@@ -330,10 +330,10 @@ export async function prepareDemo(): Promise<void> {
 }
 
 export const DEMO_MODELS: ModelOption[] = [
-  { value: 'default', label: 'Default (recommended)', description: 'Opus · best for everyday, complex tasks', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true },
-  { value: 'opus', label: 'Opus', description: 'For complex work', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true },
-  { value: 'sonnet', label: 'Sonnet', description: 'Efficient for everyday tasks', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: false },
-  { value: 'haiku', label: 'Haiku', description: 'Fastest for quick answers', efforts: [], supportsFast: false },
+  { value: 'default', label: 'Default (recommended)', description: 'Opus · best for everyday, complex tasks', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, resolvedModel: 'claude-opus-5-5' },
+  { value: 'opus', label: 'Opus', description: 'For complex work', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, resolvedModel: 'claude-opus-5-5' },
+  { value: 'sonnet', label: 'Sonnet', description: 'Efficient for everyday tasks', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: false, resolvedModel: 'claude-sonnet-5-5' },
+  { value: 'haiku', label: 'Haiku', description: 'Fastest for quick answers', efforts: [], supportsFast: false, resolvedModel: 'claude-haiku-5-5' },
 ];
 
 /** The first demo session waits for an approval; another one is busy in Claude Desktop. */

@@ -10,6 +10,7 @@ import type {
   MessagesPage,
   ModelOption,
   PermissionDecision,
+  RecordedSettings,
   RewindResult,
   RunSettings,
   RunState,
@@ -77,7 +78,7 @@ export const api = {
   info: () => request<ServerInfo>('info'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
-    request<{ session: SessionSummary | null; run: RunState | null; tasks: Todo[] }>(`sessions/${encodeURIComponent(id)}`),
+    request<{ session: SessionSummary | null; run: RunState | null; tasks: Todo[]; settings: RecordedSettings }>(`sessions/${encodeURIComponent(id)}`),
   messages: (id: string, before?: number, limit = 120) =>
     request<MessagesPage>(
       `sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before === undefined ? '' : `&before=${before}`}`,

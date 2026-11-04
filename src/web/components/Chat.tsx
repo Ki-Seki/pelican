@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronLeft, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Attachment, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
 import { baseName, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, saveDefaults, usePrefs } from '../lib/prefs';
+import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import {
   addLocalMessage,
@@ -249,16 +250,24 @@ export function Chat({
     if (sessionId) markSeen(sessionId, Math.max(Date.now(), session?.lastActivity ?? 0));
   }, [sessionId, session?.lastActivity, view.messages.length]);
 
-  // A session already running here keeps its own settings.
+  // Which settings the composer shows, most specific first: what the session runs with here right
+  // now; else what it last ran with (its transcript); else the defaults for new work. Once you
+  // change something in this session, your choice stays.
+  const chosen = useRef(false);
   const runSettings = view.run?.settings;
-  const runKey = JSON.stringify(runSettings ?? null);
+  const recorded = useMemo(() => fromRecorded(detail?.settings, modelList?.models), [detail?.settings, modelList?.models]);
+  const settingsKey = JSON.stringify([runSettings ?? null, recorded]);
   useEffect(() => {
+    if (chosen.current) return;
     if (runSettings) setSettings((current) => ({ ...current, ...runSettings }));
+    else if (recorded) setSettings({ ...loadDefaults(), ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, runKey]);
+  }, [sessionId, settingsKey]);
 
   const changeSettings = (next: RunSettings) => {
+    chosen.current = true;
     setSettings(next);
+    // A change is also the default for new sessions, as /model and /effort are in Claude Code.
     saveDefaults(next);
     if (sessionId && view.run && next.permissionMode !== settings.permissionMode) {
       void api.setMode(sessionId, next.permissionMode).catch(() => undefined);

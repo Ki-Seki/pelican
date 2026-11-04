@@ -4,11 +4,11 @@ import path from 'node:path';
 import { getSessionInfo, getSubagentMessages, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
-import type { ChatMessage, MessagesPage, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
-import { readHistory } from './history.js';
+import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
@@ -87,6 +87,12 @@ export async function renameSessionTitle(sessionId: string, title: string): Prom
   const dir = infoCache.get(sessionId)?.cwd;
   await renameSession(sessionId, title, dir ? { dir } : {});
   infoCache.delete(sessionId);
+}
+
+/** What the session last ran with, from its transcript; empty for a session not written yet. */
+export async function recordedSettings(sessionId: string): Promise<RecordedSettings> {
+  const file = await transcriptPath(sessionId);
+  return file ? readRecordedSettings(file) : {};
 }
 
 /** The whole conversation, oldest first, including what came before each compaction. */

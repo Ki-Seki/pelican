@@ -34,7 +34,15 @@ jobs:
         with:
           name: package
       - name: Publish with provenance (npm trusted publishing)
-        run: npm publish ./pelican-cc-*.tgz --provenance --access public
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # A version published by hand already (the first release was) is not published again.
+          if npm view "pelican-cc@${RELEASE_TAG#v}" version >/dev/null 2>&1; then
+            echo "pelican-cc@${RELEASE_TAG#v} is on npm already"
+          else
+            npm publish ./pelican-cc-*.tgz --provenance --access public
+          fi
       - name: Attach the package to the release
         env:
           GH_TOKEN: ${{ github.token }}

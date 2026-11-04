@@ -104,3 +104,22 @@ describe('readHistory: messages sent mid-turn', () => {
     expect(messages[2]).toMatchObject({ uuid: 'q1', role: 'user', steered: true, sourceUuid: 'client-1' });
   });
 });
+
+describe('readRecordedSettings', () => {
+  it('keeps what the session last ran with: model, effort, speed, ultracode, permission mode', async () => {
+    const { readRecordedSettings } = await import('../src/server/history');
+    const file = path.join(dir, 'settings.jsonl');
+    const asst = (uuid: string, parent: string, extra: Record<string, unknown>, speed: string) => JSON.stringify({
+      uuid, parentUuid: parent, type: 'assistant', timestamp: new Date((clock += 1000)).toISOString(),
+      message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'ok' }], usage: { speed } }, ...extra,
+    });
+    await writeFile(file, [
+      JSON.stringify({ uuid: 'u1', parentUuid: null, type: 'user', permissionMode: 'plan', timestamp: new Date((clock += 1000)).toISOString(), message: { role: 'user', content: 'go' } }),
+      asst('a1', 'u1', { requestedModel: 'claude-sonnet-5', effort: 'high' }, 'standard'),
+      JSON.stringify({ uuid: 'x1', parentUuid: 'a1', type: 'attachment', attachment: { type: 'ultra_effort_enter' } }),
+      JSON.stringify({ uuid: 'u2', parentUuid: 'x1', type: 'user', permissionMode: 'bypassPermissions', timestamp: new Date((clock += 1000)).toISOString(), message: { role: 'user', content: 'more' } }),
+      asst('a2', 'u2', { requestedModel: 'claude-opus-5-5', effort: 'max' }, 'fast'),
+    ].join('\n') + '\n');
+    expect(await readRecordedSettings(file)).toEqual({ model: 'claude-opus-5-5', effort: 'max', fast: true, ultracode: true, permissionMode: 'bypassPermissions' });
+  });
+});

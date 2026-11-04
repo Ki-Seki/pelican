@@ -156,6 +156,12 @@ export type RunState = {
 
 export type BackgroundTask = { id: string; description: string; type: string };
 
+/**
+ * What a session last ran with, as its transcript records it: the model Claude Code asked for,
+ * the effort, whether output was fast, whether ultracode was on, and the permission mode.
+ */
+export type RecordedSettings = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; permissionMode?: PermissionMode };
+
 /** While Claude works, a new message joins the turn at Claude's next step (steer) or waits for the turn to end (queue). */
 export type SendMode = 'steer' | 'queue';
 

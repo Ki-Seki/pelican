@@ -1,6 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 
-import type { ChatMessage } from '../shared/protocol.js';
+import type { ChatMessage, RecordedSettings } from '../shared/protocol.js';
 import { toChatMessage } from './normalize.js';
 
 /**
@@ -35,6 +35,8 @@ type Node = {
 };
 
 type Transcript = {
+  /** The settings the session last ran with, in file order. */
+  recorded: RecordedSettings;
   ino: number;
   /** Bytes parsed so far, and the start of a line not finished yet. */
   offset: number;
@@ -59,9 +61,30 @@ const str = (value: unknown) => (typeof value === 'string' && value ? value : un
 
 function empty(ino: number): Transcript {
   return {
-    ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
+    recorded: {}, ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
     chain: [], chainIndex: new Map(), chainLeaf: undefined, messages: [],
   };
+}
+
+const MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+
+/** Keeps the settings a row shows the session ran with: the latest row wins. */
+function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
+  if (row.type === 'assistant') {
+    const model = str(row.requestedModel) ?? str((row.message as { model?: unknown } | undefined)?.model);
+    if (model && !model.startsWith('<')) recorded.model = model;
+    if (str(row.effort)) recorded.effort = str(row.effort);
+    const speed = str((row.message as { usage?: { speed?: unknown } } | undefined)?.usage?.speed);
+    if (speed) recorded.fast = speed === 'fast';
+    recorded.ultracode ??= false;
+  } else if (row.type === 'user' && str(row.permissionMode) && MODES.has(str(row.permissionMode)!)) {
+    recorded.permissionMode = str(row.permissionMode) as RecordedSettings['permissionMode'];
+  } else if (row.type === 'attachment') {
+    const kind = str((row.attachment as { type?: unknown } | undefined)?.type) ?? '';
+    // Claude Code notes ultracode turning on (and off) as attachments.
+    if (kind === 'ultra_effort_enter') recorded.ultracode = true;
+    else if (/^ultra_effort_(exit|leave|off)/.test(kind)) recorded.ultracode = false;
+  }
 }
 
 /**
@@ -90,6 +113,7 @@ function addLine(t: Transcript, line: string): void {
   }
   const uuid = str(row.uuid);
   if (!uuid || row.isSidechain === true) return;
+  note(t.recorded, row);
   const turn = row.type === 'user' || row.type === 'assistant';
   const message = turn ? toChatMessage(row) : steeredMessage(row, uuid);
   const existing = t.nodes.get(uuid);
@@ -193,6 +217,12 @@ async function read(file: string): Promise<ChatMessage[]> {
   while (transcripts.size > MAX_FILES) transcripts.delete(transcripts.keys().next().value!);
   if (info.size > t.offset) await readNew(file, t, info.size);
   return conversation(t);
+}
+
+/** What the session in a transcript file last ran with. */
+export async function readRecordedSettings(file: string): Promise<RecordedSettings> {
+  await readHistory(file);
+  return { ...(transcripts.get(file)?.recorded ?? {}) };
 }
 
 /** The conversation in a transcript file, oldest message first. */
