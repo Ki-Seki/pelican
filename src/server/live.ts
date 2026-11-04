@@ -2,13 +2,17 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { config } from './config.js';
+import { DEMO_LIVE_SESSION } from './demo.js';
 
-/** A Claude Code process of another app working on a session right now. */
-export type LiveProcess = { app: string; busy: boolean };
+/** A Claude Code process outside this app working on a session right now. */
+export type LiveProcess = { app?: string; busy: boolean };
 
-const APP_NAMES: Record<string, string> = {
-  'claude-desktop': 'Desktop',
-  claudecodeui: 'CloudCLI',
+/**
+ * Claude Code's own clients, by the entrypoint they record. Any other program
+ * that runs Claude Code is just "elsewhere": Pelican assumes nothing about it.
+ */
+const CLAUDE_CLIENTS: Record<string, string> = {
+  'claude-desktop': 'Claude Desktop',
   cli: 'the terminal',
   'claude-vscode': 'VS Code',
 };
@@ -32,6 +36,7 @@ function alive(pid: number): boolean {
  * transcript meanwhile. Entries of exited processes are ignored.
  */
 export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
+  if (config.demo) return new Map([[DEMO_LIVE_SESSION, { app: 'Claude Desktop', busy: true }]]);
   if (cache && Date.now() - cache.at < 1500) return cache.byId;
   const dir = path.join(config.claudeHome, 'sessions');
   const byId = new Map<string, LiveProcess>();
@@ -48,10 +53,10 @@ export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
       };
       if (!entry.sessionId || typeof entry.pid !== 'number' || entry.pid === process.pid || !alive(entry.pid)) return;
       const busy = entry.status !== undefined && entry.status !== 'idle';
-      const app = APP_NAMES[entry.entrypoint ?? ''] ?? 'another app';
+      const app = CLAUDE_CLIENTS[entry.entrypoint ?? ''];
       const known = byId.get(entry.sessionId);
-      // A session open in two apps: the busy one is what matters.
-      if (!known || (busy && !known.busy)) byId.set(entry.sessionId, { app, busy });
+      // A session open in two places: the busy one is what matters.
+      if (!known || (busy && !known.busy)) byId.set(entry.sessionId, { ...(app ? { app } : {}), busy });
     } catch {
       // Being rewritten; the next read gets it.
     }

@@ -22,7 +22,7 @@ export type SessionSummary = {
   scratch?: boolean;
   /** Runs inside the system temp directory: usually a run another session started. */
   temp?: boolean;
-  /** The app working on it right now when that is not this one ('Desktop', 'CloudCLI', ...). */
+  /** Which Claude Code client is working on it right now, when that is not this app and is known. */
   runningIn?: string;
   /** Start of Claude's latest reply. */
   preview?: string;
@@ -77,13 +77,19 @@ export type ModelOption = {
   description: string;
   efforts: string[];
   supportsFast: boolean;
+  /** Whether the auto permission mode works with this model; unknown when absent. */
+  supportsAuto?: boolean;
   resolvedModel?: string;
 };
+
+export type Command = { name: string; description: string; argumentHint: string };
 
 export type RunSettings = {
   model?: string;
   effort?: string;
   fast?: boolean;
+  /** Ultracode: standing workflow orchestration, on top of any effort level. */
+  ultracode?: boolean;
   permissionMode?: PermissionMode;
 };
 
@@ -128,6 +134,10 @@ export type RunState = {
   partial: PartialBlock[];
   /** Error of the last turn, if it failed. */
   error?: string;
+  /** The last finished turn: how long it took and what it used. */
+  lastTurn?: { durationMs: number; costUsd?: number; outputTokens?: number };
+  /** How full the context window is, when Claude Code reported it. */
+  context?: { percent: number; tokens: number; max: number };
 };
 
 export type ServerEvent =
@@ -147,6 +157,8 @@ export type ServerInfo = {
   machine: string;
   home: string;
   version: string;
-  claudeVersion?: string;
   pushKey?: string;
+  /** A password protects this server; the page can offer to sign out. */
+  auth: boolean;
+  demo: boolean;
 };

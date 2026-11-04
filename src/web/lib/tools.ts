@@ -78,8 +78,11 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'TodoWrite':
       return { icon: ListChecks, verb: 'Update tasks' };
     case 'TaskCreate':
-    case 'TaskUpdate':
-      return { icon: ListChecks, verb: name === 'TaskCreate' ? 'Add task' : 'Update task', target: str(input.subject) ?? str(input.title) };
+      return { icon: ListChecks, verb: 'Add task', target: str(input.subject) ?? str(input.title), prose: true };
+    case 'TaskUpdate': {
+      const status = str(input.status)?.replace('_', ' ');
+      return { icon: ListChecks, verb: 'Update task', target: [input.taskId ? `#${String(input.taskId)}` : undefined, status].filter(Boolean).join(' · ') || undefined, prose: true };
+    }
     case 'AskUserQuestion':
       return { icon: CircleHelp, verb: 'Asked you' };
     case 'ExitPlanMode':
@@ -103,8 +106,4 @@ function firstString(input: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-export type Todo = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string };
-
-export function todosOf(input: Record<string, unknown>): Todo[] {
-  return Array.isArray(input.todos) ? (input.todos as Todo[]).filter((t) => t && typeof t.content === 'string') : [];
-}
+export { currentTasks, type Todo, todosOf } from '../../shared/tasks';

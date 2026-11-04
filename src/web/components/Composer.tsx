@@ -1,15 +1,14 @@
-import { ArrowUp, ChevronDown, FileText, Loader2, Paperclip, Square, X, Zap } from 'lucide-react';
-import { type ClipboardEvent, type DragEvent, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowUp, AtSign, ChevronDown, FileText, Folder, Loader2, Paperclip, Slash, Sparkles, Square, X, Zap } from 'lucide-react';
+import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Attachment, ModelOption, PermissionMode, RunSettings } from '../../shared/protocol';
+import type { Attachment, Command, ModelOption, PermissionMode, RunSettings } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { EFFORT_LABELS, EFFORT_SHORT, PERMISSION_MODES } from '../lib/prefs';
-import { Sheet, SheetOption } from './Sheet';
+import { EFFORT_LABELS, EFFORT_SHORT, enterSends, PERMISSION_MODES } from '../lib/prefs';
+import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string };
-
-const coarsePointer = () => window.matchMedia('(pointer: coarse)').matches;
 
 /** Phone photos are large; send at most 2048 px on the long side. */
 async function shrinkImage(file: File): Promise<File> {
@@ -44,22 +43,61 @@ function Chip({ children, onClick, tone = 'plain', label }: { children: React.Re
   );
 }
 
-function Segmented({ options, value, onChange }: { options: Array<{ value: string | undefined; label: string; title?: string }>; value: string | undefined; onChange: (value: string | undefined) => void }) {
-  return (
-    <div className="grid auto-cols-fr grid-flow-col gap-1 px-3 pb-1">
-      {options.map((option) => (
-        <button
-          key={option.value ?? '*'}
-          type="button"
-          title={option.title}
-          onClick={() => onChange(option.value)}
-          className={`h-9 min-w-0 rounded-full px-1 text-[13.5px] ${option.value === value ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+/** What the text before the caret asks to complete: a slash command at the start, or an @ mention. */
+type Trigger = { kind: 'command' | 'file'; query: string; start: number; end: number };
+
+function findTrigger(text: string, caret: number): Trigger | undefined {
+  const before = text.slice(0, caret);
+  const command = before.match(/^\/([\w:.-]*)$/);
+  if (command) return { kind: 'command', query: command[1]!, start: 0, end: caret };
+  const mention = before.match(/(?:^|\s)@([^\s@]*)$/);
+  if (mention) return { kind: 'file', query: mention[1]!, start: caret - mention[1]!.length - 1, end: caret };
+  return undefined;
+}
+
+type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' };
+
+function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): { items: Suggestion[]; loading: boolean } {
+  const [fileQuery, setFileQuery] = useState('');
+  useEffect(() => {
+    if (trigger?.kind !== 'file') return;
+    const timer = setTimeout(() => setFileQuery(trigger.query), 120);
+    return () => clearTimeout(timer);
+  }, [trigger?.kind, trigger?.query]);
+
+  const commands = useQuery({
+    queryKey: ['commands', cwd],
+    queryFn: () => api.commands(cwd!),
+    enabled: Boolean(cwd) && trigger?.kind === 'command',
+    staleTime: 10 * 60_000,
+  });
+  const files = useQuery({
+    queryKey: ['files', cwd, fileQuery],
+    queryFn: () => api.files(cwd!, fileQuery),
+    enabled: Boolean(cwd) && trigger?.kind === 'file',
+    staleTime: 30_000,
+  });
+
+  return useMemo(() => {
+    if (!trigger) return { items: [], loading: false };
+    if (trigger.kind === 'command') {
+      const q = trigger.query.toLowerCase();
+      const list = (commands.data ?? [])
+        .filter((c: Command) => !q || c.name.toLowerCase().includes(q))
+        .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
+        .slice(0, 8)
+        .map((c) => ({ key: c.name, label: `/${c.name}`, detail: c.argumentHint ? `${c.argumentHint} · ${c.description}` : c.description, insert: `/${c.name} `, icon: 'command' as const }));
+      return { items: list, loading: commands.isLoading };
+    }
+    const list = (files.data ?? []).slice(0, 8).map((path) => ({
+      key: path,
+      label: path.replace(/\/$/, '').split('/').pop() + (path.endsWith('/') ? '/' : ''),
+      detail: path,
+      insert: `@${path}${path.endsWith('/') ? '' : ' '}`,
+      icon: path.endsWith('/') ? ('folder' as const) : ('file' as const),
+    }));
+    return { items: list, loading: files.isLoading };
+  }, [trigger, commands.data, commands.isLoading, files.data, files.isLoading]);
 }
 
 export function Composer({
@@ -71,6 +109,9 @@ export function Composer({
   onStop,
   placeholder = 'Message Claude',
   autoFocus,
+  cwd,
+  draft,
+  disabled,
 }: {
   busy: boolean;
   settings: RunSettings;
@@ -80,18 +121,50 @@ export function Composer({
   onStop: () => void;
   placeholder?: string;
   autoFocus?: boolean;
+  /** Folder of the session, for / commands and @ files. */
+  cwd?: string;
+  /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. */
+  draft?: { text: string; key: number };
+  disabled?: boolean;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(draft?.text ?? '');
+  const [caret, setCaret] = useState(0);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
+  const [highlight, setHighlight] = useState(0);
+  const [dismissed, setDismissed] = useState<string>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
   const model = models?.find((m) => m.value === (settings.model ?? 'default')) ?? models?.[0];
   const efforts = model?.efforts ?? [];
+  const canUltra = efforts.includes('xhigh');
+  const modes = PERMISSION_MODES.filter((m) => m.value !== 'auto' || model?.supportsAuto !== false);
   const mode = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
   const uploading = uploads.some((u) => !u.attachment && !u.error);
-  const canSend = (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
+  const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
+
+  const trigger = useMemo(() => {
+    const found = findTrigger(text, caret);
+    return found && `${found.kind}:${found.start}` !== dismissed ? found : undefined;
+  }, [text, caret, dismissed]);
+  const { items: suggestions, loading: suggesting } = useSuggestions(trigger, cwd);
+  const showSuggestions = Boolean(trigger) && (suggestions.length > 0 || suggesting);
+
+  useEffect(() => setHighlight(0), [trigger?.kind, trigger?.query]);
+
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    requestAnimationFrame(() => {
+      const el = area.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(draft.text.length, draft.text.length);
+      setCaret(draft.text.length);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.key]);
 
   useEffect(() => {
     const el = area.current;
@@ -101,12 +174,12 @@ export function Composer({
   }, [text]);
 
   useEffect(() => {
-    if (autoFocus && !coarsePointer()) area.current?.focus();
+    if (autoFocus && !window.matchMedia('(pointer: coarse)').matches) area.current?.focus();
   }, [autoFocus]);
 
   const addFiles = (files: FileList | File[]) => {
     for (const original of Array.from(files)) {
-      const key = crypto.randomUUID();
+      const key = crypto.randomUUID ? crypto.randomUUID() : String(Math.random());
       const preview = original.type.startsWith('image/') ? URL.createObjectURL(original) : undefined;
       setUploads((list) => [...list, { key, name: original.name, size: original.size, ...(preview ? { preview } : {}) }]);
       void shrinkImage(original)
@@ -120,8 +193,45 @@ export function Composer({
     if (!canSend) return;
     onSend(text.trim(), uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])));
     setText('');
+    setCaret(0);
     for (const u of uploads) if (u.preview) URL.revokeObjectURL(u.preview);
     setUploads([]);
+  };
+
+  const accept = (suggestion: Suggestion) => {
+    if (!trigger) return;
+    const next = text.slice(0, trigger.start) + suggestion.insert + text.slice(trigger.end);
+    const at = trigger.start + suggestion.insert.length;
+    setText(next);
+    setCaret(at);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(at, at);
+    });
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSuggestions && suggestions.length > 0) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlight((h) => (h + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing)) {
+        e.preventDefault();
+        accept(suggestions[highlight] ?? suggestions[0]!);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (trigger) setDismissed(`${trigger.kind}:${trigger.start}`);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && enterSends()) {
+      e.preventDefault();
+      submit();
+    }
   };
 
   const onPaste = (e: ClipboardEvent) => {
@@ -142,7 +252,30 @@ export function Composer({
   const set = (patch: Partial<RunSettings>) => onSettings({ ...settings, ...patch });
 
   return (
-    <div className="pb-safe shrink-0 px-3 pt-1" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="pb-safe relative shrink-0 px-3 pt-1" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+      {showSuggestions && (
+        <div className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-w-3xl overflow-hidden rounded-2xl border border-line bg-panel shadow-xl" role="listbox">
+          {suggesting && suggestions.length === 0 && <div className="flex justify-center py-3"><Loader2 className="size-4 animate-spin text-faint" /></div>}
+          {suggestions.map((s, i) => {
+            const Icon = s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : FileText;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                role="option"
+                aria-selected={i === highlight}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => accept(s)}
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${i === highlight ? 'bg-hover' : ''}`}
+              >
+                <Icon className="size-3.5 shrink-0 text-faint" />
+                <span className="shrink-0 font-mono text-[13px]">{s.label}</span>
+                {s.detail && <span className="min-w-0 truncate text-[12px] text-faint">{s.detail}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="mx-auto max-w-3xl rounded-[22px] border border-line bg-panel shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
         {uploads.length > 0 && (
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pt-3">
@@ -174,16 +307,17 @@ export function Composer({
           ref={area}
           value={text}
           rows={1}
+          disabled={disabled}
           placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
-          onPaste={onPaste}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarsePointer()) {
-              e.preventDefault();
-              submit();
-            }
+          onChange={(e) => {
+            setText(e.target.value);
+            setCaret(e.target.selectionStart);
+            setDismissed(undefined);
           }}
-          className="block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint"
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          onPaste={onPaste}
+          onKeyDown={onKeyDown}
+          className="block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
         />
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
           <button
@@ -203,6 +337,7 @@ export function Composer({
             <Chip label="Model, effort and speed" onClick={() => setSheet('model')}>
               <span className="max-w-28 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
               {settings.effort && <span className="text-faint">· {EFFORT_SHORT[settings.effort] ?? settings.effort}</span>}
+              {canUltra && settings.ultracode && <Sparkles className="size-3.5 text-run" aria-label="Ultracode on" />}
               {model?.supportsFast && settings.fast && <Zap className="size-3.5 fill-current text-wait" aria-label="Fast mode on" />}
               <ChevronDown className="size-3.5 opacity-60" />
             </Chip>
@@ -210,6 +345,18 @@ export function Composer({
               {mode.short}
               <ChevronDown className="size-3.5 opacity-60" />
             </Chip>
+            {cwd && !text && (
+              <Chip label="Mention a file" onClick={() => {
+                setText('@');
+                setCaret(1);
+                requestAnimationFrame(() => {
+                  area.current?.focus();
+                  area.current?.setSelectionRange(1, 1);
+                });
+              }}>
+                <AtSign className="size-3.5" />
+              </Chip>
+            )}
           </div>
           {busy && !canSend ? (
             <button type="button" aria-label="Stop" onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg">
@@ -232,36 +379,37 @@ export function Composer({
       <Sheet open={sheet === 'model'} onClose={() => setSheet(undefined)} title="Model" done>
         {efforts.length > 0 && (
           <>
-            <div className="px-3 pt-1 pb-2 text-[12px] text-faint">Reasoning effort</div>
+            <SheetHeading>Reasoning effort</SheetHeading>
             <Segmented
               value={settings.effort}
               onChange={(effort) => set({ effort })}
               options={[
                 { value: undefined, label: 'Default', title: 'What Claude Code uses for this model' },
-                ...efforts.map((e) => ({ value: e, label: EFFORT_SHORT[e] ?? e, title: EFFORT_LABELS[e] ?? e })),
+                ...efforts.map((e) => ({ value: e as string | undefined, label: EFFORT_SHORT[e] ?? e, title: EFFORT_LABELS[e] ?? e })),
               ]}
             />
           </>
         )}
+        {(model?.supportsFast || canUltra) && <div className="h-2" />}
         {model?.supportsFast && (
-          <button
-            type="button"
-            onClick={() => set({ fast: !settings.fast })}
-            className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-hover"
-            role="switch"
-            aria-checked={Boolean(settings.fast)}
-          >
-            <Zap className={`size-4 shrink-0 ${settings.fast ? 'fill-current text-wait' : 'text-faint'}`} />
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px]">Fast mode</div>
-              <div className="mt-0.5 text-[12.5px] text-muted">Faster output, billed at a higher rate</div>
-            </div>
-            <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${settings.fast ? 'bg-fg' : 'bg-line'}`}>
-              <span className={`absolute top-0.5 size-5 rounded-full bg-bg shadow transition-transform ${settings.fast ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
-            </span>
-          </button>
+          <SheetToggle
+            icon={<Zap className={`size-4 ${settings.fast ? 'fill-current text-wait' : 'text-faint'}`} />}
+            label="Fast mode"
+            description="Faster output, billed at a higher rate"
+            checked={Boolean(settings.fast)}
+            onChange={(fast) => set({ fast })}
+          />
         )}
-        <div className="px-3 pt-3 pb-1 text-[12px] text-faint">Model</div>
+        {canUltra && (
+          <SheetToggle
+            icon={<Sparkles className={`size-4 ${settings.ultracode ? 'text-run' : 'text-faint'}`} />}
+            label="Ultracode"
+            description="Claude plans and runs its work as workflows of parallel agents, on top of any effort level"
+            checked={Boolean(settings.ultracode)}
+            onChange={(ultracode) => set({ ultracode })}
+          />
+        )}
+        <SheetHeading>Model</SheetHeading>
         {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
         {models?.map((m) => (
           <SheetOption
@@ -271,14 +419,21 @@ export function Composer({
             selected={m.value === model?.value}
             onSelect={() => {
               const effort = settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined;
-              onSettings({ ...settings, model: m.value, effort, fast: m.supportsFast ? settings.fast : false });
+              onSettings({
+                ...settings,
+                model: m.value,
+                effort,
+                fast: m.supportsFast ? settings.fast : false,
+                ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
+                permissionMode: settings.permissionMode === 'auto' && m.supportsAuto === false ? 'default' : settings.permissionMode,
+              });
             }}
           />
         ))}
       </Sheet>
 
       <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
-        {PERMISSION_MODES.map((m) => (
+        {modes.map((m) => (
           <SheetOption key={m.value} label={m.label} description={m.description} selected={m.value === mode.value} onSelect={() => {
             set({ permissionMode: m.value as PermissionMode });
             setSheet(undefined);

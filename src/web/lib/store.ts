@@ -72,10 +72,13 @@ export async function loadLatest(sessionId: string): Promise<void> {
       const lastInPage = page.messages.at(-1)?.timestamp ?? 0;
       const pending = view.messages.filter((m) => m.pending && !inPage.has(m.uuid));
       const newer = view.messages.filter((m) => !m.pending && !inPage.has(m.uuid) && (m.timestamp ?? 0) > lastInPage);
+      // Older pages already scrolled through stay, when they join up with this one.
+      const joinsAt = page.messages[0] ? view.messages.findIndex((m) => m.uuid === page.messages[0]!.uuid) : -1;
+      const head = joinsAt > 0 ? view.messages.slice(0, joinsAt).filter((m) => !m.pending) : [];
       return {
         ...view,
-        messages: merge(merge(page.messages, newer), pending),
-        offset: page.offset,
+        messages: merge(merge([...head, ...page.messages], newer), pending),
+        offset: Math.max(0, page.offset - head.length),
         total: page.total,
         loaded: true,
         error: undefined,
@@ -105,6 +108,27 @@ export async function loadOlder(sessionId: string): Promise<void> {
 
 export function addLocalMessage(sessionId: string, message: ChatMessage): void {
   update(sessionId, (view) => ({ ...view, messages: merge(view.messages, [message]), loaded: true }));
+}
+
+/** Drops a local message the server never accepted. */
+export function removeLocalMessage(sessionId: string, uuid: string): void {
+  update(sessionId, (view) => ({ ...view, messages: view.messages.filter((m) => !(m.pending && m.uuid === uuid)) }));
+}
+
+export type Draft = { text: string; note?: string };
+const drafts = new Map<string, Draft>();
+
+/** Text for the composer of a chat about to open, such as a prompt being edited. */
+export function setDraft(viewId: string, draft: Draft): void {
+  drafts.set(viewId, draft);
+}
+
+export function getDraft(viewId: string): Draft | undefined {
+  return drafts.get(viewId);
+}
+
+export function clearDraft(viewId: string): void {
+  drafts.delete(viewId);
 }
 
 export function setRun(sessionId: string, run: RunState | undefined): void {

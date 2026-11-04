@@ -6,8 +6,8 @@ const backend = `http://127.0.0.1:${process.env.PELICAN_PORT ?? '7860'}`;
 
 export default defineConfig({
   root: 'src/web',
-  // Every URL is relative: the app is served under a path prefix it does not
-  // know (`/_m/<machine>/pelican/` behind AI Server), or at `/` when run alone.
+  // Every URL is relative: the app works at `/` and under any path prefix a
+  // reverse proxy mounts it at, without being told which.
   base: './',
   publicDir: '../../public',
   plugins: [react(), tailwindcss()],

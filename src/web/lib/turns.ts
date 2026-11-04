@@ -88,13 +88,15 @@ export function buildItems(messages: ChatMessage[]): Item[] {
   };
 
   for (const message of messages) {
-    if (message.meta || message.parentToolUseId) continue;
+    if (message.parentToolUseId) continue;
+    // A compaction's summary is injected text too, but it marks where Claude's memory was condensed.
     if (message.compactSummary) {
       const summary = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim();
       push({ kind: 'compact', key: message.uuid, summary });
       turn = undefined;
       continue;
     }
+    if (message.meta) continue;
     if (message.role === 'user') {
       const texts = message.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : ''));
       const images = message.blocks.filter((b): b is ImageBlock => b.type === 'image');

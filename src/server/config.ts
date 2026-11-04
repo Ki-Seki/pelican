@@ -14,22 +14,45 @@ function findWebDir(): string | undefined {
   return undefined;
 }
 
+const list = (value: string | undefined) => (value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+export type AuthMode = 'auto' | 'none';
+
+/**
+ * Settings from the environment; the command line (`cli.ts`) overrides some of
+ * them before the server starts.
+ */
 export const config = {
   host: process.env.PELICAN_HOST ?? '127.0.0.1',
   port: Number(process.env.PELICAN_PORT ?? 7860),
   /** Name shown in the app, for telling machines apart. */
-  machine: process.env.PELICAN_MACHINE ?? os.hostname().split('.')[0] ?? 'local',
+  machine: process.env.PELICAN_MACHINE ?? (os.hostname().split('.')[0] || 'local'),
   home,
   claudeHome: process.env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'),
-  stateDir: process.env.PELICAN_STATE_DIR ?? path.join(home, '.local/state/pelican'),
+  /** The password hash lives here. */
+  configDir: process.env.PELICAN_CONFIG_DIR ?? path.join(home, '.config', 'pelican'),
+  /** Uploads, push keys and subscriptions. */
+  stateDir: process.env.PELICAN_STATE_DIR ?? path.join(home, '.local', 'state', 'pelican'),
   webDir: findWebDir(),
-  /** Extra origins allowed to open the WebSocket and send requests, besides the page's own. */
-  allowedOrigins: (process.env.PELICAN_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
-  /** A Claude process with nothing to do is closed after this long; resuming starts a new one. */
+  /**
+   * auto: ask for the password when one is set (`pelican password`), and refuse
+   * to listen beyond this machine without one. none: never ask, for when
+   * something in front already authenticates (an SSH tunnel, a proxy).
+   */
+  auth: (process.env.PELICAN_AUTH === 'none' ? 'none' : 'auto') as AuthMode,
+  /** Origins, besides the page's own, allowed to send requests (for example a proxy's public URL). */
+  allowedOrigins: list(process.env.PELICAN_ALLOWED_ORIGINS),
+  /** Host names the server answers to without a password, besides this machine's (`*` for any). */
+  allowedHosts: list(process.env.PELICAN_ALLOWED_HOSTS),
+  /** Where a tapped notification opens a session; `{id}` is replaced. Default: the page that subscribed. */
+  sessionUrl: process.env.PELICAN_SESSION_URL || undefined,
+  /** A Claude process with nothing to do is closed after this long; the next message resumes the session. */
   idleCloseMs: Number(process.env.PELICAN_IDLE_CLOSE_MS ?? 30 * 60 * 1000),
   /** A transcript written by someone else this recently counts as live. */
   liveWindowMs: 45_000,
   claudeExecutable: process.env.PELICAN_CLAUDE_PATH || undefined,
+  /** Demo mode: made-up sessions, nothing runs. */
+  demo: false,
 };
 
 export type Config = typeof config;

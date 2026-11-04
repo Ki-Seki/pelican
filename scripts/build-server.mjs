@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 
 const outfile = 'dist/server/index.js';
 await build({
-  entryPoints: ['src/server/index.ts'],
+  entryPoints: ['src/server/cli.ts'],
   outfile,
   bundle: true,
   platform: 'node',

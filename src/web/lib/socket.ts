@@ -27,6 +27,17 @@ class Socket {
     });
   }
 
+  /** Connects again now, e.g. after signing in, instead of waiting out the backoff. */
+  reconnect(): void {
+    this.retry = 0;
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      const old = this.ws;
+      this.ws = undefined;
+      old.close();
+    }
+    this.connect();
+  }
+
   private connect(): void {
     clearTimeout(this.timer);
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;

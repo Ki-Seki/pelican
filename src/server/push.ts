@@ -56,10 +56,11 @@ export async function notify(payload: PushPayload): Promise<void> {
   if (!keys || subscriptions.length === 0) return;
   const gone: string[] = [];
   await Promise.all(subscriptions.map(async (subscription) => {
-    const body = JSON.stringify({
-      ...payload,
-      url: subscription.openUrl ? `${subscription.openUrl}${encodeURIComponent(payload.sessionId)}` : undefined,
-    });
+    // PELICAN_SESSION_URL wins (for a page that embeds Pelican); otherwise the page that subscribed.
+    const id = encodeURIComponent(payload.sessionId);
+    const url = config.sessionUrl ? config.sessionUrl.replaceAll('{id}', id)
+      : subscription.openUrl ? `${subscription.openUrl}${id}` : undefined;
+    const body = JSON.stringify({ ...payload, url });
     try {
       await webpush.sendNotification(subscription, body, { TTL: 3600, urgency: 'high' });
     } catch (error) {

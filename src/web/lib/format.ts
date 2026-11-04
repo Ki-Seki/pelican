@@ -61,3 +61,14 @@ export function duration(ms: number): string {
   const m = Math.floor(s / 60);
   return `${m}m ${String(s % 60).padStart(2, '0')}s`;
 }
+
+/** Shell-quotes a path, keeping a leading `~/` working. */
+export function shellQuote(path: string): string {
+  if (path.startsWith('~/')) return `~/${shellQuote(path.slice(2))}`;
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The command that carries a session on in a terminal. */
+export function resumeCommand(sessionId: string, cwd?: string): string {
+  return `${cwd ? `cd ${shellQuote(cwd)} && ` : ''}claude --resume ${sessionId}`;
+}

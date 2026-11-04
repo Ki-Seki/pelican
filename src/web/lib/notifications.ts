@@ -12,15 +12,8 @@ function keyBytes(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-/**
- * Where a tapped notification should land. Behind AI Server the app lives in
- * an iframe of the entry page, so open the entry page on this machine's tab
- * with the session (`/_hub/#/<machine>/<service>~/?s=<id>`); on its own, open
- * the app itself.
- */
+/** Where a tapped notification lands when no Pelican page is open: the session in this app. */
 function openUrl(): string {
-  const mounted = appBase.pathname.match(/^\/_m\/([\w-]+)\/([\w-]+)\/$/);
-  if (mounted) return `${location.origin}/_hub/#/${mounted[1]}/${mounted[2]}~/?s=`;
   return `${appBase.href}?s=`;
 }
 

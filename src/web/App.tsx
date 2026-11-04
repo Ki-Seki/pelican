@@ -1,12 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, Plus } from 'lucide-react';
+import { Loader2, MessageSquare, Plus } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
 import { Chat } from './components/Chat';
+import { Lightbox } from './components/Lightbox';
+import { Login } from './components/Login';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
-import { api, appBase } from './lib/api';
+import { SettingsSheet } from './components/Settings';
+import { api, appBase, whenSignedOut } from './lib/api';
 import {
   disableNotifications,
   enableNotifications,
@@ -14,13 +17,13 @@ import {
   notificationState,
   onNotificationOpen,
 } from './lib/notifications';
+import { applyTheme } from './lib/prefs';
 import { socket } from './lib/socket';
 
 /**
  * Routes live in the query string (`?s=<id>`, `?new`, `?new&cwd=<path>`): the
- * page stays at the app's own folder, so relative asset URLs keep working, and
- * the AI Server entry page, which remembers an iframe's path and query, brings
- * you back to the same session after a reload.
+ * page stays at the app's own folder, so relative URLs keep working under any
+ * path prefix, and a page that frames Pelican can keep the route in its own URL.
  */
 function useRoute() {
   const [search, setSearch] = useState(location.search);
@@ -57,13 +60,46 @@ function useWide() {
   return wide;
 }
 
+/** The sign-in gate: shown only when the server has a password and this browser has no session. */
 export function App() {
+  const queryClient = useQueryClient();
+  const auth = useQuery({ queryKey: ['auth'], queryFn: api.auth, staleTime: Infinity, retry: 2 });
+
+  useEffect(() => {
+    applyTheme();
+    whenSignedOut(() => queryClient.setQueryData(['auth'], { required: true, signedIn: false }));
+  }, [queryClient]);
+
+  if (auth.isPending) {
+    return <div className="app-height flex items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>;
+  }
+  if (auth.data?.required && !auth.data.signedIn) {
+    return (
+      <Login
+        onSignedIn={() => {
+          queryClient.setQueryData(['auth'], { required: true, signedIn: true });
+          void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'auth' });
+          socket.reconnect();
+        }}
+      />
+    );
+  }
+  return (
+    <>
+      <Main />
+      <Lightbox />
+    </>
+  );
+}
+
+function Main() {
   const { sessionId, isNew, newCwd, scratch, navigate } = useRoute();
   const wide = useWide();
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
   const [connected, setConnected] = useState(socket.connected);
   const [notifications, setNotifications] = useState<NotificationState>('off');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => socket.onConnection(setConnected), []);
   useEffect(() => {
@@ -92,15 +128,29 @@ export function App() {
     void next.then(setNotifications).catch((error: Error) => window.alert(`Could not turn on notifications: ${error.message}`));
   };
 
+  const signOut = () => {
+    void api.logout().finally(() => {
+      setSettingsOpen(false);
+      queryClient.clear();
+      queryClient.setQueryData(['auth'], { required: true, signedIn: false });
+    });
+  };
+
+  const banner = info?.demo ? (
+    <div data-demo-banner className="mx-3 mb-1 rounded-xl bg-chip px-3 py-2 text-[12.5px] leading-snug text-muted">
+      <span className="font-medium text-fg">Demo.</span> Sample sessions on a made-up machine; nothing you do here runs or changes anything.
+    </div>
+  ) : undefined;
+
   const list = (
     <SessionList
       machine={info?.machine ?? ''}
       selectedId={sessionId}
       onOpen={(id) => open(id)}
       onNew={() => navigate('?new')}
+      onSettings={() => setSettingsOpen(true)}
       connected={connected}
-      notifications={notifications}
-      onToggleNotifications={toggleNotifications}
+      banner={banner}
     />
   );
 
@@ -113,9 +163,12 @@ export function App() {
         newCwd={newCwd}
         scratch={scratch}
         home={info?.home}
+        machine={info?.machine}
+        demo={info?.demo}
         wide={wide}
         onBack={() => navigate('')}
         onOpen={open}
+        onStartIn={(cwd) => navigate(`?new&cwd=${encodeURIComponent(cwd)}`)}
       />
     );
   } else if (isNew) {
@@ -139,6 +192,17 @@ export function App() {
     );
   }
 
+  const settings = (
+    <SettingsSheet
+      open={settingsOpen}
+      onClose={() => setSettingsOpen(false)}
+      {...(info ? { info } : {})}
+      notifications={notifications}
+      onToggleNotifications={toggleNotifications}
+      onSignOut={signOut}
+    />
+  );
+
   if (wide) {
     return (
       <div className="app-height grid grid-cols-[minmax(300px,360px)_1fr] overflow-hidden">
@@ -156,8 +220,14 @@ export function App() {
             </div>
           )}
         </main>
+        {settings}
       </div>
     );
   }
-  return <div className="app-height overflow-hidden">{main ?? list}</div>;
+  return (
+    <div className="app-height overflow-hidden">
+      {main ?? list}
+      {settings}
+    </div>
+  );
 }

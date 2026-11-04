@@ -24,6 +24,7 @@ import type {
   SessionStatus,
 } from '../shared/protocol.js';
 import { config } from './config.js';
+import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
@@ -91,6 +92,8 @@ export class SessionRun {
   private title = '';
   /** Set by Stop: the turn then ends with an error result that is not a failure. */
   private interrupted = false;
+  private lastTurn?: RunState['lastTurn'];
+  private context?: RunState['context'];
 
   constructor(
     readonly sessionId: string,
@@ -108,7 +111,13 @@ export class SessionRun {
       ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
       allowDangerouslySkipPermissions: true,
-      ...(settings.fast ? { settings: { fastMode: true } } : {}),
+      ...(settings.fast || settings.ultracode ? {
+        settings: {
+          ...(settings.fast ? { fastMode: true } : {}),
+          // Ultracode needs workflows; both are session settings, like the CLI's --settings.
+          ...(settings.ultracode ? { ultracode: true, enableWorkflows: true } : {}),
+        },
+      } : {}),
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
@@ -135,6 +144,8 @@ export class SessionRun {
       permissions: [...this.permissions.values()].map((p) => p.request),
       partial: this.partial.slice(this.completedBlocks).filter(Boolean),
       ...(this.error ? { error: this.error } : {}),
+      ...(this.lastTurn ? { lastTurn: this.lastTurn } : {}),
+      ...(this.context ? { context: this.context } : {}),
     };
   }
 
@@ -222,7 +233,14 @@ export class SessionRun {
     const prev = this.settings;
     try {
       if ((next.model ?? 'default') !== (prev.model ?? 'default')) await q.setModel(sdkModel(next.model));
-      if ((next.effort ?? '') !== (prev.effort ?? '')) await q.applyFlagSettings({ effortLevel: (next.effort as EffortLevel) ?? null });
+      // A new effort level sent without the ultracode key turns ultracode off, so both go together.
+      if ((next.effort ?? '') !== (prev.effort ?? '') || Boolean(next.ultracode) !== Boolean(prev.ultracode)) {
+        await q.applyFlagSettings({
+          effortLevel: (next.effort as EffortLevel) ?? null,
+          ultracode: Boolean(next.ultracode),
+          ...(next.ultracode ? { enableWorkflows: true } : {}),
+        });
+      }
       if (Boolean(next.fast) !== Boolean(prev.fast)) await q.applyFlagSettings({ fastMode: Boolean(next.fast) });
       if (next.permissionMode && next.permissionMode !== (prev.permissionMode ?? 'default')) await q.setPermissionMode(next.permissionMode);
     } catch (error) {
@@ -307,6 +325,18 @@ export class SessionRun {
     }
   }
 
+  /** How full the context window is now; shown in the session header. */
+  private async readContext(): Promise<void> {
+    try {
+      const usage = await this.q?.getContextUsage();
+      if (!usage) return;
+      this.context = { percent: Math.round(usage.percentage), tokens: usage.totalTokens, max: usage.maxTokens };
+      this.emit();
+    } catch {
+      // Older Claude Code; the header just shows no meter.
+    }
+  }
+
   private onStream(event: Record<string, unknown>): void {
     const index = typeof event.index === 'number' ? event.index : -1;
     switch (event.type) {
@@ -374,8 +404,14 @@ export class SessionRun {
             this.error = failed
               ? ('errors' in message && message.errors.length > 0 ? message.errors.join('\n') : ('result' in message ? String(message.result) : message.subtype))
               : undefined;
+            this.lastTurn = {
+              durationMs: message.duration_ms,
+              ...(typeof message.total_cost_usd === 'number' ? { costUsd: message.total_cost_usd } : {}),
+              ...(typeof message.usage?.output_tokens === 'number' ? { outputTokens: message.usage.output_tokens } : {}),
+            };
             this.setBusy(false);
             this.emit();
+            void this.readContext();
             if (!stopped) {
               void notify({
                 title: this.title || 'Claude Code',
@@ -414,10 +450,12 @@ export function getRun(sessionId: string): SessionRun | undefined {
 
 /** Status of a session this app runs; undefined when it has no Claude process here. */
 export function runStatus(sessionId: string): SessionStatus | undefined {
+  if (config.demo) return sessionId === DEMO_WAITING_SESSION ? 'waiting' : undefined;
   return getRun(sessionId)?.status();
 }
 
 export function runState(sessionId: string): RunState | undefined {
+  if (config.demo) return demoRunState(sessionId);
   return getRun(sessionId)?.state();
 }
 
@@ -430,6 +468,7 @@ async function isDirectory(dir: string): Promise<boolean> {
  * none is running. Without a session id a new session starts in `cwd`.
  */
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
+  if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (target.sessionId) {
     const existing = getRun(target.sessionId);
     if (existing) {

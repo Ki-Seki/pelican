@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+        os: [ubuntu-latest]
+        include:
+          - node: "24"
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  package:
+    name: Pack, install and start
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Check release tag matches package version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: test "$RELEASE_TAG" = "v$(node -p 'require("./package.json").version')"
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack
+      - name: Install the package and serve the demo from it
+        run: |
+          npm install -g ./pelican-cc-*.tgz
+          pelican --version
+          pelican --demo --port 7861 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:7861/api/info && break; sleep 1; done
+          curl -fsS http://127.0.0.1:7861/api/sessions | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (d.sessions.length < 3) process.exit(1)'
+          curl -fsS http://127.0.0.1:7861/ | grep -q '<div id="root">'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: attacker.example' http://127.0.0.1:7861/api/info)" = 403
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: pelican-cc-*.tgz
+          if-no-files-found: error
+          retention-days: 7

@@ -1,6 +1,7 @@
 import type {
   Attachment,
   ChatMessage,
+  Command,
   MessagesPage,
   ModelOption,
   PermissionDecision,
@@ -9,10 +10,11 @@ import type {
   ServerInfo,
   SessionSummary,
 } from '../../shared/protocol';
+import type { Todo } from '../../shared/tasks';
 
 /**
- * The app does not know the path it is mounted under (`/_m/<machine>/pelican/`
- * behind AI Server, `/` on its own), so every URL is resolved against the
+ * The app does not know the path it is served under (`/` on its own, or a
+ * prefix a reverse proxy mounts it at), so every URL is resolved against the
  * folder of the current page.
  */
 export const appBase = new URL('./', location.href);
@@ -20,9 +22,15 @@ export const appBase = new URL('./', location.href);
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly signIn = false) {
     super(message);
   }
+}
+
+/** Called when the server says the session cookie is missing or expired. */
+let onSignedOut: () => void = () => {};
+export function whenSignedOut(handler: () => void): void {
+  onSignedOut = handler;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -31,8 +39,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: init?.body && typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status);
+    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean };
+    if (body.signIn) onSignedOut();
+    throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn));
   }
   return (await response.json()) as T;
 }
@@ -44,10 +53,13 @@ export type Project = { path: string; name: string; lastActivity: number; sessio
 export type DirListing = { path: string; parent?: string; dirs: Array<{ name: string; path: string }> };
 
 export const api = {
+  auth: () => request<{ required: boolean; signedIn: boolean }>('auth'),
+  login: (password: string) => send<{ ok: boolean }>('POST', 'auth/login', { password }),
+  logout: () => send<{ ok: boolean }>('POST', 'auth/logout'),
   info: () => request<ServerInfo>('info'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
-    request<{ session: SessionSummary | null; run: RunState | null }>(`sessions/${encodeURIComponent(id)}`),
+    request<{ session: SessionSummary | null; run: RunState | null; tasks: Todo[] }>(`sessions/${encodeURIComponent(id)}`),
   messages: (id: string, before?: number, limit = 120) =>
     request<MessagesPage>(
       `sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before === undefined ? '' : `&before=${before}`}`,
@@ -62,7 +74,15 @@ export const api = {
   setMode: (id: string, permissionMode: RunSettings['permissionMode']) =>
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/mode`, { permissionMode }),
   rename: (id: string, title: string) => send<{ ok: boolean }>('PATCH', `sessions/${encodeURIComponent(id)}`, { title }),
-  models: () => request<{ models: ModelOption[] }>('models').then((r) => r.models),
+  /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
+  fork: (id: string, options: { before?: string; title?: string } = {}) =>
+    send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
+  remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
+  exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
+  models: () => request<{ models: ModelOption[]; signedIn: boolean | null }>('models'),
+  commands: (cwd: string) => request<{ commands: Command[] }>(`commands?cwd=${encodeURIComponent(cwd)}`).then((r) => r.commands),
+  files: (cwd: string, q: string) =>
+    request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   upload: async (file: File): Promise<Attachment> => {

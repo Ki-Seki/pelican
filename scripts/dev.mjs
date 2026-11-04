@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 
 const children = [
-  spawn('npx', ['tsx', 'watch', 'src/server/index.ts'], { stdio: 'inherit', env: { ...process.env, PELICAN_DEV: '1' } }),
+  spawn('npx', ['tsx', 'watch', 'src/server/cli.ts'], { stdio: 'inherit', env: { ...process.env, PELICAN_DEV: '1' } }),
   spawn('npx', ['vite', '--host', '127.0.0.1'], { stdio: 'inherit' }),
 ];
 const stop = () => {

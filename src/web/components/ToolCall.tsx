@@ -1,9 +1,10 @@
 import { CheckCircle2, ChevronRight, Circle, CircleDot, Loader2 } from 'lucide-react';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
 import { resultImages, resultText, type ToolCall } from '../lib/turns';
 import { Diff, diffStats } from './Diff';
+import { openImage } from './Lightbox';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -46,18 +47,18 @@ function Images({ call }: { call: ToolCall }) {
   if (images.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-2">
-      {images.map((image, i) =>
-        image.omitted || image.source.type !== 'base64' ? (
-          <div key={i} className="rounded-md bg-chip px-2 py-1 text-[11px] text-faint">Image not shown</div>
-        ) : (
-          <img
-            key={i}
-            alt=""
-            className="max-h-64 max-w-full rounded-lg border border-line"
-            src={`data:${image.source.media_type};base64,${image.source.data}`}
-          />
-        ),
-      )}
+      {images.map((image, i) => {
+        const source = image.source;
+        if (image.omitted || source.type !== 'base64') {
+          return <div key={i} className="rounded-md bg-chip px-2 py-1 text-[11px] text-faint">Image not shown</div>;
+        }
+        const src = `data:${source.media_type};base64,${source.data}`;
+        return (
+          <button key={i} type="button" onClick={() => openImage(src)}>
+            <img alt="" className="max-h-64 max-w-full rounded-lg border border-line" src={src} />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -193,8 +194,9 @@ export function ToolTarget({ summary }: { summary: ToolSummary }) {
   return <span className={`min-w-0 truncate ${summary.prose ? '' : 'font-mono text-[12px]'}`}>{target}</span>;
 }
 
-export const ToolCallView = memo(function ToolCallView({ call, cwd, running }: { call: ToolCall; cwd?: string; running: boolean }) {
-  const [open, setOpen] = useState(false);
+export const ToolCallView = memo(function ToolCallView({ call, cwd, running, defaultOpen = false }: { call: ToolCall; cwd?: string; running: boolean; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => setOpen(defaultOpen), [defaultOpen]);
   const summary = describeTool(call.name, call.input, cwd);
   const failed = Boolean(call.result?.is_error);
   const stats = useMemo(() => {

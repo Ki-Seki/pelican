@@ -1,52 +1,68 @@
 import { readFile } from 'node:fs/promises';
-import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
 
-import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { getConnInfo } from '@hono/node-server/conninfo';
+import { type Context, Hono } from 'hono';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type {
-  Attachment,
-  ClientEvent,
-  PermissionDecision,
-  RunSettings,
-  ServerEvent,
-  ServerInfo,
-} from '../shared/protocol.js';
+import type { Attachment, PermissionDecision, RunSettings, ServerInfo } from '../shared/protocol.js';
+import { currentTasks } from '../shared/tasks.js';
+import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
+import { allowAttempt, checkPassword, cookieName, newSessionCookie, passwordSet, signedIn } from './auth.js';
 import { config } from './config.js';
-import { connect, subscribe } from './feed.js';
 import { findUpload, listDirs, readUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { listModels } from './models.js';
-import { addSubscription, initPush, pushKey, removeSubscription } from './push.js';
-import { closeAll, getRun, runState, runStatus, sendMessage } from './runner.js';
-import { listSummaries, loadPage, renameSessionTitle, sessionSummary } from './sessions.js';
+import { listCommands, listModels } from './models.js';
+import { searchFiles } from './project-files.js';
+import { addSubscription, pushKey, removeSubscription } from './push.js';
+import { getRun, runState, runStatus, sendMessage } from './runner.js';
+import { hostAllowed, isLoopback, originAllowed } from './security.js';
+import { listSummaries, loadMessages, loadPage, renameSessionTitle, sessionSummary } from './sessions.js';
+
+export const app = new Hono();
 
 /**
- * Requests that change something must come from this app's own page (or an
- * origin allowed in the config). Behind AI Server the front proxy checks the
- * origin as well; this keeps a stray page on another site from driving Claude.
+ * Who is asking, for limiting password attempts. The address of the connection,
+ * unless that is a proxy on this machine (Tailscale, Caddy, nginx): then the
+ * client the proxy added last to X-Forwarded-For. Anyone can write that header,
+ * so it is believed only from here, and only its last entry.
  */
-function originAllowed(origin: string | undefined, ...hosts: Array<string | undefined>): boolean {
-  if (!origin) return true;
-  let url: URL;
+function clientAddress(c: Context): string {
+  let remote = 'unknown';
   try {
-    url = new URL(origin);
+    remote = getConnInfo(c).remote.address ?? 'unknown';
   } catch {
-    return false;
+    // Not served by Node (tests): one bucket for all.
   }
-  if (config.allowedOrigins.includes(url.origin)) return true;
-  return hosts.flatMap((h) => (h ? h.split(',').map((s) => s.trim()) : [])).includes(url.host);
+  const address = remote.replace(/^::ffff:/, '');
+  if (isLoopback(address)) {
+    const forwarded = c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim();
+    if (forwarded) return forwarded;
+  }
+  return address;
 }
 
-const app = new Hono();
+const secure = (c: { req: { header: (name: string) => string | undefined; url: string } }) =>
+  c.req.header('x-forwarded-proto') === 'https' || c.req.url.startsWith('https:');
+
+/** Answers only to host names that point at this server, unless a password protects it. */
+app.use('*', async (c, next) => {
+  if (!passwordSet() && !hostAllowed(c.req.header('host'))) {
+    return c.text('This host name is not allowed. Add it to PELICAN_ALLOWED_HOSTS, or set a password with `pelican password`.', 403);
+  }
+  await next();
+});
 
 app.use('/api/*', async (c, next) => {
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD'
     && !originAllowed(c.req.header('origin'), c.req.header('host'), c.req.header('x-forwarded-host'))) {
     return c.json({ error: 'Request from another site' }, 403);
+  }
+  if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'))) {
+    return c.json({ error: 'Sign in to continue', signIn: true }, 401);
+  }
+  if (config.demo && c.req.method !== 'GET' && !c.req.path.startsWith('/api/auth') && !c.req.path.startsWith('/api/push')) {
+    return c.json({ error: 'This is the demo: nothing runs and nothing changes. Start Pelican without --demo to talk to Claude.' }, 403);
   }
   await next();
 });
@@ -56,8 +72,26 @@ app.onError((error, c) => {
   return c.json({ error: error.message }, 500);
 });
 
+app.get('/api/auth', (c) => c.json({ required: passwordSet(), signedIn: signedIn(c.req.header('cookie')) }));
+
+app.post('/api/auth/login', async (c) => {
+  if (!allowAttempt(clientAddress(c))) return c.json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
+  const { password } = await c.req.json<{ password?: string }>().catch(() => ({ password: undefined }));
+  if (!passwordSet() || typeof password !== 'string' || !(await checkPassword(password))) {
+    return c.json({ error: 'Wrong password' }, 401);
+  }
+  const cookie = newSessionCookie();
+  c.header('Set-Cookie', `${cookie.name}=${cookie.value}; Path=/; Max-Age=${cookie.maxAge}; HttpOnly; SameSite=Lax${secure(c) ? '; Secure' : ''}`);
+  return c.json({ ok: true });
+});
+
+app.post('/api/auth/logout', (c) => {
+  c.header('Set-Cookie', `${cookieName()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure(c) ? '; Secure' : ''}`);
+  return c.json({ ok: true });
+});
+
 app.get('/api/info', (c) => {
-  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version };
+  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: passwordSet(), demo: config.demo };
   const key = pushKey();
   if (key) info.pushKey = key;
   return c.json(info);
@@ -70,7 +104,9 @@ app.get('/api/sessions/:id', async (c) => {
   const session = await sessionSummary(id, runStatus);
   const run = runState(id);
   if (!session && !run) return c.json({ error: 'No such session' }, 404);
-  return c.json({ session: session ?? null, run: run ?? null });
+  // The task list needs the whole conversation; the page may only have loaded its end.
+  const tasks = currentTasks(await loadMessages(id));
+  return c.json({ session: session ?? null, run: run ?? null, tasks });
 });
 
 app.get('/api/sessions/:id/messages', async (c) => {
@@ -134,7 +170,50 @@ app.patch('/api/sessions/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-app.get('/api/models', async (c) => c.json({ models: await listModels() }));
+app.post('/api/sessions/:id/fork', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ upTo?: string; before?: string; title?: string }>().catch(() => ({} as { upTo?: string; before?: string; title?: string }));
+  let upTo = body.upTo;
+  if (body.before) {
+    const previous = await messageBefore(id, body.before);
+    if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
+    // Nothing comes before the first prompt: the caller starts a new session instead.
+    if (previous === null) return c.json({ sessionId: null });
+    upTo = previous;
+  }
+  return c.json({ sessionId: await fork(id, upTo, body.title) });
+});
+
+app.delete('/api/sessions/:id', async (c) => {
+  const id = c.req.param('id');
+  if (getRun(id)?.busy) return c.json({ error: 'Stop Claude in this session before deleting it.' }, 409);
+  getRun(id)?.close();
+  await remove(id);
+  return c.json({ ok: true });
+});
+
+app.get('/api/sessions/:id/export', async (c) => {
+  const { title, markdown } = await exportMarkdown(c.req.param('id'));
+  const name = `${title.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'session'}.md`;
+  return c.body(markdown, 200, {
+    'Content-Type': 'text/markdown; charset=utf-8',
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+  });
+});
+
+app.get('/api/models', async (c) => c.json(await listModels()));
+
+app.get('/api/commands', async (c) => {
+  const cwd = c.req.query('cwd');
+  if (!cwd || !(await isDirectory(cwd))) return c.json({ commands: [] });
+  return c.json({ commands: await listCommands(cwd) });
+});
+
+app.get('/api/files', async (c) => {
+  const cwd = c.req.query('cwd');
+  if (!cwd || !(await isDirectory(cwd))) return c.json({ files: [] });
+  return c.json({ files: await searchFiles(cwd, c.req.query('q') ?? '') });
+});
 
 /**
  * Folders to start a new session in: those of recent sessions, without temp
@@ -205,10 +284,17 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
+/** The web app. Every URL in it is relative, so it works under any path a proxy mounts it at. */
 app.get('/*', async (c) => {
   if (!config.webDir) return c.text('The web app is not built. Run `npm run build`, or use `npm run dev`.', 503);
   const root = config.webDir;
-  const requested = path.normalize(decodeURIComponent(new URL(c.req.url).pathname)).replace(/^(\.\.[/\\])+/, '');
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(new URL(c.req.url).pathname);
+  } catch {
+    return c.text('Bad path', 400);
+  }
+  const requested = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
   let file = path.join(root, requested);
   if (!file.startsWith(root) || requested === '/' || !path.extname(file)) file = path.join(root, 'index.html');
   try {
@@ -218,68 +304,10 @@ app.get('/*', async (c) => {
     return c.body(new Uint8Array(data), 200, {
       'Content-Type': TYPES[ext] ?? 'application/octet-stream',
       'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'same-origin',
     });
   } catch {
     return c.notFound();
   }
 });
-
-await initPush();
-
-const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
-  console.log(`[pelican] ${config.machine}: http://${info.address}:${info.port}${config.webDir ? '' : ' (API only)'}`);
-});
-
-const wss = new WebSocketServer({ noServer: true });
-
-server.on('upgrade', (req: IncomingMessage, socket, head) => {
-  const pathname = new URL(req.url ?? '/', 'http://x').pathname;
-  const forwarded = req.headers['x-forwarded-host'];
-  if (!pathname.endsWith('/api/ws')
-    || !originAllowed(req.headers.origin, req.headers.host, Array.isArray(forwarded) ? forwarded[0] : forwarded)) {
-    socket.destroy();
-    return;
-  }
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-});
-
-wss.on('connection', (ws: WebSocket) => {
-  const send = (event: ServerEvent) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
-  };
-  const disconnect = connect(send);
-  const subscriptions = new Map<string, () => void>();
-  // Proxies (Cloudflare closes idle sockets after 100 s) see traffic every 25 s.
-  const ping = setInterval(() => ws.ping(), 25_000);
-
-  ws.on('message', (data) => {
-    let event: ClientEvent;
-    try {
-      event = JSON.parse(String(data)) as ClientEvent;
-    } catch {
-      return;
-    }
-    if (event.type === 'subscribe' && !subscriptions.has(event.sessionId)) {
-      subscriptions.set(event.sessionId, subscribe(event.sessionId, send));
-      const state = runState(event.sessionId);
-      if (state) send({ type: 'run', state });
-    } else if (event.type === 'unsubscribe') {
-      subscriptions.get(event.sessionId)?.();
-      subscriptions.delete(event.sessionId);
-    }
-  });
-
-  ws.on('close', () => {
-    clearInterval(ping);
-    disconnect();
-    for (const unsubscribe of subscriptions.values()) unsubscribe();
-  });
-});
-
-const shutdown = () => {
-  closeAll();
-  server.close();
-  setTimeout(() => process.exit(0), 500).unref();
-};
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);

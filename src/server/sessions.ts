@@ -1,14 +1,14 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, getSessionMessages, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, SessionStatus, SessionSummary } from '../shared/protocol.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
-import { toChatMessage } from './normalize.js';
+import { readHistory } from './history.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
@@ -88,31 +88,10 @@ export async function renameSessionTitle(sessionId: string, title: string): Prom
   infoCache.delete(sessionId);
 }
 
-type Cached = { size: number; mtimeMs: number; messages: ChatMessage[] };
-const messageCache = new Map<string, Cached>();
-const MAX_CACHED = 24;
-
-/** The whole conversation chain, as Claude Code itself resolves it (forks, compactions). */
+/** The whole conversation, oldest first, including what came before each compaction. */
 export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
   const file = await transcriptPath(sessionId);
-  if (!file) return [];
-  let info;
-  try {
-    info = await stat(file);
-  } catch {
-    return [];
-  }
-  const cached = messageCache.get(sessionId);
-  if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.messages;
-  const dir = infoCache.get(sessionId)?.cwd;
-  const raw = await getSessionMessages(sessionId, dir ? { dir } : {});
-  const messages = raw
-    .map((message) => toChatMessage(message as unknown as Record<string, unknown>))
-    .filter((message): message is ChatMessage => Boolean(message));
-  messageCache.delete(sessionId);
-  messageCache.set(sessionId, { size: info.size, mtimeMs: info.mtimeMs, messages });
-  while (messageCache.size > MAX_CACHED) messageCache.delete(messageCache.keys().next().value!);
-  return messages;
+  return file ? readHistory(file) : [];
 }
 
 /** A page of messages ending before index `before` (default: the end). */

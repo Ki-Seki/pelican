@@ -27,7 +27,7 @@ self.addEventListener('notificationclick', (event) => {
   const { url, sessionId } = event.notification.data || {};
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    // An open page shows the session itself; it may be inside the AI Server entry page.
+    // An open page shows the session itself, even when another page frames it.
     for (const client of windows) {
       if (sessionId) client.postMessage({ type: 'open-session', sessionId });
       if ('focus' in client) {
