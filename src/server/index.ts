@@ -144,7 +144,7 @@ app.get('/api/models', async (c) => c.json({ models: await listModels() }));
 app.get('/api/projects', async (c) => {
   const seen = new Map<string, { path: string; name: string; lastActivity: number; sessions: number }>();
   for (const s of await listSummaries(runStatus)) {
-    if (!s.cwd || s.scratch) continue;
+    if (!s.cwd || s.scratch || s.temp) continue;
     const entry = seen.get(s.cwd);
     if (entry) entry.sessions += 1;
     else seen.set(s.cwd, { path: s.cwd, name: s.project, lastActivity: s.lastActivity, sessions: 1 });

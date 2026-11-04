@@ -6,7 +6,7 @@ import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, SessionStatus, SessionSummary } from '../shared/protocol.js';
 import { config } from './config.js';
-import { isScratchFolder } from './folders.js';
+import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
@@ -43,7 +43,8 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
     ...(info.createdAt ? { createdAt: info.createdAt } : {}),
     status: state,
     ...(info.fileSize ? { sizeBytes: info.fileSize } : {}),
-    ...(cwd && isScratchFolder(cwd) ? { scratch: true } : {}),
+    ...(cwd && folderKind(cwd) === 'scratch' ? { scratch: true } : {}),
+    ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
     ...(state === 'live' && elsewhere?.busy ? { runningIn: elsewhere.app } : {}),
     ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
   };

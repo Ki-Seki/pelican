@@ -24,16 +24,30 @@ export const scratchRoot = process.env.PELICAN_SCRATCH_DIR ?? path.join(config.h
  * folders. Sessions in them are real conversations, but the folders are not
  * places to start new work in.
  */
-const scratchRoots = [...new Set([
-  '/tmp', '/private/tmp', '/var/folders', '/private/var/folders',
-  os.tmpdir(), realpath(os.tmpdir()),
-  path.join(config.home, 'Library/Application Support/Claude/scratch-workspaces'),
-  scratchRoot,
-])].map((p) => p.replace(/\/+$/, ''));
+const tempRoots = [...new Set(['/tmp', '/private/tmp', '/var/folders', '/private/var/folders', os.tmpdir(), realpath(os.tmpdir())])]
+  .map((p) => p.replace(/\/+$/, ''));
+const scratchRoots = [path.join(config.home, 'Library/Application Support/Claude/scratch-workspaces'), scratchRoot]
+  .map((p) => p.replace(/\/+$/, ''));
+
+const under = (dir: string, roots: string[]) => {
+  const p = dir.replace(/\/+$/, '');
+  return roots.some((root) => p === root || p.startsWith(`${root}/`));
+};
+
+/**
+ * temp: inside the system's temp directory. Mostly runs another session
+ * started (Claude Code's per-session scratchpads live there); the OS cleans
+ * these folders up. scratch: a session you started without a project, in
+ * Claude Desktop or here; a real conversation in a throwaway folder.
+ */
+export function folderKind(dir: string): 'project' | 'scratch' | 'temp' {
+  if (under(dir, tempRoots)) return 'temp';
+  if (under(dir, scratchRoots)) return 'scratch';
+  return 'project';
+}
 
 export function isScratchFolder(dir: string): boolean {
-  const p = dir.replace(/\/+$/, '');
-  return scratchRoots.some((root) => p === root || p.startsWith(`${root}/`));
+  return folderKind(dir) !== 'project';
 }
 
 export async function isDirectory(dir: string): Promise<boolean> {

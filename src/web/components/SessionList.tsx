@@ -6,8 +6,10 @@ import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { dayGroup, relativeTime } from '../lib/format';
 
-/** Filter value for sessions in temp and scratch folders. */
+/** Filter values for sessions outside projects. */
 const SCRATCH = '\u0000scratch';
+const TEMP = '\u0000temp';
+const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary' };
 
 export function StatusBadge({ status, runningIn }: { status: SessionStatus; runningIn?: string }) {
   if (status === 'idle') return null;
@@ -39,8 +41,10 @@ const Row = memo(function Row({ session, selected, onOpen }: { session: SessionS
       {session.preview && <div className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
       <div className="mt-1 flex items-center gap-2 text-[12.5px] text-muted">
         <StatusBadge status={session.status} runningIn={session.runningIn} />
-        {session.scratch ? (
-          <span className="min-w-0 truncate text-faint">Scratch · {session.project}</span>
+        {session.temp ? (
+          <span className="min-w-0 truncate text-faint">Temporary · {session.project}</span>
+        ) : session.scratch ? (
+          <span className="min-w-0 truncate text-faint">Scratch</span>
         ) : (
           <span className="min-w-0 truncate">{session.project || '—'}</span>
         )}
@@ -76,19 +80,30 @@ export function SessionList({
   const [query, setQuery] = useState('');
   const [project, setProject] = useState<string>();
 
-  // One chip per real project; sessions in temp and scratch folders share a single "Scratch" chip.
+  // One chip per real project; scratch sessions share one chip, and so do temporary ones,
+  // which "All" leaves out: they are mostly runs other sessions started.
   const projects = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const s of sessions ?? []) if (s.project && !s.scratch && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
+    for (const s of sessions ?? []) if (s.project && !s.scratch && !s.temp && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
     const list = [...seen.keys()].slice(0, 14);
     if ((sessions ?? []).some((s) => s.scratch)) list.push(SCRATCH);
+    if ((sessions ?? []).some((s) => s.temp)) list.push(TEMP);
     return list;
   }, [sessions]);
+  const tempCount = useMemo(() => (sessions ?? []).filter((s) => s.temp).length, [sessions]);
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = (sessions ?? []).filter((s) => {
-      if (project === SCRATCH ? !s.scratch : project && (s.scratch || s.project !== project)) return false;
+      if (project === TEMP) {
+        if (!s.temp) return false;
+      } else if (project === SCRATCH) {
+        if (!s.scratch) return false;
+      } else if (project) {
+        if (s.scratch || s.temp || s.project !== project) return false;
+      } else if (s.temp && !q) {
+        return false;
+      }
       if (!q) return true;
       return s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q) || s.id.startsWith(q);
     });
@@ -115,7 +130,7 @@ export function SessionList({
               <span title={connected ? 'Connected' : 'Reconnecting'} className={`size-1.5 shrink-0 rounded-full ${connected ? 'bg-live' : 'bg-wait'}`} />
             </div>
             <div className="text-[12.5px] text-faint">
-              Claude Code{sessions ? ` · ${sessions.length} sessions` : ''}
+              Claude Code{sessions ? ` · ${sessions.length - tempCount} sessions` : ''}
             </div>
           </div>
           {notifications !== 'unsupported' && (
@@ -156,7 +171,8 @@ export function SessionList({
                 onClick={() => setProject(p)}
                 className={`h-8 shrink-0 rounded-full px-3 text-[13px] ${project === p ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
               >
-                {p === SCRATCH ? 'Scratch' : (p ?? 'All')}
+                {p && SPECIAL[p] ? SPECIAL[p] : (p ?? 'All')}
+                {p === TEMP && <span className="ml-1 opacity-60">{tempCount}</span>}
               </button>
             ))}
           </div>

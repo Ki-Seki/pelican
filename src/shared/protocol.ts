@@ -18,8 +18,10 @@ export type SessionSummary = {
   createdAt?: number;
   status: SessionStatus;
   sizeBytes?: number;
-  /** Runs in a temp or scratch folder rather than a project. */
+  /** Started without a project, in a scratch folder (Claude Desktop's or ~/scratch). */
   scratch?: boolean;
+  /** Runs inside the system temp directory: usually a run another session started. */
+  temp?: boolean;
   /** The app working on it right now when that is not this one ('Desktop', 'CloudCLI', ...). */
   runningIn?: string;
   /** Start of Claude's latest reply. */
