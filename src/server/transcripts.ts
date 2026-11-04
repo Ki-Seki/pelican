@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
+import readline from 'node:readline';
 import path from 'node:path';
 
 import { config } from './config.js';
@@ -142,46 +144,6 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
 
 const lastTurnCache = new Map<string, { size: number; mtimeMs: number; value: LastTurn | undefined }>();
 
-const HEAD_SCAN = 1024 * 1024;
-const headCache = new Map<string, string | null>();
-
-/**
- * The session id on the first prompt or reply of a transcript. It is the file's own id, except
- * in a copy of another session: Claude Desktop's side chats start with the whole conversation
- * they came from, rows and ids unchanged. A file only grows at its end, so this is read once.
- */
-export async function firstTurnSession(file: string): Promise<string | undefined> {
-  const cached = headCache.get(file);
-  if (cached !== undefined) return cached ?? undefined;
-  let found: string | null = null;
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(file, 'r');
-    const chunk = Buffer.alloc(HEAD_SCAN);
-    const { bytesRead } = await handle.read(chunk, 0, HEAD_SCAN, 0);
-    const lines = chunk.subarray(0, bytesRead).toString('utf8').split('\n');
-    // The last line may be cut off by the read; it is skipped by the parse.
-    for (const line of lines) {
-      if (!line.includes('"sessionId"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
-      try {
-        const row = JSON.parse(line) as { type?: string; sessionId?: unknown; isSidechain?: boolean };
-        if ((row.type === 'user' || row.type === 'assistant') && !row.isSidechain && typeof row.sessionId === 'string') {
-          found = row.sessionId;
-          break;
-        }
-      } catch {
-        // A row longer than the scan, or cut by it.
-      }
-    }
-  } catch {
-    // Missing or unreadable.
-  } finally {
-    await handle?.close();
-  }
-  if (found || headCache.size < 10_000) headCache.set(file, found);
-  return found ?? undefined;
-}
-
 /**
  * `readLastTurn`, cached by file size and mtime. The row also gives the
  * session's folder and branch, which the SDK misses when Desktop has put
@@ -201,4 +163,87 @@ export async function lastTurnTime(file: string): Promise<{ lastTurn?: LastTurn;
   const value = await readLastTurn(file);
   lastTurnCache.set(file, { size: info.size, mtimeMs: info.mtimeMs, value });
   return { lastTurn: value, mtimeMs: info.mtimeMs, size: info.size };
+}
+
+const HEAD_SCAN = 64 * 1024 * 1024;
+const headCache = new Map<string, string | null>();
+
+/**
+ * The session id on the first prompt or reply of a transcript. It is the file's own id, except
+ * in a copy of another session: Claude Desktop's side chats start with the whole conversation
+ * they came from, rows and ids unchanged. A file only grows at its end, so an answer is kept;
+ * a file that holds no turn yet is asked again next time.
+ */
+export async function firstTurnSession(file: string): Promise<string | undefined> {
+  const cached = headCache.get(file);
+  if (cached !== undefined) return cached ?? undefined;
+  let found: string | undefined;
+  let read = 0;
+  try {
+    const lines = readline.createInterface({ input: createReadStream(file), crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        read += line.length + 1;
+        if (read > HEAD_SCAN) break;
+        if (!line.includes('"sessionId"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
+        try {
+          const row = JSON.parse(line) as { type?: string; sessionId?: unknown; isSidechain?: boolean };
+          if ((row.type === 'user' || row.type === 'assistant') && !row.isSidechain && typeof row.sessionId === 'string') {
+            found = row.sessionId;
+            break;
+          }
+        } catch {
+          // A row being written.
+        }
+      }
+    } finally {
+      lines.close();
+    }
+  } catch {
+    return undefined; // Missing or unreadable.
+  }
+  if (found) {
+    if (headCache.size > 10_000) headCache.clear();
+    headCache.set(file, found);
+  }
+  return found;
+}
+
+/** An image of a prompt as the transcript holds it, in full (the message list leaves big ones out). */
+export type RawImage = { type: 'base64'; mediaType: string; data: string } | { type: 'url' };
+
+/**
+ * The images of one message, in the order and by the rules the message list uses (base64 and
+ * url images; anything else is not an image there), read from the transcript row itself.
+ */
+export async function rawImages(file: string, uuid: string): Promise<RawImage[]> {
+  const needle = `"uuid":"${uuid}"`;
+  const lines = readline.createInterface({ input: createReadStream(file), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line.includes(needle)) continue;
+      let row: { uuid?: unknown; message?: { content?: unknown } };
+      try {
+        row = JSON.parse(line) as typeof row;
+      } catch {
+        continue;
+      }
+      if (row.uuid !== uuid) continue;
+      const content = row.message?.content;
+      if (!Array.isArray(content)) return [];
+      const images: RawImage[] = [];
+      for (const block of content as Array<{ type?: unknown; source?: { type?: unknown; data?: unknown; media_type?: unknown; url?: unknown } }>) {
+        if (block?.type !== 'image' || !block.source) continue;
+        if (block.source.type === 'base64' && typeof block.source.data === 'string') {
+          images.push({ type: 'base64', mediaType: typeof block.source.media_type === 'string' ? block.source.media_type : 'image/png', data: block.source.data });
+        } else if (block.source.type === 'url' && typeof block.source.url === 'string') {
+          images.push({ type: 'url' });
+        }
+      }
+      return images;
+    }
+  } finally {
+    lines.close();
+  }
+  return [];
 }

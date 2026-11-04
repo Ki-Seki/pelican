@@ -136,7 +136,8 @@ function Main() {
   const signOut = () => {
     void api.logout().finally(() => {
       setSettingsOpen(false);
-      queryClient.clear();
+      // Everything but the sign-in state goes; that one is asked again, so the sign-in screen shows.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'auth' });
       void queryClient.resetQueries({ queryKey: ['auth'] });
     });
   };

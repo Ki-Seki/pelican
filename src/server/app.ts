@@ -10,9 +10,11 @@ import pkg from '../../package.json' with { type: 'json' };
 import type { Attachment, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
+import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, signedIn } from './auth.js';
 import { config } from './config.js';
-import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './files.js';
+import { sessionsChanged } from './feed.js';
+import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { listCompletions, listModels, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
@@ -23,6 +25,8 @@ import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { rawImages, transcriptPath } from './transcripts.js';
+import { claudeRanIn, noteClaudeRanIn } from './trust.js';
 
 export const app = new Hono();
 
@@ -199,7 +203,19 @@ function cleanSettings(raw: unknown): RunSettings {
 }
 
 const sendMode = (value: unknown): SendMode | undefined => (value === 'steer' || value === 'queue' ? value : undefined);
-const uuidOf = (value: unknown) => (typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : undefined);
+const uuidOf = (value: unknown) => (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : undefined);
+
+/** A message body of the right types, or why not: a wrong one is the client's error (400), not ours. */
+function sendBody(raw: unknown): SendBody | string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'Not a message';
+  const body = raw as Record<string, unknown>;
+  if (body.text !== undefined && typeof body.text !== 'string') return 'The text must be a string';
+  if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.length > 50 || !body.attachments.every((a) => typeof a === 'string'))) return 'Attachments must be upload ids';
+  if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null)) return 'Settings must be an object';
+  if (body.cwd !== undefined && typeof body.cwd !== 'string') return 'The folder must be a path';
+  if (body.scratch !== undefined && typeof body.scratch !== 'boolean') return 'scratch must be true or false';
+  return body as SendBody;
+}
 
 async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]> {
   const found = await Promise.all((ids ?? []).map((id) => findUpload(id)));
@@ -207,10 +223,12 @@ async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]>
 }
 
 app.post('/api/sessions', async (c) => {
-  const body = await c.req.json<SendBody>();
+  const body = sendBody(await c.req.json().catch(() => undefined));
+  if (typeof body === 'string') return c.json({ error: body }, 400);
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
   const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
   if (!cwd) return c.json({ error: 'No such folder' }, 400);
+  noteClaudeRanIn(cwd);
   const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {
     text: typeof body.text === 'string' ? body.text : '',
@@ -222,7 +240,8 @@ app.post('/api/sessions', async (c) => {
 });
 
 app.post('/api/sessions/:id/messages', async (c) => {
-  const body = await c.req.json<SendBody>();
+  const body = sendBody(await c.req.json().catch(() => undefined));
+  if (typeof body === 'string') return c.json({ error: body }, 400);
   const uuid = uuidOf(body.uuid);
   const mode = sendMode(body.mode);
   const sessionId = await sendMessage({ sessionId: c.req.param('id') }, {
@@ -235,19 +254,21 @@ app.post('/api/sessions/:id/messages', async (c) => {
   return c.json({ sessionId });
 });
 
-/** Edits already made, by the id the editor gave them: a retry gets the same branch, not a second one. */
+/** Edits made, and being made, by the id the editor gave them: a retry gets the same branch, never a second one. */
 const edits = new Map<string, { at: number; sessionId: string }>();
+const editing = new Map<string, Promise<string>>();
 
-/** The images of a prompt, saved as uploads again so the edited prompt carries them too. */
+/** The images of a prompt, saved as uploads again so the edited prompt carries the ones kept. */
 async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise<Attachment[]> {
-  const message = (await loadMessages(sessionId)).find((m) => m.uuid === uuid);
-  const images = (message?.blocks ?? []).flatMap((b) => (b.type === 'image' && b.source.type === 'base64' ? [b.source] : []));
+  const file = await transcriptPath(sessionId);
+  if (!file) return [];
+  const images = await rawImages(file, uuid);
   const wanted = Array.isArray(keep) ? new Set(keep.filter((i): i is number => Number.isInteger(i))) : new Set(images.map((_, i) => i));
   const kept: Attachment[] = [];
   for (const [i, image] of images.entries()) {
-    if (!wanted.has(i)) continue;
-    const ext = image.media_type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
-    kept.push(await saveUpload(new File([Buffer.from(image.data, 'base64')], `image-${i + 1}.${ext}`, { type: image.media_type })));
+    if (!wanted.has(i) || image.type !== 'base64' || !image.data) continue;
+    const ext = image.mediaType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+    kept.push(await saveUpload(new File([Buffer.from(image.data, 'base64')], `image-${i + 1}.${ext}`, { type: image.mediaType })));
   }
   return kept;
 }
@@ -255,7 +276,8 @@ async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise
 /**
  * Edit a prompt and send it again, as one request: the conversation branches just before the
  * prompt (the first prompt: a new session in the same folder) and the new text goes there. If
- * the send fails, the branch is removed, so nothing is left behind; this session is untouched.
+ * the send fails, the branch and its copied images are removed, so nothing is left behind; this
+ * session is untouched. A branch is new work: it never starts in Bypass.
  */
 app.post('/api/sessions/:id/edit', async (c) => {
   const id = c.req.param('id');
@@ -267,31 +289,38 @@ app.post('/api/sessions/:id/edit', async (c) => {
   for (const [k, v] of edits) if (Date.now() - v.at > 10 * 60_000) edits.delete(k);
   const done = edits.get(key);
   if (done) return c.json({ sessionId: done.sessionId });
+  const pending = editing.get(key);
+  if (pending) return c.json({ sessionId: await pending });
   const info = await sessionInfo(id);
   if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
   if (getRun(id)?.busy) return c.json({ error: 'Stop Claude before editing an earlier prompt.' }, 409);
   const previous = await messageBefore(id, before);
   if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
-  const message = {
-    text: body.text,
-    attachments: await imagesOf(id, before, body.keepImages),
-    settings: cleanSettings(body.settings),
-    uuid: key,
-  };
-  let sessionId: string;
-  if (previous === null) {
-    sessionId = await sendMessage({ cwd: info.cwd }, message);
-  } else {
-    const branch = await fork(id, previous);
+  const settings = cleanSettings(body.settings);
+  if (settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
+  const text = body.text;
+  const work = (async () => {
+    const attachments = await imagesOf(id, before, body.keepImages);
+    const message = { text, attachments, settings, uuid: key };
+    let branch: string | undefined;
     try {
-      sessionId = await sendMessage({ sessionId: branch }, message);
+      if (previous === null) return await sendMessage({ cwd: info.cwd }, message);
+      branch = await fork(id, previous);
+      return await sendMessage({ sessionId: branch }, message);
     } catch (error) {
-      await remove(branch).catch(() => undefined);
+      if (branch) await remove(branch).catch(() => undefined);
+      await Promise.all(attachments.map((a) => removeUpload(a.id)));
       throw error;
     }
+  })();
+  editing.set(key, work);
+  try {
+    const sessionId = await work;
+    edits.set(key, { at: Date.now(), sessionId });
+    return c.json({ sessionId });
+  } finally {
+    editing.delete(key);
   }
-  edits.set(key, { at: Date.now(), sessionId });
-  return c.json({ sessionId });
 });
 
 app.post('/api/sessions/:id/interrupt', async (c) => {
@@ -300,9 +329,14 @@ app.post('/api/sessions/:id/interrupt', async (c) => {
 });
 
 app.post('/api/sessions/:id/permissions/:requestId', async (c) => {
-  const decision = await c.req.json<PermissionDecision>();
-  const asked = (decision as { permissionMode?: unknown }).permissionMode;
-  if (asked !== undefined && !permissionMode(asked)) return c.json({ error: 'No such mode' }, 400);
+  const decision = await c.req.json<PermissionDecision>().catch(() => undefined);
+  const raw = (decision ?? {}) as Record<string, unknown>;
+  const valid = (raw.behavior === 'allow' || raw.behavior === 'deny')
+    && (raw.message === undefined || typeof raw.message === 'string')
+    && (raw.remember === undefined || typeof raw.remember === 'boolean')
+    && (raw.updatedInput === undefined || (typeof raw.updatedInput === 'object' && raw.updatedInput !== null && !Array.isArray(raw.updatedInput)))
+    && (raw.permissionMode === undefined || Boolean(permissionMode(raw.permissionMode)));
+  if (!decision || !valid) return c.json({ error: 'Not a decision' }, 400);
   const ok = getRun(c.req.param('id'))?.decide(c.req.param('requestId'), decision) ?? false;
   return ok ? c.json({ ok }) : c.json({ error: 'That request is no longer pending' }, 409);
 });
@@ -334,6 +368,16 @@ app.post('/api/sessions/:id/fork', async (c) => {
     upTo = previous;
   }
   return c.json({ sessionId: await fork(id, upTo, body.title) });
+});
+
+/** Put a session away from the list, or bring it back; nothing else changes. */
+app.post('/api/sessions/:id/archive', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const body = await c.req.json<{ archived?: unknown }>().catch(() => ({}) as { archived?: unknown });
+  if (!id || typeof body.archived !== 'boolean') return c.json({ error: 'Say archived: true or false' }, 400);
+  await setArchived(id, body.archived);
+  sessionsChanged();
+  return c.json({ ok: true });
 });
 
 app.delete('/api/sessions/:id', async (c) => {
@@ -391,9 +435,13 @@ async function checkedFolder(cwd: string | undefined): Promise<string | undefine
 
 const folderOf = (c: Context) => checkedFolder(c.req.query('cwd'));
 
+/** Git runs only where Claude Code has run: a folder you are only shown runs nothing of its own. */
+const gitAllowed = (cwd: string) => (config.demo ? Promise.resolve(true) : claudeRanIn(cwd));
+
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);
   if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  if (!(await gitAllowed(cwd))) return c.json({ repo: false, untrusted: true });
   return c.json(await gitStatus(cwd));
 });
 
@@ -401,6 +449,7 @@ app.get('/api/git/diff', async (c) => {
   const cwd = await folderOf(c);
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
+  if (!(await gitAllowed(cwd))) return c.json({ diff: '' });
   return c.json({ diff: await gitDiff(cwd, file) });
 });
 

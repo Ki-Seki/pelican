@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Attachment } from '../shared/protocol.js';
@@ -61,4 +61,10 @@ export async function listDirs(dir: string | undefined, showHidden: boolean): Pr
     .sort((a, b) => a.name.localeCompare(b.name));
   const parent = path.dirname(target);
   return { path: target, ...(parent !== target ? { parent } : {}), dirs };
+}
+
+/** Removes an upload (made for a message that was never sent). */
+export async function removeUpload(id: string): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/.test(id)) return;
+  await rm(path.join(uploadsDir(), id), { recursive: true, force: true });
 }

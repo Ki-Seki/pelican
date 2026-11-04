@@ -8,13 +8,12 @@ import { config } from './config.js';
 const run = promisify(execFile);
 
 /**
- * Settings that keep git from running anything a folder brings with it. Pelican only reads
- * (status, diffs, file lists), but a repository's own config can name programs that git
- * starts just to show a status or a diff: a file-system monitor, hooks (post-index-change),
- * an external diff, text converters, and clean/process filters for the files its attributes
- * name. All of them are turned off here; Pelican takes no locks the user's own git would
- * trip over, never asks for credentials, and reads pathspecs literally (`:/` is a name, not
- * "the top of the repository").
+ * Git runs only in folders Claude Code has worked in (see trust.ts), where the repository's
+ * config is the user's own. Even there Pelican only reads, so it starts nothing git would start
+ * on the side: no hooks, no file-system monitor, no external diff or text converter. It takes
+ * no locks the user's own git would trip over, never asks for credentials, reads pathspecs
+ * literally (`:/` is a name, not "the top of the repository"), and leaves submodules' work
+ * trees alone.
  */
 const SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'safe.bareRepository=explicit', '-c', 'core.quotepath=off'];
 
@@ -32,42 +31,12 @@ function environment(): NodeJS.ProcessEnv {
   return env;
 }
 
-const filterCache = new Map<string, { at: number; args: string[] }>();
-
-/**
- * `-c filter.<driver>.clean=` and the like for every filter driver the folder's own config
- * defines (local, worktree or included scope). Reading config runs nothing. Drivers from your
- * global or system config, such as Git LFS, are yours and stay as they are.
- */
-async function filterOverrides(cwd: string, env: NodeJS.ProcessEnv): Promise<string[]> {
-  const cached = filterCache.get(cwd);
-  if (cached && Date.now() - cached.at < 10_000) return cached.args;
-  let listing = '';
-  try {
-    listing = (await run('git', ['config', '--show-scope', '--includes', '--name-only', '--get-regexp', '^filter\\.'], { cwd, env, timeout: 5000 })).stdout;
-  } catch {
-    // No filters (git exits with 1), or not a repository.
-  }
-  const drivers = new Set<string>();
-  for (const line of listing.split('\n')) {
-    const [scope, name] = line.trim().split(/\s+/);
-    if (!scope || !name || scope === 'global' || scope === 'system') continue;
-    const driver = /^filter\.(.+)\.[^.]+$/.exec(name)?.[1];
-    if (driver) drivers.add(driver);
-  }
-  const args = [...drivers].flatMap((d) => ['-c', `filter.${d}.clean=`, '-c', `filter.${d}.smudge=`, '-c', `filter.${d}.process=`, '-c', `filter.${d}.required=false`]);
-  filterCache.set(cwd, { at: Date.now(), args });
-  return args;
-}
-
 /** Runs a read-only git command in `cwd`; rejects on a non-zero exit, with stdout on the error. */
 export async function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
-  const env = environment();
   const command = args[0]!;
-  const extra = command === 'diff' ? ['--no-ext-diff', '--no-textconv', '--ignore-submodules=all']
-    : command === 'status' ? ['--ignore-submodules=all']
+  const extra = command === 'diff' ? ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty']
+    : command === 'status' ? ['--ignore-submodules=dirty']
       : [];
-  const filters = await filterOverrides(cwd, env);
-  const { stdout } = await run('git', [...SAFE, ...filters, command, ...extra, ...args.slice(1)], { cwd, env, maxBuffer: 32 * 1024 * 1024, timeout });
+  const { stdout } = await run('git', [...SAFE, command, ...extra, ...args.slice(1)], { cwd, env: environment(), maxBuffer: 32 * 1024 * 1024, timeout });
   return stdout;
 }

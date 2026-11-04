@@ -373,8 +373,11 @@ export function Chat({
   // a new session in the same folder), and sends the new text there; a failed send leaves no
   // branch, and a retry with the same `key` gets the same one. This session stays as it was.
   const alive = useRef(true);
-  useEffect(() => () => {
-    alive.current = false;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
   }, []);
   const edit = async (uuid: string, text: string, key: string, keepImages: number[]): Promise<boolean> => {
     if (!sessionId) return false;
@@ -492,6 +495,11 @@ export function Chat({
         {session?.status === 'live' && !view.run && (
           <Notice tone="live">
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
+          </Notice>
+        )}
+        {session?.openIn && session.status !== 'live' && !busy && (
+          <Notice>
+            Also open in {session.openIn}. Continue in one place: Pelican catches up with what was said there before it sends, but {session.openIn} does not see what you send here until the session is reopened there.
           </Notice>
         )}
         {modelList?.signedIn === false && (

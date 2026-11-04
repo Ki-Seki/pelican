@@ -272,7 +272,7 @@ const FILE_TEXT: Record<string, string> = {
 async function demoRepository(dir: string): Promise<void> {
   const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
   // Your own git setup (hooks, templates, signing) has no say in the demo's repository.
-  const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
+  const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
   try {
     await git(['init', '-q', '-b', 'feat/dark-theme']);
     await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });

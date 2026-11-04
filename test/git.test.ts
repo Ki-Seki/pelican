@@ -5,30 +5,35 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { app } from '../src/server/app';
+import { config } from '../src/server/config';
 import { gitDiff, gitStatus } from '../src/server/workspace';
 
 let root: string;
 let repo: string;
 let marker: string;
 const ran = () => readFile(marker, 'utf8').catch(() => '');
+const saved = { ...config };
+const savedHome = process.env.CLAUDE_CONFIG_DIR;
 
 beforeAll(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'pelican-git-'));
   repo = path.join(root, 'repo');
   marker = path.join(root, 'ran');
+  // No Claude Code sessions anywhere: no folder counts as one Claude has worked in.
+  process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
   await mkdir(repo);
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo });
   git('init', '-q', '-b', 'main');
   await writeFile(path.join(repo, 'a.txt'), 'one\n');
-  await writeFile(path.join(repo, '.gitattributes'), '* filter=evil diff=evil\n');
+  await writeFile(path.join(repo, '.gitattributes'), '*.txt diff=evil\n*.dat filter=evil\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'init');
-  // What a folder from somewhere else can bring: its own filter, diff driver and hooks.
-  git('config', 'filter.evil.clean', `sh -c 'echo clean >> ${marker}; cat'`);
-  git('config', 'filter.evil.process', `sh -c 'echo process >> ${marker}; exit 1'`);
+  // What a folder from somewhere else can bring: a diff driver, an external diff, a monitor, hooks.
   git('config', 'diff.evil.textconv', `sh -c 'echo textconv >> ${marker}; cat "$1"' --`);
   git('config', 'diff.external', `sh -c 'echo external >> ${marker}' --`);
   git('config', 'core.fsmonitor', `sh -c 'echo fsmonitor >> ${marker}' --`);
+  git('config', 'filter.evil.clean', `sh -c 'echo clean >> ${marker}; cat'`);
   await mkdir(path.join(repo, '.git', 'hooks'), { recursive: true });
   const hook = path.join(repo, '.git', 'hooks', 'post-index-change');
   await writeFile(hook, `#!/bin/sh\necho hook >> ${marker}\n`);
@@ -36,10 +41,15 @@ beforeAll(async () => {
   await writeFile(path.join(repo, 'a.txt'), 'two\n');
   await writeFile(path.join(repo, 'b.txt'), 'new\n');
 });
-afterAll(() => rm(root, { recursive: true, force: true }));
+afterAll(async () => {
+  Object.assign(config, saved);
+  if (savedHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = savedHome;
+  await rm(root, { recursive: true, force: true });
+});
 
-describe('git in a folder from elsewhere', () => {
-  it('shows the changes and runs none of the programs the folder names', async () => {
+describe('git', () => {
+  it('in a folder Claude has worked in, shows the changes and starts nothing on the side', async () => {
     const status = await gitStatus(repo);
     if (!status.repo) throw new Error('not a repository');
     expect(status.files.map((f) => f.path).sort()).toEqual(['a.txt', 'b.txt']);
@@ -48,7 +58,16 @@ describe('git in a folder from elsewhere', () => {
     expect(await ran()).toBe('');
   });
 
-  it('reads a path as a name, never as "the top of the repository"', async () => {
+  it('reads a path as a name, and never one with ..', async () => {
     expect(await gitDiff(repo, ':/')).toBe('');
+    await expect(gitDiff(repo, 'x/../a.txt')).rejects.toThrow(/outside/);
+  });
+
+  it('in a folder Claude has not worked in, does not run at all', async () => {
+    config.auth = 'none';
+    await writeFile(path.join(repo, 'c.dat'), 'filtered\n');
+    const response = await app.request(`/api/git?cwd=${encodeURIComponent(repo)}`, { headers: { host: 'localhost:7860', 'x-pelican': '1' } });
+    expect(await response.json()).toEqual({ repo: false, untrusted: true });
+    expect(await ran()).toBe('');
   });
 });

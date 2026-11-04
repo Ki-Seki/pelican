@@ -24,6 +24,10 @@ export type SessionSummary = {
   temp?: boolean;
   /** A Claude Desktop side chat: a copy of this session (the id) with a question or two of its own. */
   sideChatOf?: string;
+  /** Put away from the list in Pelican; the transcript is untouched. */
+  archived?: boolean;
+  /** Open (idle) in another app too, which does not see what is sent here until it reopens the session. */
+  openIn?: string;
   /** Which Claude Code client is working on it right now, when that is not this app and is known. */
   runningIn?: string;
   /** Start of Claude's latest reply. */
@@ -192,7 +196,7 @@ export type UsageLimit = {
 export type Account = { email?: string; organization?: string; plan?: string };
 
 export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
-export type GitStatus = { repo: false } | { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] };
+export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] };
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };

@@ -1,8 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
@@ -98,7 +95,7 @@ const tokenLink = (base: string, token: string) => `${base}?token=${token}`;
 /** Pelican's address on this computer: localhost, unless it listens on one other address only. */
 function localAddress(): string {
   const h = config.host;
-  const host = h === '0.0.0.0' || h === '::' || listensLocally(h) ? 'localhost' : h.includes(':') ? `[${h}]` : h;
+  const host = ['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(h) ? 'localhost' : h.includes(':') ? `[${h}]` : h;
   return `http://${host}:${config.port}/`;
 }
 
@@ -121,22 +118,13 @@ async function tokenCommand(reset: boolean): Promise<void> {
   if (token) console.log(tokenLink(localAddress(), token));
 }
 
-/**
- * Opens the browser signed in, without putting the token on a command line, where other
- * accounts could read it: a page only you can read redirects to the link, and goes away.
- */
-async function openSignedIn(link: string): Promise<void> {
-  const file = path.join(config.configDir, 'open.html');
-  await mkdir(config.configDir, { recursive: true, mode: 0o700 });
-  await rm(file, { force: true });
-  await writeFile(file, `<!doctype html><meta http-equiv="refresh" content="0;url=${link}"><a href="${link}">Open Pelican</a>\n`, { mode: 0o600 });
-  openBrowser(pathToFileURL(file).href);
-  setTimeout(() => void rm(file, { force: true }), 30_000).unref();
-}
-
 function openBrowser(url: string): void {
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-  spawn(opener, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).on('error', () => {}).unref();
+  try {
+    spawn(opener, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).on('error', () => {}).unref();
+  } catch {
+    // Opening a browser is a convenience; the address is printed above.
+  }
 }
 
 async function main(): Promise<void> {
@@ -216,8 +204,9 @@ async function main(): Promise<void> {
     console.log(`  From your phone: ${DOCS}#phone\n`);
   }
   if (values.open) {
-    if (token) await openSignedIn(tokenLink(shown, token));
-    else openBrowser(shown);
+    // macOS hands the address to the browser in an Apple Event; elsewhere it would sit on the
+    // browser's command line for every account to read, so the page opens to its sign-in there.
+    openBrowser(token && process.platform === 'darwin' ? tokenLink(shown, token) : shown);
   }
 }
 

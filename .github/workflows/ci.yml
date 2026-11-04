@@ -78,7 +78,7 @@ jobs:
           for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://localhost:7862/api/auth && break; sleep 1; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 401
           # Not in the log (stdout is a file there): `pelican token` prints the link.
-          ! grep -q 'token=' "$RUNNER_TEMP/pelican.log"
+          if grep -q 'token=' "$RUNNER_TEMP/pelican.log"; then echo 'The sign-in link is in the log'; exit 1; fi
           link=$(pelican token --port 7862)
           case "$link" in http://localhost:7862/?token=*) ;; *) exit 1 ;; esac
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$RUNNER_TEMP/cookies" "$link")" = 302

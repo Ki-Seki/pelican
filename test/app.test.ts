@@ -140,6 +140,20 @@ describe('what a request may carry', () => {
   });
 });
 
+describe('archive', () => {
+  it('puts a session away and back, and takes nothing else', async () => {
+    const id = '4e05eb31-6d40-4b57-93dd-bf4aeb9374cf';
+    const post = (body: unknown, sessionId = id) => ask(`/api/sessions/${sessionId}/archive`, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+    expect((await post({ archived: 'yes' })).status).toBe(400);
+    expect((await post({ archived: true }, 'not-a-session')).status).toBe(400);
+    expect((await post({ archived: true })).status).toBe(200);
+    const { archivedIds } = await import('../src/server/archive');
+    expect((await archivedIds()).has(id)).toBe(true);
+    expect((await post({ archived: false })).status).toBe(200);
+    expect((await archivedIds()).has(id)).toBe(false);
+  });
+});
+
 describe('the page', () => {
   it('may be framed only by itself, and loads images only from itself', async () => {
     const response = await ask('/', {}, false);

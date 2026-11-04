@@ -11,7 +11,8 @@ import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
 /** Filter values for sessions outside projects. */
 const SCRATCH = '\u0000scratch';
 const TEMP = '\u0000temp';
-const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary' };
+const ARCHIVED = '\u0000archived';
+const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary', [ARCHIVED]: 'Archived' };
 
 export function statusLabel(status: SessionStatus, runningIn?: string): string {
   if (status === 'running') return 'Working';
@@ -42,7 +43,11 @@ export function StatusBadge({ status, runningIn }: { status: SessionStatus; runn
   );
 }
 
+const matches = (s: SessionSummary, q: string) =>
+  s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q) || (s.preview ?? '').toLowerCase().includes(q) || s.id.startsWith(q);
+
 function Where({ session }: { session: SessionSummary }) {
+  if (session.archived) return <span className="min-w-0 truncate text-faint">Archived · {session.project}</span>;
   if (session.sideChatOf) return <span className="min-w-0 truncate text-faint">Side chat · {session.project}</span>;
   if (session.temp) return <span className="min-w-0 truncate text-faint">Temporary · {session.project}</span>;
   if (session.scratch) return <span className="min-w-0 truncate text-faint">Scratch</span>;
@@ -158,18 +163,22 @@ export function SessionList({
   // which "All" leaves out unless Settings says otherwise: they are mostly runs other sessions started.
   const projects = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const s of sessions ?? []) if (s.project && !s.scratch && !s.temp && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
+    for (const s of sessions ?? []) if (s.project && !s.scratch && !s.temp && !s.archived && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
     const list = [...seen.keys()].slice(0, 14);
-    if ((sessions ?? []).some((s) => s.scratch)) list.push(SCRATCH);
-    if ((sessions ?? []).some((s) => s.temp)) list.push(TEMP);
+    if ((sessions ?? []).some((s) => s.scratch && !s.archived)) list.push(SCRATCH);
+    if ((sessions ?? []).some((s) => s.temp && !s.archived)) list.push(TEMP);
+    if ((sessions ?? []).some((s) => s.archived)) list.push(ARCHIVED);
     return list;
   }, [sessions]);
-  const tempCount = useMemo(() => (sessions ?? []).filter((s) => s.temp).length, [sessions]);
-  const sideChatCount = useMemo(() => (sessions ?? []).filter((s) => s.sideChatOf && !s.temp).length, [sessions]);
+  const tempCount = useMemo(() => (sessions ?? []).filter((s) => s.temp && !s.archived).length, [sessions]);
+  const archivedCount = useMemo(() => (sessions ?? []).filter((s) => s.archived).length, [sessions]);
 
   const groups = useMemo((): Group[] => {
     const q = query.trim().toLowerCase();
     const filtered = (sessions ?? []).filter((s) => {
+      // Archived sessions show under their own chip, or when a search finds them.
+      if (project === ARCHIVED) return s.archived && (!q || matches(s, q));
+      if (s.archived && !q) return false;
       // Side chats belong to the session they came from: shown when asked for, or found by a search.
       if (s.sideChatOf && !q && !prefs.showSideChats) return false;
       if (project === TEMP) {
@@ -181,8 +190,7 @@ export function SessionList({
       } else if (s.temp && !q && !prefs.showTemporary) {
         return false;
       }
-      if (!q) return true;
-      return s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q) || (s.preview ?? '').toLowerCase().includes(q) || s.id.startsWith(q);
+      return !q || matches(s, q);
     });
 
     if (prefs.listGroup === 'project' && !project) {
@@ -215,7 +223,8 @@ export function SessionList({
 
   const byProject = prefs.listGroup === 'project' && !project;
   const Row = prefs.listDensity === 'compact' ? CompactRow : DetailedRow;
-  const visibleCount = (sessions?.length ?? 0) - (prefs.showTemporary ? 0 : tempCount) - (prefs.showSideChats ? 0 : sideChatCount);
+  // What "All" shows, counted the way it is filtered.
+  const visibleCount = (sessions ?? []).filter((s) => !s.archived && !(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)).length;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -263,6 +272,7 @@ export function SessionList({
               >
                 {p && SPECIAL[p] ? SPECIAL[p] : (p ?? 'All')}
                 {p === TEMP && <span className="ml-1 opacity-60">{tempCount}</span>}
+                {p === ARCHIVED && <span className="ml-1 opacity-60">{archivedCount}</span>}
               </button>
             ))}
           </div>

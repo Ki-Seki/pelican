@@ -60,13 +60,21 @@ class Feed {
     }
   }
 
+  /** Publishes still on their way (priming reads the transcript first). */
+  publishing = 0;
+
   async publish(message: ChatMessage): Promise<void> {
-    await this.prime();
-    if (this.delivered.has(message.uuid)) return;
-    this.delivered.add(message.uuid);
-    this.recent.push(message);
-    if (this.recent.length > 40) this.recent.shift();
-    this.broadcast({ type: 'message', sessionId: this.sessionId, message });
+    this.publishing += 1;
+    try {
+      await this.prime();
+      if (this.delivered.has(message.uuid)) return;
+      this.delivered.add(message.uuid);
+      this.recent.push(message);
+      if (this.recent.length > 40) this.recent.shift();
+      this.broadcast({ type: 'message', sessionId: this.sessionId, message });
+    } finally {
+      this.publishing -= 1;
+    }
   }
 
   get hasRecent(): boolean {
@@ -184,6 +192,6 @@ export function subscribe(sessionId: string, listener: Listener): () => void {
     feed.unwatch();
     // Nobody watches and no run has published into it: forget it, so feeds do not pile up
     // for every session ever opened. A run's feed stays, for a client that comes back to it.
-    if (!feed.hasRecent && feeds.get(sessionId) === feed) feeds.delete(sessionId);
+    if (!feed.hasRecent && feed.publishing === 0 && feeds.get(sessionId) === feed) feeds.delete(sessionId);
   };
 }

@@ -141,8 +141,6 @@ const AssistantTurn = memo(function AssistantTurn({
   );
 });
 
-/** The images of a prompt that an edit can carry over: those whose data is here (not url ones, not left out). */
-const editableImages = (images: ImageBlock[]) => images.filter((image) => !image.omitted && image.source.type === 'base64');
 
 const UserBubble = memo(function UserBubble({
   item, onEdit, onRewind,
@@ -160,7 +158,7 @@ const UserBubble = memo(function UserBubble({
     return (
       <EditPrompt
         text={item.text}
-        images={editableImages(item.images)}
+        images={item.images}
         onCancel={() => setEditing(undefined)}
         onSend={(next, keep) => onEdit(item.key, next, editing, keep).then((sent) => {
           if (sent) setEditing(undefined);
@@ -242,7 +240,10 @@ function EditPrompt({ text, images, onCancel, onSend }: {
   onSend: (text: string, keepImages: number[]) => Promise<void>;
 }) {
   const [value, setValue] = useState(text);
-  const [kept, setKept] = useState(() => images.map((_, i) => i));
+  // Positions among all the prompt's images, as the server counts them; only those held in the
+  // transcript (not a link to one elsewhere) can go along.
+  const carried = images.flatMap((image, i) => (image.source.type === 'base64' ? [i] : []));
+  const [kept, setKept] = useState(carried);
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -263,9 +264,10 @@ function EditPrompt({ text, images, onCancel, onSend }: {
   };
   return (
     <div className="ml-auto w-full max-w-[85%] rounded-2xl border border-line bg-panel p-2">
-      {images.length > 0 && (
+      {carried.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1.5 px-1 pt-1">
-          {images.map((image, i) => {
+          {carried.map((i) => {
+            const image = images[i]!;
             const keep = kept.includes(i);
             return (
               <button
@@ -277,7 +279,11 @@ function EditPrompt({ text, images, onCancel, onSend }: {
                 onClick={() => setKept((all) => (keep ? all.filter((k) => k !== i) : [...all, i].sort((a, b) => a - b)))}
                 className="relative"
               >
-                <img alt="" src={imageSrc(image)} className={`size-14 rounded-lg border border-line object-cover ${keep ? '' : 'opacity-30'}`} />
+                {image.omitted ? (
+                  <span className={`grid size-14 place-items-center rounded-lg border border-line text-[11px] text-faint ${keep ? '' : 'opacity-30'}`}>Image</span>
+                ) : (
+                  <img alt="" src={imageSrc(image)} className={`size-14 rounded-lg border border-line object-cover ${keep ? '' : 'opacity-30'}`} />
+                )}
                 <span className="absolute -top-1 -right-1 grid size-4.5 place-items-center rounded-full bg-fg text-bg"><X className="size-3" /></span>
               </button>
             );

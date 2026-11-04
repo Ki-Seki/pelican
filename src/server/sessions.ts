@@ -5,6 +5,7 @@ import { getSessionInfo, getSubagentMessages, listSessions, renameSession } from
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import { archivedIds } from './archive.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
@@ -21,7 +22,7 @@ function titleOf(info: SDKSessionInfo): string {
   return title.replace(/\s+/g, ' ').trim() || 'Untitled session';
 }
 
-async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>): Promise<SessionSummary> {
+async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>, archived: Set<string>): Promise<SessionSummary> {
   const file = await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file) : undefined;
   const lastTurn = times?.lastTurn;
@@ -30,7 +31,8 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   let state: SessionStatus = own ?? 'idle';
   // Another app's Claude process says it is busy; failing that, a turn written moments ago
   // (not one a fork just copied over: a new branch is idle until someone sends to it).
-  const elsewhere = own ? undefined : live.get(info.sessionId);
+  const other = live.get(info.sessionId);
+  const elsewhere = own ? undefined : other;
   const recent = lastTurn && !lastTurn.copied && Date.now() - lastTurn.time < config.liveWindowMs;
   if (!own && (elsewhere?.busy || recent)) state = 'live';
   const cwd = info.cwd || lastTurn?.cwd || '';
@@ -55,6 +57,9 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
     ...(state === 'live' && elsewhere?.busy ? { runningIn: elsewhere.app } : {}),
     ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
+    ...(archived.has(info.sessionId) ? { archived: true } : {}),
+    // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
+    ...(other && !other.busy ? { openIn: other.app ?? 'another app' } : {}),
   };
 }
 
@@ -62,8 +67,8 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
 export async function listSummaries(status: StatusSource): Promise<SessionSummary[]> {
   const infos = await listSessions({ includeProgrammatic: true });
   for (const info of infos) infoCache.set(info.sessionId, info);
-  const live = await liveProcesses();
-  const summaries = await Promise.all(infos.map((info) => summarize(info, status, live)));
+  const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
+  const summaries = await Promise.all(infos.map((info) => summarize(info, status, live, archived)));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -87,7 +92,7 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 
 export async function sessionSummary(sessionId: string, status: StatusSource): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status, await liveProcesses()) : undefined;
+  return info ? summarize(info, status, await liveProcesses(), await archivedIds()) : undefined;
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

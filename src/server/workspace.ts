@@ -11,8 +11,13 @@ const MAX_DIFF = 400_000;
 const OUTSIDE = 'That path is outside the session’s folder';
 const within = (root: string, full: string) => full === root || full.startsWith(`${root}${path.sep}`);
 
-/** A path inside the session's folder, or an error: the panels never reach outside it. */
+/**
+ * A path inside the session's folder, or an error: the panels never reach outside it. No `..`
+ * at all: resolving it by the text would cancel a linked folder before the link is checked
+ * (`link/../x`), and the panels never ask for one.
+ */
 export function inside(cwd: string, relative: string): string {
+  if ((relative ?? '').split(/[\\/]/).includes('..')) throw new Error(OUTSIDE);
   const root = path.resolve(cwd);
   const full = path.resolve(root, relative || '.');
   if (!within(root, full)) throw new Error(OUTSIDE);
@@ -29,8 +34,25 @@ async function insideReal(cwd: string, relative: string): Promise<string> {
 
 const KIND: Record<string, GitFile['status']> = { M: 'modified', T: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'added', U: 'conflicted' };
 
+/**
+ * The repository the folder is in, when its work tree is the folder or a folder above it. A
+ * repository whose config points its work tree somewhere else (core.worktree) would show files
+ * from outside: Pelican treats that as no repository.
+ */
+async function repositoryOf(cwd: string): Promise<string | undefined> {
+  try {
+    const top = (await git(cwd, ['rev-parse', '--show-toplevel'], 5000)).trim();
+    if (!top) return undefined;
+    const [root, folder] = await Promise.all([realpath(top), realpath(cwd)]);
+    return within(root, folder) ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** What changed in the session's folder since the last commit, with line counts. */
 export async function gitStatus(cwd: string): Promise<GitStatus> {
+  if (!(await repositoryOf(cwd))) return { repo: false };
   let raw: string;
   try {
     raw = await git(cwd, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']);
@@ -97,6 +119,7 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
 
 /** The diff of one file against the last commit; an untracked file shows as all added. */
 export async function gitDiff(cwd: string, file: string): Promise<string> {
+  if (!(await repositoryOf(cwd))) return '';
   // The file itself may be gone (a deleted file has a diff), but the folder it is in may not lead
   // out of the session's folder through a link.
   const full = inside(cwd, file);

@@ -1,11 +1,34 @@
+import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { config } from './config.js';
 import { DEMO_LIVE_SESSION } from './demo.js';
 
-/** A Claude Code process outside this app working on a session right now. */
-export type LiveProcess = { app?: string; busy: boolean };
+/**
+ * A Claude Code process outside this app with a session open: busy, or idle and holding the
+ * conversation as it last saw it. `updatedAt` is when it last worked on it.
+ */
+export type LiveProcess = { app?: string; busy: boolean; updatedAt?: number };
+
+const run = promisify(execFile);
+
+/** Parent of each process, to tell this app's own Claude processes from other apps'. */
+async function parents(pids: number[]): Promise<Map<number, number> | undefined> {
+  if (pids.length === 0) return new Map();
+  try {
+    const { stdout } = await run('ps', ['-o', 'pid=,ppid=', '-p', pids.join(',')], { timeout: 3000 });
+    const map = new Map<number, number>();
+    for (const line of stdout.split('\n')) {
+      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+      if (pid && ppid) map.set(pid, ppid);
+    }
+    return map;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Claude Code's own clients, by the entrypoint they record. Any other program
@@ -46,21 +69,28 @@ export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
   } catch {
     // Older Claude Code, or none running.
   }
-  await Promise.all(names.map(async (name) => {
+  type Entry = { pid?: number; sessionId?: string; status?: string; entrypoint?: string; updatedAt?: number };
+  const entries = (await Promise.all(names.map(async (name) => {
     try {
-      const entry = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as {
-        pid?: number; sessionId?: string; status?: string; entrypoint?: string;
-      };
-      if (!entry.sessionId || typeof entry.pid !== 'number' || entry.pid === process.pid || !alive(entry.pid)) return;
-      const busy = entry.status !== undefined && entry.status !== 'idle';
-      const app = CLAUDE_CLIENTS[entry.entrypoint ?? ''];
-      const known = byId.get(entry.sessionId);
-      // A session open in two places: the busy one is what matters.
-      if (!known || (busy && !known.busy)) byId.set(entry.sessionId, { ...(app ? { app } : {}), busy });
+      const entry = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as Entry;
+      return entry.sessionId && typeof entry.pid === 'number' && entry.pid !== process.pid && alive(entry.pid) ? entry : undefined;
     } catch {
-      // Being rewritten; the next read gets it.
+      return undefined; // Being rewritten; the next read gets it.
     }
-  }));
+  }))).filter((e): e is Entry & { pid: number; sessionId: string } => Boolean(e));
+  // This app's own Claude processes are its children; when that cannot be told, those of the SDK.
+  const parent = await parents(entries.map((e) => e.pid));
+  for (const entry of entries) {
+    const ours = parent ? parent.get(entry.pid) === process.pid : entry.entrypoint === 'sdk-ts';
+    if (ours) continue;
+    const busy = entry.status !== undefined && entry.status !== 'idle';
+    const app = CLAUDE_CLIENTS[entry.entrypoint ?? ''];
+    const known = byId.get(entry.sessionId);
+    const updatedAt = Math.max(known?.updatedAt ?? 0, typeof entry.updatedAt === 'number' ? entry.updatedAt : 0) || undefined;
+    // A session open in two places: the busy one is what matters.
+    const pick = !known || (busy && !known.busy) ? { ...(app ? { app } : {}), busy } : known;
+    byId.set(entry.sessionId, { ...pick, ...(updatedAt ? { updatedAt } : {}) });
+  }
   cache = { at: Date.now(), byId };
   return byId;
 }

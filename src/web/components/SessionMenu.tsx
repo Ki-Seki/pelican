@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Download, GitFork, Loader2, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
@@ -215,6 +215,27 @@ export function SessionMenu({
         />
       )}
       <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" description="Prompts and replies, with each step on one line" onSelect={exportMarkdown} />
+      {session?.archived ? (
+        <SheetOption
+          icon={<ArchiveRestore className="size-4" />}
+          label="Unarchive"
+          description="Back in the list"
+          onSelect={() => act(async () => {
+            await api.archive(sessionId, false);
+            onRenamed();
+          })}
+        />
+      ) : (
+        <SheetOption
+          icon={<Archive className="size-4" />}
+          label="Archive"
+          description="Off the list, under Archived; the session itself stays as it is"
+          onSelect={() => act(async () => {
+            await api.archive(sessionId, true);
+            onDeleted();
+          })}
+        />
+      )}
       {confirmDelete ? (
         <div className="mx-1 my-1 rounded-xl border border-line px-3 py-2.5">
           <div className="text-[14px]">Delete this session?</div>

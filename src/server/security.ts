@@ -33,7 +33,7 @@ function knownHosts(): Set<string> {
   }
   for (const origin of config.allowedOrigins) {
     try {
-      names.add(new URL(origin).hostname.toLowerCase());
+      names.add(new URL(origin).hostname.toLowerCase().replace(/^\[(.*)\]$/, '$1'));
     } catch {
       // Not a URL; ignored.
     }

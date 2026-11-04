@@ -32,6 +32,7 @@ import { config } from './config.js';
 import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
 import { toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
+import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
 import { sessionInfo } from './sessions.js';
@@ -106,6 +107,10 @@ export class SessionRun {
   private context?: RunState['context'];
   private activity?: RunState['activity'];
   private tasks: BackgroundTask[] = [];
+
+  get hasBackgroundTasks(): boolean {
+    return this.tasks.length > 0;
+  }
   /** Messages waiting for the turn to end, published when it does. */
   private queued: ChatMessage[] = [];
   private suggestion?: string;
@@ -537,7 +542,8 @@ export class SessionRun {
       this.permissions.clear();
       this.setBusy(false);
       this.emit();
-      runs.delete(this.sessionId);
+      // A newer run may have taken this session's place already (see sendMessage).
+      if (runs.get(this.sessionId) === this) runs.delete(this.sessionId);
       sessionsChanged();
     }
   }
@@ -569,11 +575,25 @@ async function isDirectory(dir: string): Promise<boolean> {
  * Sends a message, starting (or resuming) the session's Claude process when
  * none is running. Without a session id a new session starts in `cwd`.
  */
+/**
+ * Whether another app (Claude Desktop, the terminal) has worked on the session since this
+ * run's Claude last did. Its process then holds a conversation this one has not seen, and a
+ * message sent to it would continue an old version, beside the other: it is started afresh.
+ */
+async function staleRun(run: SessionRun): Promise<boolean> {
+  if (run.busy || run.hasBackgroundTasks) return false;
+  const other = (await liveProcesses()).get(run.sessionId);
+  return Boolean(other?.updatedAt && other.updatedAt > run.lastActive);
+}
+
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (target.sessionId) {
     const existing = getRun(target.sessionId);
-    if (existing) {
+    if (existing && (await staleRun(existing))) {
+      existing.close();
+      runs.delete(existing.sessionId);
+    } else if (existing) {
       await existing.send(input);
       return existing.sessionId;
     }

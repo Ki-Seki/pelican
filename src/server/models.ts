@@ -1,12 +1,13 @@
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 
-import { listSessions, query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerStatus, ModelInfo, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Account, Agent, Command, McpServer, ModelOption } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
+import { claudeRanIn } from './trust.js';
 
 const TTL_MS = 10 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 30_000;
@@ -16,24 +17,6 @@ const MAX_PROBES = 2;
 const idlePrompt: AsyncIterable<SDKUserMessage> = {
   [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
 };
-
-/**
- * Whether Claude Code has run in this folder before, so its own settings, hooks
- * and MCP servers are ones the user already let run. A folder Pelican is merely
- * shown (a fresh clone, a download) gets only the user's settings: looking at it
- * must not start what it brings.
- */
-async function ranHere(dir: string): Promise<boolean> {
-  if (dir === os.homedir()) return true;
-  // Claude Code files sessions by the folder's path with punctuation turned into dashes, so
-  // `a.b` and `a-b` share a list: a session counts only if it ran in this very folder.
-  const sessions = await listSessions({ dir, limit: 50, includeWorktrees: false }).catch(() => []);
-  for (const session of sessions) {
-    if (!session.cwd) continue;
-    if (session.cwd === dir || (await realpath(session.cwd).catch(() => '')) === dir) return true;
-  }
-  return false;
-}
 
 let running = 0;
 const waiting: (() => void)[] = [];
@@ -68,7 +51,7 @@ async function probe<T>(key: string, cwd: string, ask: (q: ReturnType<typeof que
       options: {
         cwd: dir,
         persistSession: false,
-        settingSources: (await ranHere(dir)) ? ['user', 'project', 'local'] : ['user'],
+        settingSources: (await claudeRanIn(dir)) ? ['user', 'project', 'local'] : ['user'],
         ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
       },
     });
