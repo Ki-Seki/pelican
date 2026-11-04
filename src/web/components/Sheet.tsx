@@ -3,7 +3,7 @@ import { type ReactNode, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 /** A bottom sheet on phones, a centered panel on wider screens. */
-export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export function Sheet({ open, onClose, title, children, done }: { open: boolean; onClose: () => void; title: string; children: ReactNode; done?: boolean }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -25,7 +25,14 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       >
         <div className="shrink-0 px-4 pt-2 pb-1">
           <div className="mx-auto mb-2 h-1 w-9 rounded-full bg-line sm:hidden" />
-          <div className="text-[13px] font-medium text-muted">{title}</div>
+          <div className="flex items-center">
+            <div className="flex-1 text-[13px] font-medium text-muted">{title}</div>
+            {done && (
+              <button type="button" onClick={onClose} className="-my-1 h-8 rounded-full px-3 text-[14px] font-medium hover:bg-hover">
+                Done
+              </button>
+            )}
+          </div>
         </div>
         <div className="min-h-0 overflow-y-auto px-2 pb-2">{children}</div>
       </div>

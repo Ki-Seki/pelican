@@ -4,7 +4,7 @@ import { type ClipboardEvent, type DragEvent, useEffect, useRef, useState } from
 import type { Attachment, ModelOption, PermissionMode, RunSettings } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { EFFORT_LABELS, PERMISSION_MODES } from '../lib/prefs';
+import { EFFORT_LABELS, EFFORT_SHORT, PERMISSION_MODES } from '../lib/prefs';
 import { Sheet, SheetOption } from './Sheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string };
@@ -30,16 +30,35 @@ async function shrinkImage(file: File): Promise<File> {
   }
 }
 
-function Chip({ children, onClick, active, label }: { children: React.ReactNode; onClick: () => void; active?: boolean; label: string }) {
+/** A composer setting. Never a solid pill: the send button is the only solid control in the row. */
+function Chip({ children, onClick, tone = 'plain', label }: { children: React.ReactNode; onClick: () => void; tone?: 'plain' | 'warn'; label: string }) {
   return (
     <button
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] ${active ? 'bg-fg text-bg' : 'text-muted hover:bg-hover hover:text-fg'}`}
+      className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] whitespace-nowrap ${tone === 'warn' ? 'bg-wait/12 text-wait' : 'text-muted hover:bg-hover hover:text-fg'}`}
     >
       {children}
     </button>
+  );
+}
+
+function Segmented({ options, value, onChange }: { options: Array<{ value: string | undefined; label: string; title?: string }>; value: string | undefined; onChange: (value: string | undefined) => void }) {
+  return (
+    <div className="grid auto-cols-fr grid-flow-col gap-1 px-3 pb-1">
+      {options.map((option) => (
+        <button
+          key={option.value ?? '*'}
+          type="button"
+          title={option.title}
+          onClick={() => onChange(option.value)}
+          className={`h-9 min-w-0 rounded-full px-1 text-[13.5px] ${option.value === value ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -64,7 +83,7 @@ export function Composer({
 }) {
   const [text, setText] = useState('');
   const [uploads, setUploads] = useState<Upload[]>([]);
-  const [sheet, setSheet] = useState<'model' | 'effort' | 'mode' | undefined>();
+  const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
@@ -179,23 +198,15 @@ export function Composer({
             if (e.target.files) addFiles(e.target.files);
             e.target.value = '';
           }} />
-          <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-            <Chip label="Model" onClick={() => setSheet('model')}>
-              <span className="max-w-32 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
+          {/* Model, effort and speed share one chip, so the row fits a phone; it scrolls with a fade if not. */}
+          <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pr-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
+            <Chip label="Model, effort and speed" onClick={() => setSheet('model')}>
+              <span className="max-w-28 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
+              {settings.effort && <span className="text-faint">· {EFFORT_SHORT[settings.effort] ?? settings.effort}</span>}
+              {model?.supportsFast && settings.fast && <Zap className="size-3.5 fill-current text-wait" aria-label="Fast mode on" />}
               <ChevronDown className="size-3.5 opacity-60" />
             </Chip>
-            {efforts.length > 0 && (
-              <Chip label="Effort" onClick={() => setSheet('effort')}>
-                {settings.effort ? EFFORT_LABELS[settings.effort] ?? settings.effort : 'Effort'}
-                <ChevronDown className="size-3.5 opacity-60" />
-              </Chip>
-            )}
-            {model?.supportsFast && (
-              <Chip label="Fast mode" active={settings.fast} onClick={() => set({ fast: !settings.fast })}>
-                <Zap className="size-3.5" />Fast
-              </Chip>
-            )}
-            <Chip label="Permission mode" active={mode.value === 'bypassPermissions'} onClick={() => setSheet('mode')}>
+            <Chip label="Permission mode" tone={mode.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
               {mode.short}
               <ChevronDown className="size-3.5 opacity-60" />
             </Chip>
@@ -218,7 +229,39 @@ export function Composer({
         </div>
       </div>
 
-      <Sheet open={sheet === 'model'} onClose={() => setSheet(undefined)} title="Model">
+      <Sheet open={sheet === 'model'} onClose={() => setSheet(undefined)} title="Model" done>
+        {efforts.length > 0 && (
+          <>
+            <div className="px-3 pt-1 pb-2 text-[12px] text-faint">Reasoning effort</div>
+            <Segmented
+              value={settings.effort}
+              onChange={(effort) => set({ effort })}
+              options={[
+                { value: undefined, label: 'Default', title: 'What Claude Code uses for this model' },
+                ...efforts.map((e) => ({ value: e, label: EFFORT_SHORT[e] ?? e, title: EFFORT_LABELS[e] ?? e })),
+              ]}
+            />
+          </>
+        )}
+        {model?.supportsFast && (
+          <button
+            type="button"
+            onClick={() => set({ fast: !settings.fast })}
+            className="mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-hover"
+            role="switch"
+            aria-checked={Boolean(settings.fast)}
+          >
+            <Zap className={`size-4 shrink-0 ${settings.fast ? 'fill-current text-wait' : 'text-faint'}`} />
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px]">Fast mode</div>
+              <div className="mt-0.5 text-[12.5px] text-muted">Faster output, billed at a higher rate</div>
+            </div>
+            <span className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${settings.fast ? 'bg-fg' : 'bg-line'}`}>
+              <span className={`absolute top-0.5 size-5 rounded-full bg-bg shadow transition-transform ${settings.fast ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+            </span>
+          </button>
+        )}
+        <div className="px-3 pt-3 pb-1 text-[12px] text-faint">Model</div>
         {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
         {models?.map((m) => (
           <SheetOption
@@ -229,22 +272,8 @@ export function Composer({
             onSelect={() => {
               const effort = settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined;
               onSettings({ ...settings, model: m.value, effort, fast: m.supportsFast ? settings.fast : false });
-              setSheet(undefined);
             }}
           />
-        ))}
-      </Sheet>
-
-      <Sheet open={sheet === 'effort'} onClose={() => setSheet(undefined)} title="Reasoning effort">
-        <SheetOption label="Default" description="What Claude Code uses for this model" selected={!settings.effort} onSelect={() => {
-          set({ effort: undefined });
-          setSheet(undefined);
-        }} />
-        {efforts.map((effort) => (
-          <SheetOption key={effort} label={EFFORT_LABELS[effort] ?? effort} selected={settings.effort === effort} onSelect={() => {
-            set({ effort });
-            setSheet(undefined);
-          }} />
         ))}
       </Sheet>
 

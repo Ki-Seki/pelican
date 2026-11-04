@@ -35,3 +35,12 @@ export const EFFORT_LABELS: Record<string, string> = {
   xhigh: 'Extra high',
   max: 'Max',
 };
+
+/** Short forms for the composer's one-line summary. */
+export const EFFORT_SHORT: Record<string, string> = {
+  low: 'Low',
+  medium: 'Med',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+};

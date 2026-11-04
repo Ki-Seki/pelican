@@ -164,6 +164,12 @@ export function Chat({
         {permissions.map((request) => (
           <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
         ))}
+        {session?.status === 'live' && !view.run && (
+          <div className="mx-auto mb-2 flex max-w-3xl items-start gap-2 px-1 text-[12.5px] leading-snug text-muted">
+            <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-live" />
+            Claude is working on this session in another app right now. Sending here starts a second Claude in it.
+          </div>
+        )}
         {sendError && (
           <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
             <TriangleAlert className="size-4 shrink-0" />
