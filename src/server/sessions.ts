@@ -35,6 +35,8 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   const elsewhere = own ? undefined : other;
   const recent = lastTurn && !lastTurn.copied && Date.now() - lastTurn.time < config.liveWindowMs;
   if (!own && (elsewhere?.busy || recent)) state = 'live';
+  // Idle here but working in another app: that is what the session is doing.
+  else if (own === 'idle' && other?.busy) state = 'live';
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
@@ -54,7 +56,7 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
     ...(info.fileSize ? { sizeBytes: info.fileSize } : {}),
     ...(cwd && folderKind(cwd) === 'scratch' ? { scratch: true } : {}),
     ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
-    ...(state === 'live' && elsewhere?.busy ? { runningIn: elsewhere.app } : {}),
+    ...(state === 'live' && other?.busy && other.app ? { runningIn: other.app } : {}),
     ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
     ...(archived.has(info.sessionId) ? { archived: true } : {}),

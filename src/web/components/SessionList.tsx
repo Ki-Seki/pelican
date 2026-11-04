@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, GitBranch, LayoutList, Loader2, Plus, Search, Settings, X } from 'lucide-react';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
@@ -172,6 +172,10 @@ export function SessionList({
   }, [sessions]);
   const tempCount = useMemo(() => (sessions ?? []).filter((s) => s.temp && !s.archived).length, [sessions]);
   const archivedCount = useMemo(() => (sessions ?? []).filter((s) => s.archived).length, [sessions]);
+  // A chip that went away (its last session unarchived or gone) takes its filter with it.
+  useEffect(() => {
+    if (project && sessions && !projects.includes(project)) setProject(undefined);
+  }, [project, projects, sessions]);
 
   const groups = useMemo((): Group[] => {
     const q = query.trim().toLowerCase();
@@ -261,7 +265,7 @@ export function SessionList({
             </button>
           )}
         </label>
-        {projects.length > 1 && (
+        {(projects.length > 1 || archivedCount > 0) && (
           <div className="no-scrollbar -mx-4 mt-2 flex gap-1.5 overflow-x-auto px-4">
             {[undefined, ...projects].map((p) => (
               <button
@@ -321,6 +325,8 @@ export function SessionList({
         })}
         {sessions && groups.length === 0 && (query || project ? (
           <div className="px-4 py-12 text-center text-[13px] text-faint">No matching sessions</div>
+        ) : archivedCount > 0 ? (
+          <div className="px-4 py-12 text-center text-[13px] text-faint">Every session is archived: they are under Archived.</div>
         ) : (
           <div className="mx-auto max-w-xs px-4 py-14 text-center">
             <div className="text-[15px] font-medium">No sessions yet</div>

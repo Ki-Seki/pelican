@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
@@ -16,7 +16,7 @@ import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { listCompletions, listModels, probeMcpServers } from './models.js';
+import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runState, runStatus, sendMessage } from './runner.js';
@@ -26,7 +26,7 @@ import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
-import { claudeRanIn, noteClaudeRanIn } from './trust.js';
+import { claudeRanIn } from './trust.js';
 
 export const app = new Hono();
 
@@ -228,7 +228,6 @@ app.post('/api/sessions', async (c) => {
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
   const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
   if (!cwd) return c.json({ error: 'No such folder' }, 400);
-  noteClaudeRanIn(cwd);
   const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {
     text: typeof body.text === 'string' ? body.text : '',
@@ -286,6 +285,70 @@ async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise
  *   A branch is new work: it never starts in Bypass.
  * If the send fails, a branch and the copied images are removed, so nothing is left behind.
  */
+type EditFailure = { error: string; status: 404 | 409 };
+
+/** Waits until the Claude of a session it just started is running; a start that fails throws. */
+async function claudeStarted(sessionId: string): Promise<void> {
+  const run = getRun(sessionId);
+  if (!run) return;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([run.ready, new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, 45_000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown }, key: string): Promise<Edited | EditFailure> {
+  const info = await sessionInfo(id);
+  if (!info?.cwd || !(await isDirectory(info.cwd))) return { error: 'The session’s folder is missing', status: 404 };
+  if (getRun(id)?.busy) return { error: 'Stop Claude before editing an earlier prompt.', status: 409 };
+  const messages = await loadMessages(id);
+  const at = messages.findIndex((m) => m.uuid === before);
+  if (at < 0) return { error: 'That message is not in this session', status: 404 };
+  const previous = at === 0 ? null : messages[at - 1]!.uuid;
+  const last = !messages.slice(at + 1).some(isPrompt);
+  const file = await transcriptPath(id);
+  // In place only for the last prompt, after another one (the first has nothing to go on from),
+  // when no background task would be cut off by restarting Claude.
+  const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
+  const settings = cleanSettings(body.settings);
+  if (!entry && settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
+  const attachments = await imagesOf(id, before, body.keepImages);
+  const message = { text: body.text, attachments, settings, uuid: key };
+  let branch: string | undefined;
+  let started: string | undefined;
+  try {
+    if (entry) {
+      started = await replaceLastTurn(id, info.cwd, entry, before, message);
+      await claudeStarted(started);
+      return { sessionId: started, inPlace: true };
+    }
+    if (previous !== null) branch = await fork(id, previous);
+    started = await sendMessage(branch ? { sessionId: branch } : { cwd: info.cwd }, message);
+    // Only a Claude that started makes the branch real; one that could not start leaves nothing.
+    await claudeStarted(started);
+    return { sessionId: started, inPlace: false };
+  } catch (error) {
+    if (branch) await remove(branch).catch(() => undefined);
+    else if (started && !entry) await remove(started).catch(() => undefined);
+    await Promise.all(attachments.map((a) => removeUpload(a.id)));
+    throw error;
+  }
+}
+
+/**
+ * Edit a prompt and send it again, as one request.
+ * - The last prompt is replaced in place, as rewinding does in Claude Code: the session goes on
+ *   from just before it with the new text (the old turn stays in the transcript, off the line).
+ * - An earlier one branches: a copy of the conversation up to just before it gets the new text
+ *   (the first prompt: a new session in the same folder), and this session stays as it was.
+ *   A branch is new work: it never starts in Bypass.
+ * If Claude cannot start, a branch and the copied images are removed, so nothing is left behind.
+ * Requests with the same `uuid` share one edit, also while it is still being made.
+ */
 app.post('/api/sessions/:id/edit', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown }>()
@@ -296,47 +359,19 @@ app.post('/api/sessions/:id/edit', async (c) => {
   for (const [k, v] of edits) if (Date.now() - v.at > 10 * 60_000) edits.delete(k);
   const done = edits.get(key);
   if (done) return c.json({ sessionId: done.sessionId, inPlace: done.inPlace });
-  const pending = editing.get(key);
-  if (pending) return c.json(await pending);
-  const info = await sessionInfo(id);
-  if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
-  if (getRun(id)?.busy) return c.json({ error: 'Stop Claude before editing an earlier prompt.' }, 409);
-  const messages = await loadMessages(id);
-  const at = messages.findIndex((m) => m.uuid === before);
-  if (at < 0) return c.json({ error: 'That message is not in this session' }, 404);
-  const previous = at === 0 ? null : messages[at - 1]!.uuid;
-  const last = !messages.slice(at + 1).some(isPrompt);
-  const file = await transcriptPath(id);
-  // In place only for the last prompt, after another one (the first has nothing to go on from),
-  // when no background task would be cut off by restarting Claude.
-  const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
-  const settings = cleanSettings(body.settings);
-  if (!entry && settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
-  const text = body.text;
-  const cwd = info.cwd;
-  const work = (async (): Promise<Edited> => {
-    const attachments = await imagesOf(id, before, body.keepImages);
-    const message = { text, attachments, settings, uuid: key };
-    let branch: string | undefined;
-    try {
-      if (entry) return { sessionId: await replaceLastTurn(id, cwd, entry, before, message), inPlace: true };
-      if (previous === null) return { sessionId: await sendMessage({ cwd }, message), inPlace: false };
-      branch = await fork(id, previous);
-      return { sessionId: await sendMessage({ sessionId: branch }, message), inPlace: false };
-    } catch (error) {
-      if (branch) await remove(branch).catch(() => undefined);
-      await Promise.all(attachments.map((a) => removeUpload(a.id)));
-      throw error;
-    }
-  })();
-  editing.set(key, work);
-  try {
-    const result = await work;
-    edits.set(key, { at: Date.now(), ...result });
-    return c.json(result);
-  } finally {
-    editing.delete(key);
+  // Registered before anything is awaited, so a second request with this id waits for this one.
+  let work = editing.get(key) as Promise<Edited | EditFailure> | undefined;
+  if (!work) {
+    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages }, key);
+    work = made;
+    editing.set(key, made as Promise<Edited>);
+    void made.then((result) => {
+      if (!('error' in result)) edits.set(key, { at: Date.now(), ...result });
+    }, () => undefined).finally(() => editing.delete(key));
   }
+  const result = await work;
+  if ('error' in result) return c.json({ error: result.error }, result.status);
+  return c.json(result);
 });
 
 app.post('/api/sessions/:id/interrupt', async (c) => {
@@ -430,6 +465,9 @@ app.get('/api/commands', async (c) => {
   return c.json(await listCompletions(cwd));
 });
 
+/** What `/usage` shows in Claude Code: asked of claude.ai when Settings opens, kept a minute. */
+app.get('/api/usage/plan', async (c) => c.json({ plan: await planUsage() }));
+
 app.get('/api/usage', (c) => c.json({
   limits: config.demo
     ? [
@@ -459,13 +497,21 @@ async function checkedFolder(cwd: string | undefined): Promise<string | undefine
 
 const folderOf = (c: Context) => checkedFolder(c.req.query('cwd'));
 
+/** Whether a folder is in a git repository, by its `.git` and its parents' (this runs nothing). */
+async function insideRepository(cwd: string): Promise<boolean> {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (await stat(path.join(dir, '.git')).then(() => true, () => false)) return true;
+    if (path.dirname(dir) === dir) return false;
+  }
+}
+
 /** Git runs only where Claude Code has run: a folder you are only shown runs nothing of its own. */
 const gitAllowed = (cwd: string) => (config.demo ? Promise.resolve(true) : claudeRanIn(cwd));
 
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);
   if (!cwd) return c.json({ error: 'No such folder' }, 404);
-  if (!(await gitAllowed(cwd))) return c.json({ repo: false, untrusted: true });
+  if (!(await gitAllowed(cwd))) return c.json(await insideRepository(cwd) ? { repo: false, untrusted: true } : { repo: false });
   return c.json(await gitStatus(cwd));
 });
 

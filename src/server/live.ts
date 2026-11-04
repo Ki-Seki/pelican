@@ -14,20 +14,29 @@ export type LiveProcess = { app?: string; busy: boolean; updatedAt?: number };
 
 const run = promisify(execFile);
 
-/** Parent of each process, to tell this app's own Claude processes from other apps'. */
-async function parents(pids: number[]): Promise<Map<number, number> | undefined> {
-  if (pids.length === 0) return new Map();
+type Proc = { ppid: number; comm: string };
+
+/** Every process's parent and name, in one `ps` (none when ps is not there). */
+async function processes(): Promise<Map<number, Proc> | undefined> {
   try {
-    const { stdout } = await run('ps', ['-o', 'pid=,ppid=', '-p', pids.join(',')], { timeout: 3000 });
-    const map = new Map<number, number>();
+    const { stdout } = await run('ps', ['-A', '-o', 'pid=,ppid=,comm='], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 });
+    const map = new Map<number, Proc>();
     for (const line of stdout.split('\n')) {
-      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-      if (pid && ppid) map.set(pid, ppid);
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (match) map.set(Number(match[1]), { ppid: Number(match[2]), comm: match[3]!.trim() });
     }
     return map;
   } catch {
     return undefined;
   }
+}
+
+/** Started by this app, directly or through a wrapper. */
+function descends(pid: number, procs: Map<number, Proc>): boolean {
+  for (let p = procs.get(pid)?.ppid, hops = 0; p && hops < 8; p = procs.get(p)?.ppid, hops += 1) {
+    if (p === process.pid) return true;
+  }
+  return false;
 }
 
 /**
@@ -69,7 +78,7 @@ export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
   } catch {
     // Older Claude Code, or none running.
   }
-  type Entry = { pid?: number; sessionId?: string; status?: string; entrypoint?: string; updatedAt?: number };
+  type Entry = { pid?: number; sessionId?: string; status?: string; entrypoint?: string; updatedAt?: number; statusUpdatedAt?: number };
   const entries = (await Promise.all(names.map(async (name) => {
     try {
       const entry = JSON.parse(await readFile(path.join(dir, name), 'utf8')) as Entry;
@@ -78,15 +87,20 @@ export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
       return undefined; // Being rewritten; the next read gets it.
     }
   }))).filter((e): e is Entry & { pid: number; sessionId: string } => Boolean(e));
-  // This app's own Claude processes are its children; when that cannot be told, those of the SDK.
-  const parent = await parents(entries.map((e) => e.pid));
+  // This app's own Claude processes descend from it; when that cannot be told, those of the SDK.
+  // A pid now used by something that is not Claude Code is a registry entry left behind.
+  const procs = await processes();
   for (const entry of entries) {
-    const ours = parent ? parent.get(entry.pid) === process.pid : entry.entrypoint === 'sdk-ts';
+    const proc = procs?.get(entry.pid);
+    if (procs && (!proc || !/claude|node|bun|disclaimer/i.test(proc.comm))) continue;
+    const ours = procs ? descends(entry.pid, procs) : entry.entrypoint === 'sdk-ts';
     if (ours) continue;
     const busy = entry.status !== undefined && entry.status !== 'idle';
     const app = CLAUDE_CLIENTS[entry.entrypoint ?? ''];
     const known = byId.get(entry.sessionId);
-    const updatedAt = Math.max(known?.updatedAt ?? 0, typeof entry.updatedAt === 'number' ? entry.updatedAt : 0) || undefined;
+    // When it last changed between working and idle: other writes to the registry are not work.
+    const worked = typeof entry.statusUpdatedAt === 'number' ? entry.statusUpdatedAt : entry.updatedAt;
+    const updatedAt = Math.max(known?.updatedAt ?? 0, typeof worked === 'number' ? worked : 0) || undefined;
     // A session open in two places: the busy one is what matters.
     const pick = !known || (busy && !known.busy) ? { ...(app ? { app } : {}), busy } : known;
     byId.set(entry.sessionId, { ...pick, ...(updatedAt ? { updatedAt } : {}) });

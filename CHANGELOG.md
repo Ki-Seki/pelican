@@ -12,8 +12,9 @@ The first public release.
   [SECURITY.md](SECURITY.md).
 - Images in a reply load only from Pelican; pages and visuals Claude makes cannot reach any server
   but the public CDNs. A folder Claude has not worked in loads only your user settings when
-  Pelican looks at it, and git does not run there; where Claude has worked, git starts no hooks
-  or helpers. The QR code that opens Pelican on a phone carries a one-time code.
+  Pelican looks at it, and git does not run there; where Claude has worked, git starts no hooks,
+  file-system monitor, external diff or text converter (your filters, such as Git LFS, run as in
+  your own git). The QR code that opens Pelican on a phone carries a one-time code.
 - `pelican --demo` shows made-up sessions, with nothing of yours involved.
 - Every session's whole history, back past each compaction, with a divider where the context was
   compacted; older pages load as you scroll up.
@@ -27,6 +28,11 @@ The first public release.
   touching it.
 - A session open in another app too says so; before sending, Pelican catches up with what was
   said there instead of continuing an older version of the conversation.
+- Editing the last prompt replaces it in place, as rewinding does in Claude Code; an earlier
+  prompt still branches. Model, effort, fast mode and ultracode changed while Claude works apply
+  at once, and a choice not yet used stays with the session.
+- Settings shows the plan's usage as Claude Code's `/usage` does: the 5-hour and weekly windows,
+  or, on Team and Enterprise, the month's extra usage against its cap.
 - `/` commands and `@` files in the composer, ultracode next to effort and fast mode, the task list
   pinned above the composer, how full the context is, and each turn's time, tokens and cost.
 - Images open full screen. A failed send gives the text back to edit.

@@ -10,8 +10,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   the way Jupyter does. Opening that link signs the browser in; `pelican token` prints it again and
   `pelican token --reset` replaces it, signing every browser out. Other accounts and programs on
   the computer, containers and VMs that can reach `127.0.0.1` included, get nowhere without it.
-  The link is printed only on a terminal, never into a log (a service's output file), and
-  `--open` hands it to the browser through a file only you can read, not on a command line.
+  The link is printed only on a terminal, never into a log (a service's output file), and is
+  never put on a command line: on macOS `--open` hands it to the browser through a file only you
+  can read; elsewhere `--open` opens the sign-in page.
 - **The QR code in Settings** that opens Pelican on a phone carries a one-time code, good once and
   for two minutes; the page never sees the token or your password. (The QR code Pelican prints in
   the terminal when it listens beyond this computer carries the token itself, like the link.)

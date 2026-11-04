@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
@@ -118,6 +121,29 @@ async function tokenCommand(reset: boolean): Promise<void> {
   if (token) console.log(tokenLink(localAddress(), token));
 }
 
+/**
+ * Opens Pelican in the browser. The link with the token is never put on a command line, where
+ * other accounts could read it: on macOS a page only you can read redirects to it (and is
+ * removed); elsewhere, where a browser may not open such a page, Pelican opens to its sign-in.
+ */
+async function openPelican(address: string, token: string | undefined): Promise<void> {
+  if (!token || process.platform !== 'darwin') {
+    openBrowser(address);
+    return;
+  }
+  const file = path.join(config.configDir, 'open.html');
+  try {
+    await mkdir(config.configDir, { recursive: true, mode: 0o700 });
+    await rm(file, { force: true });
+    const link = tokenLink(address, token);
+    await writeFile(file, `<!doctype html><meta http-equiv="refresh" content="0;url=${link}"><a href="${link}">Open Pelican</a>\n`, { mode: 0o600 });
+    openBrowser(pathToFileURL(file).href);
+    setTimeout(() => void rm(file, { force: true }), 30_000).unref();
+  } catch {
+    openBrowser(address);
+  }
+}
+
 function openBrowser(url: string): void {
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
   try {
@@ -203,11 +229,7 @@ async function main(): Promise<void> {
   } else if (!config.demo) {
     console.log(`  From your phone: ${DOCS}#phone\n`);
   }
-  if (values.open) {
-    // macOS hands the address to the browser in an Apple Event; elsewhere it would sit on the
-    // browser's command line for every account to read, so the page opens to its sign-in there.
-    openBrowser(token && process.platform === 'darwin' ? tokenLink(shown, token) : shown);
-  }
+  if (values.open) await openPelican(shown, token);
 }
 
 main().catch((error: Error) => {

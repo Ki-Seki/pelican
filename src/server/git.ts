@@ -19,6 +19,10 @@ const SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-
 
 function environment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_LITERAL_PATHSPECS: '1' };
+  // The folder decides the repository, not whatever the server was started with.
+  for (const name of Object.keys(env)) {
+    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|NAMESPACE|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+|CEILING_DIRECTORIES)$/.test(name)) delete env[name];
+  }
   if (config.demo) {
     // The demo's folders may sit inside a repository of yours (a home folder kept in git):
     // git must not look above the demo for one.

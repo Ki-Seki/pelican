@@ -2,9 +2,9 @@ import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { McpServerStatus, ModelInfo, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import type { McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
-import type { Account, Agent, Command, McpServer, ModelOption } from '../shared/protocol.js';
+import type { Account, Agent, Command, McpServer, ModelOption, PlanUsage } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
 import { claudeRanIn } from './trust.js';
@@ -166,4 +166,59 @@ export async function probeMcpServers(cwd: string): Promise<McpServer[]> {
   const servers = toMcpServers(await probe('mcp', dir, (q) => q.mcpServerStatus()));
   mcpCache.set(dir, { at: Date.now(), servers });
   return servers;
+}
+
+const DEMO_PLAN: PlanUsage = {
+  windows: [
+    { type: 'five_hour', utilization: 0.42, resetsAt: Date.now() + 2.4 * 3600_000 },
+    { type: 'seven_day', utilization: 0.18, resetsAt: Date.now() + 3.5 * 86400_000 },
+  ],
+};
+
+type Window = { utilization: number | null; resets_at: string | null } | null | undefined;
+let planCache: { at: number; value: PlanUsage | null } | undefined;
+
+/**
+ * The plan's usage, as Claude Code's `/usage` reads it from claude.ai: the windows of a Pro or
+ * Max plan, and the monthly cap on extra usage that Team and Enterprise plans have instead.
+ * Null where plan limits do not apply (an API key, Bedrock, Vertex) or the answer is not there.
+ * The SDK marks this call experimental, so anything unexpected is no answer, not an error.
+ */
+export async function planUsage(): Promise<PlanUsage | null> {
+  if (config.demo) return DEMO_PLAN;
+  if (planCache && Date.now() - planCache.at < 60_000) return planCache.value;
+  const value = await probe('usage', os.homedir(), async (q) => {
+    const ask = (q as unknown as { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (o: { skipBehaviors: boolean }) => Promise<SDKControlGetUsageResponse> })
+      .usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (typeof ask !== 'function') return null;
+    const answer = await ask.call(q, { skipBehaviors: true });
+    const limits = answer?.rate_limits;
+    if (!answer?.rate_limits_available || !limits) return null;
+    const windows: PlanUsage['windows'] = [];
+    const add = (type: string, window: Window, label?: string) => {
+      if (!window || typeof window.utilization !== 'number') return;
+      const resetsAt = window.resets_at ? Date.parse(window.resets_at) : NaN;
+      windows.push({ type, ...(label ? { label } : {}), utilization: window.utilization / 100, ...(Number.isFinite(resetsAt) ? { resetsAt } : {}) });
+    };
+    add('five_hour', limits.five_hour);
+    add('seven_day', limits.seven_day);
+    add('seven_day_opus', limits.seven_day_opus);
+    add('seven_day_sonnet', limits.seven_day_sonnet);
+    for (const scoped of limits.model_scoped ?? []) add(`model:${scoped.display_name}`, scoped, `Weekly ${scoped.display_name} limit`);
+    const extra = limits.extra_usage;
+    return {
+      windows,
+      ...(extra ? {
+        extra: {
+          enabled: Boolean(extra.is_enabled),
+          ...(typeof extra.used_credits === 'number' ? { usedCents: extra.used_credits } : {}),
+          ...(typeof extra.monthly_limit === 'number' ? { limitCents: extra.monthly_limit } : {}),
+          ...(typeof extra.utilization === 'number' ? { utilization: extra.utilization / 100 } : {}),
+          ...(extra.currency ? { currency: extra.currency } : {}),
+        },
+      } : {}),
+    };
+  }).catch(() => null);
+  planCache = { at: Date.now(), value };
+  return value;
 }

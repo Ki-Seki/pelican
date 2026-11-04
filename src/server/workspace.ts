@@ -54,11 +54,15 @@ async function repositoryOf(cwd: string): Promise<string | undefined> {
 export async function gitStatus(cwd: string): Promise<GitStatus> {
   if (!(await repositoryOf(cwd))) return { repo: false };
   let raw: string;
+  let prefix = '';
   try {
-    raw = await git(cwd, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']);
+    // A session in a folder inside a repository sees that folder's changes, by its own paths.
+    prefix = (await git(cwd, ['rev-parse', '--show-prefix'], 5000)).trim();
+    raw = await git(cwd, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--', '.']);
   } catch {
     return { repo: false };
   }
+  const local = (file: string | undefined) => (file && prefix && file.startsWith(prefix) ? file.slice(prefix.length) : file);
   const out: { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] } = { repo: true, files: [] };
   const entries = raw.split('\0');
   for (let i = 0; i < entries.length; i += 1) {
@@ -76,20 +80,21 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
       const code = xy[0] !== '.' ? xy[0]! : xy[1]!;
       const file = entry.startsWith('1 ') ? parts.slice(8).join(' ') : entry.startsWith('2 ') ? parts.slice(9).join(' ') : parts.slice(10).join(' ');
       const status = entry.startsWith('u ') ? 'conflicted' : KIND[code] ?? 'modified';
-      const item: GitFile = { path: file, status };
+      const item: GitFile = { path: local(file)!, status };
       if (entry.startsWith('2 ')) {
-        item.from = entries[i + 1];
+        const from = local(entries[i + 1]);
+        if (from) item.from = from;
         i += 1;
       }
       out.files.push(item);
     } else if (entry.startsWith('? ')) {
-      out.files.push({ path: entry.slice(2), status: 'untracked' });
+      out.files.push({ path: local(entry.slice(2))!, status: 'untracked' });
     }
   }
   // Line counts against the last commit (or the empty tree before the first one).
   try {
     const base = await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']).then(() => 'HEAD', () => '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
-    const numstat = await git(cwd, ['diff', '--numstat', '-z', base]);
+    const numstat = await git(cwd, ['diff', '--numstat', '--relative', '-z', base]);
     const counts = new Map<string, { added?: number; removed?: number }>();
     const fields = numstat.split('\0');
     for (let i = 0; i < fields.length; i += 1) {
@@ -133,7 +138,8 @@ export async function gitDiff(cwd: string, file: string): Promise<string> {
   }
   if (!diff) {
     // Untracked (or no commits yet): git diff --no-index exits with 1 when the files differ.
-    diff = await git(cwd, ['diff', '--no-index', '--', '/dev/null', file]).catch((error: { stdout?: string }) => error.stdout ?? '');
+    // `./`: a file named `-` would otherwise be read from stdin.
+    diff = await git(cwd, ['diff', '--no-index', '--', '/dev/null', `./${file}`]).catch((error: { stdout?: string }) => error.stdout ?? '');
   }
   return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… (diff cut short)` : diff;
 }

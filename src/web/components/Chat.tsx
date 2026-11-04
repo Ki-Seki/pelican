@@ -6,7 +6,7 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
 import { baseName, shortPath, untilTime } from '../lib/format';
-import { loadDefaults, markSeen, saveDefaults, usePrefs } from '../lib/prefs';
+import { loadDefaults, markSeen, saveDefaults, saveSessionChoice, sessionChoice, usePrefs } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import {
@@ -299,16 +299,25 @@ export function Chat({
   const settingsKey = JSON.stringify([runSettings ?? null, recorded]);
   useEffect(() => {
     if (chosen.current) return;
+    // A choice made here since the session last ran, which no turn has used yet, comes first.
+    const choice = sessionId && session ? sessionChoice(sessionId) : undefined;
+    if (choice && choice.at > session!.lastActivity) {
+      chosen.current = true;
+      setSettings((current) => ({ ...current, ...choice.settings }));
+      return;
+    }
     if (runSettings) setSettings((current) => ({ ...current, ...runSettings }));
     else if (recorded) setSettings({ ...loadDefaults(), ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, settingsKey]);
+  }, [sessionId, settingsKey, session?.lastActivity]);
 
   const changeSettings = (next: RunSettings) => {
     chosen.current = true;
     setSettings(next);
-    // A change is also the default for new sessions, as /model and /effort are in Claude Code.
+    // A change is also the default for new sessions, as /model and /effort are in Claude Code,
+    // and stays with this session when you leave it and come back.
     saveDefaults(next);
+    if (sessionId) saveSessionChoice(sessionId, next);
     // A Claude running for this session switches now (from its next step), not at the next message.
     if (sessionId && view.run) {
       void api.applySettings(sessionId, next).catch(() => undefined);

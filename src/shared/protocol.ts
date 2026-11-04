@@ -183,6 +183,14 @@ export type ShellResult = {
 };
 
 /** One of the account's usage limits, as Claude Code last reported it. */
+/** The plan's usage as claude.ai reports it (what `/usage` shows in Claude Code). */
+export type PlanUsage = {
+  /** Windows that fill up and reset: 5-hour, weekly, per model. Utilization 0–1 (above 1 once over). */
+  windows: Array<{ type: string; label?: string; utilization: number; resetsAt?: number }>;
+  /** Spending past the plan (Team and Enterprise set a monthly cap). Amounts in cents. */
+  extra?: { enabled: boolean; usedCents?: number; limitCents?: number; utilization?: number; currency?: string };
+};
+
 export type UsageLimit = {
   type: string;
   status: 'allowed' | 'allowed_warning' | 'rejected';

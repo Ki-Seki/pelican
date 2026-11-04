@@ -9,6 +9,7 @@ import type {
   McpServer,
   MessagesPage,
   ModelOption,
+  PlanUsage,
   PermissionDecision,
   RecordedSettings,
   RewindResult,
@@ -131,6 +132,8 @@ export const api = {
   subagent: (id: string, agent: string) =>
     request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
   usage: () => request<{ limits: UsageLimit[] }>('usage').then((r) => r.limits),
+  /** The plan's usage as Claude Code's /usage shows it, or null where plan limits do not apply. */
+  planUsage: () => request<{ plan: PlanUsage | null }>('usage/plan').then((r) => r.plan),
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
   git: (cwd: string) => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}`),
   gitDiff: (cwd: string, path: string) => request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),

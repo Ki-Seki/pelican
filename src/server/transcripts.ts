@@ -180,7 +180,8 @@ export async function firstTurnSession(file: string): Promise<string | undefined
   let found: string | undefined;
   let read = 0;
   try {
-    const lines = readline.createInterface({ input: createReadStream(file), crlfDelay: Infinity });
+    const input = createReadStream(file);
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
     try {
       for await (const line of lines) {
         read += line.length + 1;
@@ -198,6 +199,7 @@ export async function firstTurnSession(file: string): Promise<string | undefined
       }
     } finally {
       lines.close();
+      input.destroy();
     }
   } catch {
     return undefined; // Missing or unreadable.
@@ -218,21 +220,27 @@ export type RawEntry = { parentUuid: string | null; content: unknown };
 /** The transcript row with this uuid, read from the file itself. */
 export async function rawEntry(file: string, uuid: string): Promise<RawEntry | undefined> {
   const needle = `"uuid":"${uuid}"`;
-  const lines = readline.createInterface({ input: createReadStream(file), crlfDelay: Infinity });
+  const input = createReadStream(file);
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
   try {
     for await (const line of lines) {
       if (!line.includes(needle)) continue;
-      let row: { uuid?: unknown; parentUuid?: unknown; message?: { content?: unknown } };
+      let row: { uuid?: unknown; parentUuid?: unknown; type?: unknown; message?: { content?: unknown }; attachment?: { type?: unknown; prompt?: unknown } };
       try {
         row = JSON.parse(line) as typeof row;
       } catch {
         continue;
       }
       if (row.uuid !== uuid) continue;
-      return { parentUuid: typeof row.parentUuid === 'string' ? row.parentUuid : null, content: row.message?.content };
+      // A message sent while Claude worked is an attachment row; its prompt is the content.
+      const content = row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment.prompt : row.message?.content;
+      return { parentUuid: typeof row.parentUuid === 'string' ? row.parentUuid : null, content };
     }
+  } catch {
+    return undefined;
   } finally {
     lines.close();
+    input.destroy();
   }
   return undefined;
 }

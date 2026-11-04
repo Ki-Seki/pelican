@@ -42,6 +42,25 @@ export function saveDefaults({ permissionMode: _mode, ...settings }: RunSettings
   write(SETTINGS_KEY, settings);
 }
 
+const CHOICES_KEY = 'pelican:session-settings';
+type Choice = { settings: RunSettings; at: number };
+
+/**
+ * What was picked in one session's composer and not yet used: it stays when you leave the
+ * session and come back, until a turn runs with it (or after it). Bypass is not kept here either.
+ */
+export function sessionChoice(sessionId: string): Choice | undefined {
+  return read<Record<string, Choice>>(CHOICES_KEY, {})[sessionId];
+}
+
+export function saveSessionChoice(sessionId: string, { permissionMode, ...settings }: RunSettings): void {
+  const all = read<Record<string, Choice>>(CHOICES_KEY, {});
+  all[sessionId] = { settings: { ...settings, ...(permissionMode && permissionMode !== 'bypassPermissions' ? { permissionMode } : {}) }, at: Date.now() };
+  // The newest few dozen are plenty.
+  const kept = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 50);
+  write(CHOICES_KEY, Object.fromEntries(kept));
+}
+
 export type ViewMode = 'summary' | 'normal' | 'verbose';
 export type Theme = 'system' | 'light' | 'dark';
 

@@ -37,7 +37,7 @@ import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
 import { sessionInfo } from './sessions.js';
 import { bashModeText } from './shell.js';
-import { refreshTranscriptIndex } from './transcripts.js';
+import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { recordLimit } from './usage.js';
 
 /** Messages the user sends, handed to the Claude process as they come. */
@@ -121,6 +121,13 @@ export class SessionRun {
   }
   /** Messages waiting for the turn to end, published when it does. */
   private queued: ChatMessage[] = [];
+  private started!: { resolve: () => void; reject: (error: Error) => void };
+  /** Settles once Claude has started (its first message), or fails when it ends before that. */
+  readonly ready = new Promise<void>((resolve, reject) => {
+    this.started = { resolve, reject };
+  });
+  // Most callers never wait for it: a failure here must not count as unhandled.
+  private readonly readyHandled = this.ready.catch(() => undefined);
   private suggestion?: string;
 
   constructor(
@@ -478,6 +485,7 @@ export class SessionRun {
     try {
       for await (const message of q as AsyncIterable<SDKMessage>) {
         this.lastActive = Date.now();
+        this.started.resolve();
         const raw = message as unknown as Record<string, unknown>;
         switch (message.type) {
           case 'stream_event':
@@ -557,6 +565,7 @@ export class SessionRun {
       console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
     } finally {
       this.closed = true;
+      this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
       for (const [, pending] of this.permissions) pending.resolve({ behavior: 'deny', message: 'Session closed.' });
       this.permissions.clear();
       this.setBusy(false);
@@ -602,23 +611,42 @@ async function isDirectory(dir: string): Promise<boolean> {
 async function staleRun(run: SessionRun): Promise<boolean> {
   if (run.busy || run.hasBackgroundTasks) return false;
   const other = (await liveProcesses()).get(run.sessionId);
-  return Boolean(other?.updatedAt && other.updatedAt > run.lastActive);
+  if (other?.updatedAt && other.updatedAt > run.lastActive) return true;
+  // An app that has closed since leaves no process to ask: a turn in the transcript newer than
+  // anything this run did is the sign.
+  const file = await transcriptPath(run.sessionId);
+  const last = file ? (await lastTurnTime(file))?.lastTurn : undefined;
+  return Boolean(last && !last.copied && last.time > run.lastActive + 2000);
+}
+
+/** The session's run, unless it holds an older version of the conversation: then it is closed. */
+async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
+  const run = getRun(sessionId);
+  if (run && (await staleRun(run))) {
+    run.close();
+    if (runs.get(sessionId) === run) runs.delete(sessionId);
+    return getRun(sessionId);
+  }
+  return run;
 }
 
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (target.sessionId) {
-    const existing = getRun(target.sessionId);
-    if (existing && (await staleRun(existing))) {
-      existing.close();
-      runs.delete(existing.sessionId);
-    } else if (existing) {
+    const existing = await currentRun(target.sessionId);
+    if (existing) {
       await existing.send(input);
       return existing.sessionId;
     }
     const info = await sessionInfo(target.sessionId);
     const cwd = info?.cwd ?? target.cwd;
     if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+    // Another request may have started one while this one looked the folder up.
+    const started = getRun(target.sessionId);
+    if (started) {
+      await started.send(input);
+      return started.sessionId;
+    }
     const run = new SessionRun(target.sessionId, cwd, input.settings, true);
     runs.set(run.sessionId, run);
     run.start();
@@ -660,11 +688,13 @@ export async function replaceLastTurn(sessionId: string, cwd: string, entry: str
  */
 export async function ensureRun(sessionId: string, settings: RunSettings = {}): Promise<SessionRun> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
-  const existing = getRun(sessionId);
+  const existing = await currentRun(sessionId);
   if (existing) return existing;
   const info = await sessionInfo(sessionId);
   const cwd = info?.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const started = getRun(sessionId);
+  if (started) return started;
   const run = new SessionRun(sessionId, cwd, settings, true);
   runs.set(sessionId, run);
   run.start();
