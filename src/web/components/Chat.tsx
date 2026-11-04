@@ -18,6 +18,7 @@ import {
   loadLatest,
   removeLocalMessage,
   setRun,
+  truncateFrom,
   useSessionView,
 } from '../lib/store';
 import { currentTasks, type Todo } from '../lib/tools';
@@ -369,9 +370,10 @@ export function Chat({
     }
   };
 
-  // Edit and send again: one request makes the branch, just before the prompt (the first prompt:
-  // a new session in the same folder), and sends the new text there; a failed send leaves no
-  // branch, and a retry with the same `key` gets the same one. This session stays as it was.
+  // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
+  // does in Claude Code; an earlier one gets a branch made just before it (the first prompt: a new
+  // session in the same folder), and this session stays as it was. A failed send leaves nothing
+  // behind, and a retry with the same `key` gets the same result.
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -390,12 +392,17 @@ export function Chat({
       setSendError('Stop Claude before editing an earlier prompt.');
       return false;
     }
-    // A branch is new work: Bypass is chosen anew there, never carried over.
-    const branch = settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: 'default' as const } : settings;
     try {
-      const opened = await api.edit(sessionId, { before: uuid, text, settings: branch, uuid: key, keepImages });
+      // The server decides: the last prompt is replaced here; an earlier one branches, and a
+      // branch never starts in Bypass.
+      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages });
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      if (alive.current) onOpen(opened);
+      if (result.inPlace) {
+        truncateFrom(viewId, uuid);
+        addLocalMessage(viewId, localMessage(key, text, []));
+      } else if (alive.current) {
+        onOpen(result.sessionId);
+      }
       return true;
     } catch (error) {
       if (alive.current) setSendError((error as Error).message);

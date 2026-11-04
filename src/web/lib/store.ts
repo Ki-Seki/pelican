@@ -122,6 +122,14 @@ export function addLocalMessage(sessionId: string, message: ChatMessage): void {
 }
 
 /** Drops a local message the server never accepted. */
+/** Drops a message and everything after it from the view: the turn an edit replaced in place. */
+export function truncateFrom(sessionId: string, uuid: string): void {
+  update(sessionId, (view) => {
+    const at = view.messages.findIndex((m) => m.uuid === uuid || m.sourceUuid === uuid);
+    return at < 0 ? view : { ...view, messages: view.messages.slice(0, at), total: Math.max(0, view.total - (view.messages.length - at)) };
+  });
+}
+
 export function removeLocalMessage(sessionId: string, uuid: string): void {
   update(sessionId, (view) => ({ ...view, messages: view.messages.filter((m) => !(m.pending && m.uuid === uuid)) }));
 }

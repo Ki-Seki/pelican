@@ -7,7 +7,7 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { Attachment, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import type { Attachment, ChatMessage, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -19,13 +19,13 @@ import { createScratchFolder, isDirectory } from './folders.js';
 import { listCompletions, listModels, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, runState, runStatus, sendMessage } from './runner.js';
+import { ensureRun, getRun, replaceLastTurn, runState, runStatus, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
-import { rawImages, transcriptPath } from './transcripts.js';
+import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { claudeRanIn, noteClaudeRanIn } from './trust.js';
 
 export const app = new Hono();
@@ -254,9 +254,13 @@ app.post('/api/sessions/:id/messages', async (c) => {
   return c.json({ sessionId });
 });
 
-/** Edits made, and being made, by the id the editor gave them: a retry gets the same branch, never a second one. */
-const edits = new Map<string, { at: number; sessionId: string }>();
-const editing = new Map<string, Promise<string>>();
+/** Edits made, and being made, by the id the editor gave them: a retry gets the same result, never a second one. */
+type Edited = { sessionId: string; inPlace: boolean };
+const edits = new Map<string, { at: number } & Edited>();
+const editing = new Map<string, Promise<Edited>>();
+
+/** A prompt the user wrote (text or images), not a tool's result or injected context. */
+const isPrompt = (m: ChatMessage) => m.role === 'user' && !m.meta && m.blocks.some((b) => b.type === 'text' || b.type === 'image');
 
 /** The images of a prompt, saved as uploads again so the edited prompt carries the ones kept. */
 async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise<Attachment[]> {
@@ -274,10 +278,13 @@ async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise
 }
 
 /**
- * Edit a prompt and send it again, as one request: the conversation branches just before the
- * prompt (the first prompt: a new session in the same folder) and the new text goes there. If
- * the send fails, the branch and its copied images are removed, so nothing is left behind; this
- * session is untouched. A branch is new work: it never starts in Bypass.
+ * Edit a prompt and send it again, as one request.
+ * - The last prompt is replaced in place, as rewinding does in Claude Code: the session goes on
+ *   from just before it with the new text (the old turn stays in the transcript, off the line).
+ * - An earlier one branches: a copy of the conversation up to just before it gets the new text
+ *   (the first prompt: a new session in the same folder), and this session stays as it was.
+ *   A branch is new work: it never starts in Bypass.
+ * If the send fails, a branch and the copied images are removed, so nothing is left behind.
  */
 app.post('/api/sessions/:id/edit', async (c) => {
   const id = c.req.param('id');
@@ -288,25 +295,34 @@ app.post('/api/sessions/:id/edit', async (c) => {
   if (!key || !before || typeof body.text !== 'string' || !body.text.trim()) return c.json({ error: 'Nothing to send' }, 400);
   for (const [k, v] of edits) if (Date.now() - v.at > 10 * 60_000) edits.delete(k);
   const done = edits.get(key);
-  if (done) return c.json({ sessionId: done.sessionId });
+  if (done) return c.json({ sessionId: done.sessionId, inPlace: done.inPlace });
   const pending = editing.get(key);
-  if (pending) return c.json({ sessionId: await pending });
+  if (pending) return c.json(await pending);
   const info = await sessionInfo(id);
   if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
   if (getRun(id)?.busy) return c.json({ error: 'Stop Claude before editing an earlier prompt.' }, 409);
-  const previous = await messageBefore(id, before);
-  if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
+  const messages = await loadMessages(id);
+  const at = messages.findIndex((m) => m.uuid === before);
+  if (at < 0) return c.json({ error: 'That message is not in this session' }, 404);
+  const previous = at === 0 ? null : messages[at - 1]!.uuid;
+  const last = !messages.slice(at + 1).some(isPrompt);
+  const file = await transcriptPath(id);
+  // In place only for the last prompt, after another one (the first has nothing to go on from),
+  // when no background task would be cut off by restarting Claude.
+  const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
   const settings = cleanSettings(body.settings);
-  if (settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
+  if (!entry && settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
   const text = body.text;
-  const work = (async () => {
+  const cwd = info.cwd;
+  const work = (async (): Promise<Edited> => {
     const attachments = await imagesOf(id, before, body.keepImages);
     const message = { text, attachments, settings, uuid: key };
     let branch: string | undefined;
     try {
-      if (previous === null) return await sendMessage({ cwd: info.cwd }, message);
+      if (entry) return { sessionId: await replaceLastTurn(id, cwd, entry, before, message), inPlace: true };
+      if (previous === null) return { sessionId: await sendMessage({ cwd }, message), inPlace: false };
       branch = await fork(id, previous);
-      return await sendMessage({ sessionId: branch }, message);
+      return { sessionId: await sendMessage({ sessionId: branch }, message), inPlace: false };
     } catch (error) {
       if (branch) await remove(branch).catch(() => undefined);
       await Promise.all(attachments.map((a) => removeUpload(a.id)));
@@ -315,9 +331,9 @@ app.post('/api/sessions/:id/edit', async (c) => {
   })();
   editing.set(key, work);
   try {
-    const sessionId = await work;
-    edits.set(key, { at: Date.now(), sessionId });
-    return c.json({ sessionId });
+    const result = await work;
+    edits.set(key, { at: Date.now(), ...result });
+    return c.json(result);
   } finally {
     editing.delete(key);
   }

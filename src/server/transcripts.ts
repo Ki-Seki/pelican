@@ -212,38 +212,46 @@ export async function firstTurnSession(file: string): Promise<string | undefined
 /** An image of a prompt as the transcript holds it, in full (the message list leaves big ones out). */
 export type RawImage = { type: 'base64'; mediaType: string; data: string } | { type: 'url' };
 
-/**
- * The images of one message, in the order and by the rules the message list uses (base64 and
- * url images; anything else is not an image there), read from the transcript row itself.
- */
-export async function rawImages(file: string, uuid: string): Promise<RawImage[]> {
+/** One row of a transcript, as written: what it follows in the chain, and its content. */
+export type RawEntry = { parentUuid: string | null; content: unknown };
+
+/** The transcript row with this uuid, read from the file itself. */
+export async function rawEntry(file: string, uuid: string): Promise<RawEntry | undefined> {
   const needle = `"uuid":"${uuid}"`;
   const lines = readline.createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   try {
     for await (const line of lines) {
       if (!line.includes(needle)) continue;
-      let row: { uuid?: unknown; message?: { content?: unknown } };
+      let row: { uuid?: unknown; parentUuid?: unknown; message?: { content?: unknown } };
       try {
         row = JSON.parse(line) as typeof row;
       } catch {
         continue;
       }
       if (row.uuid !== uuid) continue;
-      const content = row.message?.content;
-      if (!Array.isArray(content)) return [];
-      const images: RawImage[] = [];
-      for (const block of content as Array<{ type?: unknown; source?: { type?: unknown; data?: unknown; media_type?: unknown; url?: unknown } }>) {
-        if (block?.type !== 'image' || !block.source) continue;
-        if (block.source.type === 'base64' && typeof block.source.data === 'string') {
-          images.push({ type: 'base64', mediaType: typeof block.source.media_type === 'string' ? block.source.media_type : 'image/png', data: block.source.data });
-        } else if (block.source.type === 'url' && typeof block.source.url === 'string') {
-          images.push({ type: 'url' });
-        }
-      }
-      return images;
+      return { parentUuid: typeof row.parentUuid === 'string' ? row.parentUuid : null, content: row.message?.content };
     }
   } finally {
     lines.close();
   }
-  return [];
+  return undefined;
+}
+
+/**
+ * The images of one message, in the order and by the rules the message list uses (base64 and
+ * url images; anything else is not an image there), read from the transcript row itself.
+ */
+export async function rawImages(file: string, uuid: string): Promise<RawImage[]> {
+  const content = (await rawEntry(file, uuid))?.content;
+  if (!Array.isArray(content)) return [];
+  const images: RawImage[] = [];
+  for (const block of content as Array<{ type?: unknown; source?: { type?: unknown; data?: unknown; media_type?: unknown; url?: unknown } }>) {
+    if (block?.type !== 'image' || !block.source) continue;
+    if (block.source.type === 'base64' && typeof block.source.data === 'string') {
+      images.push({ type: 'base64', mediaType: typeof block.source.media_type === 'string' ? block.source.media_type : 'image/png', data: block.source.data });
+    } else if (block.source.type === 'url' && typeof block.source.url === 'string') {
+      images.push({ type: 'url' });
+    }
+  }
+  return images;
 }

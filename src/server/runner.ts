@@ -89,6 +89,14 @@ export type SendInput = {
 const sdkModel = (model: string | undefined) => (model && model !== 'default' ? model : undefined);
 
 /** One Claude Code process driving one session. It stays alive between turns until idle. */
+/** Claude Code's error, or what it means for someone who edited their last prompt. */
+function readableError(text: string): string {
+  if (text.includes('Resume rejected by --resume-drops-turn')) {
+    return 'The conversation changed after that prompt (another app added to it), so the prompt was not replaced. Reload, then edit it again or send a new message.';
+  }
+  return text;
+}
+
 export class SessionRun {
   busy = false;
   closed = false;
@@ -120,6 +128,8 @@ export class SessionRun {
     readonly cwd: string,
     private settings: RunSettings,
     private readonly resume: boolean,
+    /** Resume only up to this entry, dropping the turn after it (an edited last prompt). */
+    private readonly resumeAt?: { entry: string; dropsTurn: string },
   ) {}
 
   start(): void {
@@ -127,6 +137,9 @@ export class SessionRun {
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
+      // Claude Code checks that everything past the entry belongs to the dropped turn, so a
+      // message another app added meanwhile is never thrown away unseen.
+      ...(this.resume && this.resumeAt ? { resumeSessionAt: this.resumeAt.entry, resumeDropsTurn: this.resumeAt.dropsTurn } : {}),
       ...(sdkModel(settings.model) ? { model: sdkModel(settings.model) } : {}),
       ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
@@ -506,7 +519,7 @@ export class SessionRun {
             this.interrupted = false;
             const failed = !stopped && (message.subtype !== 'success' || message.is_error);
             this.error = failed
-              ? ('errors' in message && message.errors.length > 0 ? message.errors.join('\n') : ('result' in message ? String(message.result) : message.subtype))
+              ? readableError('errors' in message && message.errors.length > 0 ? message.errors.join('\n') : ('result' in message ? String(message.result) : message.subtype))
               : undefined;
             this.lastTurn = {
               durationMs: message.duration_ms,
@@ -534,7 +547,7 @@ export class SessionRun {
         }
       }
     } catch (error) {
-      this.error = (error as Error).message;
+      this.error = readableError((error as Error).message);
       console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
     } finally {
       this.closed = true;
@@ -613,6 +626,26 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
   run.start();
   await run.send(input);
   return run.sessionId;
+}
+
+/**
+ * Replaces the session's last turn: Claude resumes it up to `entry` (the row just before the
+ * prompt being replaced) and gets `input` instead, in the same session, as rewinding does in
+ * Claude Code. The old turn stays in the transcript, off the conversation's line.
+ */
+export async function replaceLastTurn(sessionId: string, cwd: string, entry: string, prompt: string, input: SendInput): Promise<string> {
+  if (config.demo) throw new Error('This is the demo: nothing runs.');
+  const existing = getRun(sessionId);
+  if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
+  if (existing) {
+    existing.close();
+    runs.delete(sessionId);
+  }
+  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt });
+  runs.set(sessionId, run);
+  run.start();
+  await run.send(input);
+  return sessionId;
 }
 
 /**

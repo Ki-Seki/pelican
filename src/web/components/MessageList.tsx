@@ -143,9 +143,11 @@ const AssistantTurn = memo(function AssistantTurn({
 
 
 const UserBubble = memo(function UserBubble({
-  item, onEdit, onRewind,
+  item, last, onEdit, onRewind,
 }: {
   item: Extract<Item, { kind: 'user' }>;
+  /** The newest prompt: an edit replaces it here instead of branching. */
+  last: boolean;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
 }) {
@@ -159,6 +161,7 @@ const UserBubble = memo(function UserBubble({
       <EditPrompt
         text={item.text}
         images={item.images}
+        last={last}
         onCancel={() => setEditing(undefined)}
         onSend={(next, keep) => onEdit(item.key, next, editing, keep).then((sent) => {
           if (sent) setEditing(undefined);
@@ -207,7 +210,7 @@ const UserBubble = memo(function UserBubble({
             <button
               type="button"
               aria-label="Edit"
-              title="Edit and send again, as a new branch"
+              title={last ? 'Edit and send again, in place of this prompt' : 'Edit and send again, as a new branch'}
               className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"
               onClick={() => {
                 setActions(false);
@@ -233,9 +236,10 @@ const UserBubble = memo(function UserBubble({
  * before this prompt and the new text, with the images kept, goes there; this session stays as
  * it was. While it sends there is nothing to cancel: the branch is being made.
  */
-function EditPrompt({ text, images, onCancel, onSend }: {
+function EditPrompt({ text, images, last, onCancel, onSend }: {
   text: string;
   images: ImageBlock[];
+  last: boolean;
   onCancel: () => void;
   onSend: (text: string, keepImages: number[]) => Promise<void>;
 }) {
@@ -303,7 +307,9 @@ function EditPrompt({ text, images, onCancel, onSend }: {
         className="block w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed outline-none"
       />
       <div className="mt-1 flex items-center gap-1.5">
-        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">{busy ? 'Making the branch…' : 'Sends as a new branch; this one stays as it is.'}</span>
+        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">
+          {busy ? 'Sending…' : last ? 'Replaces this prompt and Claude’s answer to it.' : 'Sends as a new branch; this one stays as it is.'}
+        </span>
         <button type="button" onClick={onCancel} disabled={busy} className="h-8 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">Cancel</button>
         <button type="button" onClick={send} disabled={busy || !value.trim()} className="flex h-8 items-center rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg disabled:opacity-40">
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Send'}
@@ -464,6 +470,7 @@ export function MessageList({
   const [showJump, setShowJump] = useState(false);
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
+  const lastPrompt = [...items].reverse().find((i) => i.kind === 'user' && !i.command)?.key;
 
   // Older messages are about to go in above: note where the reader is before the page changes,
   // so the same lines stay on screen. (The browser's own scroll anchoring is off for this list.)
@@ -566,7 +573,7 @@ export function MessageList({
             {items.map((item) => {
               switch (item.kind) {
                 case 'user':
-                  return <UserBubble key={item.key} item={item} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
+                  return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
                 case 'shell':
                   return <ShellItem key={item.key} item={item} />;
                 case 'assistant':

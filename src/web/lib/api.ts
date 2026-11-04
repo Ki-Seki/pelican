@@ -105,11 +105,12 @@ export const api = {
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/mode`, { permissionMode }),
   rename: (id: string, title: string) => send<{ ok: boolean }>('PATCH', `sessions/${encodeURIComponent(id)}`, { title }),
   /**
-   * Edit the prompt `before` and send it again, on a branch made just before it (a new session for
-   * the first prompt). `uuid` is made once per edit, so a retry returns the same branch.
+   * Edit the prompt `before` and send it again: the last prompt in place (`inPlace`), an earlier
+   * one on a branch made just before it (a new session for the first prompt). `uuid` is made once
+   * per edit, so a retry gets the same result.
    */
   edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[] }) =>
-    send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body).then((r) => r.sessionId),
+    send<{ sessionId: string; inPlace: boolean }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body),
   /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
   fork: (id: string, options: { before?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
