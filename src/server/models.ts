@@ -25,8 +25,14 @@ const idlePrompt: AsyncIterable<SDKUserMessage> = {
  */
 async function ranHere(dir: string): Promise<boolean> {
   if (dir === os.homedir()) return true;
-  const sessions = await listSessions({ dir, limit: 1, includeWorktrees: false }).catch(() => []);
-  return sessions.length > 0;
+  // Claude Code files sessions by the folder's path with punctuation turned into dashes, so
+  // `a.b` and `a-b` share a list: a session counts only if it ran in this very folder.
+  const sessions = await listSessions({ dir, limit: 50, includeWorktrees: false }).catch(() => []);
+  for (const session of sessions) {
+    if (!session.cwd) continue;
+    if (session.cwd === dir || (await realpath(session.cwd).catch(() => '')) === dir) return true;
+  }
+  return false;
 }
 
 let running = 0;

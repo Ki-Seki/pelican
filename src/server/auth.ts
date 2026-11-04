@@ -191,8 +191,52 @@ export function noteFailure(client: string, now = Date.now()): void {
   }
 }
 
+/**
+ * Starts a sign-in attempt: counted as a failure at once, before the slow check, so many
+ * requests sent together cannot all get past the limit. Returns undefined when the client
+ * is over the limit, else a function that takes the attempt back once it succeeded.
+ */
+export function beginAttempt(client: string, now = Date.now()): (() => void) | undefined {
+  if (!attemptAllowed(client, now)) return undefined;
+  noteFailure(client, now);
+  return () => {
+    const drop = (times: number[] | undefined) => {
+      const at = times?.lastIndexOf(now) ?? -1;
+      if (times && at >= 0) times.splice(at, 1);
+    };
+    drop(allFailures);
+    drop(failures.get(client));
+  };
+}
+
 /** For tests: start counting afresh. */
 export function resetAttempts(): void {
   failures.clear();
   allFailures = [];
+}
+
+// One-time sign-in codes, for the QR code that opens Pelican on a phone: the page never sees
+// the access token or the password, and a photo of the code is useless after two minutes.
+const CODE_MS = 2 * 60_000;
+const codes = new Map<string, number>();
+
+/** A new code that signs one browser in, once, within two minutes. */
+export function issueCode(now = Date.now()): string {
+  for (const [code, expires] of codes) if (expires <= now) codes.delete(code);
+  while (codes.size >= 20) codes.delete(codes.keys().next().value!);
+  const code = randomBytes(18).toString('base64url');
+  codes.set(code, now + CODE_MS);
+  return code;
+}
+
+/** Whether `given` is a live code; using it ends it. */
+export function redeemCode(given: string | undefined, now = Date.now()): boolean {
+  if (!given || authMode() === 'none') return false;
+  for (const [code, expires] of codes) {
+    if (same(code, given)) {
+      codes.delete(code);
+      return expires > now;
+    }
+  }
+  return false;
 }

@@ -19,4 +19,8 @@ describe('fromRecorded', () => {
     expect(fromRecorded({}, MODELS)).toBeUndefined();
     expect(fromRecorded(undefined, MODELS)).toBeUndefined();
   });
+
+  it('never carries Bypass over: as with `claude --resume`, it is chosen anew', () => {
+    expect(fromRecorded({ model: 'claude-opus-5-5', permissionMode: 'bypassPermissions' }, MODELS)).toEqual({ model: 'default' });
+  });
 });

@@ -69,7 +69,8 @@ export function App() {
 
   useEffect(() => {
     applyTheme();
-    whenSignedOut(() => queryClient.setQueryData<AuthState>(['auth'], (old) => old && { ...old, signedIn: false }));
+    // Asked again rather than patched: how browsers sign in may have changed (a password set or removed).
+    whenSignedOut(() => void queryClient.resetQueries({ queryKey: ['auth'] }));
   }, [queryClient]);
 
   if (auth.isPending) {
@@ -136,7 +137,7 @@ function Main() {
     void api.logout().finally(() => {
       setSettingsOpen(false);
       queryClient.clear();
-      queryClient.setQueryData<AuthState>(['auth'], (old) => old && { ...old, signedIn: false });
+      void queryClient.resetQueries({ queryKey: ['auth'] });
     });
   };
 

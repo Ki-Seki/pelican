@@ -72,7 +72,7 @@ pelican</code></pre>
       <h3>Tailscale (recommended)</h3>
       <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need.</p>
       <pre><code>tailscale serve --bg 7860    <span class="c"># https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</span></code></pre>
-      <p>On the computer, open <code>https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</code> and paste the link Pelican printed to sign in. Then open Settings and scan the code with your phone: it opens Pelican there, signed in. Or set a password with <code>pelican password</code> and type it on the phone. If changes are refused with a 403, add the address to <code>PELICAN_ALLOWED_ORIGINS</code>.</p>
+      <p>On the computer, open <code>https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</code> and paste the link Pelican printed to sign in. Then open Settings, tap Show code and scan it with your phone: it opens Pelican there, signed in. The code works once, for two minutes. Or set a password with <code>pelican password</code> and type it on the phone. If changes are refused with a 403, add the address to <code>PELICAN_ALLOWED_ORIGINS</code>.</p>
       <h3>An SSH tunnel</h3>
       <p>From a laptop, or a phone app that forwards ports (Termius, Blink): <code>ssh -N -L 7860:127.0.0.1:7860 you@computer</code>, then open the link Pelican printed.</p>
       <h3>Your own reverse proxy</h3>
@@ -148,7 +148,7 @@ PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican --no-auth   <span cl
           <tr><td></td><td><code>PELICAN_STATE_DIR</code></td><td><code>~/.local/state/pelican</code></td><td>Uploads, push keys and subscriptions</td></tr>
         </tbody>
       </table>
-      <p><code>pelican token</code> prints the link that signs a browser in, and <code>pelican token --reset</code> makes a new token. <code>pelican password</code> sets a password, which replaces the token until <code>pelican password --off</code> removes it. A new token or password signs every browser out.</p>
+      <p><code>pelican token</code> prints the link that signs a browser in (Pelican shows it at start only on a terminal, never in a log), and <code>pelican token --reset</code> makes a new token. <code>pelican password</code> sets a password, which replaces the token until <code>pelican password --off</code> removes it. A new token or password signs every browser out.</p>
     </section>
 
     <section id="security">
@@ -159,7 +159,8 @@ PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican --no-auth   <span cl
         <li><b>Cookies</b> are <code>HttpOnly</code> and <code>SameSite=Strict</code>, signed with a secret that changes with the token or password.</li>
         <li><b>Only Pelican’s own page.</b> Its requests carry a header another site cannot add, requests a browser says come from another site are refused (reads too), and changes must come from Pelican’s origin or one you allowed. The server answers only to this computer’s names, loopback, <code>*.ts.net</code> and the names you configure (DNS rebinding), and only Pelican’s own origin may frame it.</li>
         <li><b>What Claude writes stays on the screen.</b> Images in a reply load only from Pelican; pages and visuals Claude makes render in a sandboxed frame that cannot reach Pelican and talks to no server but the public script and font CDNs.</li>
-        <li><b>Folders run nothing of their own until Claude has worked in them.</b> Looking at a fresh clone loads only your user settings, not its hooks or MCP servers, and git runs with the repository’s own helpers turned off.</li>
+        <li><b>Folders run nothing of their own until Claude has worked in them.</b> Looking at a fresh clone loads only your user settings, not its hooks or MCP servers, and git runs with the repository’s own hooks, filters and helpers turned off.</li>
+        <li><b>The phone’s QR code</b> carries a one-time code, good once for two minutes; the page never sees the token or your password, and the token is never written to a log.</li>
         <li><b><code>--no-auth</code></b> is for when something in front of Pelican authenticates. The demo signs no one in, so it stays on <code>127.0.0.1</code> unless you pass it.</li>
         <li><b>No copies.</b> Pelican reads Claude Code’s transcripts where Claude Code writes them. It stores uploads, push keys and subscriptions in its state folder, and sends nothing anywhere but your browser and, for notifications, your browser’s push service.</li>
       </ul>

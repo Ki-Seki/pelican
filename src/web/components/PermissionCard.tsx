@@ -1,5 +1,5 @@
 import { CircleHelp, ClipboardList, Loader2, ShieldQuestion } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { api } from '../lib/api';
@@ -9,14 +9,39 @@ import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
+/**
+ * Whether a click on an approval is meant for it. For a moment after the card appears, and after
+ * the page comes back into view, clicks are let through to nothing: a double click begun on
+ * another site (which opened this page under the pointer) must not approve anything.
+ */
+function useSettled(ms = 500): () => boolean {
+  const since = useRef(performance.now());
+  useEffect(() => {
+    const reset = () => {
+      since.current = performance.now();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') reset();
+    };
+    window.addEventListener('focus', reset);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', reset);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+  return () => performance.now() - since.current >= ms;
+}
+
 function Button({ children, onClick, kind = 'secondary', disabled }: { children: React.ReactNode; onClick: () => void; kind?: 'primary' | 'secondary' | 'quiet'; disabled?: boolean }) {
+  const settled = useSettled();
   const style = kind === 'primary'
     ? 'bg-fg text-bg'
     : kind === 'secondary'
       ? 'border border-line bg-panel hover:bg-hover'
       : 'text-muted hover:bg-hover hover:text-fg';
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className={`h-10 rounded-xl px-3.5 text-[14px] font-medium disabled:opacity-40 ${style}`}>
+    <button type="button" disabled={disabled} onClick={() => settled() && onClick()} className={`h-10 rounded-xl px-3.5 text-[14px] font-medium disabled:opacity-40 ${style}`}>
       {children}
     </button>
   );

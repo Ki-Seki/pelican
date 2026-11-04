@@ -1,8 +1,9 @@
-import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Pencil, RotateCcw, SquareTerminal, TriangleAlert } from 'lucide-react';
+import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
 import { clockTime, dayLabel, duration } from '../lib/format';
+import { newId } from '../lib/ids';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
@@ -127,25 +128,45 @@ const AssistantTurn = memo(function AssistantTurn({
           <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} verbose={view === 'verbose'} />
         ) : seg.kind === 'text' ? (
           <Markdown key={seg.key} text={seg.text} className="my-2" />
-        ) : !seg.image.omitted ? (
+        ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
+          <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
+        ) : (
           <button key={seg.key} type="button" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
             <img alt="" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
           </button>
-        ) : null,
+        ),
       )}
       {!running && lastText && <TurnFooter text={lastText.text} timestamp={item.timestamp} stats={stats} />}
     </div>
   );
 });
 
+/** The images of a prompt that an edit can carry over: those whose data is here (not url ones, not left out). */
+const editableImages = (images: ImageBlock[]) => images.filter((image) => !image.omitted && image.source.type === 'base64');
+
 const UserBubble = memo(function UserBubble({
   item, onEdit, onRewind,
-}: { item: Extract<Item, { kind: 'user' }>; onEdit?: (uuid: string, text: string) => Promise<boolean>; onRewind?: (uuid: string) => void }) {
+}: {
+  item: Extract<Item, { kind: 'user' }>;
+  onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
+  onRewind?: (uuid: string) => void;
+}) {
   const [actions, setActions] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // The id of an edit in progress, made once when the editor opens: sending twice (a retry after
+  // a lost answer) gets the same branch, not a second one.
+  const [editing, setEditing] = useState<string>();
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
   if (editing && onEdit) {
-    return <EditPrompt text={item.text} onCancel={() => setEditing(false)} onSend={(next) => onEdit(item.key, next).then((sent) => { if (sent) setEditing(false); })} />;
+    return (
+      <EditPrompt
+        text={item.text}
+        images={editableImages(item.images)}
+        onCancel={() => setEditing(undefined)}
+        onSend={(next, keep) => onEdit(item.key, next, editing, keep).then((sent) => {
+          if (sent) setEditing(undefined);
+        })}
+      />
+    );
   }
   // A message still on its way has no actions, and hidden actions take no taps: a tap meant for
   // the composer or the list must never land on one (Edit makes a branch).
@@ -155,7 +176,9 @@ const UserBubble = memo(function UserBubble({
       {item.images.length > 0 && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
           {item.images.map((image, i) =>
-            image.omitted ? null : (
+            image.omitted ? null : !loadsInPlace(imageSrc(image)) ? (
+              <RemoteImage key={i} src={imageSrc(image)} />
+            ) : (
               <button key={i} type="button" onClick={() => openImage(imageSrc(image))}>
                 <img alt="" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
               </button>
@@ -190,7 +213,7 @@ const UserBubble = memo(function UserBubble({
               className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"
               onClick={() => {
                 setActions(false);
-                setEditing(true);
+                setEditing(newId());
               }}
             >
               <Pencil className="size-3.5" />
@@ -209,10 +232,17 @@ const UserBubble = memo(function UserBubble({
 
 /**
  * Editing a prompt in place. Nothing changes until Send: then the conversation branches just
- * before this prompt and the new text goes there; this session stays as it was.
+ * before this prompt and the new text, with the images kept, goes there; this session stays as
+ * it was. While it sends there is nothing to cancel: the branch is being made.
  */
-function EditPrompt({ text, onCancel, onSend }: { text: string; onCancel: () => void; onSend: (text: string) => Promise<void> }) {
+function EditPrompt({ text, images, onCancel, onSend }: {
+  text: string;
+  images: ImageBlock[];
+  onCancel: () => void;
+  onSend: (text: string, keepImages: number[]) => Promise<void>;
+}) {
   const [value, setValue] = useState(text);
+  const [kept, setKept] = useState(() => images.map((_, i) => i));
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -229,24 +259,46 @@ function EditPrompt({ text, onCancel, onSend }: { text: string; onCancel: () => 
   const send = () => {
     if (!value.trim() || busy) return;
     setBusy(true);
-    void onSend(value.trim()).finally(() => setBusy(false));
+    void onSend(value.trim(), kept).finally(() => setBusy(false));
   };
   return (
     <div className="ml-auto w-full max-w-[85%] rounded-2xl border border-line bg-panel p-2">
+      {images.length > 0 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5 px-1 pt-1">
+          {images.map((image, i) => {
+            const keep = kept.includes(i);
+            return (
+              <button
+                key={i}
+                type="button"
+                disabled={busy}
+                aria-label={keep ? 'Leave this image out' : 'Keep this image'}
+                title={keep ? 'Leave this image out' : 'Keep this image'}
+                onClick={() => setKept((all) => (keep ? all.filter((k) => k !== i) : [...all, i].sort((a, b) => a - b)))}
+                className="relative"
+              >
+                <img alt="" src={imageSrc(image)} className={`size-14 rounded-lg border border-line object-cover ${keep ? '' : 'opacity-30'}`} />
+                <span className="absolute -top-1 -right-1 grid size-4.5 place-items-center rounded-full bg-fg text-bg"><X className="size-3" /></span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <textarea
         ref={field}
         value={value}
+        readOnly={busy}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') onCancel();
+          if (e.key === 'Escape' && !busy) onCancel();
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
         }}
         aria-label="Edit the prompt"
         className="block w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed outline-none"
       />
       <div className="mt-1 flex items-center gap-1.5">
-        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">Sends as a new branch; this one stays as it is.</span>
-        <button type="button" onClick={onCancel} className="h-8 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg">Cancel</button>
+        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">{busy ? 'Making the branch…' : 'Sends as a new branch; this one stays as it is.'}</span>
+        <button type="button" onClick={onCancel} disabled={busy} className="h-8 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">Cancel</button>
         <button type="button" onClick={send} disabled={busy || !value.trim()} className="flex h-8 items-center rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg disabled:opacity-40">
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Send'}
         </button>
@@ -390,7 +442,7 @@ export function MessageList({
   view: SessionView;
   cwd?: string;
   mode: ViewMode;
-  onEdit?: (uuid: string, text: string) => Promise<boolean>;
+  onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
 }) {
   const items = useMemo(() => buildItems(view.messages), [view.messages]);
@@ -420,7 +472,12 @@ export function MessageList({
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    if (sending && sending !== lastSending.current) atBottom.current = true;
+    if (sending && sending !== lastSending.current) {
+      // The finger was on the composer, not the list; a touch whose end never arrived (its element
+      // was replaced mid-touch) must not keep the new prompt out of view.
+      atBottom.current = true;
+      touching.current = false;
+    }
     lastSending.current = sending;
     if (snapshot.current) {
       el.scrollTop = snapshot.current.top + (el.scrollHeight - snapshot.current.height);

@@ -71,9 +71,13 @@ export function shellQuote(path: string): string {
 /** A Claude Code session id: a UUID. Anything else (an id typed into the address) is not offered to a shell. */
 export const isSessionId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-/** The command that carries a session on in a terminal; every part quoted, whatever it holds. */
+/**
+ * The command that carries a session on in a terminal; every part quoted, whatever it holds.
+ * A folder with a backslash in its name is left out: no one quoting is safe in both POSIX
+ * shells and fish for it.
+ */
 export function resumeCommand(sessionId: string, cwd?: string): string {
-  return `${cwd ? `cd ${shellQuote(cwd)} && ` : ''}claude --resume ${shellQuote(sessionId)}`;
+  return `${cwd && !cwd.includes('\\') ? `cd ${shellQuote(cwd)} && ` : ''}claude --resume ${shellQuote(sessionId)}`;
 }
 
 /** A time ahead, like a limit's reset: "14:30", "tomorrow 09:00", or "Sun 16:14". */

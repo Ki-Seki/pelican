@@ -27,7 +27,10 @@ function knownHosts(): Set<string> {
   // This computer's own addresses: a phone on the network may open it by IP.
   for (const address of Object.values(os.networkInterfaces()).flat()) if (address) names.add(address.address.toLowerCase());
   if (config.host !== '0.0.0.0' && config.host !== '::') names.add(hostname(config.host));
-  for (const host of config.allowedHosts) names.add(hostname(host));
+  for (const host of config.allowedHosts) {
+    const name = hostname(host);
+    if (name) names.add(name);
+  }
   for (const origin of config.allowedOrigins) {
     try {
       names.add(new URL(origin).hostname.toLowerCase());
@@ -46,8 +49,9 @@ function knownHosts(): Set<string> {
  */
 export function hostAllowed(host: string | undefined): boolean {
   if (!host) return false;
-  if (isLoopback(host)) return true;
   const name = hostname(host);
+  if (!name) return false;
+  if (isLoopback(host)) return true;
   if (name.endsWith('.ts.net')) return true;
   return knownHosts().has(name);
 }

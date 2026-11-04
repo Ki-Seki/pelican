@@ -97,7 +97,11 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
 
 /** The diff of one file against the last commit; an untracked file shows as all added. */
 export async function gitDiff(cwd: string, file: string): Promise<string> {
-  inside(cwd, file);
+  // The file itself may be gone (a deleted file has a diff), but the folder it is in may not lead
+  // out of the session's folder through a link.
+  const full = inside(cwd, file);
+  const [root, parent] = await Promise.all([realpath(cwd), realpath(path.dirname(full)).catch(() => undefined)]);
+  if (parent && !within(root, parent)) throw new Error(OUTSIDE);
   let diff = '';
   try {
     diff = await git(cwd, ['diff', 'HEAD', '--', file]);

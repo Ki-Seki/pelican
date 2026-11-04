@@ -10,7 +10,7 @@ import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
-import { lastTurnTime, transcriptPath } from './transcripts.js';
+import { firstTurnSession, lastTurnTime, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
 
@@ -36,9 +36,13 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
+  const title = titleOf(info);
+  // Claude Desktop's side chats: a copy of a conversation with a question or two of its own.
+  const copiedFrom = file && title === 'Side chat' ? await firstTurnSession(file) : undefined;
+  const sideChatOf = copiedFrom && copiedFrom !== info.sessionId ? copiedFrom : undefined;
   return {
     id: info.sessionId,
-    title: titleOf(info),
+    title,
     cwd,
     project: cwd ? path.basename(cwd) : '',
     ...(gitBranch && gitBranch !== 'HEAD' ? { gitBranch } : {}),
@@ -50,6 +54,7 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
     ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
     ...(state === 'live' && elsewhere?.busy ? { runningIn: elsewhere.app } : {}),
     ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
+    ...(sideChatOf ? { sideChatOf } : {}),
   };
 }
 

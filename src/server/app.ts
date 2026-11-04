@@ -7,10 +7,10 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { Attachment, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import type { Attachment, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
-import { accessToken, attemptAllowed, authMode, checkPassword, checkToken, cookieName, newSessionCookie, noteFailure, signedIn } from './auth.js';
+import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, signedIn } from './auth.js';
 import { config } from './config.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
@@ -61,22 +61,24 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-// Bodies are small, except an upload; nothing is buffered past these sizes, signed in or not.
-const tooLarge = (c: Context) => c.json({ error: 'Request too large' }, 413);
-const limits = {
-  auth: bodyLimit({ maxSize: 4 * 1024, onError: tooLarge }),
-  upload: bodyLimit({ maxSize: MAX_UPLOAD_BYTES + 64 * 1024, onError: tooLarge }),
-  json: bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }),
-};
-app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth : c.req.path === '/api/uploads' ? limits.upload : limits.json)(c, next));
-
 /** What the page loads without fetch, so it cannot mark: an uploaded image, a download. */
 const unmarked = (c: Context) => c.req.method === 'GET'
   && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path));
 
+/** The Origin header as an origin (`null`, garbage and missing are none). */
+function originOf(header: string | undefined): string | undefined {
+  if (!header || header === 'null') return undefined;
+  try {
+    return new URL(header).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 app.use('/api/*', async (c, next) => {
   const origin = c.req.header('origin');
-  const allowedOrigin = Boolean(origin && config.allowedOrigins.includes(origin));
+  const parsed = originOf(origin);
+  const allowedOrigin = Boolean(parsed && config.allowedOrigins.includes(parsed));
   // Another site's page can make a browser send requests here, reads included, and some reads
   // run programs (git, Claude Code). Browsers say where a request comes from: only Pelican's own
   // page, or a page the config allows, gets in.
@@ -102,6 +104,16 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
+// Bodies are small, except an upload; nothing is buffered past these sizes. Only signed-in
+// requests get this far, apart from signing in itself, whose limit is 4 KB.
+const tooLarge = (c: Context) => c.json({ error: 'Request too large' }, 413);
+const limits = {
+  auth: bodyLimit({ maxSize: 4 * 1024, onError: tooLarge }),
+  upload: bodyLimit({ maxSize: MAX_UPLOAD_BYTES + 64 * 1024, onError: tooLarge }),
+  json: bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }),
+};
+app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth : c.req.path === '/api/uploads' ? limits.upload : limits.json)(c, next));
+
 app.onError((error, c) => {
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
@@ -114,17 +126,15 @@ app.get('/api/auth', (c) => c.json({
 }));
 
 app.post('/api/auth/login', async (c) => {
-  const client = clientAddress(c);
-  if (!attemptAllowed(client)) return c.json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
+  const succeeded = beginAttempt(clientAddress(c));
+  if (!succeeded) return c.json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
   const body = await c.req.json<{ password?: unknown; token?: unknown }>().catch(() => ({} as { password?: unknown; token?: unknown }));
   const mode = authMode();
   const ok = mode === 'password' ? typeof body.password === 'string' && (await checkPassword(body.password))
     : mode === 'token' ? typeof body.token === 'string' && checkToken(body.token.trim())
       : false;
-  if (!ok) {
-    noteFailure(client);
-    return c.json({ error: mode === 'token' ? 'That is not the access token' : 'Wrong password' }, 401);
-  }
+  if (!ok) return c.json({ error: mode === 'token' ? 'That is not the access token' : 'Wrong password', mode }, 401);
+  succeeded();
   const cookie = newSessionCookie();
   c.header('Set-Cookie', cookieHeader(c, cookie.name, cookie.value, cookie.maxAge));
   return c.json({ ok: true });
@@ -135,8 +145,11 @@ app.post('/api/auth/logout', (c) => {
   return c.json({ ok: true });
 });
 
-/** The access token, for a signed-in page to show as a QR code that signs a phone in. */
-app.get('/api/access', (c) => c.json({ token: accessToken() ?? null }));
+/** A one-time code for the QR code that signs a phone in: good once, for two minutes. */
+app.post('/api/access/code', (c) => {
+  if (authMode() === 'none') return c.json({ code: null });
+  return c.json({ code: issueCode() });
+});
 
 app.get('/api/info', (c) => {
   const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
@@ -165,6 +178,29 @@ app.get('/api/sessions/:id/messages', async (c) => {
 
 type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
 
+const PERMISSION_MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
+const permissionMode = (value: unknown): PermissionMode | undefined =>
+  (PERMISSION_MODES as unknown[]).includes(value) ? (value as PermissionMode) : undefined;
+
+/** The settings a request may carry, and only those, each of its own type. */
+function cleanSettings(raw: unknown): RunSettings {
+  const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const text = (v: unknown, max: number) => (typeof v === 'string' && v.length > 0 && v.length <= max ? v : undefined);
+  const out: RunSettings = {};
+  const model = text(value.model, 200);
+  const effort = text(value.effort, 20);
+  const mode = permissionMode(value.permissionMode);
+  if (model) out.model = model;
+  if (effort) out.effort = effort;
+  if (typeof value.fast === 'boolean') out.fast = value.fast;
+  if (typeof value.ultracode === 'boolean') out.ultracode = value.ultracode;
+  if (mode) out.permissionMode = mode;
+  return out;
+}
+
+const sendMode = (value: unknown): SendMode | undefined => (value === 'steer' || value === 'queue' ? value : undefined);
+const uuidOf = (value: unknown) => (typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : undefined);
+
 async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]> {
   const found = await Promise.all((ids ?? []).map((id) => findUpload(id)));
   return found.filter((a): a is Attachment => Boolean(a));
@@ -173,25 +209,88 @@ async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]>
 app.post('/api/sessions', async (c) => {
   const body = await c.req.json<SendBody>();
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
-  const cwd = body.scratch ? await createScratchFolder() : body.cwd;
+  const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
+  if (!cwd) return c.json({ error: 'No such folder' }, 400);
+  const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {
-    text: body.text ?? '',
+    text: typeof body.text === 'string' ? body.text : '',
     attachments: await attachmentsFrom(body.attachments),
-    settings: body.settings ?? {},
-    ...(body.uuid ? { uuid: body.uuid } : {}),
+    settings: cleanSettings(body.settings),
+    ...(uuid ? { uuid } : {}),
   });
   return c.json({ sessionId });
 });
 
 app.post('/api/sessions/:id/messages', async (c) => {
   const body = await c.req.json<SendBody>();
+  const uuid = uuidOf(body.uuid);
+  const mode = sendMode(body.mode);
   const sessionId = await sendMessage({ sessionId: c.req.param('id') }, {
-    text: body.text ?? '',
+    text: typeof body.text === 'string' ? body.text : '',
     attachments: await attachmentsFrom(body.attachments),
-    settings: body.settings ?? {},
-    ...(body.uuid ? { uuid: body.uuid } : {}),
-    ...(body.mode ? { mode: body.mode } : {}),
+    settings: cleanSettings(body.settings),
+    ...(uuid ? { uuid } : {}),
+    ...(mode ? { mode } : {}),
   });
+  return c.json({ sessionId });
+});
+
+/** Edits already made, by the id the editor gave them: a retry gets the same branch, not a second one. */
+const edits = new Map<string, { at: number; sessionId: string }>();
+
+/** The images of a prompt, saved as uploads again so the edited prompt carries them too. */
+async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise<Attachment[]> {
+  const message = (await loadMessages(sessionId)).find((m) => m.uuid === uuid);
+  const images = (message?.blocks ?? []).flatMap((b) => (b.type === 'image' && b.source.type === 'base64' ? [b.source] : []));
+  const wanted = Array.isArray(keep) ? new Set(keep.filter((i): i is number => Number.isInteger(i))) : new Set(images.map((_, i) => i));
+  const kept: Attachment[] = [];
+  for (const [i, image] of images.entries()) {
+    if (!wanted.has(i)) continue;
+    const ext = image.media_type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+    kept.push(await saveUpload(new File([Buffer.from(image.data, 'base64')], `image-${i + 1}.${ext}`, { type: image.media_type })));
+  }
+  return kept;
+}
+
+/**
+ * Edit a prompt and send it again, as one request: the conversation branches just before the
+ * prompt (the first prompt: a new session in the same folder) and the new text goes there. If
+ * the send fails, the branch is removed, so nothing is left behind; this session is untouched.
+ */
+app.post('/api/sessions/:id/edit', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown }>()
+    .catch(() => ({}) as Record<string, unknown>);
+  const key = uuidOf(body.uuid);
+  const before = uuidOf(body.before);
+  if (!key || !before || typeof body.text !== 'string' || !body.text.trim()) return c.json({ error: 'Nothing to send' }, 400);
+  for (const [k, v] of edits) if (Date.now() - v.at > 10 * 60_000) edits.delete(k);
+  const done = edits.get(key);
+  if (done) return c.json({ sessionId: done.sessionId });
+  const info = await sessionInfo(id);
+  if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
+  if (getRun(id)?.busy) return c.json({ error: 'Stop Claude before editing an earlier prompt.' }, 409);
+  const previous = await messageBefore(id, before);
+  if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
+  const message = {
+    text: body.text,
+    attachments: await imagesOf(id, before, body.keepImages),
+    settings: cleanSettings(body.settings),
+    uuid: key,
+  };
+  let sessionId: string;
+  if (previous === null) {
+    sessionId = await sendMessage({ cwd: info.cwd }, message);
+  } else {
+    const branch = await fork(id, previous);
+    try {
+      sessionId = await sendMessage({ sessionId: branch }, message);
+    } catch (error) {
+      await remove(branch).catch(() => undefined);
+      throw error;
+    }
+  }
+  edits.set(key, { at: Date.now(), sessionId });
   return c.json({ sessionId });
 });
 
@@ -202,13 +301,17 @@ app.post('/api/sessions/:id/interrupt', async (c) => {
 
 app.post('/api/sessions/:id/permissions/:requestId', async (c) => {
   const decision = await c.req.json<PermissionDecision>();
+  const asked = (decision as { permissionMode?: unknown }).permissionMode;
+  if (asked !== undefined && !permissionMode(asked)) return c.json({ error: 'No such mode' }, 400);
   const ok = getRun(c.req.param('id'))?.decide(c.req.param('requestId'), decision) ?? false;
   return ok ? c.json({ ok }) : c.json({ error: 'That request is no longer pending' }, 409);
 });
 
 app.post('/api/sessions/:id/mode', async (c) => {
-  const { permissionMode } = await c.req.json<{ permissionMode: RunSettings['permissionMode'] }>();
-  await getRun(c.req.param('id'))?.setPermissionMode(permissionMode);
+  const body = await c.req.json<{ permissionMode?: unknown }>();
+  const mode = permissionMode(body.permissionMode);
+  if (!mode) return c.json({ error: 'No such mode' }, 400);
+  await getRun(c.req.param('id'))?.setPermissionMode(mode);
   return c.json({ ok: true });
 });
 
@@ -247,6 +350,7 @@ app.get('/api/sessions/:id/export', async (c) => {
   return c.body(markdown, 200, {
     'Content-Type': 'text/markdown; charset=utf-8',
     'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'X-Content-Type-Options': 'nosniff',
   });
 });
 
@@ -418,9 +522,16 @@ app.post('/api/uploads', async (c) => {
 app.get('/api/uploads/:id', async (c) => {
   const found = await readUpload(c.req.param('id'));
   if (!found) return c.notFound();
+  // Shown in the page only as an image; anything else downloads. Either way it runs nothing:
+  // no sniffing, no scripts, no frames.
+  const image = found.attachment.mime.startsWith('image/') && found.attachment.mime !== 'image/svg+xml';
   return c.body(new Uint8Array(found.data), 200, {
     'Content-Type': found.attachment.mime,
     'Cache-Control': 'private, max-age=86400',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
+    'X-Frame-Options': 'SAMEORIGIN',
+    ...(image ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.attachment.name)}` }),
   });
 });
 
@@ -488,14 +599,19 @@ app.get('/*', async (c) => {
   } catch {
     return c.text('Bad path', 400);
   }
-  // Opening the link Pelican printed (…/?token=…) signs this browser in, then drops the token from the address.
-  const offered = c.req.query('token');
-  if (offered !== undefined) {
+  // Opening the link Pelican printed (…/?token=…), or the QR code from Settings (…/?code=…),
+  // signs this browser in, then drops the secret from the address.
+  const token = c.req.query('token');
+  const code = c.req.query('code');
+  if (token !== undefined || code !== undefined) {
     const url = new URL(c.req.url);
     url.searchParams.delete('token');
-    // One leading slash: `//other.example/` would send the browser to another site.
-    const location = `${url.pathname.replace(/^\/+/, '/')}${url.search}`;
-    if (!checkToken(offered)) return c.redirect(location, 302);
+    url.searchParams.delete('code');
+    // Relative to where the page is, so it works under a proxy's path prefix, and can never
+    // name another site (`//other.example/` would).
+    const location = `./${url.pathname.split('/').pop() ?? ''}${url.search}`;
+    const ok = token !== undefined ? checkToken(token) : redeemCode(code);
+    if (!ok) return c.body(null, 302, { Location: location, 'Cache-Control': 'no-store' });
     const cookie = newSessionCookie();
     return c.body(null, 302, { Location: location, 'Set-Cookie': cookieHeader(c, cookie.name, cookie.value, cookie.maxAge), 'Cache-Control': 'no-store' });
   }

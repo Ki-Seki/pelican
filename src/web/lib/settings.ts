@@ -16,6 +16,8 @@ export function fromRecorded(recorded: RecordedSettings | undefined, models: Mod
   if (recorded.effort) out.effort = recorded.effort;
   if (recorded.fast !== undefined) out.fast = recorded.fast;
   if (recorded.ultracode !== undefined) out.ultracode = recorded.ultracode;
-  if (recorded.permissionMode) out.permissionMode = recorded.permissionMode;
+  // As with `claude --resume`, a session picks up where it left off except for Bypass:
+  // skipping every permission check is chosen anew each time, never carried over.
+  if (recorded.permissionMode && recorded.permissionMode !== 'bypassPermissions') out.permissionMode = recorded.permissionMode;
   return out;
 }

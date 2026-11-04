@@ -53,6 +53,8 @@ export type Prefs = {
   view: ViewMode;
   /** List runs in the system temp directory under "All" too. */
   showTemporary: boolean;
+  /** List Claude Desktop's side chats too. */
+  showSideChats: boolean;
   /** The session list: grouped by day or by project, with full or one-line rows. */
   listGroup: 'time' | 'project';
   listDensity: 'detailed' | 'compact';
@@ -63,7 +65,7 @@ export type Prefs = {
 };
 
 const DEFAULT_PREFS: Prefs = {
-  theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, listGroup: 'time', listDensity: 'detailed',
+  theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, showSideChats: false, listGroup: 'time', listDensity: 'detailed',
   sendWhileBusy: 'steer', suggestions: true,
 };
 

@@ -31,7 +31,15 @@ export const PREVIEW_POLICY = [
   "base-uri 'none'",
 ].join('; ');
 
-const POLICY_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_POLICY}">`;
+/**
+ * First in every preview, before anything the page brings: the policy, then a script that takes
+ * WebRTC away (a peer connection reaches its ICE servers whatever connect-src says, and browsers
+ * do not know the policy's own webrtc directive yet).
+ */
+const PREAMBLE = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_POLICY}"><script>for(const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCIceTransport"])try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false})}catch(e){}</script>`;
+
+/** HTML's own whitespace (not \s, which also takes in characters that HTML reads as text). */
+const LEADING = /^[\t\n\f\r ]*/;
 
 const isDark = () => {
   const theme = getPrefs().theme;
@@ -63,16 +71,18 @@ export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string
 
 export function documentFor(source: PreviewSource, dark: boolean): string {
   const theme = dark ? 'dark' : 'light';
-  const full = /^\s*(<!doctype|<html)/i.test(source.code);
+  const code = source.code.replace(/^\uFEFF/, '');
+  const start = code.slice(LEADING.exec(code)?.[0].length ?? 0);
+  const full = /^(<!doctype|<html)/i.test(start);
   if (full) {
-    // A page of its own: its own styles, plus the size report. The policy goes before anything of the
-    // page's, right after the doctype: the parser puts it in the head, so it covers the whole page.
-    const doctype = /^\s*<!doctype[^>]*>/i.exec(source.code)?.[0] ?? '';
-    const page = `${doctype}${POLICY_META}${source.code.slice(doctype.length)}`;
+    // A page of its own: its own styles, plus the size report. Our doctype and preamble come
+    // first, whatever the page starts with: the parser puts the policy in the head before any
+    // of the page's own content, so it covers all of it. The page's doctype is dropped.
+    const page = `<!doctype html>${PREAMBLE}${start.replace(/^<!doctype[^>]*>/i, '')}`;
     return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${RESIZE}</body>`) : `${page}${RESIZE}`;
   }
   const css = source.widget || source.kind === 'svg' ? `<style>${WIDGET_CSS}</style>` : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
-  return `<!doctype html><html data-theme="${theme}"><head>${POLICY_META}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${source.code}${RESIZE}</body></html>`;
+  return `<!doctype html><html data-theme="${theme}"><head>${PREAMBLE}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${code}${RESIZE}</body></html>`;
 }
 
 /** The rendered content in a sandboxed frame, as tall as it is (up to `max`). */

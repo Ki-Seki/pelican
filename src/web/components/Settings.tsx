@@ -108,6 +108,12 @@ export function SettingsSheet({
         checked={prefs.showTemporary}
         onChange={(showTemporary) => setPrefs({ showTemporary })}
       />
+      <SheetToggle
+        label="Show side chats"
+        description="Claude Desktop’s side chats: a copy of a session with a question or two of their own. A search always finds them."
+        checked={prefs.showSideChats}
+        onChange={(showSideChats) => setPrefs({ showSideChats })}
+      />
 
       {/* The demo sends nothing anywhere, notifications included. */}
       {!info?.demo && (
@@ -181,35 +187,51 @@ export function SettingsSheet({
 const qrImage = (text: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg(text))}`;
 
 /**
- * This page's address as a QR code, for opening Pelican on a phone. With the
- * access token, the code also signs the phone in, so it shows only on a tap:
- * anyone who scans it can use Pelican as you.
+ * This page's address as a QR code, for opening Pelican on a phone. When browsers sign in,
+ * the code carries a one-time sign-in code instead of the token or the password: it works
+ * once, within two minutes, so it shows only on a tap.
  */
 function PhoneCode({ open }: { open: boolean }) {
   const { data: auth } = useQuery<AuthState>({ queryKey: ['auth'], enabled: false });
-  const token = auth?.mode === 'token';
-  const [shown, setShown] = useState(false);
+  const signsIn = auth?.mode === 'token' || auth?.mode === 'password';
+  const [code, setCode] = useState<{ value: string; expires: number }>();
+  const [error, setError] = useState<string>();
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!open) setShown(false);
+    if (!open) setCode(undefined);
   }, [open]);
-  const { data: access } = useQuery({ queryKey: ['access'], queryFn: api.access, enabled: open && token && shown, staleTime: Infinity });
-  const link = token && access ? `${appBase.href}?token=${encodeURIComponent(access)}` : appBase.href;
-  const hidden = token && !(shown && access);
+  useEffect(() => {
+    if (!code) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [code]);
+  const live = code && code.expires > now;
+  const show = () => {
+    setError(undefined);
+    api.accessCode()
+      .then((value) => {
+        setNow(Date.now());
+        setCode(value ? { value, expires: Date.now() + 115_000 } : undefined);
+      })
+      .catch((err: Error) => setError(err.message));
+  };
+  const link = live ? `${appBase.href}?code=${encodeURIComponent(code.value)}` : appBase.href;
   return (
     <div className="flex items-center gap-4 px-3 pb-1">
-      {hidden ? (
-        <button type="button" onClick={() => setShown(true)} className="grid size-28 shrink-0 place-items-center rounded-lg border border-dashed border-line text-[12.5px] text-muted hover:bg-hover hover:text-fg">
-          Show code
+      {signsIn && !live ? (
+        <button type="button" onClick={show} className="grid size-28 shrink-0 place-items-center rounded-lg border border-dashed border-line text-[12.5px] text-muted hover:bg-hover hover:text-fg">
+          {code ? 'New code' : 'Show code'}
         </button>
       ) : (
         <img src={qrImage(link)} alt="" className="size-28 shrink-0 rounded-lg border border-line bg-white p-1.5" />
       )}
       <p className="min-w-0 text-[13px] leading-relaxed text-muted">
-        {token
-          ? <>Scan with your phone’s camera to open Pelican there, signed in. Anyone who scans it can use Pelican as you.</>
+        {signsIn
+          ? <>Scan with your phone’s camera to open Pelican there, signed in. The code works once, for two minutes.</>
           : <>Scan with your phone’s camera to open this page there.</>}
         <br />
         <span className="font-mono text-[12px] break-all text-faint">{appBase.href}</span>
+        {error && <><br /><span className="text-danger">{error}</span></>}
       </p>
     </div>
   );

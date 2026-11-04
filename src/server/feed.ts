@@ -69,6 +69,10 @@ class Feed {
     this.broadcast({ type: 'message', sessionId: this.sessionId, message });
   }
 
+  get hasRecent(): boolean {
+    return this.recent.length > 0;
+  }
+
   replayRecent(listener: Listener): void {
     for (const message of this.recent) listener({ type: 'message', sessionId: this.sessionId, message });
   }
@@ -176,10 +180,10 @@ export function subscribe(sessionId: string, listener: Listener): () => void {
   feed.watch();
   return () => {
     feed.listeners.delete(listener);
-    if (feed.listeners.size === 0) feed.unwatch();
+    if (feed.listeners.size > 0) return;
+    feed.unwatch();
+    // Nobody watches and no run has published into it: forget it, so feeds do not pile up
+    // for every session ever opened. A run's feed stays, for a client that comes back to it.
+    if (!feed.hasRecent && feeds.get(sessionId) === feed) feeds.delete(sessionId);
   };
-}
-
-export async function checkFeed(sessionId: string): Promise<void> {
-  if (await feedFor(sessionId).check()) sessionsChanged();
 }

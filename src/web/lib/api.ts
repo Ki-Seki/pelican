@@ -84,8 +84,8 @@ export const api = {
   auth: () => request<AuthState>('auth'),
   login: (proof: { password: string } | { token: string }) => send<{ ok: boolean }>('POST', 'auth/login', proof),
   logout: () => send<{ ok: boolean }>('POST', 'auth/logout'),
-  /** The access token, for the link that signs a phone in (null unless the token is how Pelican signs in). */
-  access: () => request<{ token: string | null }>('access').then((r) => r.token),
+  /** A one-time code that signs a phone in, good for two minutes (null when nobody signs in). */
+  accessCode: () => send<{ code: string | null }>('POST', 'access/code').then((r) => r.code),
   info: () => request<ServerInfo>('info'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
@@ -104,6 +104,12 @@ export const api = {
   setMode: (id: string, permissionMode: RunSettings['permissionMode']) =>
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/mode`, { permissionMode }),
   rename: (id: string, title: string) => send<{ ok: boolean }>('PATCH', `sessions/${encodeURIComponent(id)}`, { title }),
+  /**
+   * Edit the prompt `before` and send it again, on a branch made just before it (a new session for
+   * the first prompt). `uuid` is made once per edit, so a retry returns the same branch.
+   */
+  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[] }) =>
+    send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body).then((r) => r.sessionId),
   /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
   fork: (id: string, options: { before?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),

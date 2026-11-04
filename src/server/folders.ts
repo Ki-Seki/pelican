@@ -41,6 +41,9 @@ const under = (dir: string, roots: string[]) => {
  * Claude Desktop or here; a real conversation in a throwaway folder.
  */
 export function folderKind(dir: string): 'project' | 'scratch' | 'temp' {
+  // The demo's made-up home can itself be in a temp folder (the scripts that record it put it
+  // there): its folders are what they pretend to be.
+  if (config.demo && under(dir, [config.home.replace(/\/+$/, '')])) return under(dir, scratchRoots) ? 'scratch' : 'project';
   if (under(dir, tempRoots)) return 'temp';
   if (under(dir, scratchRoots)) return 'scratch';
   return 'project';

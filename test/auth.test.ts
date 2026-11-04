@@ -5,8 +5,8 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  accessToken, attemptAllowed, authMode, checkPassword, checkToken, clearPassword, cookieName, loadAuth,
-  newSessionCookie, noteFailure, passwordSet, resetAttempts, resetToken, setPassword, signedIn,
+  accessToken, attemptAllowed, authMode, beginAttempt, checkPassword, checkToken, clearPassword, cookieName, issueCode, loadAuth,
+  newSessionCookie, noteFailure, passwordSet, redeemCode, resetAttempts, resetToken, setPassword, signedIn,
 } from '../src/server/auth';
 import { config } from '../src/server/config';
 
@@ -125,5 +125,32 @@ describe('failed sign-ins', () => {
     for (let i = 0; i < 30; i += 1) noteFailure(`10.0.0.${i}`, now);
     expect(attemptAllowed('192.168.1.1', now)).toBe(false);
     expect(attemptAllowed('192.168.1.1', now + 10 * 60_000 + 1)).toBe(true);
+  });
+});
+
+describe('attempts counted before the check', () => {
+  beforeEach(() => resetAttempts());
+
+  it('many sent at once cannot all get past the limit, and a success is not counted', () => {
+    const now = 2_000_000;
+    const started = Array.from({ length: 50 }, () => beginAttempt('9.9.9.9', now));
+    expect(started.filter(Boolean)).toHaveLength(10);
+    resetAttempts();
+    const ok = beginAttempt('9.9.9.9', now)!;
+    ok();
+    for (let i = 0; i < 10; i += 1) expect(beginAttempt('9.9.9.9', now)).toBeTruthy();
+    expect(beginAttempt('9.9.9.9', now)).toBeUndefined();
+  });
+});
+
+describe('one-time codes', () => {
+  it('work once, and only for two minutes', () => {
+    const code = issueCode(1_000);
+    expect(redeemCode(code, 2_000)).toBe(true);
+    expect(redeemCode(code, 2_000)).toBe(false);
+    const late = issueCode(1_000);
+    expect(redeemCode(late, 1_000 + 2 * 60_000 + 1)).toBe(false);
+    expect(redeemCode('made-up', 1_000)).toBe(false);
+    expect(redeemCode(undefined)).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { readLastTurn } from '../src/server/transcripts';
+import { firstTurnSession, readLastTurn } from '../src/server/transcripts';
 
 let dir: string;
 beforeAll(async () => {
@@ -56,5 +56,20 @@ describe('readLastTurn', () => {
 
   it('returns nothing for a missing file', async () => {
     expect(await readLastTurn(path.join(dir, 'missing.jsonl'))).toBeUndefined();
+  });
+});
+
+describe('firstTurnSession', () => {
+  it('names the session a transcript was copied from (a side chat), or its own', async () => {
+    const side = await write('side.jsonl', [
+      row({ type: 'custom-title', customTitle: 'Side chat', sessionId: 'side' }),
+      row({ type: 'user', sessionId: 'parent', message: { role: 'user', content: 'from the parent' }, timestamp: '2026-11-02T09:00:00Z' }),
+      row({ type: 'assistant', sessionId: 'parent', message: { role: 'assistant', content: [] }, timestamp: '2026-11-02T09:00:01Z' }),
+      row({ type: 'user', sessionId: 'side', message: { role: 'user', content: 'a side question' }, timestamp: '2026-11-02T09:30:00Z' }),
+    ]);
+    expect(await firstTurnSession(side)).toBe('parent');
+    const own = await write('own.jsonl', [row({ type: 'user', sessionId: 'own', message: { role: 'user', content: 'hi' }, timestamp: '2026-11-02T09:00:00Z' })]);
+    expect(await firstTurnSession(own)).toBe('own');
+    expect(await firstTurnSession(path.join(dir, 'missing.jsonl'))).toBeUndefined();
   });
 });

@@ -43,6 +43,7 @@ export function StatusBadge({ status, runningIn }: { status: SessionStatus; runn
 }
 
 function Where({ session }: { session: SessionSummary }) {
+  if (session.sideChatOf) return <span className="min-w-0 truncate text-faint">Side chat · {session.project}</span>;
   if (session.temp) return <span className="min-w-0 truncate text-faint">Temporary · {session.project}</span>;
   if (session.scratch) return <span className="min-w-0 truncate text-faint">Scratch</span>;
   return <span className="min-w-0 truncate">{session.project || '—'}</span>;
@@ -118,6 +119,12 @@ function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }
         checked={prefs.showTemporary}
         onChange={(showTemporary) => setPrefs({ showTemporary })}
       />
+      <SheetToggle
+        label="Show side chats"
+        description="Claude Desktop’s side chats: a copy of a session with a question or two of their own"
+        checked={prefs.showSideChats}
+        onChange={(showSideChats) => setPrefs({ showSideChats })}
+      />
     </Sheet>
   );
 }
@@ -158,10 +165,13 @@ export function SessionList({
     return list;
   }, [sessions]);
   const tempCount = useMemo(() => (sessions ?? []).filter((s) => s.temp).length, [sessions]);
+  const sideChatCount = useMemo(() => (sessions ?? []).filter((s) => s.sideChatOf && !s.temp).length, [sessions]);
 
   const groups = useMemo((): Group[] => {
     const q = query.trim().toLowerCase();
     const filtered = (sessions ?? []).filter((s) => {
+      // Side chats belong to the session they came from: shown when asked for, or found by a search.
+      if (s.sideChatOf && !q && !prefs.showSideChats) return false;
       if (project === TEMP) {
         if (!s.temp) return false;
       } else if (project === SCRATCH) {
@@ -201,11 +211,11 @@ export function SessionList({
       else out.push({ key: label, label, sessions: [s] });
     }
     return out;
-  }, [sessions, query, project, prefs.listGroup, prefs.showTemporary]);
+  }, [sessions, query, project, prefs.listGroup, prefs.showTemporary, prefs.showSideChats]);
 
   const byProject = prefs.listGroup === 'project' && !project;
   const Row = prefs.listDensity === 'compact' ? CompactRow : DetailedRow;
-  const visibleCount = (sessions?.length ?? 0) - (prefs.showTemporary ? 0 : tempCount);
+  const visibleCount = (sessions?.length ?? 0) - (prefs.showTemporary ? 0 : tempCount) - (prefs.showSideChats ? 0 : sideChatCount);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

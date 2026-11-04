@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
@@ -92,9 +95,20 @@ async function passwordCommand(off: boolean, stdin: boolean): Promise<void> {
 /** The link with the access token, for this computer's own address. */
 const tokenLink = (base: string, token: string) => `${base}?token=${token}`;
 
+/** Pelican's address on this computer: localhost, unless it listens on one other address only. */
+function localAddress(): string {
+  const h = config.host;
+  const host = h === '0.0.0.0' || h === '::' || listensLocally(h) ? 'localhost' : h.includes(':') ? `[${h}]` : h;
+  return `http://${host}:${config.port}/`;
+}
+
 async function tokenCommand(reset: boolean): Promise<void> {
   const { accessToken, authMode, loadAuth, resetToken } = await import('./auth.js');
   await loadAuth();
+  if (authMode() === 'none') {
+    console.log('Sign-in is off (--no-auth or PELICAN_AUTH=none), so there is no access token.');
+    return;
+  }
   if (reset) {
     await resetToken();
     console.log('New access token made. Restart Pelican to apply; browsers signed in with the old one are signed out.');
@@ -104,7 +118,20 @@ async function tokenCommand(reset: boolean): Promise<void> {
     return;
   }
   const token = accessToken();
-  if (token) console.log(tokenLink(`http://localhost:${config.port}/`, token));
+  if (token) console.log(tokenLink(localAddress(), token));
+}
+
+/**
+ * Opens the browser signed in, without putting the token on a command line, where other
+ * accounts could read it: a page only you can read redirects to the link, and goes away.
+ */
+async function openSignedIn(link: string): Promise<void> {
+  const file = path.join(config.configDir, 'open.html');
+  await mkdir(config.configDir, { recursive: true, mode: 0o700 });
+  await rm(file, { force: true });
+  await writeFile(file, `<!doctype html><meta http-equiv="refresh" content="0;url=${link}"><a href="${link}">Open Pelican</a>\n`, { mode: 0o600 });
+  openBrowser(pathToFileURL(file).href);
+  setTimeout(() => void rm(file, { force: true }), 30_000).unref();
 }
 
 function openBrowser(url: string): void {
@@ -131,15 +158,16 @@ async function main(): Promise<void> {
   });
   if (values.help) return void process.stdout.write(HELP);
   if (values.version) return void console.log(pkg.version);
-  if (positionals[0] === 'password') return passwordCommand(Boolean(values.off), Boolean(values.stdin));
-  if (positionals[0] === 'token') return tokenCommand(Boolean(values.reset));
-  if (positionals.length > 0) throw new Error(`Unknown command: ${positionals.join(' ')}. See pelican --help.`);
 
   if (values.port) config.port = Number(values.port);
   if (values.host) config.host = values.host;
   if (values.name) config.machine = values.name;
   if (values['no-auth']) config.auth = 'none';
   if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) throw new Error(`Not a port: ${values.port}`);
+
+  if (positionals[0] === 'password') return passwordCommand(Boolean(values.off), Boolean(values.stdin));
+  if (positionals[0] === 'token') return tokenCommand(Boolean(values.reset));
+  if (positionals.length > 0) throw new Error(`Unknown command: ${positionals.join(' ')}. See pelican --help.`);
 
   // --no-auth, or PELICAN_AUTH=none, is an explicit choice; the demo asks no one to sign in on its own.
   const noAuth = config.auth === 'none';
@@ -159,15 +187,21 @@ async function main(): Promise<void> {
   const { accessToken, authMode, loadAuth } = await import('./auth.js');
   await loadAuth();
 
+  const { configWarnings } = await import('./config.js');
+  for (const warning of configWarnings) console.warn(`pelican: ${warning}`);
+
   const { startServer } = await import('./server.js');
   const { url } = await startServer();
   const shown = url.replace('://127.0.0.1:', '://localhost:');
   const token = accessToken();
   const mode = authMode();
-  const open = token ? tokenLink(shown, token) : shown;
+  // The link with the token is a standing key: shown on a terminal, never written to a log
+  // (a service's output file, the journal). `pelican token` prints it on demand.
+  const interactive = Boolean(process.stdout.isTTY);
+  const open = token && interactive ? tokenLink(shown, token) : shown;
   const protection = config.demo ? 'demo: made-up sessions, nothing runs'
     : mode === 'password' ? 'browsers sign in with your password'
-      : mode === 'token' ? 'the link signs a browser in (`pelican token` prints it again)'
+      : mode === 'token' ? (interactive ? 'the link signs a browser in (`pelican token` prints it again)' : 'browsers sign in with the link `pelican token` prints')
         : local ? 'no sign-in (--no-auth)' : 'no sign-in (--no-auth): anyone who reaches this address can run commands as you';
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${open}\n  ${protection}\n`);
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
@@ -176,12 +210,15 @@ async function main(): Promise<void> {
     const { qrTerminal } = await import('./qr.js');
     const lan = Object.values(os.networkInterfaces()).flat().find((a) => a && a.family === 'IPv4' && !a.internal);
     const base = config.host === '0.0.0.0' || config.host === '::' ? (lan ? `http://${lan.address}:${config.port}/` : undefined) : url;
-    const phone = base && token ? tokenLink(base, token) : base;
-    if (phone) console.log(`  On your phone: ${phone}\n\n${qrTerminal(phone).replace(/^/gm, '  ')}\n`);
+    const phone = base && token && interactive ? tokenLink(base, token) : base;
+    if (phone) console.log(`  On your phone: ${phone}\n${interactive ? `\n${qrTerminal(phone).replace(/^/gm, '  ')}\n` : ''}`);
   } else if (!config.demo) {
     console.log(`  From your phone: ${DOCS}#phone\n`);
   }
-  if (values.open) openBrowser(open);
+  if (values.open) {
+    if (token) await openSignedIn(tokenLink(shown, token));
+    else openBrowser(shown);
+  }
 }
 
 main().catch((error: Error) => {

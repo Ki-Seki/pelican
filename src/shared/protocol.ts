@@ -22,6 +22,8 @@ export type SessionSummary = {
   scratch?: boolean;
   /** Runs inside the system temp directory: usually a run another session started. */
   temp?: boolean;
+  /** A Claude Desktop side chat: a copy of this session (the id) with a question or two of its own. */
+  sideChatOf?: string;
   /** Which Claude Code client is working on it right now, when that is not this app and is known. */
   runningIn?: string;
   /** Start of Claude's latest reply. */

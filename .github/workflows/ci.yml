@@ -75,12 +75,14 @@ jobs:
         run: |
           export PELICAN_CONFIG_DIR="$RUNNER_TEMP/config" PELICAN_STATE_DIR="$RUNNER_TEMP/state"
           pelican --port 7862 > "$RUNNER_TEMP/pelican.log" &
-          for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7862/api/auth && break; sleep 1; done
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' http://127.0.0.1:7862/api/sessions)" = 401
-          link=$(grep -o 'http://localhost:7862/?token=[A-Za-z0-9_-]*' "$RUNNER_TEMP/pelican.log" | head -1)
-          test -n "$link"
+          for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://localhost:7862/api/auth && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 401
+          # Not in the log (stdout is a file there): `pelican token` prints the link.
+          ! grep -q 'token=' "$RUNNER_TEMP/pelican.log"
+          link=$(pelican token --port 7862)
+          case "$link" in http://localhost:7862/?token=*) ;; *) exit 1 ;; esac
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$RUNNER_TEMP/cookies" "$link")" = 302
-          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://127.0.0.1:7862/api/sessions)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 200
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package

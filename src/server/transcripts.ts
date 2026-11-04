@@ -142,6 +142,46 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
 
 const lastTurnCache = new Map<string, { size: number; mtimeMs: number; value: LastTurn | undefined }>();
 
+const HEAD_SCAN = 1024 * 1024;
+const headCache = new Map<string, string | null>();
+
+/**
+ * The session id on the first prompt or reply of a transcript. It is the file's own id, except
+ * in a copy of another session: Claude Desktop's side chats start with the whole conversation
+ * they came from, rows and ids unchanged. A file only grows at its end, so this is read once.
+ */
+export async function firstTurnSession(file: string): Promise<string | undefined> {
+  const cached = headCache.get(file);
+  if (cached !== undefined) return cached ?? undefined;
+  let found: string | null = null;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(file, 'r');
+    const chunk = Buffer.alloc(HEAD_SCAN);
+    const { bytesRead } = await handle.read(chunk, 0, HEAD_SCAN, 0);
+    const lines = chunk.subarray(0, bytesRead).toString('utf8').split('\n');
+    // The last line may be cut off by the read; it is skipped by the parse.
+    for (const line of lines) {
+      if (!line.includes('"sessionId"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
+      try {
+        const row = JSON.parse(line) as { type?: string; sessionId?: unknown; isSidechain?: boolean };
+        if ((row.type === 'user' || row.type === 'assistant') && !row.isSidechain && typeof row.sessionId === 'string') {
+          found = row.sessionId;
+          break;
+        }
+      } catch {
+        // A row longer than the scan, or cut by it.
+      }
+    }
+  } catch {
+    // Missing or unreadable.
+  } finally {
+    await handle?.close();
+  }
+  if (found || headCache.size < 10_000) headCache.set(file, found);
+  return found ?? undefined;
+}
+
 /**
  * `readLastTurn`, cached by file size and mtime. The row also gives the
  * session's folder and branch, which the SDK misses when Desktop has put

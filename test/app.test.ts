@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
-import { accessToken, loadAuth, resetAttempts } from '../src/server/auth';
+import { accessToken, issueCode, loadAuth, resetAttempts } from '../src/server/auth';
 import { config } from '../src/server/config';
 
 let dir: string;
@@ -77,7 +77,7 @@ describe('signing in', () => {
   it('with the token from the printed link: a cookie, then the address without the token', async () => {
     const response = await ask(`/?token=${accessToken()}&s=abc`, {}, false);
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('/?s=abc');
+    expect(response.headers.get('location')).toBe('./?s=abc');
     expect(response.headers.get('set-cookie')).toMatch(/HttpOnly; SameSite=Strict/);
     const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
     expect((await ask('/api/sessions', { headers: { cookie } }, false)).status).not.toBe(401);
@@ -88,13 +88,55 @@ describe('signing in', () => {
     expect(wrong.status).toBe(302);
     expect(wrong.headers.get('set-cookie')).toBeNull();
     const sneaky = await ask(`http://localhost:7860//evil.example/?token=${accessToken()}`, {}, false);
-    expect(sneaky.headers.get('location')).toBe('/evil.example/');
+    expect(sneaky.headers.get('location')).toBe('./');
+    // Under a proxy's path prefix, the redirect stays under it.
+    const prefixed = await ask(`/pelican/?token=${accessToken()}`, {}, false);
+    expect(prefixed.headers.get('location')).toBe('./');
   });
 
   it('logs in with the token, and counts wrong ones', async () => {
     const login = (token: string) => ask('/api/auth/login', { method: 'POST', body: JSON.stringify({ token }), headers: { 'content-type': 'application/json' } }, false);
     expect((await login('wrong')).status).toBe(401);
     expect((await login(accessToken()!)).status).toBe(200);
+  });
+});
+
+describe('one-time codes (the phone QR code)', () => {
+  it('sign a browser in once, and are asked for only by a signed-in page', async () => {
+    expect((await ask('/api/access/code', { method: 'POST' }, false)).status).toBe(401);
+    const { code } = await (await ask('/api/access/code', { method: 'POST' })).json() as { code: string };
+    expect(code).toMatch(/^[\w-]{24}$/);
+    const first = await ask(`/?code=${code}`, {}, false);
+    expect(first.headers.get('set-cookie')).toMatch(/HttpOnly/);
+    const again = await ask(`/?code=${code}`, {}, false);
+    expect(again.headers.get('set-cookie')).toBeNull();
+    expect((await ask(`/?code=${issueCode(Date.now() - 3 * 60_000)}`, {}, false)).headers.get('set-cookie')).toBeNull();
+  });
+
+  it('the page never gets the access token itself', async () => {
+    expect((await ask('/api/access')).status).toBe(404);
+  });
+});
+
+describe('what a request may carry', () => {
+  it('only the permission modes there are', async () => {
+    const response = await ask('/api/sessions/abc/mode', { method: 'POST', body: JSON.stringify({ permissionMode: 'yolo' }), headers: { 'content-type': 'application/json' } });
+    expect(response.status).toBe(400);
+  });
+
+  it('a new session only in a folder that exists', async () => {
+    const response = await ask('/api/sessions', { method: 'POST', body: JSON.stringify({ cwd: 'relative/path', text: 'hi' }), headers: { 'content-type': 'application/json' } });
+    expect(response.status).toBe(400);
+  });
+
+  it('an edit only with its id, the prompt it edits and some text', async () => {
+    const response = await ask('/api/sessions/abc/edit', { method: 'POST', body: JSON.stringify({ text: 'hi' }), headers: { 'content-type': 'application/json' } });
+    expect(response.status).toBe(400);
+  });
+
+  it('nothing large before signing in: an upload is refused before its body is read', async () => {
+    const response = await ask('/api/uploads', { method: 'POST', body: 'x'.repeat(1000), headers: { 'content-type': 'application/octet-stream', 'content-length': String(30 * 1024 * 1024) } }, false);
+    expect(response.status).toBe(401);
   });
 });
 

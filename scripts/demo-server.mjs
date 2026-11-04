@@ -1,8 +1,9 @@
 // `pelican --demo` for the scripts that record it (site, screenshots, video): built app, a port of
 // its own, and fresh config and state folders, so nothing of this machine's Pelican is read or
-// written. Waits until the demo answers, and fails rather than waiting forever.
+// written. Waits until this very demo answers, and fails rather than waiting forever.
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -10,6 +11,12 @@ import path from 'node:path';
 export const MARK = { 'X-Pelican': '1' };
 
 export async function startDemo({ port, name = 'laptop' }) {
+  const base = `http://127.0.0.1:${port}/`;
+  const ask = (url) => fetch(url, { headers: MARK, signal: AbortSignal.timeout(1500) });
+  // Something already on the port (an earlier demo left running) would be recorded instead.
+  if (await ask(`${base}api/info`).then(() => true, () => false)) {
+    throw new Error(`Port ${port} is taken; stop what runs there (an earlier demo?) and try again`);
+  }
   const root = await mkdtemp(path.join(os.tmpdir(), 'pelican-demo-'));
   const server = spawn(process.execPath, ['dist/server/index.js', '--demo', '--name', name, '--port', String(port)], {
     stdio: ['ignore', 'ignore', 'inherit'],
@@ -17,25 +24,23 @@ export async function startDemo({ port, name = 'laptop' }) {
   });
   let exited = false;
   server.on('exit', () => { exited = true; });
-  const stop = async () => {
+  const stop = () => {
     server.kill();
-    await rm(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   };
-  process.on('exit', () => server.kill());
-  const base = `http://127.0.0.1:${port}/`;
-  for (let i = 0; ; i += 1) {
-    if (exited) throw new Error('The demo server stopped (is the app built? run `npm run build`)');
-    try {
-      const response = await fetch(`${base}api/info`, { headers: MARK });
-      if (response.ok && (await response.json()).demo === true) break;
-    } catch {
-      // Not listening yet.
+  process.on('exit', stop);
+  try {
+    for (let i = 0; ; i += 1) {
+      if (exited) throw new Error('The demo server stopped (is the app built? run `npm run build`)');
+      const info = await ask(`${base}api/info`).then((r) => (r.ok ? r.json() : undefined), () => undefined);
+      // The port was free before it started, and it exits if it cannot listen: this is ours.
+      if (info?.demo === true && info.machine === name) break;
+      if (i > 75) throw new Error(`The demo server did not answer on ${base}`);
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    if (i > 75) {
-      await stop();
-      throw new Error(`The demo server did not answer on ${base}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch (error) {
+    stop();
+    throw error;
   }
-  return { base, stop };
+  return { base, stop: async () => stop() };
 }

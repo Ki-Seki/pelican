@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronUp, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Attachment, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
+import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
+import { newId } from '../lib/ids';
 import { baseName, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, saveDefaults, usePrefs } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
@@ -29,7 +30,6 @@ import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
 import { Workspace } from './Workspace';
 
-export const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`.replace('.', ''));
 
 function localMessage(uuid: string, text: string, attachments: Attachment[]): ChatMessage {
   const blocks: Block[] = [];
@@ -137,6 +137,48 @@ function RewindSheet({ sessionId, uuid, cwd, onClose, onDone }: { sessionId: str
   );
 }
 
+const Pulse = () => (
+  <span className="relative flex size-1.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-run opacity-60" /><span className="relative inline-flex size-1.5 rounded-full bg-run" /></span>
+);
+
+/**
+ * Background tasks (shells and agents Claude left running). One shows as a row with Stop; more
+ * fold into a single row, so they never crowd the conversation, and open into a short list.
+ */
+function BackgroundTasks({ sessionId, tasks }: { sessionId: string; tasks: BackgroundTask[] }) {
+  const [open, setOpen] = useState(false);
+  const stop = (id: string) => void api.stopTask(sessionId, id);
+  const row = (task: BackgroundTask) => (
+    <div key={task.id} className="flex items-center gap-2 py-1 pr-1 pl-3 text-[12.5px] text-muted">
+      <Pulse />
+      <span className="min-w-0 flex-1 truncate">{task.description || 'Background task'}</span>
+      <button type="button" onClick={() => stop(task.id)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Stop</button>
+    </div>
+  );
+  if (tasks.length === 1) return <div className="mx-auto mb-2 max-w-3xl rounded-full border border-line bg-panel">{row(tasks[0]!)}</div>;
+  const latest = tasks.at(-1)!;
+  return (
+    <div className="mx-auto mb-2 max-w-3xl">
+      {open ? (
+        <div className="rounded-2xl border border-line bg-panel py-1">
+          <button type="button" onClick={() => setOpen(false)} className="flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted hover:text-fg">
+            <span className="min-w-0 flex-1 truncate">{tasks.length} background tasks</span>
+            <ChevronDown className="size-4 shrink-0" />
+          </button>
+          <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}</div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setOpen(true)} className="flex h-8 w-full items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted hover:text-fg">
+          <Pulse />
+          <span className="shrink-0 tabular-nums">{tasks.length} tasks</span>
+          <span className="min-w-0 flex-1 truncate text-faint">{latest.description || 'Background task'}</span>
+          <ChevronUp className="size-4 shrink-0" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Claude's task list, pinned above the composer while there is work left. */
 function TasksBar({ tasks }: { tasks: Todo[] }) {
   const [open, setOpen] = useState(false);
@@ -145,7 +187,7 @@ function TasksBar({ tasks }: { tasks: Todo[] }) {
   return (
     <div className="mx-auto mb-2 max-w-3xl">
       {open ? (
-        <div className="relative">
+        <div className="relative max-h-[40vh] overflow-y-auto overscroll-contain rounded-xl">
           <TodoList input={{ todos: tasks }} />
           <button type="button" aria-label="Hide tasks" onClick={() => setOpen(false)} className="absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg">
             <ChevronDown className="size-4" />
@@ -327,9 +369,14 @@ export function Chat({
     }
   };
 
-  // Edit and send again: only now does the conversation branch, just before the prompt, and the new
-  // text goes to the branch (the first prompt: a new session in the same folder). This one stays as it was.
-  const edit = async (uuid: string, text: string): Promise<boolean> => {
+  // Edit and send again: one request makes the branch, just before the prompt (the first prompt:
+  // a new session in the same folder), and sends the new text there; a failed send leaves no
+  // branch, and a retry with the same `key` gets the same one. This session stays as it was.
+  const alive = useRef(true);
+  useEffect(() => () => {
+    alive.current = false;
+  }, []);
+  const edit = async (uuid: string, text: string, key: string, keepImages: number[]): Promise<boolean> => {
     if (!sessionId) return false;
     setSendError(undefined);
     if (demo) {
@@ -340,22 +387,15 @@ export function Chat({
       setSendError('Stop Claude before editing an earlier prompt.');
       return false;
     }
+    // A branch is new work: Bypass is chosen anew there, never carried over.
+    const branch = settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: 'default' as const } : settings;
     try {
-      const body = { text, attachments: [], settings, uuid: newId() };
-      const id = await api.fork(sessionId, { before: uuid });
-      let opened: string | undefined;
-      if (id) {
-        await api.send(id, body);
-        opened = id;
-      } else if (cwd) {
-        opened = (await api.create({ ...body, cwd })).sessionId;
-      }
-      if (!opened) return false;
+      const opened = await api.edit(sessionId, { before: uuid, text, settings: branch, uuid: key, keepImages });
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      onOpen(opened);
+      if (alive.current) onOpen(opened);
       return true;
     } catch (error) {
-      setSendError((error as Error).message);
+      if (alive.current) setSendError((error as Error).message);
       return false;
     }
   };
@@ -436,13 +476,7 @@ export function Chat({
           <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
         ))}
         {showTasks && <TasksBar tasks={tasks} />}
-        {view.run?.tasks?.map((task) => (
-          <div key={task.id} className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-full border border-line bg-panel py-1 pr-1 pl-3 text-[12.5px] text-muted">
-            <span className="relative flex size-1.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-run opacity-60" /><span className="relative inline-flex size-1.5 rounded-full bg-run" /></span>
-            <span className="min-w-0 flex-1 truncate">{task.description || 'Background task'}</span>
-            <button type="button" onClick={() => sessionId && void api.stopTask(sessionId, task.id)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Stop</button>
-          </div>
-        ))}
+        {sessionId && view.run?.tasks && view.run.tasks.length > 0 && <BackgroundTasks sessionId={sessionId} tasks={view.run.tasks} />}
         {running && (
           <Notice><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Running <code className="font-mono">{running}</code></span></Notice>
         )}

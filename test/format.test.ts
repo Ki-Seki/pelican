@@ -8,6 +8,8 @@ describe('resumeCommand', () => {
     expect(resumeCommand("a'b")).toBe("claude --resume 'a'\\''b'");
     expect(isSessionId('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf')).toBe(true);
     expect(isSessionId('1;sh')).toBe(false);
+    // fish reads a backslash before a quote as an escape: such a folder is left out.
+    expect(resumeCommand('abc', "/work/x\\';id;#")).toBe('claude --resume abc');
   });
 
   it('quotes folders the shell would split, and keeps ~ working', () => {

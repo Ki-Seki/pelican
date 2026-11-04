@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process';
 
 const children = [
-  spawn('npx', ['tsx', 'watch', 'src/server/cli.ts'], { stdio: 'inherit', env: { ...process.env, PELICAN_DEV: '1', PELICAN_AUTH: process.env.PELICAN_AUTH ?? 'none' } }),
+  spawn('npx', ['tsx', 'watch', 'src/server/cli.ts'], { stdio: 'inherit', env: { ...process.env, PELICAN_AUTH: process.env.PELICAN_AUTH ?? 'none', PELICAN_HOST: '127.0.0.1' } }),
   spawn('npx', ['vite', '--host', '127.0.0.1'], { stdio: 'inherit' }),
 ];
 const stop = () => {
