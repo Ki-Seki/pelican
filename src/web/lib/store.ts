@@ -45,17 +45,28 @@ export function useSessionView(sessionId: string | undefined): SessionView {
   );
 }
 
-/** Adds messages that are new, and replaces local copies the server confirmed. */
+/**
+ * Adds messages that are new, and replaces local copies the server confirmed. A
+ * message can come back under a new id with the sender's in `sourceUuid` (one
+ * read mid-turn); it replaces the copy with that id. A local copy never
+ * replaces a confirmed one.
+ */
 function merge(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-  const index = new Map(existing.map((m, i) => [m.uuid, i]));
+  const index = new Map<string, number>();
+  const note = (message: ChatMessage, at: number) => {
+    index.set(message.uuid, at);
+    if (message.sourceUuid) index.set(message.sourceUuid, at);
+  };
+  existing.forEach(note);
   const next = existing.slice();
   for (const message of incoming) {
-    const at = index.get(message.uuid);
+    const at = index.get(message.uuid) ?? (message.sourceUuid ? index.get(message.sourceUuid) : undefined);
     if (at === undefined) {
-      index.set(message.uuid, next.length);
+      note(message, next.length);
       next.push(message);
-    } else {
+    } else if (!(message.pending && !next[at]!.pending)) {
       next[at] = message;
+      note(message, at);
     }
   }
   return next;
@@ -68,7 +79,7 @@ export async function loadLatest(sessionId: string): Promise<void> {
     update(sessionId, (view) => {
       // Keep what the page cannot know yet: messages that arrived over the socket
       // after the page was read, and local copies the server has not confirmed.
-      const inPage = new Set(page.messages.map((m) => m.uuid));
+      const inPage = new Set(page.messages.flatMap((m) => (m.sourceUuid ? [m.uuid, m.sourceUuid] : [m.uuid])));
       const lastInPage = page.messages.at(-1)?.timestamp ?? 0;
       const pending = view.messages.filter((m) => m.pending && !inPage.has(m.uuid));
       const newer = view.messages.filter((m) => !m.pending && !inPage.has(m.uuid) && (m.timestamp ?? 0) > lastInPage);

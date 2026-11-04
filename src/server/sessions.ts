@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, getSubagentMessages, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, SessionStatus, SessionSummary } from '../shared/protocol.js';
@@ -9,6 +9,7 @@ import { config } from './config.js';
 import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory } from './history.js';
+import { toChatMessage } from './normalize.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
@@ -92,6 +93,36 @@ export async function renameSessionTitle(sessionId: string, title: string): Prom
 export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
   const file = await transcriptPath(sessionId);
   return file ? readHistory(file) : [];
+}
+
+/**
+ * Files Claude handed to the user in a session (SendUserFile, Artifact): the
+ * only files outside the session's folder the app may show, and only these paths.
+ */
+export async function sentFiles(sessionId: string): Promise<Set<string>> {
+  const paths = new Set<string>();
+  for (const message of await loadMessages(sessionId)) {
+    if (message.role !== 'assistant') continue;
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_use') continue;
+      if (block.name === 'SendUserFile' && Array.isArray(block.input.files)) {
+        for (const file of block.input.files) if (typeof file === 'string') paths.add(file);
+      } else if (block.name === 'Artifact' && typeof block.input.file_path === 'string') {
+        paths.add(block.input.file_path);
+      }
+    }
+  }
+  return paths;
+}
+
+/** What a subagent did inside an Agent call: its own transcript, next to the session's. */
+export async function loadSubagent(sessionId: string, agentId: string): Promise<ChatMessage[]> {
+  if (!/^[\w-]{1,80}$/.test(agentId)) return [];
+  const dir = infoCache.get(sessionId)?.cwd;
+  const raw = await getSubagentMessages(sessionId, agentId, dir ? { dir } : {}).catch(() => []);
+  return raw
+    .map((message) => toChatMessage(message as unknown as Record<string, unknown>))
+    .filter((message): message is ChatMessage => Boolean(message));
 }
 
 /** A page of messages ending before index `before` (default: the end). */

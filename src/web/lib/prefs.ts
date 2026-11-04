@@ -52,10 +52,15 @@ export type Prefs = {
   /** The session list: grouped by day or by project, with full or one-line rows. */
   listGroup: 'time' | 'project';
   listDensity: 'detailed' | 'compact';
+  /** While Claude works, a new message joins the turn (steer) or waits for it to end (queue). */
+  sendWhileBusy: 'steer' | 'queue';
+  /** Offer Claude Code's guess at the next prompt after a turn. */
+  suggestions: boolean;
 };
 
 const DEFAULT_PREFS: Prefs = {
   theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, listGroup: 'time', listDensity: 'detailed',
+  sendWhileBusy: 'steer', suggestions: true,
 };
 
 let prefs: Prefs = read(PREFS_KEY, DEFAULT_PREFS);

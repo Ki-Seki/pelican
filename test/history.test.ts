@@ -86,3 +86,21 @@ describe('readHistory', () => {
     expect(await readHistory(path.join(dir, 'missing.jsonl'))).toEqual([]);
   });
 });
+
+describe('readHistory: messages sent mid-turn', () => {
+  it('shows a queued command where Claude read it, under the sender’s id', async () => {
+    const file = path.join(dir, 'steer.jsonl');
+    await writeFile(file, [
+      say('u1', null, 'user', 'run it'),
+      say('a1', 'u1', 'assistant', 'running'),
+      JSON.stringify({
+        uuid: 'q1', parentUuid: 'a1', type: 'attachment', timestamp: new Date((clock += 1000)).toISOString(),
+        attachment: { type: 'queued_command', prompt: [{ type: 'text', text: 'also say hi' }], source_uuid: 'client-1', commandMode: 'prompt' },
+      }),
+      say('a2', 'q1', 'assistant', 'done, hi'),
+    ].join('\n') + '\n');
+    const messages = await readHistory(file);
+    expect(texts(messages)).toEqual(['run it', 'running', 'also say hi', 'done, hi']);
+    expect(messages[2]).toMatchObject({ uuid: 'q1', role: 'user', steered: true, sourceUuid: 'client-1' });
+  });
+});

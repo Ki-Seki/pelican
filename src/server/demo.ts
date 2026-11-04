@@ -1,9 +1,13 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import type { ModelOption, RunState } from '../shared/protocol.js';
 import { config } from './config.js';
+import { SETTINGS_SCREENSHOT } from './demo-image.js';
+import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 
 /**
  * `pelican --demo`: a made-up home with a few sessions, for trying Pelican
@@ -11,6 +15,7 @@ import { config } from './config.js';
  * written fresh on every start, with times relative to now. Nothing runs.
  */
 
+const run = promisify(execFile);
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
@@ -48,7 +53,14 @@ const SESSIONS: DemoSession[] = [
     rows: (cwd) => {
       const t = Date.now() - 4 * MIN;
       return [
-        { role: 'user', at: t, content: 'Add a dark theme to the settings page, with a toggle. Keep the colors in CSS variables.' },
+        {
+          role: 'user',
+          at: t,
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: SETTINGS_SCREENSHOT } },
+            text('Add a dark theme to the settings page, with a toggle. Keep the colors in CSS variables.'),
+          ],
+        },
         { role: 'assistant', at: t + 4000, content: [text("I'll look at how the colors are set up first."), tool('t1', 'Read', { file_path: `${cwd}/src/styles/theme.css` })] },
         { role: 'user', at: t + 5000, content: [result('t1', numbered(THEME_CSS))] },
         {
@@ -176,6 +188,29 @@ const SESSIONS: DemoSession[] = [
     },
   },
   {
+    id: 'f3a6e9b5-6666-4f60-9182-000000000006',
+    title: "Chart last week's signups",
+    project: 'data-pipeline',
+    branch: 'main',
+    rows: (cwd) => {
+      const t = Date.now() - 50 * MIN;
+      return [
+        { role: 'user', at: t, content: "Chart last week's signups by day, and make me a one-page summary I can share." },
+        { role: 'assistant', at: t + 3000, content: [text("I'll read the numbers first."), tool('v1', 'Read', { file_path: `${cwd}/data/signups.csv` })] },
+        { role: 'user', at: t + 4000, content: [result('v1', numbered(SIGNUPS_CSV.trimEnd()))] },
+        { role: 'assistant', at: t + 9000, content: [tool('v2', 'mcp__visualize__show_widget', { title: 'signups_by_day', loading_messages: ['Stacking the bars'], widget_code: signupsChart() })] },
+        { role: 'user', at: t + 10000, content: [result('v2', 'Shown to the user.')] },
+        { role: 'assistant', at: t + 16000, content: [tool('v3', 'Write', { file_path: `${cwd}/reports/signups-week-45.html`, content: REPORT_HTML })] },
+        { role: 'user', at: t + 17000, content: [result('v3', `File created successfully at: ${cwd}/reports/signups-week-45.html`)] },
+        {
+          role: 'assistant',
+          at: t + 21000,
+          content: [text('Signups grew **18%** to 12,480. Thursday was the best day (2,214), the day the newsletter went out, and the weekend stayed above the weekday average.\n\nThe one-pager is in `reports/signups-week-45.html`: the three numbers that matter and the chart. Open it from the step above.')],
+        },
+      ];
+    },
+  },
+  {
     id: 'e2f5d8a4-5555-4e5f-8071-000000000005',
     title: 'Turn this CSV into JSON',
     project: 'scratch',
@@ -193,9 +228,65 @@ const SESSIONS: DemoSession[] = [
   },
 ];
 
+const SETTINGS_TSX = `import { FontSizePicker } from './FontSizePicker';
+import { Section } from './Section';
+
+export function Settings() {
+  return (
+    <Section title="Display">
+      <FontSizePicker />
+    </Section>
+  );
+}
+`;
+
+const TOGGLE_TSX = `type Theme = 'light' | 'dark';
+
+/** Switches the page between the light and dark color values in theme.css. */
+export function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
+  return (
+    <label className="row">
+      Dark theme
+      <input type="checkbox" checked={value === 'dark'} onChange={(e) => onChange(e.target.checked ? 'dark' : 'light')} />
+    </label>
+  );
+}
+`;
+
+const DARK_CSS = `${THEME_CSS.replace('  --accent: #2563eb;\n}', "  --accent: #2563eb;\n}\n\n:root[data-theme='dark'] {\n  --bg: #0b0b0c;\n  --fg: #ededed;\n  --muted: #a1a1a1;\n  --accent: #60a5fa;\n}")}\n`;
+
+const FILE_TEXT: Record<string, string> = {
+  'acme-web/src/styles/theme.css': `${THEME_CSS}\n`,
+  'acme-web/src/settings/Settings.tsx': SETTINGS_TSX,
+  'acme-web/README.md': '# acme-web\n\nThe Acme web app.\n',
+  'data-pipeline/README.md': '# data-pipeline\n\nNightly exports and the numbers behind them.\n',
+  'data-pipeline/data/signups.csv': SIGNUPS_CSV,
+  'data-pipeline/reports/signups-week-45.html': REPORT_HTML,
+  'docs-site/README.md': '# docs-site\n\nThe public docs.\n',
+};
+
+/**
+ * The first project is a git repository with Claude's work so far left
+ * uncommitted, so the Changes panel has something to show. Skipped without git.
+ */
+async function demoRepository(dir: string): Promise<void> {
+  const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
+  const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: dir, env });
+  try {
+    await git(['init', '-q', '-b', 'feat/dark-theme']);
+    await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'Settings page']);
+    await writeFile(path.join(dir, 'src/styles/theme.css'), DARK_CSS);
+    await writeFile(path.join(dir, 'src/settings/ThemeToggle.tsx'), TOGGLE_TSX);
+  } catch {
+    // No git here; the panel shows the files only.
+  }
+}
+
 const DEMO_FILES: Record<string, string[]> = {
   'acme-web': ['README.md', 'package.json', 'src/app.tsx', 'src/settings/Settings.tsx', 'src/settings/ThemeToggle.tsx', 'src/styles/theme.css', 'tests/login.spec.ts'],
-  'data-pipeline': ['README.md', 'pipeline/export.py', 'pipeline/db.py', 'pipeline/writer.py', 'tests/test_export.py'],
+  'data-pipeline': ['README.md', 'data/signups.csv', 'pipeline/export.py', 'pipeline/db.py', 'pipeline/writer.py', 'reports/signups-week-45.html', 'tests/test_export.py'],
   'docs-site': ['README.md', 'docs/releases.md'],
 };
 
@@ -208,9 +299,10 @@ export async function prepareDemo(): Promise<void> {
     for (const file of files) {
       const full = path.join(root, 'code', project, file);
       await mkdir(path.dirname(full), { recursive: true });
-      await writeFile(full, file === 'src/styles/theme.css' ? `${THEME_CSS}\n` : '');
+      await writeFile(full, FILE_TEXT[`${project}/${file}`] ?? '');
     }
   }
+  await demoRepository(path.join(root, 'code', 'acme-web'));
   for (const session of SESSIONS) {
     const cwd = session.scratch ? path.join(root, 'scratch', '2026-11-04-7c2e') : path.join(root, 'code', session.project);
     await mkdir(cwd, { recursive: true });

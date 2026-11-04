@@ -64,6 +64,21 @@ function empty(ino: number): Transcript {
   };
 }
 
+/**
+ * A message the user sent while Claude was working, which Claude read at its
+ * next step: Claude Code records it as a `queued_command` attachment where it
+ * was taken in, not as a user row.
+ */
+function steeredMessage(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+  const attachment = row.attachment as { type?: string; prompt?: unknown; source_uuid?: unknown; commandMode?: unknown } | undefined;
+  if (row.type !== 'attachment' || attachment?.type !== 'queued_command') return undefined;
+  if (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') return undefined;
+  const message = toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, message: { role: 'user', content: attachment.prompt } });
+  if (!message) return undefined;
+  const source = str(attachment.source_uuid);
+  return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
+}
+
 function addLine(t: Transcript, line: string): void {
   // Rows that take part in the conversation carry a uuid; skip the rest (titles, costs, requests) unparsed.
   if (line.length < 2 || line.charCodeAt(0) !== 123 || !line.includes('"uuid"')) return;
@@ -76,7 +91,7 @@ function addLine(t: Transcript, line: string): void {
   const uuid = str(row.uuid);
   if (!uuid || row.isSidechain === true) return;
   const turn = row.type === 'user' || row.type === 'assistant';
-  const message = turn ? toChatMessage(row) : undefined;
+  const message = turn ? toChatMessage(row) : steeredMessage(row, uuid);
   const existing = t.nodes.get(uuid);
   if (existing) {
     existing.message = message;

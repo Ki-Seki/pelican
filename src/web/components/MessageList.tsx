@@ -1,9 +1,10 @@
-import { ArrowDown, Brain, ChevronRight, Copy, Layers, Loader2, Pencil, RotateCcw, SquareTerminal, TriangleAlert } from 'lucide-react';
+import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Pencil, RotateCcw, SquareTerminal, TriangleAlert } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import type { ViewMode } from '../lib/prefs';
+import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
 import { buildItems, type Item, type Part } from '../lib/turns';
@@ -104,12 +105,15 @@ const AssistantTurn = memo(function AssistantTurn({
   const steps = item.parts.filter((p) => p.kind === 'tool').length;
 
   if (view === 'summary') {
-    if (!lastText && !running) {
+    // Visuals Claude drew are part of the answer, so they stay with the reply.
+    const visuals = item.parts.filter((p): p is Extract<Part, { kind: 'tool' }> => p.kind === 'tool' && /(^|__)show_widget$/.test(p.call.name));
+    if (!lastText && !running && visuals.length === 0) {
       return steps > 0 ? <div className="flex items-center gap-2 text-[12.5px] text-faint"><Layers className="size-3.5" />{steps} steps, no reply</div> : null;
     }
     return (
       <div className="group/turn">
         {steps > 0 && <div className="flex items-center gap-2 text-[12px] text-faint"><Layers className="size-3" />{steps} step{steps === 1 ? '' : 's'}</div>}
+        {visuals.map((part) => <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} />)}
         {lastText && <Markdown text={lastText.text} className="my-2" />}
         {!running && <TurnFooter text={lastText?.text} timestamp={item.timestamp} stats={stats} />}
       </div>
@@ -134,7 +138,9 @@ const AssistantTurn = memo(function AssistantTurn({
   );
 });
 
-const UserBubble = memo(function UserBubble({ item, onEdit }: { item: Extract<Item, { kind: 'user' }>; onEdit?: (uuid: string, text: string) => void }) {
+const UserBubble = memo(function UserBubble({
+  item, onEdit, onRewind,
+}: { item: Extract<Item, { kind: 'user' }>; onEdit?: (uuid: string, text: string) => void; onRewind?: (uuid: string) => void }) {
   const [actions, setActions] = useState(false);
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
   return (
@@ -160,16 +166,21 @@ const UserBubble = memo(function UserBubble({ item, onEdit }: { item: Extract<It
         </button>
       )}
       {item.pending ? (
-        <div className="text-[11px] text-faint">Sending…</div>
+        <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
       ) : text && (
         <div className={`flex h-7 items-center gap-0.5 text-[11px] text-faint transition-opacity ${actions ? 'opacity-100' : 'opacity-0 group-hover/user:opacity-100'}`}>
-          {item.timestamp && <span className="mr-1">{clockTime(item.timestamp)}</span>}
+          {item.timestamp && <span className="mr-1">{clockTime(item.timestamp)}{item.steered ? ' · while Claude worked' : ''}</span>}
           <button type="button" aria-label="Copy" title="Copy" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => void navigator.clipboard?.writeText(text)}>
             <Copy className="size-3.5" />
           </button>
           {onEdit && !item.command && (
             <button type="button" aria-label="Edit and resend" title="Edit and resend: branches the conversation here" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => onEdit(item.key, item.text)}>
               <Pencil className="size-3.5" />
+            </button>
+          )}
+          {onRewind && !item.command && (
+            <button type="button" aria-label="Rewind code to here" title="Rewind code: put files back the way they were before this prompt" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => onRewind(item.key)}>
+              <History className="size-3.5" />
             </button>
           )}
         </div>
@@ -208,6 +219,30 @@ function readableSummary(summary: string): string {
 }
 
 /** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
+/** A `!` command someone ran in the session, with its output. */
+function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
+  const [all, setAll] = useState(false);
+  const output = [item.stdout, item.stderr].filter((part) => part.trim()).join('\n').trimEnd();
+  const long = output.split('\n').length > 14 || output.length > 1600;
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-panel">
+      <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
+        <SquareTerminal className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 break-all">{item.command}</span>
+        {item.timestamp && <span className="shrink-0 font-sans text-[11px] text-faint">{clockTime(item.timestamp)}</span>}
+      </div>
+      {output && (
+        <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${long && !all ? 'max-h-60 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]' : ''}`}>{output}</pre>
+      )}
+      {long && (
+        <button type="button" className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
+          {all ? 'Show less' : 'Show all'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Compacted({ summary }: { summary: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -269,7 +304,12 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
             <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
             <span className={`relative inline-flex size-2 rounded-full ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
           </span>
-          <span className="shimmer-text">{run.permissions.length > 0 ? 'Waiting for you' : 'Working'}</span>
+          <span className="shimmer-text">
+            {run.permissions.length > 0 ? 'Waiting for you'
+              : run.activity?.kind === 'compacting' ? 'Compacting the conversation'
+                : run.activity?.kind === 'retrying' ? `The API is busy; trying again (${run.activity.attempt} of ${run.activity.max})`
+                  : 'Working'}
+          </span>
           <span className="text-faint tabular-nums">{duration(now - since)}</span>
         </div>
       )}
@@ -278,11 +318,22 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
 }
 
 export function MessageList({
-  sessionId, view, cwd, mode, onEdit,
-}: { sessionId: string; view: SessionView; cwd?: string; mode: ViewMode; onEdit?: (uuid: string, text: string) => void }) {
+  sessionId, view, cwd, mode, onEdit, onRewind,
+}: {
+  sessionId: string;
+  view: SessionView;
+  cwd?: string;
+  mode: ViewMode;
+  onEdit?: (uuid: string, text: string) => void;
+  onRewind?: (uuid: string) => void;
+}) {
   const items = useMemo(() => buildItems(view.messages), [view.messages]);
   const scroller = useRef<HTMLDivElement>(null);
+  /** Following the newest output. Stops the moment the reader scrolls up, touches the list or opens something. */
   const atBottom = useRef(true);
+  /** A finger is on the list: never move it under them. */
+  const touching = useRef(false);
+  const lastTop = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
@@ -303,9 +354,10 @@ export function MessageList({
     if (snapshot.current) {
       el.scrollTop = snapshot.current.top + (el.scrollHeight - snapshot.current.height);
       snapshot.current = undefined;
-    } else if (atBottom.current) {
+    } else if (atBottom.current && !touching.current) {
       el.scrollTop = el.scrollHeight;
     }
+    lastTop.current = el.scrollTop;
   }, [items, view.run?.partial, mode]);
 
   useEffect(() => {
@@ -327,18 +379,35 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.offset, view.loadingOlder, view.loaded, mode]);
 
+  // Any move up is the reader's: stop following at once, not only once they are far from the end
+  // (streamed text arrives every few frames and would pull them back down before they got there).
+  // Following resumes when they come back to the very end.
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    atBottom.current = bottom;
-    setShowJump(!bottom);
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (el.scrollTop < lastTop.current - 2) atBottom.current = false;
+    else if (distance < 24) atBottom.current = true;
+    lastTop.current = el.scrollTop;
+    setShowJump(distance > 80);
     loadIfNearTop();
   };
 
   return (
+    <SessionContext.Provider value={sessionId}>
     <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]">
+      {/* Opening a step makes the page longer without a scroll: from then on the reader is reading,
+          not following, so new output must not pull them to the end. Scrolling back down follows again. */}
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        onClickCapture={() => { atBottom.current = false; }}
+        onTouchStart={() => { touching.current = true; }}
+        onTouchEnd={() => { touching.current = false; }}
+        onTouchCancel={() => { touching.current = false; }}
+        onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
+        className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
+      >
         <div className="mx-auto max-w-3xl px-4 pt-3 pb-6">
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
@@ -363,7 +432,9 @@ export function MessageList({
             {items.map((item) => {
               switch (item.kind) {
                 case 'user':
-                  return <UserBubble key={item.key} item={item} {...(onEdit ? { onEdit } : {})} />;
+                  return <UserBubble key={item.key} item={item} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
+                case 'shell':
+                  return <ShellItem key={item.key} item={item} />;
                 case 'assistant':
                   return (
                     <AssistantTurn
@@ -402,12 +473,15 @@ export function MessageList({
           className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md"
           onClick={() => {
             const el = scroller.current;
-            if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+            if (!el) return;
+            atBottom.current = true;
+            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
           }}
         >
           <ArrowDown className="size-4" />
         </button>
       )}
     </div>
+    </SessionContext.Provider>
   );
 }

@@ -5,19 +5,22 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { Attachment, PermissionDecision, RunSettings, ServerInfo } from '../shared/protocol.js';
+import type { Attachment, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { allowAttempt, checkPassword, cookieName, newSessionCookie, passwordSet, signedIn } from './auth.js';
 import { config } from './config.js';
 import { findUpload, listDirs, readUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { listCommands, listModels } from './models.js';
+import { listCompletions, listModels, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { getRun, runState, runStatus, sendMessage } from './runner.js';
+import { ensureRun, getRun, runState, runStatus, sendMessage } from './runner.js';
+import { runCommand } from './shell.js';
+import { usageLimits } from './usage.js';
+import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
-import { listSummaries, loadMessages, loadPage, renameSessionTitle, sessionSummary } from './sessions.js';
+import { listSummaries, loadMessages, loadPage, loadSubagent, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 
 export const app = new Hono();
 
@@ -115,7 +118,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
   return c.json(await loadPage(c.req.param('id'), before === undefined ? undefined : Number(before), limit));
 });
 
-type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean };
+type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
 
 async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]> {
   const found = await Promise.all((ids ?? []).map((id) => findUpload(id)));
@@ -142,6 +145,7 @@ app.post('/api/sessions/:id/messages', async (c) => {
     attachments: await attachmentsFrom(body.attachments),
     settings: body.settings ?? {},
     ...(body.uuid ? { uuid: body.uuid } : {}),
+    ...(body.mode ? { mode: body.mode } : {}),
   });
   return c.json({ sessionId });
 });
@@ -205,8 +209,112 @@ app.get('/api/models', async (c) => c.json(await listModels()));
 
 app.get('/api/commands', async (c) => {
   const cwd = c.req.query('cwd');
-  if (!cwd || !(await isDirectory(cwd))) return c.json({ commands: [] });
-  return c.json({ commands: await listCommands(cwd) });
+  if (!cwd || !(await isDirectory(cwd))) return c.json({ commands: [], agents: [] });
+  return c.json(await listCompletions(cwd));
+});
+
+app.get('/api/qr', async (c) => {
+  const text = c.req.query('text') ?? '';
+  if (!text || text.length > 512) return c.json({ error: 'Nothing to encode' }, 400);
+  const { qrSvg } = await import('./qr.js');
+  return c.body(qrSvg(text), 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'private, max-age=3600' });
+});
+
+app.get('/api/usage', (c) => c.json({
+  limits: config.demo
+    ? [
+      { type: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: Date.now() + 2.4 * 3600_000, at: Date.now() },
+      { type: 'seven_day', status: 'allowed', utilization: 0.18, resetsAt: Date.now() + 3.5 * 86400_000, at: Date.now() },
+    ]
+    : usageLimits(),
+}));
+
+/** The folder a workspace request is about: the session's own, which must exist. */
+async function folderOf(c: Context): Promise<string | undefined> {
+  const cwd = c.req.query('cwd');
+  return cwd && (await isDirectory(cwd)) ? cwd : undefined;
+}
+
+app.get('/api/git', async (c) => {
+  const cwd = await folderOf(c);
+  if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  return c.json(await gitStatus(cwd));
+});
+
+app.get('/api/git/diff', async (c) => {
+  const cwd = await folderOf(c);
+  const file = c.req.query('path');
+  if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
+  return c.json({ diff: await gitDiff(cwd, file) });
+});
+
+app.get('/api/tree', async (c) => {
+  const cwd = await folderOf(c);
+  if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  return c.json({ entries: await listTree(cwd, c.req.query('path') ?? '') });
+});
+
+app.get('/api/file', async (c) => {
+  const cwd = await folderOf(c);
+  const file = c.req.query('path');
+  if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
+  return c.json(await readProjectFile(cwd, file));
+});
+
+app.post('/api/sessions/:id/shell', async (c) => {
+  const id = c.req.param('id');
+  const { command } = await c.req.json<{ command?: string }>().catch(() => ({ command: undefined }));
+  if (!command?.trim()) return c.json({ error: 'No command' }, 400);
+  const info = await sessionInfo(id);
+  if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
+  const result = await runCommand(info.cwd, command.trim());
+  // Into the conversation without a turn: Claude reads it with the next message.
+  await (await ensureRun(id)).appendShell(result);
+  return c.json(result);
+});
+
+app.post('/api/sessions/:id/rewind', async (c) => {
+  const { uuid, dryRun } = await c.req.json<{ uuid?: string; dryRun?: boolean }>().catch(() => ({ uuid: undefined, dryRun: undefined }));
+  if (!uuid) return c.json({ error: 'Which prompt?' }, 400);
+  const run = await ensureRun(c.req.param('id'));
+  if (run.busy) return c.json({ error: 'Stop Claude before rewinding files.' }, 409);
+  return c.json(await run.rewind(uuid, dryRun !== false));
+});
+
+app.get('/api/sessions/:id/mcp', async (c) => {
+  const id = c.req.param('id');
+  const run = getRun(id);
+  if (run) return c.json({ servers: await run.mcpServers(), live: true });
+  const info = await sessionInfo(id);
+  if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ servers: [], live: false });
+  return c.json({ servers: await probeMcpServers(info.cwd), live: false });
+});
+
+app.post('/api/sessions/:id/mcp/:name', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Claude is not running in this session' }, 409);
+  const change = await c.req.json<{ enabled?: boolean; reconnect?: boolean }>().catch(() => ({}));
+  await run.setMcpServer(c.req.param('name'), change);
+  return c.json({ servers: await run.mcpServers() });
+});
+
+app.post('/api/sessions/:id/tasks/:task/stop', async (c) => {
+  await getRun(c.req.param('id'))?.stopTask(c.req.param('task'));
+  return c.json({ ok: true });
+});
+
+app.get('/api/sessions/:id/sent', async (c) => {
+  const file = c.req.query('path') ?? '';
+  if (!file || !(await sentFiles(c.req.param('id'))).has(file)) return c.json({ error: 'Not a file Claude sent in this session' }, 404);
+  try {
+    return c.json(await readProjectFile(path.dirname(file), path.basename(file)));
+  } catch {
+    return c.json({ error: 'The file is gone' }, 404);
+  }
+});
+
+app.get('/api/sessions/:id/agents/:agent', async (c) => {
+  return c.json({ messages: await loadSubagent(c.req.param('id'), c.req.param('agent')) });
 });
 
 app.get('/api/files', async (c) => {

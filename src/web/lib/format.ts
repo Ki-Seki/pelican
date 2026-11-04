@@ -72,3 +72,17 @@ export function shellQuote(path: string): string {
 export function resumeCommand(sessionId: string, cwd?: string): string {
   return `${cwd ? `cd ${shellQuote(cwd)} && ` : ''}claude --resume ${sessionId}`;
 }
+
+/** A time ahead, like a limit's reset: "14:30", "tomorrow 09:00", or "Sun 16:14". */
+export function untilTime(ms: number, now = Date.now()): string {
+  const day = (t: number) => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const days = Math.round((day(ms) - day(now)) / 86_400_000);
+  const time = clockTime(ms);
+  if (days <= 0) return time;
+  if (days === 1) return `tomorrow ${time}`;
+  return `${new Date(ms).toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+}

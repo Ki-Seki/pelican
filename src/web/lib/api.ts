@@ -1,16 +1,27 @@
 import type {
+  Account,
+  Agent,
   Attachment,
   ChatMessage,
   Command,
+  FileContent,
+  GitStatus,
+  McpServer,
   MessagesPage,
   ModelOption,
   PermissionDecision,
+  RewindResult,
   RunSettings,
   RunState,
+  SendMode,
   ServerInfo,
   SessionSummary,
+  ShellResult,
+  TreeEntry,
+  UsageLimit,
 } from '../../shared/protocol';
 import type { Todo } from '../../shared/tasks';
+import { STATIC_DEMO, staticRequest } from './static-demo';
 
 /**
  * The app does not know the path it is served under (`/` on its own, or a
@@ -34,6 +45,13 @@ export function whenSignedOut(handler: () => void): void {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (STATIC_DEMO) {
+    try {
+      return (await staticRequest(appBase, path, init)) as T;
+    } catch (error) {
+      throw new ApiError((error as Error).message, 403);
+    }
+  }
   const response = await fetch(apiUrl(path), {
     ...init,
     headers: init?.body && typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
@@ -64,7 +82,7 @@ export const api = {
     request<MessagesPage>(
       `sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before === undefined ? '' : `&before=${before}`}`,
     ),
-  send: (id: string, body: { text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
+  send: (id: string, body: { text: string; attachments: string[]; settings: RunSettings; uuid: string; mode?: SendMode }) =>
     send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/messages`, body),
   create: (body: { cwd?: string; scratch?: boolean; text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
     send<{ sessionId: string }>('POST', 'sessions', body),
@@ -79,13 +97,28 @@ export const api = {
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
   remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
   exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
-  models: () => request<{ models: ModelOption[]; signedIn: boolean | null }>('models'),
-  commands: (cwd: string) => request<{ commands: Command[] }>(`commands?cwd=${encodeURIComponent(cwd)}`).then((r) => r.commands),
+  models: () => request<{ models: ModelOption[]; signedIn: boolean | null; account?: Account }>('models'),
+  completions: (cwd: string) => request<{ commands: Command[]; agents: Agent[] }>(`commands?cwd=${encodeURIComponent(cwd)}`),
+  shell: (id: string, command: string) => send<ShellResult>('POST', `sessions/${encodeURIComponent(id)}/shell`, { command }),
+  rewind: (id: string, uuid: string, dryRun: boolean) => send<RewindResult>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun }),
+  mcp: (id: string) => request<{ servers: McpServer[]; live: boolean }>(`sessions/${encodeURIComponent(id)}/mcp`),
+  setMcp: (id: string, name: string, change: { enabled?: boolean; reconnect?: boolean }) =>
+    send<{ servers: McpServer[] }>('POST', `sessions/${encodeURIComponent(id)}/mcp/${encodeURIComponent(name)}`, change),
+  stopTask: (id: string, task: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/stop`),
+  subagent: (id: string, agent: string) =>
+    request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
+  usage: () => request<{ limits: UsageLimit[] }>('usage').then((r) => r.limits),
+  sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
+  git: (cwd: string) => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}`),
+  gitDiff: (cwd: string, path: string) => request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),
+  tree: (cwd: string, path: string) => request<{ entries: TreeEntry[] }>(`tree?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.entries),
+  file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>
     request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   upload: async (file: File): Promise<Attachment> => {
+    if (STATIC_DEMO) throw new ApiError('This demo runs in your browser: nothing is uploaded.', 403);
     const form = new FormData();
     form.append('file', file);
     const response = await fetch(apiUrl('uploads'), { method: 'POST', body: form });

@@ -43,3 +43,20 @@ describe('buildItems', () => {
     expect(items).toMatchObject([{ kind: 'compact', summary: 'Summary of the earlier conversation' }]);
   });
 });
+
+describe('buildItems: ! commands', () => {
+  it('shows a bash-mode message as a command with its output', () => {
+    const items = buildItems([user('b1', '<bash-input>ls &amp; pwd</bash-input><bash-stdout>a.txt\n&lt;dir&gt;</bash-stdout><bash-stderr></bash-stderr>')]);
+    expect(items).toMatchObject([{ kind: 'shell', command: 'ls & pwd', stdout: 'a.txt\n<dir>', stderr: '' }]);
+  });
+});
+
+describe('toChatMessage', () => {
+  it('marks what Claude Code adds itself as meta, from the transcript and from the live stream', async () => {
+    const { toChatMessage } = await import('../src/server/normalize');
+    const note = '[Image: original 2400x1260, displayed at 2000x1050.]';
+    expect(toChatMessage({ type: 'user', uuid: 'a', isMeta: true, message: { role: 'user', content: note } })?.meta).toBe(true);
+    expect(toChatMessage({ type: 'user', uuid: 'b', isSynthetic: true, message: { role: 'user', content: note } })?.meta).toBe(true);
+    expect(toChatMessage({ type: 'user', uuid: 'c', message: { role: 'user', content: 'typed' } })?.meta).toBeUndefined();
+  });
+});

@@ -1,8 +1,9 @@
 import { api, appBase } from './api';
+import { STATIC_DEMO } from './static-demo';
 
 export type NotificationState = 'on' | 'off' | 'unsupported' | 'denied';
 
-const supported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+const supported = () => !STATIC_DEMO && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
 
 function keyBytes(base64: string): Uint8Array<ArrayBuffer> {
   const padded = (base64 + '='.repeat((4 - (base64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');

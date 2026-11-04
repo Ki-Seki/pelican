@@ -1,5 +1,6 @@
 import type { ClientEvent, ServerEvent } from '../../shared/protocol';
 import { appBase } from './api';
+import { STATIC_DEMO } from './static-demo';
 
 type Listener = (event: ServerEvent) => void;
 
@@ -18,6 +19,11 @@ class Socket {
   connected = false;
 
   start(): void {
+    // The demo on the project site has no server: nothing to connect to, nothing to wait for.
+    if (STATIC_DEMO) {
+      this.connected = true;
+      return;
+    }
     this.connect();
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && !this.connected) this.connect();

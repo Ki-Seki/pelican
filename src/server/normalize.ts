@@ -126,7 +126,9 @@ export function toChatMessage(raw: Raw): ChatMessage | undefined {
     if (typeof message.model === 'string') out.model = message.model;
     if (typeof message.id === 'string') out.messageId = message.id;
   }
-  if (raw.is_meta === true || raw.isMeta === true) out.meta = true;
+  // Text Claude Code adds itself (an image's scale note, skill text) is meta in the transcript
+  // and synthetic in the live stream; either way it is not something you typed.
+  if (raw.is_meta === true || raw.isMeta === true || raw.isSynthetic === true) out.meta = true;
   if (raw.isCompactSummary === true) out.compactSummary = true;
   return out;
 }

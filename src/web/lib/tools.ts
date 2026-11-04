@@ -1,5 +1,6 @@
 import {
   Bot,
+  ChartArea,
   CircleHelp,
   ClipboardList,
   FilePen,
@@ -90,6 +91,7 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'Skill':
       return { icon: Wrench, verb: 'Skill', target: str(input.skill) ?? str(input.command) };
     default: {
+      if (/(^|__)show_widget$/.test(name)) return { icon: ChartArea, verb: 'Drew', target: str(input.title)?.replace(/_/g, ' '), prose: true };
       if (name.startsWith('mcp__')) {
         const [, server, tool] = name.split('__');
         return { icon: Plug, verb: `${server ?? 'mcp'} · ${tool ?? ''}`.trim(), target: firstString(input) };

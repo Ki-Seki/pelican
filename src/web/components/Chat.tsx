@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, GitBranch, Info, ListChecks, MoreHorizontal, TriangleAlert, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { Attachment, Block, ChatMessage, RunSettings, RunState, SessionSummary } from '../../shared/protocol';
+import type { Attachment, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
-import { baseName, shortPath } from '../lib/format';
+import { baseName, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, saveDefaults, usePrefs } from '../lib/prefs';
 import { socket } from '../lib/socket';
 import {
@@ -25,7 +25,9 @@ import { MessageList } from './MessageList';
 import { PermissionCard } from './PermissionCard';
 import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
+import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
+import { Workspace } from './Workspace';
 
 export const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`.replace('.', ''));
 
@@ -57,8 +59,81 @@ function ContextMeter({ context, onClick }: { context: NonNullable<RunState['con
         <circle cx="9" cy="9" r={r} fill="none" stroke="var(--line)" strokeWidth="2.5" />
         <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={`${(percent / 100) * circumference} ${circumference}`} />
       </svg>
-      {percent}%
+      <span>{percent}%</span>
     </button>
+  );
+}
+
+const LIMIT_NAME: Record<string, string> = {
+  five_hour: '5-hour', seven_day: 'weekly', seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet', overage: 'extra usage',
+};
+
+/** A usage limit worth knowing about now: reached, or close. */
+export function limitNotice(limits: UsageLimit[] | undefined): string | undefined {
+  const limit = limits?.find((l) => l.status === 'rejected') ?? limits?.find((l) => l.status === 'allowed_warning');
+  if (!limit) return undefined;
+  const name = LIMIT_NAME[limit.type] ?? 'usage';
+  const resets = limit.resetsAt ? ` It resets ${/^\d/.test(untilTime(limit.resetsAt)) ? 'at ' : ''}${untilTime(limit.resetsAt)}.` : '';
+  if (limit.status === 'rejected') return `You have reached your ${name} limit.${resets}`;
+  const used = typeof limit.utilization === 'number' ? `${Math.round(limit.utilization * 100)}% of ` : 'most of ';
+  return `You have used ${used}your ${name} limit.${resets}`;
+}
+
+/** Rewind code: what putting files back before a prompt would change, then doing it. */
+function RewindSheet({ sessionId, uuid, cwd, onClose, onDone }: { sessionId: string; uuid?: string; cwd?: string; onClose: () => void; onDone: (result: RewindResult) => void }) {
+  const preview = useQuery({
+    queryKey: ['rewind', sessionId, uuid],
+    queryFn: () => api.rewind(sessionId, uuid!, true),
+    enabled: Boolean(uuid),
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string>();
+  const files = preview.data?.files ?? [];
+  const rel = (file: string) => (cwd && file.startsWith(`${cwd}/`) ? file.slice(cwd.length + 1) : file);
+  return (
+    <Sheet open={Boolean(uuid)} onClose={onClose} title="Rewind code">
+      <div className="px-3 pt-1 pb-3 text-[14px] leading-relaxed">
+        {preview.isLoading && <div className="flex items-center gap-2 text-muted"><Loader2 className="size-4 animate-spin" /> Checking what changed since this prompt</div>}
+        {preview.error && <div className="text-danger">{(preview.error as Error).message}</div>}
+        {preview.data && !preview.data.canRewind && (
+          <div className="text-muted">{preview.data.error ?? 'Nothing to put back: Claude has not changed any files since this prompt.'}</div>
+        )}
+        {preview.data?.canRewind && files.length === 0 && <div className="text-muted">No files changed since this prompt.</div>}
+        {preview.data?.canRewind && files.length > 0 && (
+          <>
+            <p>Put {files.length === 1 ? 'this file' : `these ${files.length} files`} back the way they were before this prompt. The conversation stays as it is.</p>
+            <ul className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-line px-3 py-1.5 font-mono text-[12px] text-muted">
+              {files.map((file) => <li key={file} className="truncate py-0.5">{rel(file)}</li>)}
+            </ul>
+            {(preview.data.insertions || preview.data.deletions) ? (
+              <div className="mt-1.5 font-mono text-[12px]"><span className="text-add">+{preview.data.insertions ?? 0}</span> <span className="text-del">−{preview.data.deletions ?? 0}</span> <span className="font-sans text-faint">lines change back</span></div>
+            ) : null}
+            {error && <div className="mt-2 text-[13px] text-danger">{error}</div>}
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                disabled={working}
+                className="h-9 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40"
+                onClick={() => {
+                  setWorking(true);
+                  setError(undefined);
+                  api.rewind(sessionId, uuid!, false)
+                    .then((result) => (result.canRewind ? onDone(result) : setError(result.error ?? 'Could not put the files back')))
+                    .catch((err: Error) => setError(err.message))
+                    .finally(() => setWorking(false));
+                }}
+              >
+                {working ? <Loader2 className="size-4 animate-spin" /> : 'Put files back'}
+              </button>
+              <button type="button" className="h-9 rounded-full bg-chip px-4 text-[14px]" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
+    </Sheet>
   );
 }
 
@@ -101,6 +176,7 @@ function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error
   );
 }
 
+const DEMO_NOTE = 'This is the demo, so nothing runs. Start Pelican on your own computer to work with Claude.';
 const EDIT_NOTE = 'A branch of the conversation from just before this prompt. Edit it and send; the original session stays as it was.';
 const EDIT_FIRST_NOTE = 'A new session in the same folder. Edit the prompt and send; the original session stays as it was.';
 
@@ -146,10 +222,14 @@ export function Chat({
   const session = detail?.session ?? listed;
   const [settings, setSettings] = useState<RunSettings>(loadDefaults);
   const [initialDraft] = useState(() => getDraft(viewId));
-  const [draft, setDraftText] = useState(() => (initialDraft ? { text: initialDraft.text, key: 1 } : undefined));
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean } | undefined>(() => (initialDraft ? { text: initialDraft.text, key: 1 } : undefined));
   const [note, setNote] = useState(initialDraft?.note);
   const [sendError, setSendError] = useState<string>();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [rewinding, setRewinding] = useState<string>();
+  const [running, setRunning] = useState<string>();
+  const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
 
   useEffect(() => clearDraft(viewId), [viewId]);
 
@@ -185,17 +265,18 @@ export function Chat({
     }
   };
 
-  const send = async (text: string, attachments: Attachment[]) => {
+  const send = async (text: string, attachments: Attachment[], mode: SendMode) => {
     setSendError(undefined);
     setNote(undefined);
     if (demo) {
-      setSendError('This is the demo, so nothing is sent. Run Pelican on your own machine to talk to Claude.');
+      setSendError(DEMO_NOTE);
       setDraftText({ text, key: Date.now() });
       return;
     }
     const uuid = newId();
-    addLocalMessage(viewId, localMessage(uuid, text, attachments));
-    const body = { text, attachments: attachments.map((a) => a.id), settings, uuid };
+    const queued = busy && mode === 'queue';
+    addLocalMessage(viewId, { ...localMessage(uuid, text, attachments), ...(queued ? { queued: true } : {}) });
+    const body = { text, attachments: attachments.map((a) => a.id), settings, uuid, ...(busy ? { mode } : {}) };
     try {
       if (sessionId) {
         await api.send(sessionId, body);
@@ -220,6 +301,26 @@ export function Chat({
   const permissions = view.run?.permissions ?? [];
   const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
 
+  // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
+  const shell = async (command: string) => {
+    if (!sessionId) return;
+    setSendError(undefined);
+    if (demo) {
+      setSendError(DEMO_NOTE);
+      setDraftText({ text: `!${command}`, key: Date.now() });
+      return;
+    }
+    setRunning(command);
+    try {
+      await api.shell(sessionId, command);
+    } catch (error) {
+      setSendError((error as Error).message);
+      setDraftText({ text: `!${command}`, key: Date.now() });
+    } finally {
+      setRunning(undefined);
+    }
+  };
+
   // Edit and resend: branch just before the prompt, open the branch, and put the prompt in its composer.
   const edit = (uuid: string, text: string) => {
     if (!sessionId) return;
@@ -241,6 +342,13 @@ export function Chat({
       })
       .catch((error: Error) => setSendError(error.message));
   };
+
+  // Files changed in the session's folder, for the badge on the Changes button; refreshed when a turn ends.
+  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd), refetchInterval: 30_000 });
+  const changes = git?.repo ? git.files.length : 0;
+  useEffect(() => {
+    if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
+  }, [busy, cwd, queryClient]);
 
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
@@ -280,7 +388,14 @@ export function Chat({
             )}
           </div>
         </button>
-        {view.run?.context && <ContextMeter context={view.run.context} onClick={() => setMenuOpen(true)} />}
+        {/* On a phone the meter shows up once the context is filling; the session menu always has the number. */}
+        {view.run?.context && (wide || view.run.context.percent >= 60) && <ContextMeter context={view.run.context} onClick={() => setMenuOpen(true)} />}
+        {cwd && (
+          <button type="button" aria-label="Changes and files" onClick={() => setWorkspaceOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+            <FolderGit2 className="size-[18px]" />
+            {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
+          </button>
+        )}
         {sessionId && (
           <button type="button" aria-label="Session menu" onClick={() => setMenuOpen(true)} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
             <MoreHorizontal className="size-5" />
@@ -289,7 +404,7 @@ export function Chat({
       </header>
 
       {sessionId || view.messages.length > 0 ? (
-        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={prefs.view} {...(sessionId ? { onEdit: edit } : {})} />
+        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={prefs.view} {...(sessionId ? { onEdit: edit, onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
           <div>
@@ -304,6 +419,25 @@ export function Chat({
           <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
         ))}
         {showTasks && <TasksBar tasks={tasks} />}
+        {view.run?.tasks?.map((task) => (
+          <div key={task.id} className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-full border border-line bg-panel py-1 pr-1 pl-3 text-[12.5px] text-muted">
+            <span className="relative flex size-1.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-run opacity-60" /><span className="relative inline-flex size-1.5 rounded-full bg-run" /></span>
+            <span className="min-w-0 flex-1 truncate">{task.description || 'Background task'}</span>
+            <button type="button" onClick={() => sessionId && void api.stopTask(sessionId, task.id)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Stop</button>
+          </div>
+        ))}
+        {running && (
+          <Notice><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Running <code className="font-mono">{running}</code></span></Notice>
+        )}
+        {prefs.suggestions && view.run?.suggestion && !busy && !running && (
+          <div className="mx-auto mb-2 flex max-w-3xl">
+            <button type="button" onClick={() => setDraftText({ text: view.run!.suggestion!, key: Date.now() })} className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted hover:bg-hover hover:text-fg">
+              <CornerDownRight className="size-3.5 shrink-0 text-faint" />
+              <span className="truncate">{view.run.suggestion}</span>
+            </button>
+          </div>
+        )}
+        {limitNotice(limits) && <Notice tone="error">{limitNotice(limits)}</Notice>}
         {session?.status === 'live' && !view.run && (
           <Notice tone="live">
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
@@ -323,7 +457,8 @@ export function Chat({
         settings={settings}
         onSettings={changeSettings}
         models={modelList?.models}
-        onSend={(text, attachments) => void send(text, attachments)}
+        onSend={(text, attachments, mode) => void send(text, attachments, mode)}
+        {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         autoFocus={!sessionId || Boolean(initialDraft)}
         placeholder={busy ? 'Queue a message' : sessionId ? 'Reply to Claude' : 'Message Claude'}
@@ -331,6 +466,31 @@ export function Chat({
         {...(draft ? { draft } : {})}
       />
 
+      {cwd && (
+        <Workspace
+          open={workspaceOpen}
+          onClose={() => setWorkspaceOpen(false)}
+          cwd={cwd}
+          onMention={(path) => {
+            setWorkspaceOpen(false);
+            setDraftText({ text: `@${path} `, key: Date.now(), append: true });
+          }}
+        />
+      )}
+      {sessionId && (
+        <RewindSheet
+          sessionId={sessionId}
+          {...(rewinding ? { uuid: rewinding } : {})}
+          {...(cwd ? { cwd } : {})}
+          onClose={() => setRewinding(undefined)}
+          onDone={(result) => {
+            setRewinding(undefined);
+            const count = result.files?.length ?? 0;
+            setNote(`Put ${count} file${count === 1 ? '' : 's'} back the way they were before that prompt. The conversation is unchanged; to carry on from there too, use Edit and resend on it.`);
+            void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
+          }}
+        />
+      )}
       {sessionId && (
         <SessionMenu
           open={menuOpen}

@@ -1,10 +1,14 @@
-import { CheckCircle2, ChevronRight, Circle, CircleDot, Loader2 } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Circle, CircleDot, FileText, Loader2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { memo, useEffect, useMemo, useState } from 'react';
 
+import { api } from '../lib/api';
+import { useSessionId } from '../lib/session-context';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
-import { resultImages, resultText, type ToolCall } from '../lib/turns';
+import { buildItems, resultImages, resultText, type ToolCall } from '../lib/turns';
 import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
+import { PreviewCard } from './Preview';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -25,11 +29,11 @@ function editsOf(call: ToolCall): Edit[] {
 function Output({ text, failed }: { text: string; failed?: boolean }) {
   const [all, setAll] = useState(false);
   if (!text.trim()) return <div className="text-[12px] text-faint">No output</div>;
-  const long = text.length > 1800 || text.split('\n').length > 24;
+  const long = text.length > 1200 || text.split('\n').length > 14;
   return (
     <div>
       <pre
-        className={`overflow-x-auto rounded-lg border border-line bg-panel px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words ${failed ? 'text-danger' : 'text-muted'} ${long && !all ? 'max-h-72 overflow-y-hidden' : ''}`}
+        className={`overflow-x-auto rounded-lg border border-line bg-panel px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words ${failed ? 'text-danger' : 'text-muted'} ${long && !all ? 'max-h-56 overflow-y-hidden [mask-image:linear-gradient(to_bottom,black_80%,transparent)]' : ''}`}
       >
         {text}
       </pre>
@@ -63,10 +67,96 @@ function Images({ call }: { call: ToolCall }) {
   );
 }
 
-function Detail({ call }: { call: ToolCall }) {
+/** One file Claude sent: a picture, a page, a document, or just its name. */
+function SentFile({ path, open: startOpen }: { path: string; open: boolean }) {
+  const sessionId = useSessionId();
+  const [open, setOpen] = useState(startOpen);
+  const name = path.split('/').pop() ?? path;
+  const kind = /\.(png|jpe?g|gif|webp)$/i.test(name) ? 'image' : /\.(html?|svg)$/i.test(name) ? 'page' : /\.(md|markdown)$/i.test(name) ? 'doc' : 'file';
+  const { data, error, isLoading } = useQuery({
+    queryKey: ['sent', sessionId, path],
+    queryFn: () => api.sent(sessionId!, path),
+    enabled: open && Boolean(sessionId),
+    staleTime: 60_000,
+  });
+  const chip = (
+    <button type="button" onClick={() => setOpen((v) => !v)} className="flex min-h-9 w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-left text-[13px]">
+      <FileText className="size-4 shrink-0 text-faint" />
+      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{name}</span>
+      {isLoading ? <Loader2 className="size-3.5 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />}
+    </button>
+  );
+  if (!open) return chip;
+  if (error) return <div>{chip}<div className="mt-1 text-[12px] text-danger">{(error as Error).message}</div></div>;
+  if (!data) return chip;
+  if (kind === 'image' && data.image) {
+    return (
+      <button type="button" onClick={() => openImage(data.image)} className="block">
+        <img src={data.image} alt={name} className="max-h-96 max-w-full rounded-lg border border-line" />
+      </button>
+    );
+  }
+  if (kind === 'page' && data.text !== undefined) return <PreviewCard source={{ kind: /\.svg$/i.test(name) ? 'svg' : 'html', code: data.text, title: name }} label={name} />;
+  if (kind === 'doc' && data.text !== undefined) {
+    return <div>{chip}<div className="mt-1 rounded-lg border border-line bg-bg px-3 py-2"><Markdown text={data.text} className="text-[14px]" /></div></div>;
+  }
+  return <div>{chip}{data.text !== undefined && <div className="mt-1"><Output text={data.text} /></div>}</div>;
+}
+
+/** Files Claude handed over (SendUserFile, Artifact), shown the way Claude Desktop shows them. */
+function SentFiles({ call }: { call: ToolCall }) {
+  const files = call.name === 'Artifact' ? [str(call.input.file_path)].filter(Boolean) : (Array.isArray(call.input.files) ? (call.input.files as unknown[]).filter((f): f is string => typeof f === 'string') : []);
+  const caption = str(call.input.caption) || str(call.input.description);
+  const link = resultText(call.result).match(/https:\/\/claude\.ai\/[^\s)"']+/)?.[0];
+  // Shown in place unless Claude meant them as attachments to save.
+  const render = call.name === 'Artifact' || str(call.input.display) !== 'attach';
+  return (
+    <div className="my-1 space-y-1.5">
+      {caption && <div className="text-[13px] text-muted">{caption}</div>}
+      {files.map((file) => <SentFile key={file} path={file} open={render} />)}
+      {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
+    </div>
+  );
+}
+
+/** What a subagent did, from its own transcript: its tool calls, opened on request. */
+function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
+  const sessionId = useSessionId();
+  const [open, setOpen] = useState(false);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['subagent', sessionId, agentId],
+    queryFn: () => api.subagent(sessionId!, agentId),
+    enabled: open && Boolean(sessionId),
+    staleTime: 60_000,
+  });
+  const steps = useMemo(() => buildItems(data ?? []).flatMap((item) => (item.kind === 'assistant' ? item.parts : [])).filter((part) => part.kind === 'tool'), [data]);
+  if (!sessionId) return null;
+  return (
+    <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px]">
+      <button type="button" className="flex min-h-7 w-full items-center gap-1.5 text-left text-faint hover:text-fg" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <ChevronRight className={`size-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
+        {open && data ? `${steps.length} steps` : 'Steps it took'}
+        {open && isLoading && <Loader2 className="size-3.5 animate-spin" />}
+      </button>
+      {open && error && <div className="py-1 text-[12px] text-danger">{(error as Error).message}</div>}
+      {open && data && steps.length === 0 && <div className="py-1 text-[12px] text-faint">No steps were recorded.</div>}
+      {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} /> : null))}
+    </div>
+  );
+}
+
+/** A page or a picture Claude wrote, worth seeing rendered rather than as code. */
+const PREVIEWABLE = /\.(html?|svg)$/i;
+
+function Detail({ call, cwd }: { call: ToolCall; cwd?: string }) {
   const output = resultText(call.result);
   const failed = call.result?.is_error;
   const edits = editsOf(call);
+  const file = str(call.input.file_path);
+  if (call.name === 'Write' && PREVIEWABLE.test(file) && !failed) {
+    const name = file.split('/').pop() ?? file;
+    return <PreviewCard source={{ kind: /\.svg$/i.test(file) ? 'svg' : 'html', code: str(call.input.content), title: name }} label={name} />;
+  }
   if (edits.length > 0 && !failed) {
     return (
       <div className="space-y-2">
@@ -87,7 +177,8 @@ function Detail({ call }: { call: ToolCall }) {
         </div>
       );
     case 'Agent':
-    case 'Task':
+    case 'Task': {
+      const agentId = output.match(/agentId:\s*([\w-]+)/)?.[1];
       return (
         <div className="space-y-2">
           {str(call.input.prompt) && (
@@ -96,9 +187,11 @@ function Detail({ call }: { call: ToolCall }) {
               <Markdown text={str(call.input.prompt)} className="mt-2 text-[13px]" />
             </details>
           )}
-          {call.result && <Markdown text={output} className="text-[14px]" />}
+          {agentId && <AgentSteps agentId={agentId} cwd={cwd} />}
+          {call.result && <Markdown text={output.replace(/\n*agentId:[\s\S]*$/, '')} className="text-[14px]" />}
         </div>
       );
+    }
     default:
       return (
         <div className="space-y-2">
@@ -209,6 +302,16 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   }, [call]);
 
   if (call.name === 'TodoWrite') return <TodoList input={call.input} />;
+  if (call.name === 'SendUserFile' || (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish'))) return <SentFiles call={call} />;
+  // Claude Desktop's visuals (diagrams, charts, small tools): drawn in place, as Desktop shows them.
+  if (/(^|__)show_widget$/.test(call.name) && str(call.input.widget_code)) {
+    const code = str(call.input.widget_code);
+    return (
+      <div className="my-1">
+        <PreviewCard source={{ kind: /^\s*<svg/i.test(code) ? 'svg' : 'html', code, widget: true, ...(str(call.input.title) ? { title: str(call.input.title) } : {}) }} label={str(call.input.title).replace(/_/g, ' ') || 'Visual'} />
+      </div>
+    );
+  }
   if (call.name === 'AskUserQuestion' && call.result) return <QuestionsAnswered call={call} />;
   // While it waits for approval, the approval card shows the plan; the transcript only notes it.
   if (call.name === 'ExitPlanMode' && str(call.input.plan) && call.result) return <PlanCard call={call} />;
@@ -241,7 +344,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
       {open && (
         <div className="animate-fade mt-1 mb-2 ml-5.5">
           {summary.note && <div className="mb-1.5 text-[12px] text-faint">{summary.note}</div>}
-          <Detail call={call} />
+          <Detail call={call} cwd={cwd} />
         </div>
       )}
     </div>

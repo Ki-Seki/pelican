@@ -6,6 +6,7 @@ import type { SessionSummary } from '../shared/protocol';
 import { Chat } from './components/Chat';
 import { Lightbox } from './components/Lightbox';
 import { Login } from './components/Login';
+import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
 import { SettingsSheet } from './components/Settings';
@@ -19,6 +20,7 @@ import {
 } from './lib/notifications';
 import { applyTheme } from './lib/prefs';
 import { socket } from './lib/socket';
+import { STATIC_DEMO } from './lib/static-demo';
 
 /**
  * Routes live in the query string (`?s=<id>`, `?new`, `?new&cwd=<path>`): the
@@ -88,6 +90,7 @@ export function App() {
     <>
       <Main />
       <Lightbox />
+      <PreviewOverlay />
     </>
   );
 }
@@ -138,7 +141,7 @@ function Main() {
 
   const banner = info?.demo ? (
     <div data-demo-banner className="mx-3 mb-1 rounded-xl bg-chip px-3 py-2 text-[12.5px] leading-snug text-muted">
-      <span className="font-medium text-fg">Demo.</span> Sample sessions on a made-up machine; nothing you do here runs or changes anything.
+      <span className="font-medium text-fg">Demo.</span> {STATIC_DEMO ? 'Pelican running in your browser, with made-up sessions; nothing you do here is sent anywhere.' : 'Sample sessions on a made-up machine; nothing you do here runs or changes anything.'}
     </div>
   ) : undefined;
 

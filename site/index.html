@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pelican · Claude Code, in your pocket</title>
+<meta name="description" content="Pelican is an open-source, phone-first web app for the Claude Code on your computer: follow every session live, answer Claude, approve its edits. Runs on your machine, no account.">
+<meta name="theme-color" content="#fbfbfa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0c0d" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Pelican · Claude Code, in your pocket">
+<meta property="og:description" content="An open-source, phone-first web app for the Claude Code on your computer. Every session, live; approvals with the diff; nothing leaves your machine.">
+<meta property="og:image" content="https://ki-seki.github.io/pelican/assets/shots/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<script type="module" src="assets/site.js"></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="">Pelican</a>
+    <nav class="nav" aria-label="Site">
+      <a href="docs.html">Docs</a>
+      <a href="demo/" class="wide-only">Live demo</a>
+      <a class="gh" href="https://github.com/Ki-Seki/pelican"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow"><span class="dot"></span>Open source · for Claude Code</span>
+        <h1>Claude Code, <span class="soft">in your pocket.</span></h1>
+        <p class="lede">Pelican is a phone-first web app for the Claude Code on your computer. Follow every session as it runs, answer Claude, approve its edits and start new work, from wherever you are.</p>
+        <div class="ctas">
+          <a class="btn primary" href="demo/">Open the live demo <svg class="i go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+          <a class="btn" href="docs.html">Read the docs</a>
+        </div>
+        <div class="cmd"><code>npm install -g pelican-cc</code></div>
+        <div class="trust">
+          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Runs on your computer</span>
+          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/><path d="m3 3 18 18"/></svg>No account, no relay</span>
+          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8 3 12l4 4"/><path d="m17 8 4 4-4 4"/><path d="m14 4-4 16"/></svg>MIT licensed</span>
+        </div>
+      </div>
+      <figure class="device">
+        <div class="phone">
+          <div class="screen">
+            <span class="island" aria-hidden="true"></span>
+            <div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div>
+            <iframe src="demo/" title="Pelican, running with made-up sessions" loading="lazy"></iframe>
+          </div>
+        </div>
+        <figcaption class="device-note">The real app, with made-up sessions. Tap around.</figcaption>
+      </figure>
+      <a class="hero-shot" href="demo/" aria-label="Open the live demo">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/shots/phone-dark.png">
+          <img src="assets/shots/phone-light.png" width="1280" height="920" alt="Pelican on a phone: the session list, a session waiting for approval, and a session another app is running">
+        </picture>
+      </a>
+    </div>
+  </section>
+
+  <section class="band tint" id="sessions">
+    <div class="wrap">
+      <div class="feature-row">
+        <div class="copy-side">
+          <div class="kicker">Every session</div>
+          <h2>Wherever you started it</h2>
+          <p class="sub">Pelican reads Claude Code’s own transcripts. The sessions you began in the terminal, in Claude Desktop or in your editor are all here, live while they run, with their whole history back past every compaction.</p>
+          <ul class="points">
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span><b>Live.</b> A session another app is working on shows up as it works, and you can see which app.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span><b>Whole history.</b> Scroll up to the first prompt, through each compaction, with what Claude kept.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span><b>Three ways to read.</b> Just the replies, the replies with steps folded, or every step open.</span></li>
+          </ul>
+        </div>
+        <div class="phone"><div class="screen"><span class="island" aria-hidden="true"></span><div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div><picture><source media="(prefers-color-scheme: dark)" srcset="assets/shots/list-dark.png"><img class="shot" src="assets/shots/list-light.png" width="1170" height="2532" alt="The session list: one session waiting for approval, one Claude Desktop is working on, and earlier ones by day" loading="lazy"></picture></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="everything">
+    <div class="wrap">
+      <div class="kicker">All of Claude Code</div>
+      <h2>What you do at your desk, from your phone</h2>
+      <p class="sub">Pelican drives Claude Code through the official Agent SDK, so your login, settings, <code>CLAUDE.md</code>, skills and MCP servers all apply. On top of that, everything you would reach for in the terminal.</p>
+      <div class="grid">
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg><h3>Approve with the diff</h3><p>Every edit and command waits for you, shown the way you would review it. Or let Claude work: plan, accept edits, auto, bypass.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m17 11-5-5-5 5"/><path d="M12 6v14"/></svg><h3>Steer or queue</h3><p>Tell Claude something while it works and it reads it at its next step, or line up what comes after this turn.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><h3><code>!</code> commands</h3><p>Run a command in the session’s folder. The output lands in the conversation, and Claude reads it with your next message.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/></svg><h3>Changes and files</h3><p>Each changed file with its diff, and the whole folder to browse, read and mention.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-3M11 15V8M15 15v-5M19 15V5"/></svg><h3>Visuals and pages</h3><p>Charts and diagrams Claude draws, and the pages it writes, rendered in place, in a sandbox.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg><h3>Rewind and branch</h3><p>Put files back the way they were before any prompt, or change an earlier prompt and send it again on a branch.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.8L20 10l-5 3.6L16.8 20 12 16.6 7.2 20 9 13.6 4 10l6.1-1.2Z"/></svg><h3>Every model and mode</h3><p>Opus to Haiku, effort up to max, fast mode and ultracode; <code>/</code> commands, <code>@</code> files and subagents, photos and files.</p></div>
+        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><h3>Notifications</h3><p>A push when Claude finishes or needs you. Add Pelican to your Home Screen and it opens like an app.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint" id="local">
+    <div class="wrap">
+      <div class="local">
+        <div>
+          <div class="kicker">Yours</div>
+          <h2>Nothing leaves your computer</h2>
+          <p class="sub">Pelican is one small Node process next to Claude Code. There is no cloud service in between, no account to make, and no copy of your sessions anywhere but where Claude Code keeps them.</p>
+          <p class="sub"><a class="link" href="docs.html#phone">Reach it from your phone</a> through Tailscale, an SSH tunnel or your own proxy.</p>
+        </div>
+        <div class="facts">
+          <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg><div><b>Only this computer, unless you say otherwise</b><span>It listens on 127.0.0.1, and will not listen further without a password.</span></div></div>
+          <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div><b>A password you set on the computer</b><span>Stored as a scrypt hash; changing it signs every browser out.</span></div></div>
+          <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg><div><b>Guarded against other websites</b><span>Host and origin checks stop DNS rebinding and cross-site requests.</span></div></div>
+          <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8 3 12l4 4"/><path d="m17 8 4 4-4 4"/><path d="m14 4-4 16"/></svg><div><b>Open source, no telemetry</b><span>MIT licensed. Read every line it runs.</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="start">
+    <div class="wrap">
+      <div class="start">
+        <div>
+          <div class="kicker">Get started</div>
+          <h2>One command, then your phone</h2>
+          <p class="sub">On the computer where you use Claude Code, with Node 22.12 or newer.</p>
+          <p class="note">Then <a class="link" href="docs.html#phone">set it up for your phone</a>, or read the <a class="link" href="docs.html">docs</a>.</p>
+        </div>
+        <pre class="code"><code><span class="c"># see it first, with made-up sessions</span>
+npx pelican-cc --demo
+
+<span class="c"># then for real</span>
+npm install -g pelican-cc
+pelican                  <span class="c"># http://localhost:7860</span></code></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="">Pelican</a>
+    <nav aria-label="Footer">
+      <a href="docs.html">Docs</a>
+      <a href="demo/">Live demo</a>
+      <a href="https://github.com/Ki-Seki/pelican">GitHub</a>
+      <a href="https://github.com/Ki-Seki/pelican/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/Ki-Seki/pelican/blob/main/LICENSE">MIT license</a>
+    </nav>
+    <p>Pelican is an independent project, not made by or affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
@@ -140,6 +141,15 @@ async function main(): Promise<void> {
     : passwordSet() ? 'password required'
       : local ? 'no password: only this machine can reach it' : 'no password (--no-auth)';
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${shown}\n  ${protection}\n`);
+  // Listening beyond this computer: the address a phone on the same network can open, as a QR code.
+  if (!local) {
+    const { qrTerminal } = await import('./qr.js');
+    const lan = Object.values(os.networkInterfaces()).flat().find((a) => a && a.family === 'IPv4' && !a.internal);
+    const phone = config.host === '0.0.0.0' || config.host === '::' ? (lan ? `http://${lan.address}:${config.port}/` : undefined) : url;
+    if (phone) console.log(`  On your phone: ${phone}\n\n${qrTerminal(phone).replace(/^/gm, '  ')}\n`);
+  } else if (!config.demo) {
+    console.log('  From your phone: https://ki-seki.github.io/pelican/docs.html#phone\n');
+  }
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
   if (values.open) openBrowser(shown);
 }

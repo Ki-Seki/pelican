@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, AtSign, ChevronDown, FileText, Folder, Loader2, Paperclip, Slash, Sparkles, Square, X, Zap } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Sparkles, Square, SquareTerminal, X, Zap } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Attachment, Command, ModelOption, PermissionMode, RunSettings } from '../../shared/protocol';
+import type { Agent, Attachment, Command, ModelOption, PermissionMode, RunSettings, SendMode } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { EFFORT_LABELS, EFFORT_SHORT, enterSends, PERMISSION_MODES } from '../lib/prefs';
+import { EFFORT_LABELS, EFFORT_SHORT, enterSends, getPrefs, PERMISSION_MODES } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string };
@@ -29,19 +29,40 @@ async function shrinkImage(file: File): Promise<File> {
   }
 }
 
-/** A composer setting. Never a solid pill: the send button is the only solid control in the row. */
+/**
+ * A composer setting, written as plain text: no fill, no border, no arrow. The send
+ * button is the only solid control in the row; only a mode that skips approvals is tinted.
+ */
 function Chip({ children, onClick, tone = 'plain', label }: { children: React.ReactNode; onClick: () => void; tone?: 'plain' | 'warn'; label: string }) {
   return (
     <button
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[13px] whitespace-nowrap ${tone === 'warn' ? 'bg-wait/12 text-wait' : 'text-muted hover:bg-hover hover:text-fg'}`}
+      className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] whitespace-nowrap hover:bg-hover ${tone === 'warn' ? 'text-wait' : 'text-muted hover:text-fg'}`}
     >
       {children}
     </button>
   );
 }
+
+type Recognition = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+/** The browser's speech recognition, where there is one (Safari, Chrome; it needs HTTPS or localhost). */
+const SpeechRecognition = (() => {
+  if (typeof window === 'undefined' || !window.isSecureContext) return undefined;
+  const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition;
+})();
 
 /** What the text before the caret asks to complete: a slash command at the start, or an @ mention. */
 type Trigger = { kind: 'command' | 'file'; query: string; start: number; end: number };
@@ -55,7 +76,7 @@ function findTrigger(text: string, caret: number): Trigger | undefined {
   return undefined;
 }
 
-type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' };
+type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' | 'agent' };
 
 function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): { items: Suggestion[]; loading: boolean } {
   const [fileQuery, setFileQuery] = useState('');
@@ -65,10 +86,10 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
     return () => clearTimeout(timer);
   }, [trigger?.kind, trigger?.query]);
 
-  const commands = useQuery({
-    queryKey: ['commands', cwd],
-    queryFn: () => api.commands(cwd!),
-    enabled: Boolean(cwd) && trigger?.kind === 'command',
+  const completions = useQuery({
+    queryKey: ['completions', cwd],
+    queryFn: () => api.completions(cwd!),
+    enabled: Boolean(cwd) && Boolean(trigger),
     staleTime: 10 * 60_000,
   });
   const files = useQuery({
@@ -82,22 +103,28 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
     if (!trigger) return { items: [], loading: false };
     if (trigger.kind === 'command') {
       const q = trigger.query.toLowerCase();
-      const list = (commands.data ?? [])
+      const list = (completions.data?.commands ?? [])
         .filter((c: Command) => !q || c.name.toLowerCase().includes(q))
-        .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
+        .sort((a: Command, b: Command) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
         .slice(0, 8)
-        .map((c) => ({ key: c.name, label: `/${c.name}`, detail: c.argumentHint ? `${c.argumentHint} · ${c.description}` : c.description, insert: `/${c.name} `, icon: 'command' as const }));
-      return { items: list, loading: commands.isLoading };
+        .map((c: Command) => ({ key: c.name, label: `/${c.name}`, detail: c.argumentHint ? `${c.argumentHint} · ${c.description}` : c.description, insert: `/${c.name} `, icon: 'command' as const }));
+      return { items: list, loading: completions.isLoading };
     }
-    const list = (files.data ?? []).slice(0, 8).map((path) => ({
+    // Subagents first (`@agent-name` asks Claude to use one), then files and folders.
+    const q = trigger.query.toLowerCase().replace(/^agent-/, '');
+    const agents = (completions.data?.agents ?? [])
+      .filter((a: Agent) => q.length > 0 ? a.name.toLowerCase().includes(q) : true)
+      .slice(0, 3)
+      .map((a: Agent) => ({ key: `agent:${a.name}`, label: `agent-${a.name}`, detail: a.description, insert: `@agent-${a.name} `, icon: 'agent' as const }));
+    const list = (files.data ?? []).slice(0, 8 - agents.length).map((path) => ({
       key: path,
       label: path.replace(/\/$/, '').split('/').pop() + (path.endsWith('/') ? '/' : ''),
       detail: path,
       insert: `@${path}${path.endsWith('/') ? '' : ' '}`,
       icon: path.endsWith('/') ? ('folder' as const) : ('file' as const),
     }));
-    return { items: list, loading: files.isLoading };
-  }, [trigger, commands.data, commands.isLoading, files.data, files.isLoading]);
+    return { items: [...agents, ...list], loading: files.isLoading };
+  }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading]);
 }
 
 export function Composer({
@@ -106,6 +133,7 @@ export function Composer({
   onSettings,
   models,
   onSend,
+  onShell,
   onStop,
   placeholder = 'Message Claude',
   autoFocus,
@@ -117,14 +145,16 @@ export function Composer({
   settings: RunSettings;
   onSettings: (settings: RunSettings) => void;
   models: ModelOption[] | undefined;
-  onSend: (text: string, attachments: Attachment[]) => void;
+  onSend: (text: string, attachments: Attachment[], mode: SendMode) => void;
+  /** Runs a `!` command in the session's folder; without it, `!` is ordinary text. */
+  onShell?: (command: string) => void;
   onStop: () => void;
   placeholder?: string;
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
   cwd?: string;
-  /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. */
-  draft?: { text: string; key: number };
+  /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. `append` adds it after what is there. */
+  draft?: { text: string; key: number; append?: boolean };
   disabled?: boolean;
 }) {
   const [text, setText] = useState(draft?.text ?? '');
@@ -140,7 +170,7 @@ export function Composer({
   const efforts = model?.efforts ?? [];
   const canUltra = efforts.includes('xhigh');
   const modes = PERMISSION_MODES.filter((m) => m.value !== 'auto' || model?.supportsAuto !== false);
-  const mode = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
+  const permission = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
 
@@ -155,16 +185,55 @@ export function Composer({
 
   useEffect(() => {
     if (!draft) return;
-    setText(draft.text);
+    const next = draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
+    setText(next);
     requestAnimationFrame(() => {
       const el = area.current;
       if (!el) return;
       el.focus();
-      el.setSelectionRange(draft.text.length, draft.text.length);
-      setCaret(draft.text.length);
+      el.setSelectionRange(next.length, next.length);
+      setCaret(next.length);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
+
+  // While Claude works: Steer (Claude reads it at its next step) or Queue (after this turn). Remembered per message.
+  const [mode, setMode] = useState<SendMode>(() => getPrefs().sendWhileBusy);
+  useEffect(() => {
+    if (!busy) setMode(getPrefs().sendWhileBusy);
+  }, [busy]);
+  const shell = Boolean(onShell) && text.startsWith('!');
+
+  // Dictation: what you say goes into the box, to read over before sending.
+  const [listening, setListening] = useState(false);
+  const recognition = useRef<Recognition | undefined>(undefined);
+  const dictate = () => {
+    if (listening) {
+      recognition.current?.stop();
+      return;
+    }
+    if (!SpeechRecognition) return;
+    const rec = new SpeechRecognition();
+    rec.lang = navigator.language || 'en-US';
+    rec.interimResults = true;
+    rec.continuous = true;
+    const before = text;
+    rec.onresult = (event) => {
+      let said = '';
+      for (let i = 0; i < event.results.length; i += 1) said += event.results[i]![0]!.transcript;
+      setText(`${before}${before && !/\s$/.test(before) ? ' ' : ''}${said.trimStart()}`);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    try {
+      rec.start();
+      recognition.current = rec;
+      setListening(true);
+    } catch {
+      setListening(false);
+    }
+  };
+  useEffect(() => () => recognition.current?.stop(), []);
 
   useEffect(() => {
     const el = area.current;
@@ -191,7 +260,16 @@ export function Composer({
 
   const submit = () => {
     if (!canSend) return;
-    onSend(text.trim(), uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])));
+    if (shell) {
+      const command = text.slice(1).trim();
+      if (!command) return;
+      onShell!(command);
+      setText('');
+      setCaret(0);
+      return;
+    }
+    recognition.current?.stop();
+    onSend(text.trim(), uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), mode);
     setText('');
     setCaret(0);
     for (const u of uploads) if (u.preview) URL.revokeObjectURL(u.preview);
@@ -257,7 +335,7 @@ export function Composer({
         <div className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-w-3xl overflow-hidden rounded-2xl border border-line bg-panel shadow-xl" role="listbox">
           {suggesting && suggestions.length === 0 && <div className="flex justify-center py-3"><Loader2 className="size-4 animate-spin text-faint" /></div>}
           {suggestions.map((s, i) => {
-            const Icon = s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : FileText;
+            const Icon = s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : s.icon === 'agent' ? Bot : FileText;
             return (
               <button
                 key={s.key}
@@ -317,7 +395,7 @@ export function Composer({
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onPaste={onPaste}
           onKeyDown={onKeyDown}
-          className="block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50"
+          className={`block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50 ${shell ? 'font-mono text-[15px]' : ''}`}
         />
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
           <button
@@ -333,32 +411,45 @@ export function Composer({
             e.target.value = '';
           }} />
           {/* Model, effort and speed share one chip, so the row fits a phone; it scrolls with a fade if not. */}
+          {shell ? (
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-[12.5px] text-muted">
+              <SquareTerminal className="size-3.5 shrink-0" />
+              <span className="truncate">Runs in the session’s folder; Claude sees the output with your next message</span>
+            </div>
+          ) : (
           <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pr-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
             <Chip label="Model, effort and speed" onClick={() => setSheet('model')}>
-              <span className="max-w-28 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
-              {settings.effort && <span className="text-faint">· {EFFORT_SHORT[settings.effort] ?? settings.effort}</span>}
-              {canUltra && settings.ultracode && <Sparkles className="size-3.5 text-run" aria-label="Ultracode on" />}
-              {model?.supportsFast && settings.fast && <Zap className="size-3.5 fill-current text-wait" aria-label="Fast mode on" />}
-              <ChevronDown className="size-3.5 opacity-60" />
+              <span className="max-w-32 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
+              {settings.effort && <span className="text-faint">{EFFORT_SHORT[settings.effort] ?? settings.effort}</span>}
+              {canUltra && settings.ultracode && <Sparkles className="size-3 text-faint" aria-label="Ultracode on" />}
+              {model?.supportsFast && settings.fast && <Zap className="size-3 text-faint" aria-label="Fast mode on" />}
             </Chip>
-            <Chip label="Permission mode" tone={mode.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
-              {mode.short}
-              <ChevronDown className="size-3.5 opacity-60" />
+            <span aria-hidden className="h-3.5 w-px shrink-0 bg-line" />
+            <Chip label="Permission mode" tone={permission.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
+              {permission.short}
             </Chip>
-            {cwd && !text && (
-              <Chip label="Mention a file" onClick={() => {
-                setText('@');
-                setCaret(1);
-                requestAnimationFrame(() => {
-                  area.current?.focus();
-                  area.current?.setSelectionRange(1, 1);
-                });
-              }}>
-                <AtSign className="size-3.5" />
-              </Chip>
-            )}
           </div>
-          {busy && !canSend ? (
+          )}
+          {busy && canSend && !shell && (
+            <button
+              type="button"
+              onClick={() => setMode((m) => (m === 'steer' ? 'queue' : 'steer'))}
+              title={mode === 'steer' ? 'Claude reads it at its next step. Tap to send it after this turn instead.' : 'Sent when this turn ends. Tap to send it at Claude’s next step instead.'}
+              className="h-8 shrink-0 rounded-full px-2 text-[12.5px] text-muted hover:bg-hover hover:text-fg"
+            >
+              {mode === 'steer' ? 'Steer' : 'Queue'}
+            </button>
+          )}
+          {listening || (!busy && !canSend && !uploading && SpeechRecognition && !disabled) ? (
+            <button
+              type="button"
+              aria-label={listening ? 'Stop dictation' : 'Dictate'}
+              onClick={dictate}
+              className={`grid size-9 shrink-0 place-items-center rounded-full transition-colors ${listening ? 'bg-danger text-white' : 'text-muted hover:bg-hover hover:text-fg'}`}
+            >
+              {listening ? <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" /><Square className="relative size-3 fill-current" /></span> : <Mic className="size-[18px]" />}
+            </button>
+          ) : busy && !canSend ? (
             <button type="button" aria-label="Stop" onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg">
               <Square className="size-3.5 fill-current" />
             </button>
@@ -370,7 +461,7 @@ export function Composer({
               onClick={submit}
               className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg transition-opacity disabled:opacity-25"
             >
-              <ArrowUp className="size-[18px]" />
+              {shell ? <SquareTerminal className="size-[17px]" /> : <ArrowUp className="size-[18px]" />}
             </button>
           )}
         </div>
@@ -434,7 +525,7 @@ export function Composer({
 
       <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
         {modes.map((m) => (
-          <SheetOption key={m.value} label={m.label} description={m.description} selected={m.value === mode.value} onSelect={() => {
+          <SheetOption key={m.value} label={m.label} description={m.description} selected={m.value === permission.value} onSelect={() => {
             set({ permissionMode: m.value as PermissionMode });
             setSheet(undefined);
           }} />

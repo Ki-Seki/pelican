@@ -22,10 +22,13 @@ export type Item =
     command?: { name: string; args: string };
     timestamp?: number;
     pending?: boolean;
+    queued?: boolean;
+    steered?: boolean;
   }
   | { kind: 'assistant'; key: string; parts: Part[]; timestamp?: number; model?: string }
   | { kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
   | { kind: 'compact'; key: string; summary: string }
+  | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; timestamp?: number }
   | { kind: 'day'; key: string; timestamp: number };
 
 const tag = (text: string, name: string) => {
@@ -38,13 +41,22 @@ const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
 
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
-  | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string };
+  | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
+  | { kind: 'shell'; command: string; stdout: string; stderr: string };
+
+const unescape = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 /** Splits what Claude Code wraps in tags out of a user message's text. */
 function classifyUserText(raw: string): Classified | undefined {
   const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   if (!text) return undefined;
   if (text.includes('<local-command-caveat>')) return undefined;
+  // A `!` command and its output (Claude Code's bash mode), from any client.
+  const bash = tag(text, 'bash-input');
+  if (bash !== undefined) {
+    return { kind: 'shell', command: unescape(bash), stdout: unescape(tag(text, 'bash-stdout') ?? ''), stderr: unescape(tag(text, 'bash-stderr') ?? '') };
+  }
+  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) return undefined;
   const commandName = tag(text, 'command-name');
   if (commandName) {
     return { kind: 'user', text: '', images: [], command: { name: commandName, args: tag(text, 'command-args') ?? '' } };
@@ -110,7 +122,12 @@ export function buildItems(messages: ChatMessage[]): Item[] {
           images,
           ...(message.timestamp ? { timestamp: message.timestamp } : {}),
           ...(message.pending ? { pending: true } : {}),
+          ...(message.queued ? { queued: true } : {}),
+          ...(message.steered ? { steered: true } : {}),
         }, message.timestamp);
+        turn = undefined;
+      } else if (classified.kind === 'shell') {
+        push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) });
         turn = undefined;
       } else {
         push({ ...classified, key: message.uuid });

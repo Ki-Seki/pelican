@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs · Pelican</title>
+<meta name="description" content="Install Pelican, reach it from your phone, and everything it does: sessions, approvals, steer and queue, ! commands, changes and files, rewind, configuration and security.">
+<meta name="theme-color" content="#fbfbfa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0c0d" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Pelican docs">
+<meta property="og:image" content="https://ki-seki.github.io/pelican/assets/shots/og.png">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<script type="module" src="assets/site.js"></script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="">Pelican</a>
+    <nav class="nav" aria-label="Site">
+      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="demo/" class="wide-only">Live demo</a>
+      <a class="gh" href="https://github.com/Ki-Seki/pelican"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.230-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.330-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap docs-layout">
+  <nav class="toc" aria-label="On this page">
+    <a href="#install">Install</a>
+    <a href="#phone">Use it from your phone</a>
+    <a href="#using">Using Pelican</a>
+    <a class="sub" href="#sessions">Sessions</a>
+    <a class="sub" href="#reading">Reading a session</a>
+    <a class="sub" href="#composer">Talking to Claude</a>
+    <a class="sub" href="#working">While Claude works</a>
+    <a class="sub" href="#shell">! commands</a>
+    <a class="sub" href="#changes">Changes and files</a>
+    <a class="sub" href="#visuals">Visuals and pages</a>
+    <a class="sub" href="#rewind">Rewind and branches</a>
+    <a class="sub" href="#more">MCP, usage, tasks</a>
+    <a href="#config">Configuration</a>
+    <a href="#security">Security</a>
+    <a href="#how">How it works</a>
+    <a href="#compare">Compared with</a>
+    <a href="#faq">Questions</a>
+    <a href="#develop">Development</a>
+  </nav>
+
+  <article class="docs">
+    <h1>Pelican docs</h1>
+    <p class="lead">Pelican runs next to Claude Code on your computer and gives it a web app made for a phone. This page covers setting it up and everything it does.</p>
+
+    <section id="install">
+      <h2>Install</h2>
+      <p>You need Node 22.12 or newer, and Claude Code signed in on the same computer (run <code>claude</code> once and log in, or set an API key the way Claude Code reads it). Pelican brings its own copy of Claude Code through the Agent SDK, so a separate install is optional.</p>
+      <pre><code><span class="c"># try it first, with made-up sessions</span>
+npx pelican-cc --demo
+
+<span class="c"># install it</span>
+npm install -g pelican-cc
+pelican</code></pre>
+      <p>Open <code>http://localhost:7860</code>: your sessions are there already. When Pelican listens beyond this computer it also prints a QR code to open it on your phone, and Settings shows one for whatever address you are using.</p>
+      <p>To run it from a clone instead: <code>git clone https://github.com/Ki-Seki/pelican && cd pelican && npm ci && npm run build && npm link</code>.</p>
+      <div class="callout"><b>Keep it running.</b> Pelican only answers while it runs. Start it at login with a launchd agent on macOS or a systemd user service on Linux, or in a <code>tmux</code> session.</div>
+    </section>
+
+    <section id="phone">
+      <h2>Use it from your phone</h2>
+      <p>Pelican listens on <code>127.0.0.1</code>, so only your computer can reach it until you choose a way in. Whoever can use Pelican can run Claude Code as you, so pick one that keeps everyone else out.</p>
+      <h3>Tailscale (recommended)</h3>
+      <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need.</p>
+      <pre><code>pelican password             <span class="c"># once; protects Pelican beyond this computer</span>
+tailscale serve --bg 7860    <span class="c"># https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</span></code></pre>
+      <p>Open <code>https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</code> on your phone. If changes are refused with a 403, add that address to <code>PELICAN_ALLOWED_ORIGINS</code>.</p>
+      <h3>An SSH tunnel</h3>
+      <p>From a laptop, or a phone app that forwards ports (Termius, Blink): <code>ssh -N -L 7860:127.0.0.1:7860 you@computer</code>, then open <code>http://localhost:7860</code>. No password is needed, since the page is local to the phone.</p>
+      <h3>Your own reverse proxy</h3>
+      <p>Put Pelican behind Caddy or nginx with HTTPS. Tell it the public address, and either set a password or let the proxy authenticate:</p>
+      <pre><code>PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican --no-auth</code></pre>
+      <p>Pelican works under any path prefix, so <code>https://example.com/pelican/</code> is fine.</p>
+      <h3>On the home network</h3>
+      <p><code>pelican password && pelican --host 0.0.0.0</code> works across your Wi-Fi, but over plain HTTP: the password travels in the clear and notifications are off. Prefer Tailscale.</p>
+      <h3>Add it to your Home Screen</h3>
+      <p>In Safari, Share → Add to Home Screen; in Chrome, Install app. Pelican then opens full screen, and on an iPhone notifications only work this way.</p>
+    </section>
+
+    <section id="using">
+      <h2>Using Pelican</h2>
+
+      <h3 id="sessions">Sessions</h3>
+      <p>The list shows every Claude Code session on the computer, whichever app started it: the terminal, Claude Desktop, VS Code or Pelican. A session another app is working on shows <b>Working in Claude Desktop</b> (or the terminal, or your editor), and one waiting for you shows <b>Needs you</b>. A dot marks what changed since you last looked.</p>
+      <p>Search covers titles, folders and the latest reply. Filter by project; sessions started without a project share one <b>Scratch</b> filter, and runs in the system’s temp folder (usually started by another session) stay out of <b>All</b> unless Settings says otherwise. Group by time or by project, with detailed or compact rows, from the list button.</p>
+
+      <h3 id="reading">Reading a session</h3>
+      <p>Three views, from the session menu or as the default in Settings: <b>Summary</b> shows your prompts and Claude’s replies with the steps counted, <b>Normal</b> folds long runs of steps, <b>Verbose</b> opens every step and Claude’s thinking. Tool calls show what they did the way you would check it: diffs for edits, the command and its output, images. Plans, questions and the task list get their own cards; an Agent call opens the steps its subagent took.</p>
+      <p>The whole history is there: scroll up to the first prompt. A divider marks each compaction; open it to read the summary Claude carried on from. For a session running in Pelican, each turn shows its time, tokens and cost, and a ring shows how full the context is.</p>
+
+      <h3 id="composer">Talking to Claude</h3>
+      <ul>
+        <li>The first chip picks the model, the effort level (up to max), fast mode and ultracode; the second picks the permission mode: ask before acting, accept edits, plan first, auto, or bypass.</li>
+        <li>Type <code>/</code> for commands and skills, <code>@</code> for files, folders and subagents. Attach photos and files, or paste them.</li>
+        <li>Tap the microphone, where Send is when the box is empty, to dictate.</li>
+        <li>Enter sends on a computer and starts a new line on a phone; Settings changes that.</li>
+      </ul>
+
+      <h3 id="working">While Claude works</h3>
+      <p>Approvals appear above the composer with the diff or the command: <b>Allow</b>, <b>Always allow</b> (Claude Code remembers the rule) or <b>Deny</b> with a note. Questions and plans are answered the same way.</p>
+      <p>A message you send while Claude works <b>steers</b> it: Claude reads it at its next step, as when you type in the terminal. Tap <b>Steer</b> next to Send to <b>queue</b> it instead, so it waits for the turn to end and starts the next one. Settings picks which comes first. <b>Stop</b> interrupts the turn.</p>
+
+      <h3 id="shell"><code>!</code> commands</h3>
+      <p>Start a message with <code>!</code> to run a command in the session’s folder, like Claude Code’s bash mode: <code>!git log --oneline -5</code>. The output lands in the conversation, and Claude reads it with your next message. Commands run in your login shell, without a terminal, for up to two minutes.</p>
+
+      <h3 id="changes">Changes and files</h3>
+      <p>The folder button in a session’s header opens what is in its folder. <b>Changes</b> lists every file changed since the last commit with its line counts; open one for its diff. <b>Files</b> browses the folder; open a file to read it with highlighting, or <b>Mention</b> it in your message.</p>
+
+      <h3 id="visuals">Visuals and pages</h3>
+      <p>What Claude makes to be looked at is shown that way. Charts and diagrams it draws as Claude Desktop visuals appear in the conversation, a page or SVG it writes opens rendered (with its code a tap away, and full screen), <code>html</code> and <code>svg</code> blocks in a reply can be previewed, and files it sends you show as pictures, pages or documents. All of it runs in a sandboxed frame that cannot reach Pelican, your cookies or its API.</p>
+
+      <h3 id="rewind">Rewind and branches</h3>
+      <p>Tap one of your prompts for its actions. <b>Rewind code</b> puts the files Claude changed since that prompt back the way they were, after showing which ones; the conversation stays. <b>Edit and resend</b> copies the conversation up to that prompt into a new session with the prompt ready to change; the original stays. The session menu also has <b>Branch</b> (a full copy), <b>Rename</b>, <b>Export as Markdown</b>, <b>Delete</b>, and the command that continues the session in a terminal.</p>
+
+      <h3 id="more">MCP servers, usage and background tasks</h3>
+      <p>The session menu lists the session’s MCP servers and whether they connected; while Claude runs in Pelican, each can be turned off or reconnected. Settings shows your account and the plan’s usage limits as Claude Code reports them, and the session warns as a limit gets close. Commands and agents Claude runs in the background appear above the composer, each with a Stop.</p>
+      <p>Notifications, turned on in Settings, arrive when a turn finishes or Claude needs you; tapping one opens the session.</p>
+    </section>
+
+    <section id="config">
+      <h2>Configuration</h2>
+      <table>
+        <thead><tr><th>Option</th><th>Environment</th><th>Default</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><code>-p, --port</code></td><td><code>PELICAN_PORT</code></td><td><code>7860</code></td><td>Port to listen on</td></tr>
+          <tr><td><code>-H, --host</code></td><td><code>PELICAN_HOST</code></td><td><code>127.0.0.1</code></td><td>Address to listen on; any other needs a password</td></tr>
+          <tr><td><code>--name</code></td><td><code>PELICAN_MACHINE</code></td><td>host name</td><td>Name shown for this computer</td></tr>
+          <tr><td><code>--no-auth</code></td><td><code>PELICAN_AUTH=none</code></td><td></td><td>Never ask for a password, when a proxy in front authenticates</td></tr>
+          <tr><td><code>--demo</code></td><td></td><td></td><td>Made-up sessions; nothing runs</td></tr>
+          <tr><td></td><td><code>PELICAN_ALLOWED_ORIGINS</code></td><td></td><td>Comma-separated origins allowed to make changes, such as a proxy’s public URL</td></tr>
+          <tr><td></td><td><code>PELICAN_ALLOWED_HOSTS</code></td><td></td><td>Host names answered without a password, besides this computer’s (<code>*</code> for any)</td></tr>
+          <tr><td></td><td><code>PELICAN_SESSION_URL</code></td><td></td><td>Where a tapped notification opens a session (<code>{id}</code> is replaced), for a page that embeds Pelican</td></tr>
+          <tr><td></td><td><code>PELICAN_IDLE_CLOSE_MS</code></td><td>30 min</td><td>How long an idle Claude process stays open; the next message resumes the session</td></tr>
+          <tr><td></td><td><code>PELICAN_CLAUDE_PATH</code></td><td>bundled</td><td>The Claude Code executable to run</td></tr>
+          <tr><td></td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>~/.claude</code></td><td>Where Claude Code keeps its sessions</td></tr>
+          <tr><td></td><td><code>PELICAN_CONFIG_DIR</code></td><td><code>~/.config/pelican</code></td><td>Where the password hash is kept</td></tr>
+          <tr><td></td><td><code>PELICAN_STATE_DIR</code></td><td><code>~/.local/state/pelican</code></td><td>Uploads, push keys and subscriptions</td></tr>
+        </tbody>
+      </table>
+      <p><code>pelican password</code> sets or changes the password and <code>pelican password --off</code> removes it; either signs every browser out.</p>
+    </section>
+
+    <section id="security">
+      <h2>Security</h2>
+      <p>Treat access to Pelican like SSH access: it can read your sessions and run Claude Code, and so commands, as you.</p>
+      <ul>
+        <li><b>Loopback by default.</b> Pelican listens on <code>127.0.0.1</code> and refuses any other address without a password, unless you pass <code>--no-auth</code>.</li>
+        <li><b>The password</b> is set on the computer itself, never over the network, and kept as a scrypt hash readable only by you. The sign-in cookie is signed with a secret that changes with the password. Each client gets ten attempts every ten minutes.</li>
+        <li><b>DNS rebinding.</b> Without a password, the server answers only to this computer’s names, loopback and the ones you configure, so a web page cannot point its own domain at <code>127.0.0.1</code> and read your sessions through your browser.</li>
+        <li><b>Cross-site requests.</b> Anything that changes something, and the WebSocket, must come from Pelican’s own page or an origin you allowed.</li>
+        <li><b>No copies.</b> Pelican reads Claude Code’s transcripts where Claude Code writes them. It stores uploads, push keys and subscriptions in its state folder, and sends nothing anywhere but your browser and, for notifications, your browser’s push service.</li>
+      </ul>
+      <p>Report a vulnerability privately through <a href="https://github.com/Ki-Seki/pelican/security/advisories/new">GitHub security advisories</a>.</p>
+    </section>
+
+    <section id="how">
+      <h2>How it works</h2>
+      <figure><img src="assets/how-it-works.svg" width="960" height="500" alt="Your phone talks to the Pelican server on your computer, which runs Claude Code through the Agent SDK and reads the transcripts in ~/.claude that every Claude Code app writes"></figure>
+      <ol>
+        <li>The web app talks to the server over REST and a WebSocket, which carries Claude’s reply as it is written, permission requests and status changes.</li>
+        <li>To run a turn, the server starts Claude Code with the Agent SDK, resuming the session, and passes your approvals back. An idle process closes after a while; the next message resumes the session.</li>
+        <li>Everything else comes from Claude Code’s own files. The transcripts in <code>~/.claude/projects</code>, read incrementally and across compactions, give each session’s history, whichever app wrote it; they are followed while anyone watches. The process registry in <code>~/.claude/sessions</code> tells which sessions another app is working on.</li>
+      </ol>
+    </section>
+
+    <section id="compare">
+      <h2>Compared with</h2>
+      <p>There are good ways to reach Claude Code from a phone. What sets Pelican apart is that it works with the sessions you already have, and runs entirely on your computer.</p>
+      <ul>
+        <li><b>Claude Code Remote Control</b> (Anthropic) continues a session you start with <code>claude --rc</code> in the Claude app, through your claude.ai account. Pelican needs no flag and no account: every session is there, also ones started in Claude Desktop or your editor, and API keys and cloud providers work.</li>
+        <li><b>Happy</b> is a polished native app that relays end-to-end encrypted sessions you start with <code>happy</code> instead of <code>claude</code>. Pelican has no relay and no wrapper; your phone talks to your computer directly, over your own network.</li>
+        <li><b>CloudCLI</b> is a web UI for several coding agents, with a file tree, git and a terminal. Pelican does one agent, Claude Code, as far as it goes: steer and queue, rewind, branches, subagents, MCP, usage, the whole history across compactions, on a screen made for a phone.</li>
+      </ul>
+    </section>
+
+    <section id="faq">
+      <h2>Questions</h2>
+      <dl class="qa">
+        <dt>Does it send my code anywhere?</dt>
+        <dd>No. Pelican talks to your browser and to Claude Code on the same computer. Claude Code talks to Anthropic as it always does.</dd>
+        <dt>Does it work with an API key, Bedrock or Vertex?</dt>
+        <dd>Yes: Pelican uses whatever Claude Code is set up with.</dd>
+        <dt>Can I use it while the same session runs in the terminal?</dt>
+        <dd>Yes. Pelican shows that another app is working on it and follows along. Sending from Pelican then starts a second Claude in that conversation, so wait for the other one to finish first.</dd>
+        <dt>Several computers?</dt>
+        <dd>Run Pelican on each; each is its own page. Add them all to your Home Screen.</dd>
+        <dt>Windows?</dt>
+        <dd>Pelican is developed on macOS and Linux. It should run on Windows, untested so far; reports are welcome.</dd>
+      </dl>
+    </section>
+
+    <section id="develop">
+      <h2>Development</h2>
+      <pre><code>git clone https://github.com/Ki-Seki/pelican && cd pelican
+npm ci
+npm run dev          <span class="c"># server on :7860, web app on :5173, both reloading</span>
+npm test && npm run typecheck</code></pre>
+      <p><code>npm run build && npm run demo</code> serves the build with made-up sessions. The pictures come from <code>npm run screenshots</code> and <code>node scripts/icons.mjs</code>, and this site with its live demo from <code>node scripts/site.mjs</code>. More in <a href="https://github.com/Ki-Seki/pelican/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+    </section>
+  </article>
+</div>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="">Pelican</a>
+    <nav aria-label="Footer">
+      <a href="docs.html">Docs</a>
+      <a href="demo/">Live demo</a>
+      <a href="https://github.com/Ki-Seki/pelican">GitHub</a>
+      <a href="https://github.com/Ki-Seki/pelican/blob/main/LICENSE">MIT license</a>
+    </nav>
+    <p>Pelican is an independent project, not made by or affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+  </div>
+</footer>
+
+</body>
+</html>

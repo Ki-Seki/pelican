@@ -15,21 +15,29 @@ import type {
 
 import type {
   Attachment,
+  BackgroundTask,
   ChatMessage,
+  McpServer,
   PartialBlock,
   PermissionDecision,
   PermissionRequest,
+  RewindResult,
   RunSettings,
   RunState,
+  SendMode,
   SessionStatus,
+  ShellResult,
 } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
+import { toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
 import { sessionInfo } from './sessions.js';
+import { bashModeText } from './shell.js';
 import { refreshTranscriptIndex } from './transcripts.js';
+import { recordLimit } from './usage.js';
 
 /** Messages the user sends, handed to the Claude process as they come. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -73,6 +81,8 @@ export type SendInput = {
   settings: RunSettings;
   /** Id for the user message, so the client's optimistic copy matches the transcript row. */
   uuid?: string;
+  /** While a turn runs: join it at Claude's next step, or wait for it to end. */
+  mode?: SendMode;
 };
 
 const sdkModel = (model: string | undefined) => (model && model !== 'default' ? model : undefined);
@@ -94,6 +104,11 @@ export class SessionRun {
   private interrupted = false;
   private lastTurn?: RunState['lastTurn'];
   private context?: RunState['context'];
+  private activity?: RunState['activity'];
+  private tasks: BackgroundTask[] = [];
+  /** Messages waiting for the turn to end, published when it does. */
+  private queued: ChatMessage[] = [];
+  private suggestion?: string;
 
   constructor(
     readonly sessionId: string,
@@ -119,6 +134,9 @@ export class SessionRun {
         },
       } : {}),
       includePartialMessages: true,
+      // Lets "Rewind code" put files back the way they were before a prompt.
+      enableFileCheckpointing: true,
+      promptSuggestions: true,
       settingSources: ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
@@ -146,6 +164,10 @@ export class SessionRun {
       ...(this.error ? { error: this.error } : {}),
       ...(this.lastTurn ? { lastTurn: this.lastTurn } : {}),
       ...(this.context ? { context: this.context } : {}),
+      ...(this.activity ? { activity: this.activity } : {}),
+      ...(this.tasks.length > 0 ? { tasks: this.tasks } : {}),
+      ...(this.queued.length > 0 ? { queued: this.queued.map((m) => m.uuid) } : {}),
+      ...(this.suggestion && !this.busy ? { suggestion: this.suggestion } : {}),
     };
   }
 
@@ -212,19 +234,77 @@ export class SessionRun {
     let text = input.text;
     if (fileLines.length > 0) text = `${text}${text ? '\n\n' : ''}Attached files:\n${fileLines.join('\n')}`;
     if (text) content.push({ type: 'text', text });
+    // A running turn takes a new message at Claude's next step, unless it should wait for the turn to end.
+    const queue = this.busy && input.mode === 'queue';
     const message = {
       type: 'user',
       uuid,
       session_id: this.sessionId,
       parent_tool_use_id: null,
       origin: { kind: 'human' },
+      ...(this.busy ? { priority: queue ? 'later' : 'next' } : {}),
       message: { role: 'user', content },
     } as unknown as SDKUserMessage;
     this.error = undefined;
-    this.setBusy(true);
+    this.suggestion = undefined;
     const chat = toChatMessage({ type: 'user', uuid, message: { role: 'user', content } });
+    if (queue) {
+      if (chat) this.queued.push({ ...chat, timestamp: Date.now() });
+      this.emit();
+    } else {
+      this.setBusy(true);
+      if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
+    }
+    this.input.push(message);
+  }
+
+  /**
+   * Adds a `!` command and its output to the conversation without starting a
+   * turn, the way Claude Code's bash mode does: Claude reads it with the next message.
+   */
+  async appendShell(result: ShellResult): Promise<void> {
+    const uuid = randomUUID();
+    const text = bashModeText(result);
+    const message = {
+      type: 'user',
+      uuid,
+      session_id: this.sessionId,
+      parent_tool_use_id: null,
+      origin: { kind: 'human' },
+      shouldQuery: false,
+      message: { role: 'user', content: text },
+    } as unknown as SDKUserMessage;
+    const chat = toChatMessage({ type: 'user', uuid, message: { role: 'user', content: text } });
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     this.input.push(message);
+  }
+
+  /** Puts files back the way they were before the prompt `uuid`; `dryRun` only says what would change. */
+  async rewind(uuid: string, dryRun: boolean): Promise<RewindResult> {
+    if (!this.q) throw new Error('Claude is not running in this session');
+    const result = await this.q.rewindFiles(uuid, { dryRun });
+    return {
+      canRewind: result.canRewind,
+      ...(result.error ? { error: result.error } : {}),
+      ...(result.filesChanged ? { files: result.filesChanged } : {}),
+      ...(typeof result.insertions === 'number' ? { insertions: result.insertions } : {}),
+      ...(typeof result.deletions === 'number' ? { deletions: result.deletions } : {}),
+    };
+  }
+
+  async mcpServers(): Promise<McpServer[]> {
+    if (!this.q) return [];
+    return toMcpServers(await this.q.mcpServerStatus());
+  }
+
+  async setMcpServer(name: string, change: { enabled?: boolean; reconnect?: boolean }): Promise<void> {
+    if (!this.q) throw new Error('Claude is not running in this session');
+    if (change.reconnect) await this.q.reconnectMcpServer(name);
+    if (change.enabled !== undefined) await this.q.toggleMcpServer(name, change.enabled);
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    await this.q?.stopTask(taskId);
   }
 
   async applySettings(next: RunSettings): Promise<void> {
@@ -383,6 +463,7 @@ export class SessionRun {
           case 'user': {
             if (raw.parent_tool_use_id) break;
             if (message.type === 'assistant') this.completedBlocks += 1;
+            if (this.activity?.kind === 'retrying') this.activity = undefined;
             const chat = toChatMessage(raw);
             if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: chat.timestamp ?? Date.now() } satisfies ChatMessage);
             this.emit(true);
@@ -395,7 +476,25 @@ export class SessionRun {
               else if (state === 'idle') this.setBusy(false);
             } else if (message.subtype === 'init') {
               void refreshTranscriptIndex().then(sessionsChanged);
+            } else if (message.subtype === 'status') {
+              this.activity = message.status === 'compacting' ? { kind: 'compacting' } : undefined;
+              this.emit();
+            } else if (message.subtype === 'api_retry') {
+              this.activity = { kind: 'retrying', attempt: message.attempt, max: message.max_retries, delayMs: message.retry_delay_ms };
+              this.emit();
+            } else if (message.subtype === 'background_tasks_changed') {
+              this.tasks = message.tasks
+                .filter((t) => !t.ambient)
+                .map((t) => ({ id: t.task_id, description: t.description, type: t.subagent_type ?? t.task_type }));
+              this.emit();
             }
+            break;
+          case 'rate_limit_event':
+            recordLimit(message.rate_limit_info);
+            break;
+          case 'prompt_suggestion':
+            this.suggestion = message.suggestion;
+            this.emit();
             break;
           case 'result': {
             const stopped = this.interrupted;
@@ -409,6 +508,9 @@ export class SessionRun {
               ...(typeof message.total_cost_usd === 'number' ? { costUsd: message.total_cost_usd } : {}),
               ...(typeof message.usage?.output_tokens === 'number' ? { outputTokens: message.usage.output_tokens } : {}),
             };
+            this.activity = undefined;
+            // Messages that waited for this turn go in now: the next turn answers them.
+            for (const waiting of this.queued.splice(0)) await feedFor(this.sessionId).publish(waiting);
             this.setBusy(false);
             this.emit();
             void this.readContext();
@@ -491,6 +593,23 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
   run.start();
   await run.send(input);
   return run.sessionId;
+}
+
+/**
+ * The session's Claude process, started (resumed, with no turn) when there is
+ * none: for what only a running process can do, like rewinding files.
+ */
+export async function ensureRun(sessionId: string, settings: RunSettings = {}): Promise<SessionRun> {
+  if (config.demo) throw new Error('This is the demo: nothing runs.');
+  const existing = getRun(sessionId);
+  if (existing) return existing;
+  const info = await sessionInfo(sessionId);
+  const cwd = info?.cwd;
+  if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const run = new SessionRun(sessionId, cwd, settings, true);
+  runs.set(sessionId, run);
+  run.start();
+  return run;
 }
 
 /** Closes Claude processes that have been idle for a while; the next message resumes them. */

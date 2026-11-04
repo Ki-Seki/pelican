@@ -46,5 +46,6 @@ takes a screenshot with headless Chrome (set `CHROME` if it is not in the usual 
 
 Keep the interface calm: few colors, no decoration that does not carry meaning, and text that says
 what happens in plain words. In code, prefer a clear name to a comment, and write a comment for why,
-not what. The pictures in `docs/` come from `npm run screenshots` and `node scripts/icons.mjs`;
-redraw them rather than editing the files.
+not what. The pictures in `docs/` come from `npm run screenshots`, `node scripts/video.mjs` (needs
+ffmpeg) and `node scripts/icons.mjs`; redraw them rather than editing the files. The site and its
+live demo build with `node scripts/site.mjs <dir>`.

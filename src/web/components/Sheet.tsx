@@ -3,7 +3,19 @@ import { type ReactNode, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 /** A bottom sheet on phones, a centered panel on wider screens. */
-export function Sheet({ open, onClose, title, children, done }: { open: boolean; onClose: () => void; title: string; children: ReactNode; done?: boolean }) {
+export function Sheet({
+  open, onClose, title, children, done, size = 'normal', header,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  done?: boolean;
+  /** large: nearly the whole screen on a phone, wide on a computer, for reading files and diffs. */
+  size?: 'normal' | 'large';
+  /** Shown under the title, outside the scrolling part. */
+  header?: ReactNode;
+}) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -20,7 +32,7 @@ export function Sheet({ open, onClose, title, children, done }: { open: boolean;
       <div
         role="dialog"
         aria-label={title}
-        className="animate-sheet pb-safe relative flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl border border-line bg-panel shadow-2xl sm:rounded-2xl"
+        className={`animate-sheet pb-safe relative flex w-full flex-col rounded-t-2xl border border-line bg-panel shadow-2xl sm:rounded-2xl ${size === 'large' ? 'h-[92dvh] max-w-3xl sm:h-[85dvh]' : 'max-h-[85dvh] max-w-md'}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shrink-0 px-4 pt-2 pb-1">
@@ -33,8 +45,9 @@ export function Sheet({ open, onClose, title, children, done }: { open: boolean;
               </button>
             )}
           </div>
+          {header}
         </div>
-        <div className="min-h-0 overflow-y-auto px-2 pb-2">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">{children}</div>
       </div>
     </div>,
     document.body,

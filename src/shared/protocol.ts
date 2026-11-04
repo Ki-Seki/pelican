@@ -62,6 +62,12 @@ export type ChatMessage = {
   compactSummary?: boolean;
   /** Local-only message shown before the transcript confirms it. */
   pending?: boolean;
+  /** A local message that waits for the running turn to end. */
+  queued?: boolean;
+  /** Sent while Claude was working and read at its next step (Claude Code keeps it as a queued command). */
+  steered?: boolean;
+  /** The id the sending client gave this message, when the transcript row has its own. */
+  sourceUuid?: string;
 };
 
 export type MessagesPage = {
@@ -138,7 +144,52 @@ export type RunState = {
   lastTurn?: { durationMs: number; costUsd?: number; outputTokens?: number };
   /** How full the context window is, when Claude Code reported it. */
   context?: { percent: number; tokens: number; max: number };
+  /** What Claude is doing besides writing: condensing the conversation, or waiting to retry the API. */
+  activity?: { kind: 'compacting' } | { kind: 'retrying'; attempt: number; max: number; delayMs: number };
+  /** Commands and agents running in the background; each can be stopped. */
+  tasks?: BackgroundTask[];
+  /** Messages sent to run after the current turn, oldest first. */
+  queued?: string[];
+  /** Claude Code's guess at what you will ask next, after a turn. */
+  suggestion?: string;
 };
+
+export type BackgroundTask = { id: string; description: string; type: string };
+
+/** While Claude works, a new message joins the turn at Claude's next step (steer) or waits for the turn to end (queue). */
+export type SendMode = 'steer' | 'queue';
+
+/** A `!` command run in the session's folder; Claude sees it with the next message. */
+export type ShellResult = {
+  command: string;
+  stdout: string;
+  stderr: string;
+  /** Exit code; null when it was stopped for taking too long. */
+  code: number | null;
+  durationMs: number;
+  truncated?: boolean;
+};
+
+/** One of the account's usage limits, as Claude Code last reported it. */
+export type UsageLimit = {
+  type: string;
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+  /** 0–1. */
+  utilization?: number;
+  /** ms since epoch. */
+  resetsAt?: number;
+  at: number;
+};
+
+export type Account = { email?: string; organization?: string; plan?: string };
+
+export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
+export type GitStatus = { repo: false } | { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] };
+export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
+export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
+export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };
+export type RewindResult = { canRewind: boolean; error?: string; files?: string[]; insertions?: number; deletions?: number };
+export type Agent = { name: string; description: string };
 
 export type ServerEvent =
   | { type: 'session'; session: SessionSummary }

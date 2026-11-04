@@ -17,6 +17,16 @@ The first public release.
 - `/` commands and `@` files in the composer, ultracode next to effort and fast mode, the task list
   pinned above the composer, how full the context is, and each turn's time, tokens and cost.
 - Images open full screen. A failed send gives the text back to edit.
+- While Claude works, a message steers it (read at its next step) or waits for the turn: tap the
+  word next to Send. Messages sent mid-turn, from any app, show where Claude read them.
+- `!` commands run in the session's folder; Claude reads the output with the next message.
+- Changes and files: every changed file with its diff, and the folder to browse and mention.
+- Rewind code to before any prompt; open the steps a subagent took; MCP servers with their
+  status; the plan's usage limits; background tasks with Stop; suggested next prompts.
+- Charts and diagrams Claude Desktop draws, pages Claude writes, files it sends, and `html` or
+  `svg` blocks render in place, in a sandboxed frame.
+- Dictation in the composer, and a QR code to open Pelican on your phone.
+- Scrolling up while Claude streams stays where you put it.
 
 ## 0.1.0
 

@@ -1,7 +1,8 @@
-import { Check, Copy, Download, GitFork, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Copy, Download, GitFork, Loader2, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 
-import type { RunState, SessionSummary } from '../../shared/protocol';
+import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, resumeCommand, shortPath } from '../lib/format';
 import { setPrefs, usePrefs, type ViewMode } from '../lib/prefs';
@@ -12,6 +13,66 @@ const VIEW_HINT: Record<ViewMode, string> = {
   normal: 'Replies in full, long runs of steps folded.',
   verbose: 'Every step open, with its command, diff or output, and Claude’s thinking.',
 };
+
+const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
+const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', pending: 'Connecting', 'needs-auth': 'Needs sign-in', failed: 'Failed', disabled: 'Off' };
+
+/** The session's MCP servers and whether they work; while Claude runs here, each can be turned off or reconnected. */
+function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ['mcp', sessionId], queryFn: () => api.mcp(sessionId), enabled: open, staleTime: 15_000 });
+  // Servers can be turned on and off only in a Claude process running here.
+  const live = Boolean(data?.live);
+  const [busy, setBusy] = useState<string>();
+  const change = (name: string, patch: { enabled?: boolean; reconnect?: boolean }) => {
+    setBusy(name);
+    api.setMcp(sessionId, name, patch)
+      .then((result) => queryClient.setQueryData(['mcp', sessionId], { servers: result.servers, live: true }))
+      .catch(() => undefined)
+      .finally(() => setBusy(undefined));
+  };
+  const [showAll, setShowAll] = useState(false);
+  if (!isLoading && (data?.servers.length ?? 0) === 0) return null;
+  const servers = data?.servers ?? [];
+  const order: McpServer['status'][] = ['failed', 'connected', 'pending', 'disabled', 'needs-auth'];
+  const sorted = [...servers].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.name.localeCompare(b.name));
+  const signIn = sorted.filter((server) => server.status === 'needs-auth');
+  const shown = showAll ? sorted : sorted.filter((server) => server.status !== 'needs-auth');
+  const connected = servers.filter((server) => server.status === 'connected').length;
+  return (
+    <>
+      <SheetHeading>MCP servers{servers.length > 0 ? ` · ${connected} of ${servers.length} connected` : ''}</SheetHeading>
+      {isLoading && <div className="flex px-3 py-2 text-faint"><Loader2 className="size-4 animate-spin" /></div>}
+      {shown.map((server) => (
+        <div key={server.name} className="flex items-center gap-3 rounded-xl px-3 py-2">
+          <span className={`size-2 shrink-0 rounded-full ${MCP_DOT[server.status]}`} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[14.5px]">{server.name}</div>
+            <div className="truncate text-[12px] text-muted">
+              {MCP_LABEL[server.status]}{server.tools > 0 ? ` · ${server.tools} tools` : ''}{server.scope ? ` · ${server.scope}` : ''}{server.error ? ` · ${server.error}` : ''}
+            </div>
+          </div>
+          {busy === server.name ? <Loader2 className="size-4 animate-spin text-faint" /> : live && (
+            server.status === 'failed' || server.status === 'needs-auth' ? (
+              <button type="button" className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg" onClick={() => change(server.name, { reconnect: true })}>Reconnect</button>
+            ) : (
+              <button type="button" className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg" onClick={() => change(server.name, { enabled: server.status === 'disabled' })}>
+                {server.status === 'disabled' ? 'Turn on' : 'Turn off'}
+              </button>
+            )
+          )}
+        </div>
+      ))}
+      {!showAll && signIn.length > 0 && (
+        <button type="button" onClick={() => setShowAll(true)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-muted hover:bg-hover">
+          <span className="size-2 shrink-0 rounded-full bg-wait" />
+          {signIn.length} more need signing in, in Claude Code or on claude.ai
+        </button>
+      )}
+      {data && !data.live && data.servers.length > 0 && <p className="px-3 pt-0.5 text-[12px] leading-snug text-faint">As a new Claude here would see them. Send a message to turn servers on or off for this session.</p>}
+    </>
+  );
+}
 
 function Detail({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
@@ -180,6 +241,8 @@ export function SessionMenu({
           onSelect={() => !running && setConfirmDelete(true)}
         />
       )}
+
+      <McpServers sessionId={sessionId} open={open} />
 
       <SheetHeading>Details</SheetHeading>
       {cwd && <Detail label="Folder" mono>{shortPath(cwd, home)}</Detail>}
