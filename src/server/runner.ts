@@ -352,6 +352,12 @@ export class SessionRun {
     this.emit();
   }
 
+  /** Settings changed in the composer, applied to Claude now: from its next step, also mid-turn. */
+  async updateSettings(next: RunSettings): Promise<void> {
+    await this.applySettings({ ...this.settings, ...next });
+    this.emit();
+  }
+
   private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, decisionReason }) => {
     const id = randomUUID();
     const request: PermissionRequest = {

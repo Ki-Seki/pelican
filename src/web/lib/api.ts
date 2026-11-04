@@ -101,6 +101,8 @@ export const api = {
   interrupt: (id: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/interrupt`),
   decide: (id: string, requestId: string, decision: PermissionDecision) =>
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}`, decision),
+  /** The composer's settings, applied to the session's running Claude at once. */
+  applySettings: (id: string, settings: RunSettings) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/settings`, { settings }),
   setMode: (id: string, permissionMode: RunSettings['permissionMode']) =>
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/mode`, { permissionMode }),
   rename: (id: string, title: string) => send<{ ok: boolean }>('PATCH', `sessions/${encodeURIComponent(id)}`, { title }),

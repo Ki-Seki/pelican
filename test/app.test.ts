@@ -119,6 +119,11 @@ describe('one-time codes (the phone QR code)', () => {
 });
 
 describe('what a request may carry', () => {
+  it('settings for a running Claude, only of the right shape', async () => {
+    expect((await ask('/api/sessions/abc/settings', { method: 'POST', body: JSON.stringify({}), headers: { 'content-type': 'application/json' } })).status).toBe(400);
+    expect((await ask('/api/sessions/abc/settings', { method: 'POST', body: JSON.stringify({ settings: { effort: 'high' } }), headers: { 'content-type': 'application/json' } })).status).toBe(200);
+  });
+
   it('only the permission modes there are', async () => {
     const response = await ask('/api/sessions/abc/mode', { method: 'POST', body: JSON.stringify({ permissionMode: 'yolo' }), headers: { 'content-type': 'application/json' } });
     expect(response.status).toBe(400);

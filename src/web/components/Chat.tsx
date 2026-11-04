@@ -309,8 +309,9 @@ export function Chat({
     setSettings(next);
     // A change is also the default for new sessions, as /model and /effort are in Claude Code.
     saveDefaults(next);
-    if (sessionId && view.run && next.permissionMode !== settings.permissionMode) {
-      void api.setMode(sessionId, next.permissionMode).catch(() => undefined);
+    // A Claude running for this session switches now (from its next step), not at the next message.
+    if (sessionId && view.run) {
+      void api.applySettings(sessionId, next).catch(() => undefined);
     }
   };
 

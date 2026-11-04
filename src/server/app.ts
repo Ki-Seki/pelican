@@ -357,6 +357,14 @@ app.post('/api/sessions/:id/permissions/:requestId', async (c) => {
   return ok ? c.json({ ok }) : c.json({ error: 'That request is no longer pending' }, 409);
 });
 
+/** Model, effort, speed, ultracode or mode changed while Claude runs: it switches at its next step. */
+app.post('/api/sessions/:id/settings', async (c) => {
+  const body = await c.req.json<{ settings?: unknown }>().catch(() => ({}) as { settings?: unknown });
+  if (!body.settings || typeof body.settings !== 'object') return c.json({ error: 'No settings' }, 400);
+  await getRun(c.req.param('id'))?.updateSettings(cleanSettings(body.settings));
+  return c.json({ ok: true });
+});
+
 app.post('/api/sessions/:id/mode', async (c) => {
   const body = await c.req.json<{ permissionMode?: unknown }>();
   const mode = permissionMode(body.permissionMode);
