@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Bell, LogOut } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import type { ServerInfo } from '../../shared/protocol';
-import { api, apiUrl, appBase } from '../lib/api';
+import { qrSvg } from '../../shared/qr';
+import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
 import type { NotificationState } from '../lib/notifications';
 import { type Prefs, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
@@ -107,17 +109,22 @@ export function SettingsSheet({
         onChange={(showTemporary) => setPrefs({ showTemporary })}
       />
 
-      <SheetHeading>Notifications</SheetHeading>
-      {notifications === 'unsupported' || notifications === 'denied' ? (
-        <SheetOption icon={<Bell className="size-4" />} label="Notifications" description={NOTIFICATION_HINT[notifications]} onSelect={() => {}} />
-      ) : (
-        <SheetToggle
-          icon={<Bell className="size-4 text-muted" />}
-          label="Notifications"
-          description={NOTIFICATION_HINT[notifications]}
-          checked={notifications === 'on'}
-          onChange={onToggleNotifications}
-        />
+      {/* The demo sends nothing anywhere, notifications included. */}
+      {!info?.demo && (
+        <>
+          <SheetHeading>Notifications</SheetHeading>
+          {notifications === 'unsupported' || notifications === 'denied' ? (
+            <SheetOption icon={<Bell className="size-4" />} label="Notifications" description={NOTIFICATION_HINT[notifications]} onSelect={() => {}} />
+          ) : (
+            <SheetToggle
+              icon={<Bell className="size-4 text-muted" />}
+              label="Notifications"
+              description={NOTIFICATION_HINT[notifications]}
+              checked={notifications === 'on'}
+              onChange={onToggleNotifications}
+            />
+          )}
+        </>
       )}
 
       {(account || (limits && limits.length > 0)) && <SheetHeading>Account</SheetHeading>}
@@ -154,10 +161,7 @@ export function SettingsSheet({
               This address works on this computer only. To use Pelican on your phone, reach this computer through Tailscale, an SSH tunnel or a proxy, then open that address here and scan its code. <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#phone" target="_blank" rel="noreferrer">How</a>
             </p>
           ) : (
-            <div className="flex items-center gap-4 px-3 pb-1">
-              <img src={apiUrl(`qr?text=${encodeURIComponent(appBase.href)}`)} alt="" className="size-28 shrink-0 rounded-lg border border-line bg-white p-1.5" />
-              <p className="min-w-0 text-[13px] leading-relaxed text-muted">Scan with your phone’s camera to open this page there.<br /><span className="font-mono text-[12px] break-all text-faint">{appBase.href}</span></p>
-            </div>
+            <PhoneCode open={open} />
           )}
         </>
       )}
@@ -171,5 +175,42 @@ export function SettingsSheet({
       </div>
       {info?.auth && <SheetOption icon={<LogOut className="size-4" />} label="Sign out" danger onSelect={onSignOut} />}
     </Sheet>
+  );
+}
+
+const qrImage = (text: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg(text))}`;
+
+/**
+ * This page's address as a QR code, for opening Pelican on a phone. With the
+ * access token, the code also signs the phone in, so it shows only on a tap:
+ * anyone who scans it can use Pelican as you.
+ */
+function PhoneCode({ open }: { open: boolean }) {
+  const { data: auth } = useQuery<AuthState>({ queryKey: ['auth'], enabled: false });
+  const token = auth?.mode === 'token';
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!open) setShown(false);
+  }, [open]);
+  const { data: access } = useQuery({ queryKey: ['access'], queryFn: api.access, enabled: open && token && shown, staleTime: Infinity });
+  const link = token && access ? `${appBase.href}?token=${encodeURIComponent(access)}` : appBase.href;
+  const hidden = token && !(shown && access);
+  return (
+    <div className="flex items-center gap-4 px-3 pb-1">
+      {hidden ? (
+        <button type="button" onClick={() => setShown(true)} className="grid size-28 shrink-0 place-items-center rounded-lg border border-dashed border-line text-[12.5px] text-muted hover:bg-hover hover:text-fg">
+          Show code
+        </button>
+      ) : (
+        <img src={qrImage(link)} alt="" className="size-28 shrink-0 rounded-lg border border-line bg-white p-1.5" />
+      )}
+      <p className="min-w-0 text-[13px] leading-relaxed text-muted">
+        {token
+          ? <>Scan with your phone’s camera to open Pelican there, signed in. Anyone who scans it can use Pelican as you.</>
+          : <>Scan with your phone’s camera to open this page there.</>}
+        <br />
+        <span className="font-mono text-[12px] break-all text-faint">{appBase.href}</span>
+      </p>
+    </div>
   );
 }

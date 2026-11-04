@@ -28,9 +28,11 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
   let state: SessionStatus = own ?? 'idle';
-  // Another app's Claude process says it is busy; failing that, a turn written moments ago.
+  // Another app's Claude process says it is busy; failing that, a turn written moments ago
+  // (not one a fork just copied over: a new branch is idle until someone sends to it).
   const elsewhere = own ? undefined : live.get(info.sessionId);
-  if (!own && (elsewhere?.busy || (lastTurn && Date.now() - lastTurn.time < config.liveWindowMs))) state = 'live';
+  const recent = lastTurn && !lastTurn.copied && Date.now() - lastTurn.time < config.liveWindowMs;
+  if (!own && (elsewhere?.busy || recent)) state = 'live';
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;

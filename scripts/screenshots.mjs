@@ -1,11 +1,12 @@
 // The README's screenshots, from the demo (made-up sessions; nothing of yours is shown).
 //   npm run build && npm run screenshots      (CHROME=/path/to/chrome if it is not in the usual place)
 // Writes docs/shots/{phone,desktop,list}-{light,dark}.png and og.png, the picture shared links show.
-import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { chromium } from 'playwright-core';
+
+import { startDemo } from './demo-server.mjs';
 
 const PORT = 47860;
 const BASE = `http://127.0.0.1:${PORT}/`;
@@ -13,17 +14,7 @@ const OUT = 'docs/shots';
 const WAITING = 'a3f1c2d4-1111-4a1b-8c3d-000000000001';
 const CHART = 'f3a6e9b5-6666-4f60-9182-000000000006';
 
-const server = spawn(process.execPath, ['dist/server/index.js', '--demo', '--name', 'laptop', '--port', String(PORT)], { stdio: 'ignore' });
-const stop = () => server.kill();
-process.on('exit', stop);
-for (let i = 0; ; i += 1) {
-  try {
-    if ((await fetch(`${BASE}api/info`)).ok) break;
-  } catch {
-    if (i > 50) throw new Error('The demo server did not start (is the app built?)');
-  }
-  await new Promise((resolve) => setTimeout(resolve, 200));
-}
+const demo = await startDemo({ port: PORT });
 
 const browser = await chromium.launch({
   executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -114,5 +105,5 @@ for (const scheme of ['light', 'dark']) {
   await desktopShot(scheme, `desktop-${scheme}.png`);
 }
 await browser.close();
-stop();
+await demo.stop();
 console.log(`screenshots written to ${OUT}/`);

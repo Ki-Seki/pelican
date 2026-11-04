@@ -24,6 +24,8 @@ function knownHosts(): Set<string> {
   const machine = os.hostname().toLowerCase();
   names.add(machine);
   names.add(machine.split('.')[0]!);
+  // This computer's own addresses: a phone on the network may open it by IP.
+  for (const address of Object.values(os.networkInterfaces()).flat()) if (address) names.add(address.address.toLowerCase());
   if (config.host !== '0.0.0.0' && config.host !== '::') names.add(hostname(config.host));
   for (const host of config.allowedHosts) names.add(hostname(host));
   for (const origin of config.allowedOrigins) {
@@ -37,14 +39,17 @@ function knownHosts(): Set<string> {
 }
 
 /**
- * Without a password, the server answers only to names that point at it: this
- * machine's, loopback, and configured ones. Otherwise a web page could rebind
- * its own domain to 127.0.0.1 (DNS rebinding) and read your sessions.
+ * The server answers only to names that point at it: this computer's names and
+ * addresses, loopback, Tailscale names (*.ts.net, which only Tailscale can point
+ * anywhere) and configured ones. Otherwise a web page could rebind its own
+ * domain to 127.0.0.1 (DNS rebinding) and use Pelican through your browser.
  */
 export function hostAllowed(host: string | undefined): boolean {
   if (!host) return false;
-  if (config.allowedHosts.includes('*') || isLoopback(host)) return true;
-  return knownHosts().has(hostname(host));
+  if (isLoopback(host)) return true;
+  const name = hostname(host);
+  if (name.endsWith('.ts.net')) return true;
+  return knownHosts().has(name);
 }
 
 /**

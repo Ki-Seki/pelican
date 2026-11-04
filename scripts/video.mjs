@@ -1,26 +1,19 @@
 // A short tour of the demo for the README and the site: phone-sized, with each tap shown.
 //   npm run build && node scripts/video.mjs      (needs ffmpeg; CHROME=/path/to/chrome if elsewhere)
 // Writes docs/shots/tour.mp4 and docs/shots/tour.gif.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { chromium } from 'playwright-core';
 
+import { startDemo } from './demo-server.mjs';
+
 const PORT = 47862;
 const BASE = `http://127.0.0.1:${PORT}/`;
 
-const server = spawn(process.execPath, ['dist/server/index.js', '--demo', '--name', 'laptop', '--port', String(PORT)], { stdio: 'ignore' });
-process.on('exit', () => server.kill());
-for (let i = 0; ; i += 1) {
-  try {
-    if ((await fetch(`${BASE}api/info`)).ok) break;
-  } catch {
-    if (i > 50) throw new Error('The demo server did not start (is the app built?)');
-  }
-  await new Promise((resolve) => setTimeout(resolve, 200));
-}
+const demo = await startDemo({ port: PORT });
 
 const dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-video-'));
 const browser = await chromium.launch({ executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
@@ -91,7 +84,7 @@ await cdp.send('Page.stopScreencast');
 const end = Date.now() / 1000;
 await context.close();
 await browser.close();
-server.kill();
+await demo.stop();
 
 // Each frame lasts until the next one was drawn; the last one until the tour ended.
 const list = ['ffconcat version 1.0'];

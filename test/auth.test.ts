@@ -2,50 +2,128 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { allowAttempt, checkPassword, clearPassword, cookieName, newSessionCookie, passwordSet, setPassword, signedIn } from '../src/server/auth';
+import {
+  accessToken, attemptAllowed, authMode, checkPassword, checkToken, clearPassword, cookieName, loadAuth,
+  newSessionCookie, noteFailure, passwordSet, resetAttempts, resetToken, setPassword, signedIn,
+} from '../src/server/auth';
 import { config } from '../src/server/config';
 
 let dir: string;
 beforeAll(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-auth-'));
   config.configDir = dir;
+  config.auth = 'auto';
+  await loadAuth();
 });
-afterAll(() => rm(dir, { recursive: true, force: true }));
+afterAll(async () => {
+  config.auth = 'auto';
+  await rm(dir, { recursive: true, force: true });
+});
 
-describe('password', () => {
-  it('without one, every request is signed in', async () => {
-    await clearPassword();
-    expect(passwordSet()).toBe(false);
-    expect(signedIn(undefined)).toBe(true);
+const cookieOf = () => {
+  const cookie = newSessionCookie();
+  return `${cookie.name}=${cookie.value}`;
+};
+
+describe('access token (the default)', () => {
+  it('is made on first start, kept for the owner alone, and asked for on every request', async () => {
+    expect(authMode()).toBe('token');
+    const token = accessToken();
+    expect(token).toMatch(/^[\w-]{32}$/);
+    expect((await stat(path.join(dir, 'token.json'))).mode & 0o777).toBe(0o600);
+    expect(signedIn(undefined)).toBe(false);
+    expect(signedIn('pelican_x=1.2')).toBe(false);
   });
 
-  it('checks the password and keeps only a hash, readable by the owner alone', async () => {
+  it('signs in with the token, as a header or through the cookie it is exchanged for', () => {
+    const token = accessToken()!;
+    expect(checkToken(token)).toBe(true);
+    expect(checkToken(`${token}x`)).toBe(false);
+    expect(checkToken('')).toBe(false);
+    expect(checkToken(undefined)).toBe(false);
+    expect(signedIn(undefined, `Bearer ${token}`)).toBe(true);
+    expect(signedIn(undefined, 'Bearer nope')).toBe(false);
+    expect(signedIn(cookieOf())).toBe(true);
+  });
+
+  it('a new token signs out every browser and retires the old link', async () => {
+    const old = accessToken()!;
+    const cookie = cookieOf();
+    await resetToken();
+    expect(accessToken()).not.toBe(old);
+    expect(checkToken(old)).toBe(false);
+    expect(signedIn(cookie)).toBe(false);
+  });
+});
+
+describe('password', () => {
+  it('replaces the token while set, and keeps only a hash', async () => {
+    const token = accessToken()!;
     await setPassword('correct horse battery');
     expect(passwordSet()).toBe(true);
+    expect(authMode()).toBe('password');
+    expect(accessToken()).toBeUndefined();
+    expect(checkToken(token)).toBe(false);
+    expect(signedIn(undefined, `Bearer ${token}`)).toBe(false);
     expect(await checkPassword('correct horse battery')).toBe(true);
     expect(await checkPassword('wrong')).toBe(false);
-    const file = path.join(dir, 'auth.json');
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(path.join(dir, 'auth.json'))).mode & 0o777).toBe(0o600);
   });
 
   it('signs in with the cookie it issued, and not with a forged or old one', async () => {
-    await setPassword('first password');
     const cookie = newSessionCookie();
     expect(signedIn(`${cookie.name}=${cookie.value}`)).toBe(true);
     expect(signedIn(undefined)).toBe(false);
     const [expires] = cookie.value.split('.');
     expect(signedIn(`${cookie.name}=${expires}.forged`)).toBe(false);
+    expect(signedIn(`${cookie.name}=${Date.now() - 1000}.${cookie.value.split('.')[1]}`)).toBe(false);
     // A new password rotates the secret: old cookies stop working.
     await setPassword('second password');
     expect(cookieName()).not.toBe(cookie.name);
     expect(signedIn(`${cookieName()}=${cookie.value}`)).toBe(false);
   });
 
-  it('limits attempts per client', () => {
-    for (let i = 0; i < 10; i += 1) expect(allowAttempt('1.2.3.4')).toBe(true);
-    expect(allowAttempt('1.2.3.4')).toBe(false);
-    expect(allowAttempt('5.6.7.8')).toBe(true);
+  it('removing it brings the token back', async () => {
+    await clearPassword();
+    expect(authMode()).toBe('token');
+    expect(checkToken(accessToken())).toBe(true);
+  });
+});
+
+describe('--no-auth', () => {
+  it('signs every request in, and offers no token', () => {
+    config.auth = 'none';
+    try {
+      expect(authMode()).toBe('none');
+      expect(signedIn(undefined)).toBe(true);
+      expect(accessToken()).toBeUndefined();
+      expect(checkToken('anything')).toBe(false);
+    } finally {
+      config.auth = 'auto';
+    }
+  });
+});
+
+describe('failed sign-ins', () => {
+  beforeEach(() => resetAttempts());
+
+  it('allow 10 per client in 10 minutes', () => {
+    const now = 1_000_000;
+    for (let i = 0; i < 10; i += 1) {
+      expect(attemptAllowed('1.2.3.4', now)).toBe(true);
+      noteFailure('1.2.3.4', now);
+    }
+    expect(attemptAllowed('1.2.3.4', now)).toBe(false);
+    expect(attemptAllowed('5.6.7.8', now)).toBe(true);
+    expect(attemptAllowed('1.2.3.4', now + 10 * 60_000 + 1)).toBe(true);
+  });
+
+  it('allow 30 in all, however many clients they come from', () => {
+    const now = 1_000_000;
+    for (let i = 0; i < 30; i += 1) noteFailure(`10.0.0.${i}`, now);
+    expect(attemptAllowed('192.168.1.1', now)).toBe(false);
+    expect(attemptAllowed('192.168.1.1', now + 10 * 60_000 + 1)).toBe(true);
   });
 });

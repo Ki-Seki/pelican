@@ -45,6 +45,15 @@ export function whenSignedOut(handler: () => void): void {
   onSignedOut = handler;
 }
 
+/** Every request says it comes from Pelican's page; the server refuses requests without it. */
+const MARK = { 'X-Pelican': '1' };
+
+/** The largest file the server takes (MAX_UPLOAD_BYTES). */
+const MAX_UPLOAD = 25 * 1024 * 1024;
+
+export type AuthMode = 'none' | 'password' | 'token';
+export type AuthState = { required: boolean; mode: AuthMode; signedIn: boolean };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (STATIC_DEMO) {
     try {
@@ -55,7 +64,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const response = await fetch(apiUrl(path), {
     ...init,
-    headers: init?.body && typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { ...MARK, ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean };
@@ -72,9 +81,11 @@ export type Project = { path: string; name: string; lastActivity: number; sessio
 export type DirListing = { path: string; parent?: string; dirs: Array<{ name: string; path: string }> };
 
 export const api = {
-  auth: () => request<{ required: boolean; signedIn: boolean }>('auth'),
-  login: (password: string) => send<{ ok: boolean }>('POST', 'auth/login', { password }),
+  auth: () => request<AuthState>('auth'),
+  login: (proof: { password: string } | { token: string }) => send<{ ok: boolean }>('POST', 'auth/login', proof),
   logout: () => send<{ ok: boolean }>('POST', 'auth/logout'),
+  /** The access token, for the link that signs a phone in (null unless the token is how Pelican signs in). */
+  access: () => request<{ token: string | null }>('access').then((r) => r.token),
   info: () => request<ServerInfo>('info'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
@@ -120,9 +131,10 @@ export const api = {
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   upload: async (file: File): Promise<Attachment> => {
     if (STATIC_DEMO) throw new ApiError('This demo runs in your browser: nothing is uploaded.', 403);
+    if (file.size > MAX_UPLOAD) throw new ApiError(`${file.name} is larger than 25 MB`, 413);
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(apiUrl('uploads'), { method: 'POST', body: form });
+    const response = await fetch(apiUrl('uploads'), { method: 'POST', body: form, headers: MARK });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       throw new ApiError(body.error ?? response.statusText, response.status);

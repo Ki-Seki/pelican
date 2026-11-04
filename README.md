@@ -52,7 +52,7 @@
 ```bash
 npx pelican-cc --demo          # made-up sessions; nothing of yours involved
 npm install -g pelican-cc      # Node 22.12+, with Claude Code signed in
-pelican                        # http://localhost:7860
+pelican                        # prints the link that signs you in: http://localhost:7860/?token=…
 ```
 
 Then [use it from your phone](https://ki-seki.github.io/pelican/docs.html#phone); with Tailscale it

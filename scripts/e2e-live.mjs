@@ -1,6 +1,7 @@
 // Drives one real turn through the app: a new session on Haiku, a file write that needs approval,
 // Allow, Claude's reply. It runs Claude Code for real, in the folder you give (use a throwaway one).
-//   node scripts/e2e-live.mjs <pelican url> <folder> <screenshot dir>     (CHROME=/path/to/chrome)
+//   node scripts/e2e-live.mjs <pelican link> <folder> <screenshot dir>     (CHROME=/path/to/chrome)
+// The link is the one Pelican prints, with its token (`pelican token` prints it again).
 import { mkdir } from 'node:fs/promises';
 
 import { chromium } from 'playwright-core';
@@ -20,7 +21,11 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 const shot = async (name) => page.screenshot({ path: `${out}/${name}.png` });
 
-await page.goto(`${base}?new&cwd=${encodeURIComponent(folder)}`, { waitUntil: 'networkidle' });
+// The link signs the browser in; then the new-session page in the folder.
+const link = new URL(base);
+await page.goto(link.href, { waitUntil: 'networkidle' });
+link.search = '';
+await page.goto(`${link.href}?new&cwd=${encodeURIComponent(folder)}`, { waitUntil: 'networkidle' });
 await page.getByRole('button', { name: 'Model, effort and speed' }).click();
 await page.getByRole('dialog').getByText('Haiku 5.5', { exact: true }).click();
 // The model sheet stays open for effort and speed; the mode sheet closes on a choice.

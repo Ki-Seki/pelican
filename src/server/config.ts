@@ -35,15 +35,22 @@ export const config = {
   stateDir: process.env.PELICAN_STATE_DIR ?? path.join(home, '.local', 'state', 'pelican'),
   webDir: findWebDir(),
   /**
-   * auto: ask for the password when one is set (`pelican password`), and refuse
-   * to listen beyond this machine without one. none: never ask, for when
-   * something in front already authenticates (an SSH tunnel, a proxy).
+   * auto: sign in with the password when one is set (`pelican password`), else
+   * with the access token in the link Pelican prints. none: no sign-in, for
+   * when something in front already authenticates (a proxy, a gateway).
    */
   auth: (process.env.PELICAN_AUTH === 'none' ? 'none' : 'auto') as AuthMode,
   /** Origins, besides the page's own, allowed to send requests (for example a proxy's public URL). */
   allowedOrigins: list(process.env.PELICAN_ALLOWED_ORIGINS),
-  /** Host names the server answers to without a password, besides this machine's (`*` for any). */
+  /** Host names the server answers to, besides this machine's own names and addresses (and *.ts.net). */
   allowedHosts: list(process.env.PELICAN_ALLOWED_HOSTS),
+  /**
+   * A proxy on this machine (Tailscale, Caddy, nginx) sets X-Forwarded-For truthfully: limit sign-in
+   * attempts by the client it names. Off by default, since anyone can write that header.
+   */
+  trustedProxy: process.env.PELICAN_TRUSTED_PROXY === '1',
+  /** Pages, besides Pelican's own origin, that may show Pelican in a frame (space or comma separated). */
+  frameAncestors: (process.env.PELICAN_FRAME_ANCESTORS ?? '').split(/[\s,]+/).filter(Boolean),
   /** Where a tapped notification opens a session; `{id}` is replaced. Default: the page that subscribed. */
   sessionUrl: process.env.PELICAN_SESSION_URL || undefined,
   /** A Claude process with nothing to do is closed after this long; the next message resumes the session. */

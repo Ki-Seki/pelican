@@ -4,7 +4,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
-import { clockTime, dayLabel, duration, resumeCommand, shortPath } from '../lib/format';
+import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shortPath } from '../lib/format';
 import { setPrefs, usePrefs, type ViewMode } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 
@@ -206,12 +206,14 @@ export function SessionMenu({
           if (id) onForked(id);
         })}
       />
-      <SheetOption
-        icon={copied === 'resume' ? <Check className="size-4" /> : <SquareTerminal className="size-4" />}
-        label={copied === 'resume' ? 'Copied' : 'Continue in a terminal'}
-        description={<span className="font-mono text-[11.5px]">{resumeCommand(sessionId, cwd ? shortPath(cwd, home) : undefined)}</span>}
-        onSelect={() => copy('resume', resumeCommand(sessionId, cwd))}
-      />
+      {isSessionId(sessionId) && (
+        <SheetOption
+          icon={copied === 'resume' ? <Check className="size-4" /> : <SquareTerminal className="size-4" />}
+          label={copied === 'resume' ? 'Copied' : 'Continue in a terminal'}
+          description={<span className="font-mono text-[11.5px]">{resumeCommand(sessionId, cwd ? shortPath(cwd, home) : undefined)}</span>}
+          onSelect={() => copy('resume', resumeCommand(sessionId, cwd))}
+        />
+      )}
       <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" description="Prompts and replies, with each step on one line" onSelect={exportMarkdown} />
       {confirmDelete ? (
         <div className="mx-1 my-1 rounded-xl border border-line px-3 py-2.5">

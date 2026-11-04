@@ -10,8 +10,28 @@ import { getPrefs } from '../lib/prefs';
  *
  * Everything renders in a sandboxed frame with no same-origin access: scripts
  * may run (charts, small apps), but they cannot reach Pelican, its cookies or
- * its API, open windows, submit forms or navigate the page.
+ * its API, open windows, submit forms or navigate the page. A content policy,
+ * first in every document, keeps the page from talking to any server but the
+ * public script and font CDNs, so what it shows stays on this screen.
  */
+
+const CDNS = 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com';
+
+/** What a preview may load: scripts, styles and fonts from public CDNs; images only from itself. */
+export const PREVIEW_POLICY = [
+  "default-src 'none'",
+  `script-src 'unsafe-inline' 'unsafe-eval' ${CDNS}`,
+  `style-src 'unsafe-inline' https://fonts.googleapis.com ${CDNS}`,
+  `font-src data: https://fonts.gstatic.com ${CDNS}`,
+  'img-src data: blob:',
+  'media-src data: blob:',
+  `connect-src ${CDNS}`,
+  'worker-src blob:',
+  "form-action 'none'",
+  "base-uri 'none'",
+].join('; ');
+
+const POLICY_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_POLICY}">`;
 
 const isDark = () => {
   const theme = getPrefs().theme;
@@ -41,15 +61,18 @@ const RESIZE = `<script>(()=>{const post=()=>parent.postMessage({pelicanPreviewH
 
 export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean };
 
-function documentFor(source: PreviewSource, dark: boolean): string {
+export function documentFor(source: PreviewSource, dark: boolean): string {
   const theme = dark ? 'dark' : 'light';
   const full = /^\s*(<!doctype|<html)/i.test(source.code);
   if (full) {
-    // A page of its own: its own styles, plus the size report.
-    return /<\/body>/i.test(source.code) ? source.code.replace(/<\/body>/i, `${RESIZE}</body>`) : `${source.code}${RESIZE}`;
+    // A page of its own: its own styles, plus the size report. The policy goes before anything of the
+    // page's, right after the doctype: the parser puts it in the head, so it covers the whole page.
+    const doctype = /^\s*<!doctype[^>]*>/i.exec(source.code)?.[0] ?? '';
+    const page = `${doctype}${POLICY_META}${source.code.slice(doctype.length)}`;
+    return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${RESIZE}</body>`) : `${page}${RESIZE}`;
   }
   const css = source.widget || source.kind === 'svg' ? `<style>${WIDGET_CSS}</style>` : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
-  return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${source.code}${RESIZE}</body></html>`;
+  return `<!doctype html><html data-theme="${theme}"><head>${POLICY_META}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${source.code}${RESIZE}</body></html>`;
 }
 
 /** The rendered content in a sandboxed frame, as tall as it is (up to `max`). */

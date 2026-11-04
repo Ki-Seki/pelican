@@ -9,7 +9,7 @@ import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
 import { buildItems, type Item, type Part } from '../lib/turns';
 import { openImage } from './Lightbox';
-import { CopyButton, Markdown } from './Markdown';
+import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -140,9 +140,16 @@ const AssistantTurn = memo(function AssistantTurn({
 
 const UserBubble = memo(function UserBubble({
   item, onEdit, onRewind,
-}: { item: Extract<Item, { kind: 'user' }>; onEdit?: (uuid: string, text: string) => void; onRewind?: (uuid: string) => void }) {
+}: { item: Extract<Item, { kind: 'user' }>; onEdit?: (uuid: string, text: string) => Promise<boolean>; onRewind?: (uuid: string) => void }) {
   const [actions, setActions] = useState(false);
+  const [editing, setEditing] = useState(false);
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
+  if (editing && onEdit) {
+    return <EditPrompt text={item.text} onCancel={() => setEditing(false)} onSend={(next) => onEdit(item.key, next).then((sent) => { if (sent) setEditing(false); })} />;
+  }
+  // A message still on its way has no actions, and hidden actions take no taps: a tap meant for
+  // the composer or the list must never land on one (Edit makes a branch).
+  const shown = actions && !item.pending;
   return (
     <div className={`group/user flex flex-col items-end gap-1.5 ${item.pending ? 'opacity-60' : ''}`}>
       {item.images.length > 0 && (
@@ -159,7 +166,7 @@ const UserBubble = memo(function UserBubble({
       {text && (
         <button
           type="button"
-          onClick={() => setActions((v) => !v)}
+          onClick={() => !item.pending && setActions((v) => !v)}
           className={`max-w-[85%] rounded-2xl bg-chip px-3.5 py-2 text-left whitespace-pre-wrap break-words ${item.command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
         >
           {text}
@@ -168,13 +175,24 @@ const UserBubble = memo(function UserBubble({
       {item.pending ? (
         <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
       ) : text && (
-        <div className={`flex h-7 items-center gap-0.5 text-[11px] text-faint transition-opacity ${actions ? 'opacity-100' : 'opacity-0 group-hover/user:opacity-100'}`}>
+        <div
+          className={`flex h-7 items-center gap-0.5 text-[11px] text-faint transition-opacity ${shown ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover/user:pointer-events-auto group-hover/user:opacity-100'}`}
+        >
           {item.timestamp && <span className="mr-1">{clockTime(item.timestamp)}{item.steered ? ' · while Claude worked' : ''}</span>}
           <button type="button" aria-label="Copy" title="Copy" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => void navigator.clipboard?.writeText(text)}>
             <Copy className="size-3.5" />
           </button>
           {onEdit && !item.command && (
-            <button type="button" aria-label="Edit and resend" title="Edit and resend: branches the conversation here" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => onEdit(item.key, item.text)}>
+            <button
+              type="button"
+              aria-label="Edit"
+              title="Edit and send again, as a new branch"
+              className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"
+              onClick={() => {
+                setActions(false);
+                setEditing(true);
+              }}
+            >
               <Pencil className="size-3.5" />
             </button>
           )}
@@ -188,6 +206,54 @@ const UserBubble = memo(function UserBubble({
     </div>
   );
 });
+
+/**
+ * Editing a prompt in place. Nothing changes until Send: then the conversation branches just
+ * before this prompt and the new text goes there; this session stays as it was.
+ */
+function EditPrompt({ text, onCancel, onSend }: { text: string; onCancel: () => void; onSend: (text: string) => Promise<void> }) {
+  const [value, setValue] = useState(text);
+  const [busy, setBusy] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = field.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [value]);
+  useEffect(() => {
+    const el = field.current;
+    el?.focus();
+    el?.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  const send = () => {
+    if (!value.trim() || busy) return;
+    setBusy(true);
+    void onSend(value.trim()).finally(() => setBusy(false));
+  };
+  return (
+    <div className="ml-auto w-full max-w-[85%] rounded-2xl border border-line bg-panel p-2">
+      <textarea
+        ref={field}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel();
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+        }}
+        aria-label="Edit the prompt"
+        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed outline-none"
+      />
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">Sends as a new branch; this one stays as it is.</span>
+        <button type="button" onClick={onCancel} className="h-8 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg">Cancel</button>
+        <button type="button" onClick={send} disabled={busy || !value.trim()} className="flex h-8 items-center rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg disabled:opacity-40">
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Send'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
   const [open, setOpen] = useState(false);
@@ -324,10 +390,13 @@ export function MessageList({
   view: SessionView;
   cwd?: string;
   mode: ViewMode;
-  onEdit?: (uuid: string, text: string) => void;
+  onEdit?: (uuid: string, text: string) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
 }) {
   const items = useMemo(() => buildItems(view.messages), [view.messages]);
+  // The prompt this browser sent last, while it is on its way: sending always brings the end into view.
+  const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
+  const lastSending = useRef<string | undefined>(undefined);
   const scroller = useRef<HTMLDivElement>(null);
   /** Following the newest output. Stops the moment the reader scrolls up, touches the list or opens something. */
   const atBottom = useRef(true);
@@ -351,6 +420,8 @@ export function MessageList({
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    if (sending && sending !== lastSending.current) atBottom.current = true;
+    lastSending.current = sending;
     if (snapshot.current) {
       el.scrollTop = snapshot.current.top + (el.scrollHeight - snapshot.current.height);
       snapshot.current = undefined;

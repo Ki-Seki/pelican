@@ -325,6 +325,9 @@ export async function prepareDemo(): Promise<void> {
   }
   config.home = root;
   config.claudeHome = claudeHome;
+  // Its own config and state too: the demo never reads or writes your password, token or push keys.
+  config.configDir = path.join(root, 'config');
+  config.stateDir = path.join(root, 'state');
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.PELICAN_SCRATCH_DIR = path.join(root, 'scratch');
 }

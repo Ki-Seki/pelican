@@ -22,19 +22,23 @@ const write = (key: string, value: unknown) => {
   }
 };
 
-/** Composer settings a new session starts with; remembered per browser. */
+/**
+ * Composer settings a new session starts with; remembered per browser. The permission mode is
+ * not among them: it belongs to one session, as Shift+Tab's does in Claude Code, so choosing
+ * Bypass once never makes it the start of every new session. New work asks first.
+ */
 export function loadDefaults(): RunSettings {
-  const raw = read<RunSettings>(SETTINGS_KEY, {});
+  const raw = read<Partial<RunSettings>>(SETTINGS_KEY, {});
   return {
     model: raw.model ?? 'default',
     ...(raw.effort ? { effort: raw.effort } : {}),
     fast: Boolean(raw.fast),
     ultracode: Boolean(raw.ultracode),
-    permissionMode: raw.permissionMode ?? 'default',
+    permissionMode: 'default',
   };
 }
 
-export function saveDefaults(settings: RunSettings): void {
+export function saveDefaults({ permissionMode: _mode, ...settings }: RunSettings): void {
   write(SETTINGS_KEY, settings);
 }
 

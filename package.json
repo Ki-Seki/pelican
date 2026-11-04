@@ -1,6 +1,6 @@
 {
   "name": "pelican-cc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Your Claude Code sessions, from any browser: a phone-first web app that runs next to Claude Code.",
   "keywords": [
     "claude",
@@ -38,7 +38,8 @@
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.318",

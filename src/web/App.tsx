@@ -10,7 +10,7 @@ import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
 import { SettingsSheet } from './components/Settings';
-import { api, appBase, whenSignedOut } from './lib/api';
+import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import {
   disableNotifications,
   enableNotifications,
@@ -62,14 +62,14 @@ function useWide() {
   return wide;
 }
 
-/** The sign-in gate: shown only when the server has a password and this browser has no session. */
+/** The sign-in gate: shown until this browser signs in, unless the server asks no one to (--no-auth, the demo). */
 export function App() {
   const queryClient = useQueryClient();
   const auth = useQuery({ queryKey: ['auth'], queryFn: api.auth, staleTime: Infinity, retry: 2 });
 
   useEffect(() => {
     applyTheme();
-    whenSignedOut(() => queryClient.setQueryData(['auth'], { required: true, signedIn: false }));
+    whenSignedOut(() => queryClient.setQueryData<AuthState>(['auth'], (old) => old && { ...old, signedIn: false }));
   }, [queryClient]);
 
   if (auth.isPending) {
@@ -78,8 +78,9 @@ export function App() {
   if (auth.data?.required && !auth.data.signedIn) {
     return (
       <Login
+        mode={auth.data.mode}
         onSignedIn={() => {
-          queryClient.setQueryData(['auth'], { required: true, signedIn: true });
+          queryClient.setQueryData<AuthState>(['auth'], (old) => old && { ...old, signedIn: true });
           void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'auth' });
           socket.reconnect();
         }}
@@ -135,7 +136,7 @@ function Main() {
     void api.logout().finally(() => {
       setSettingsOpen(false);
       queryClient.clear();
-      queryClient.setQueryData(['auth'], { required: true, signedIn: false });
+      queryClient.setQueryData<AuthState>(['auth'], (old) => old && { ...old, signedIn: false });
     });
   };
 

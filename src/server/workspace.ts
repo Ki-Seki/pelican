@@ -1,23 +1,30 @@
-import { execFile } from 'node:child_process';
-import { open, readdir, stat } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import type { FileContent, GitFile, GitStatus, TreeEntry } from '../shared/protocol.js';
+import { git } from './git.js';
 
-const run = promisify(execFile);
 const MAX_FILE = 512 * 1024;
 const MAX_DIFF = 400_000;
 
-const git = async (cwd: string, args: string[]) =>
-  (await run('git', ['-c', 'core.quotepath=off', ...args], { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 15_000 })).stdout;
+
+const OUTSIDE = 'That path is outside the session’s folder';
+const within = (root: string, full: string) => full === root || full.startsWith(`${root}${path.sep}`);
 
 /** A path inside the session's folder, or an error: the panels never reach outside it. */
 export function inside(cwd: string, relative: string): string {
   const root = path.resolve(cwd);
   const full = path.resolve(root, relative || '.');
-  if (full !== root && !full.startsWith(`${root}${path.sep}`)) throw new Error('That path is outside the session’s folder');
+  if (!within(root, full)) throw new Error(OUTSIDE);
   return full;
+}
+
+/** The same, for a path that exists, with links followed: a link may not lead out of the folder either. */
+async function insideReal(cwd: string, relative: string): Promise<string> {
+  const full = inside(cwd, relative);
+  const [root, real] = await Promise.all([realpath(cwd), realpath(full)]);
+  if (!within(root, real)) throw new Error(OUTSIDE);
+  return real;
 }
 
 const KIND: Record<string, GitFile['status']> = { M: 'modified', T: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'added', U: 'conflicted' };
@@ -99,8 +106,7 @@ export async function gitDiff(cwd: string, file: string): Promise<string> {
   }
   if (!diff) {
     // Untracked (or no commits yet): git diff --no-index exits with 1 when the files differ.
-    diff = await run('git', ['diff', '--no-index', '--', '/dev/null', file], { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 15_000 })
-      .then((r) => r.stdout, (error: { stdout?: string }) => error.stdout ?? '');
+    diff = await git(cwd, ['diff', '--no-index', '--', '/dev/null', file]).catch((error: { stdout?: string }) => error.stdout ?? '');
   }
   return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… (diff cut short)` : diff;
 }
@@ -109,12 +115,12 @@ const HIDDEN = new Set(['.git', 'node_modules', '.DS_Store']);
 
 /** One folder of the session's tree: folders first, then files. */
 export async function listTree(cwd: string, relative: string): Promise<TreeEntry[]> {
-  const dir = inside(cwd, relative);
+  const dir = await insideReal(cwd, relative);
   const names = await readdir(dir, { withFileTypes: true });
   const entries: TreeEntry[] = [];
   for (const entry of names) {
     if (HIDDEN.has(entry.name)) continue;
-    const rel = path.relative(cwd, path.join(dir, entry.name));
+    const rel = path.join(relative, entry.name);
     if (entry.isDirectory()) entries.push({ name: entry.name, path: rel, dir: true });
     else if (entry.isFile() || entry.isSymbolicLink()) {
       const size = await stat(path.join(dir, entry.name)).then((s) => (s.isDirectory() ? -1 : s.size), () => undefined);
@@ -129,7 +135,7 @@ const IMAGE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpe
 
 /** A file to read on the phone: text up to half a megabyte, images as data, other binaries named only. */
 export async function readProjectFile(cwd: string, relative: string): Promise<FileContent> {
-  const full = inside(cwd, relative);
+  const full = await insideReal(cwd, relative);
   const info = await stat(full);
   const ext = path.extname(full).slice(1).toLowerCase();
   const handle = await open(full, 'r');

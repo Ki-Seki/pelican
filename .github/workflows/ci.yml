@@ -65,10 +65,22 @@ jobs:
           npm install -g ./pelican-cc-*.tgz
           pelican --version
           pelican --demo --port 7861 &
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:7861/api/info && break; sleep 1; done
-          curl -fsS http://127.0.0.1:7861/api/sessions | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (d.sessions.length < 3) process.exit(1)'
+          for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/info && break; sleep 1; done
+          curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/sessions | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (d.sessions.length < 3) process.exit(1)'
           curl -fsS http://127.0.0.1:7861/ | grep -q '<div id="root">'
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: attacker.example' http://127.0.0.1:7861/api/info)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' -H 'Host: attacker.example' http://127.0.0.1:7861/api/info)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7861/api/info)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' -H 'Sec-Fetch-Site: cross-site' http://127.0.0.1:7861/api/info)" = 403
+      - name: Without the demo, only the printed link signs a browser in
+        run: |
+          export PELICAN_CONFIG_DIR="$RUNNER_TEMP/config" PELICAN_STATE_DIR="$RUNNER_TEMP/state"
+          pelican --port 7862 > "$RUNNER_TEMP/pelican.log" &
+          for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7862/api/auth && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' http://127.0.0.1:7862/api/sessions)" = 401
+          link=$(grep -o 'http://localhost:7862/?token=[A-Za-z0-9_-]*' "$RUNNER_TEMP/pelican.log" | head -1)
+          test -n "$link"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$RUNNER_TEMP/cookies" "$link")" = 302
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://127.0.0.1:7862/api/sessions)" = 200
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package

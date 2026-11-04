@@ -16,7 +16,6 @@ import {
   getView,
   loadLatest,
   removeLocalMessage,
-  setDraft,
   setRun,
   useSessionView,
 } from '../lib/store';
@@ -178,8 +177,6 @@ function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error
 }
 
 const DEMO_NOTE = 'This is the demo, so nothing runs. Start Pelican on your own computer to work with Claude.';
-const EDIT_NOTE = 'A branch of the conversation from just before this prompt. Edit it and send; the original session stays as it was.';
-const EDIT_FIRST_NOTE = 'A new session in the same folder. Edit the prompt and send; the original session stays as it was.';
 
 export function Chat({
   sessionId,
@@ -330,26 +327,37 @@ export function Chat({
     }
   };
 
-  // Edit and resend: branch just before the prompt, open the branch, and put the prompt in its composer.
-  const edit = (uuid: string, text: string) => {
-    if (!sessionId) return;
+  // Edit and send again: only now does the conversation branch, just before the prompt, and the new
+  // text goes to the branch (the first prompt: a new session in the same folder). This one stays as it was.
+  const edit = async (uuid: string, text: string): Promise<boolean> => {
+    if (!sessionId) return false;
+    setSendError(undefined);
+    if (demo) {
+      setSendError(DEMO_NOTE);
+      return false;
+    }
     if (busy) {
       setSendError('Stop Claude before editing an earlier prompt.');
-      return;
+      return false;
     }
-    setSendError(undefined);
-    void api.fork(sessionId, { before: uuid })
-      .then((id) => {
-        if (id) {
-          setDraft(id, { text, note: EDIT_NOTE });
-          void queryClient.invalidateQueries({ queryKey: ['sessions'] });
-          onOpen(id);
-        } else if (cwd) {
-          setDraft(`new:${cwd}`, { text, note: EDIT_FIRST_NOTE });
-          onStartIn(cwd);
-        }
-      })
-      .catch((error: Error) => setSendError(error.message));
+    try {
+      const body = { text, attachments: [], settings, uuid: newId() };
+      const id = await api.fork(sessionId, { before: uuid });
+      let opened: string | undefined;
+      if (id) {
+        await api.send(id, body);
+        opened = id;
+      } else if (cwd) {
+        opened = (await api.create({ ...body, cwd })).sessionId;
+      }
+      if (!opened) return false;
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      onOpen(opened);
+      return true;
+    } catch (error) {
+      setSendError((error as Error).message);
+      return false;
+    }
   };
 
   // Files changed in the session's folder, for the badge on the Changes button; refreshed when a turn ends.
@@ -413,7 +421,7 @@ export function Chat({
       </header>
 
       {sessionId || view.messages.length > 0 ? (
-        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={prefs.view} {...(sessionId ? { onEdit: edit, onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
+        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={prefs.view} {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
           <div>

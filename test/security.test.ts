@@ -29,8 +29,18 @@ describe('hostAllowed', () => {
     expect(hostAllowed('pelican.internal')).toBe(true);
     expect(hostAllowed('code.example.com')).toBe(true);
     expect(hostAllowed('other.example.com')).toBe(false);
+  });
+
+  it('has no wildcard: `*` is a name like any other, never "every name"', () => {
     config.allowedHosts = ['*'];
-    expect(hostAllowed('anything.example')).toBe(true);
+    expect(hostAllowed('anything.example')).toBe(false);
+  });
+
+  it('answers to Tailscale names and this computer’s own addresses', () => {
+    expect(hostAllowed('laptop.tail1234.ts.net')).toBe(true);
+    expect(hostAllowed('ts.net.attacker.example')).toBe(false);
+    const address = Object.values(os.networkInterfaces()).flat().find((a) => a && !a.internal && a.family === 'IPv4');
+    if (address) expect(hostAllowed(`${address.address}:7860`)).toBe(true);
   });
 });
 

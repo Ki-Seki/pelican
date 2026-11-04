@@ -1,4 +1,4 @@
-import { Check, Copy } from 'lucide-react';
+import { ArrowUpRight, Check, Copy, Image as ImageIcon } from 'lucide-react';
 import { memo, type ReactNode, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -34,6 +34,38 @@ export function CopyButton({ text, className = '' }: { text: string; className?:
   );
 }
 
+/**
+ * Whether an image may load in the page: only from Pelican itself, or data already in it.
+ * Loading a picture from another server tells that server whatever its address carries, so a
+ * reply could leak the conversation without a tap (and the page's policy blocks it anyway).
+ */
+export function loadsInPlace(src: string): boolean {
+  if (src.startsWith('data:image/') || src.startsWith('blob:')) return true;
+  try {
+    return new URL(src, location.href).origin === location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/** An image on another site: named, and opened there on a tap, never loaded into the page. */
+export function RemoteImage({ src, alt }: { src: string; alt?: string }) {
+  let host = '';
+  try {
+    host = new URL(src).host;
+  } catch {
+    // Not a URL: shown as text only.
+  }
+  const label = <><ImageIcon className="size-3.5 shrink-0" /><span className="truncate">{alt ? `${alt} · ` : 'Image · '}{host || 'not shown'}</span></>;
+  if (!/^https?:\/\//i.test(src)) return <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-[12px] text-faint">{label}</span>;
+  return (
+    <a href={src} target="_blank" rel="noreferrer noopener" title={src} className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-[12px] text-muted no-underline hover:text-fg">
+      {label}
+      <ArrowUpRight className="size-3 shrink-0" />
+    </a>
+  );
+}
+
 const components: Components = {
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noreferrer noopener">
@@ -54,11 +86,15 @@ const components: Components = {
       </div>
     );
   },
-  img: ({ src, alt }) => (typeof src === 'string' && src ? (
-    <button type="button" className="block max-w-full" onClick={() => openImage(src)}>
-      <img src={src} alt={alt ?? ''} className="max-h-80 max-w-full rounded-lg border border-line" />
-    </button>
-  ) : null),
+  img: ({ src, alt }) => {
+    if (typeof src !== 'string' || !src) return null;
+    if (!loadsInPlace(src)) return <RemoteImage src={src} {...(alt ? { alt } : {})} />;
+    return (
+      <button type="button" className="block max-w-full" onClick={() => openImage(src)}>
+        <img src={src} alt={alt ?? ''} className="max-h-80 max-w-full rounded-lg border border-line" />
+      </button>
+    );
+  },
 };
 
 // Line breaks are kept, as in Claude's own apps: output like logs and lists of numbers stays readable.

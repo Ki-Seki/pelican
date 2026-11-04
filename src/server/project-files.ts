@@ -1,9 +1,7 @@
-import { execFile } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
-const run = promisify(execFile);
+import { git } from './git.js';
 
 const cache = new Map<string, { at: number; files: string[] }>();
 const TTL_MS = 30_000;
@@ -16,7 +14,7 @@ async function projectFiles(cwd: string): Promise<string[]> {
   if (cached && Date.now() - cached.at < TTL_MS) return cached.files;
   let files: string[];
   try {
-    const { stdout } = await run('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 5000 });
+    const stdout = await git(cwd, ['ls-files', '--cached', '--others', '--exclude-standard'], 5000);
     files = stdout.split('\n').filter(Boolean).slice(0, MAX_FILES);
   } catch {
     files = [];

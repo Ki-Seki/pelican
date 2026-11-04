@@ -5,72 +5,129 @@ import path from 'node:path';
 import { config } from './config.js';
 
 /**
- * The optional login: one password, set on the machine with `pelican password`
- * (never over the network), stored as a scrypt hash. Signing in sets a cookie
- * signed with a secret that changes with the password, so changing or
- * removing the password signs every browser out.
+ * Who may use Pelican. Pelican runs commands as you, so nothing gets in
+ * without proof, also on this computer, where every account and process can
+ * reach 127.0.0.1:
+ *
+ * - token (the default): a random access token, kept in the config folder and
+ *   printed in the link Pelican shows at start. Opening that link, or pasting
+ *   the token, signs the browser in, the way Jupyter does.
+ * - password: set on the computer with `pelican password` (never over the
+ *   network), stored as a scrypt hash. For reaching Pelican from a phone.
+ * - none: `--no-auth`, for when something in front already authenticates
+ *   (a reverse proxy, a gateway), and for the demo, which holds nothing private.
+ *
+ * Signing in sets a cookie signed with a secret that belongs to the token or
+ * the password and changes with it, so resetting either signs every browser out.
  */
-type Stored = { version: 1; salt: string; hash: string; secret: string; N: number; r: number; p: number };
+export type AuthMode = 'none' | 'password' | 'token';
 
-const file = () => path.join(config.configDir, 'auth.json');
+type Password = { version: 1; salt: string; hash: string; secret: string; N: number; r: number; p: number };
+type Token = { version: 1; token: string; secret: string };
+
+const passwordFile = () => path.join(config.configDir, 'auth.json');
+const tokenFile = () => path.join(config.configDir, 'token.json');
 const SESSION_DAYS = 30;
 const PARAMS = { N: 16384, r: 8, p: 1 };
 
-let stored: Stored | undefined;
+let password: Password | undefined;
+let token: Token | undefined;
 let loaded = false;
 
-function derive(password: string, salt: Buffer, params: { N: number; r: number; p: number }): Promise<Buffer> {
+function derive(text: string, salt: Buffer, params: { N: number; r: number; p: number }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    scrypt(password.normalize('NFKC'), salt, 32, { ...params, maxmem: 64 * 1024 * 1024 }, (error, key) => (error ? reject(error) : resolve(key)));
+    scrypt(text.normalize('NFKC'), salt, 32, { ...params, maxmem: 64 * 1024 * 1024 }, (error, key) => (error ? reject(error) : resolve(key)));
   });
 }
 
-export async function loadAuth(): Promise<Stored | undefined> {
-  if (loaded) return stored;
+async function writePrivate(file: string, value: unknown): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+const readJson = async <T>(file: string): Promise<T | undefined> => {
   try {
-    stored = JSON.parse(await readFile(file(), 'utf8')) as Stored;
+    return JSON.parse(await readFile(file, 'utf8')) as T;
   } catch {
-    stored = undefined;
+    return undefined;
+  }
+};
+
+/** Reads the password and the access token, making the token on first use. */
+export async function loadAuth(): Promise<void> {
+  if (loaded) return;
+  password = await readJson<Password>(passwordFile());
+  if (config.auth !== 'none') {
+    token = await readJson<Token>(tokenFile());
+    if (!token?.token || !token.secret) await resetToken();
   }
   loaded = true;
-  return stored;
+}
+
+export function authMode(): AuthMode {
+  if (config.auth === 'none') return 'none';
+  return password ? 'password' : 'token';
 }
 
 export function passwordSet(): boolean {
-  return Boolean(stored);
+  return Boolean(password);
 }
 
-export async function setPassword(password: string): Promise<void> {
+/** The access token, for the link Pelican prints; undefined when it is not in use. */
+export function accessToken(): string | undefined {
+  return authMode() === 'token' ? token?.token : undefined;
+}
+
+/** A new access token: links and browsers signed in with the old one stop working. */
+export async function resetToken(): Promise<string> {
+  token = { version: 1, token: randomBytes(24).toString('base64url'), secret: randomBytes(32).toString('base64') };
+  await writePrivate(tokenFile(), token);
+  return token.token;
+}
+
+export async function setPassword(text: string): Promise<void> {
   const salt = randomBytes(16);
-  const hash = await derive(password, salt, PARAMS);
-  const next: Stored = { version: 1, salt: salt.toString('base64'), hash: hash.toString('base64'), secret: randomBytes(32).toString('base64'), ...PARAMS };
-  await mkdir(path.dirname(file()), { recursive: true, mode: 0o700 });
-  await writeFile(file(), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  stored = next;
+  const hash = await derive(text, salt, PARAMS);
+  password = { version: 1, salt: salt.toString('base64'), hash: hash.toString('base64'), secret: randomBytes(32).toString('base64'), ...PARAMS };
+  await writePrivate(passwordFile(), password);
   loaded = true;
 }
 
 export async function clearPassword(): Promise<void> {
-  await rm(file(), { force: true });
-  stored = undefined;
-  loaded = true;
+  await rm(passwordFile(), { force: true });
+  password = undefined;
 }
 
-export async function checkPassword(password: string): Promise<boolean> {
-  if (!stored) return false;
-  const expected = Buffer.from(stored.hash, 'base64');
-  const actual = await derive(password, Buffer.from(stored.salt, 'base64'), stored);
+export async function checkPassword(text: string): Promise<boolean> {
+  if (!password) return false;
+  const expected = Buffer.from(password.hash, 'base64');
+  const actual = await derive(text, Buffer.from(password.salt, 'base64'), password);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-/** Cookie name: one per password, so two Pelicans on one origin do not sign each other out. */
+const same = (a: string, b: string) => {
+  const x = createHash('sha256').update(a).digest();
+  const y = createHash('sha256').update(b).digest();
+  return timingSafeEqual(x, y);
+};
+
+/** Whether `given` is the access token (only while the token is how Pelican signs in). */
+export function checkToken(given: string | undefined): boolean {
+  const current = accessToken();
+  return Boolean(current && given && same(given, current));
+}
+
+/** The secret that signs cookies in the current mode. */
+const secret = () => (authMode() === 'password' ? password?.secret : authMode() === 'token' ? token?.secret : undefined);
+
+/** Cookie name: one per secret, so two Pelicans on one origin do not sign each other out. */
 export function cookieName(): string {
-  const id = stored ? createHash('sha256').update(stored.secret).digest('hex').slice(0, 8) : 'none';
-  return `pelican_${id}`;
+  const value = secret();
+  return `pelican_${value ? createHash('sha256').update(value).digest('hex').slice(0, 8) : 'none'}`;
 }
 
 function sign(expires: number): string {
-  return createHmac('sha256', Buffer.from(stored!.secret, 'base64')).update(String(expires)).digest('base64url');
+  return createHmac('sha256', Buffer.from(secret() ?? '', 'base64')).update(String(expires)).digest('base64url');
 }
 
 export function newSessionCookie(): { name: string; value: string; maxAge: number } {
@@ -87,9 +144,15 @@ function cookieValue(header: string | undefined, name: string): string | undefin
   return undefined;
 }
 
-/** True when no password is set, or the request carries a valid session cookie. */
-export function signedIn(cookieHeader: string | undefined): boolean {
-  if (!stored) return true;
+/**
+ * Whether a request may use Pelican: always when nothing is required, else with a
+ * valid session cookie, or (token mode) the token as `Authorization: Bearer <token>`.
+ */
+export function signedIn(cookieHeader: string | undefined, authorization?: string): boolean {
+  const mode = authMode();
+  if (mode === 'none') return true;
+  if (mode === 'token' && authorization?.startsWith('Bearer ') && checkToken(authorization.slice(7).trim())) return true;
+  if (!secret()) return false;
   const value = cookieValue(cookieHeader, cookieName());
   if (!value) return false;
   const [expires, mac] = value.split('.');
@@ -100,16 +163,36 @@ export function signedIn(cookieHeader: string | undefined): boolean {
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
 
-const attempts = new Map<string, { count: number; resetAt: number }>();
+// Failed sign-ins: at most 10 per client and 30 in all every 10 minutes, so neither
+// a rotating client key nor many clients together can guess for long.
+const WINDOW_MS = 10 * 60_000;
+const PER_CLIENT = 10;
+const IN_ALL = 30;
+const failures = new Map<string, number[]>();
+let allFailures: number[] = [];
 
-/** At most 10 password attempts per client every 10 minutes. */
-export function allowAttempt(client: string): boolean {
-  const now = Date.now();
-  const entry = attempts.get(client);
-  if (!entry || entry.resetAt < now) {
-    attempts.set(client, { count: 1, resetAt: now + 10 * 60_000 });
-    return true;
+const recent = (times: number[], now: number) => times.filter((t) => now - t < WINDOW_MS);
+
+/** Whether this client may try to sign in now. */
+export function attemptAllowed(client: string, now = Date.now()): boolean {
+  allFailures = recent(allFailures, now);
+  if (allFailures.length >= IN_ALL) return false;
+  return recent(failures.get(client) ?? [], now).length < PER_CLIENT;
+}
+
+/** Counts a wrong password or token against the client and against everyone. */
+export function noteFailure(client: string, now = Date.now()): void {
+  allFailures.push(now);
+  failures.set(client, [...recent(failures.get(client) ?? [], now), now]);
+  // Forget clients whose failures have all expired, and never keep more than a few thousand.
+  if (failures.size > 1000) {
+    for (const [key, times] of failures) if (recent(times, now).length === 0) failures.delete(key);
+    while (failures.size > 5000) failures.delete(failures.keys().next().value!);
   }
-  entry.count += 1;
-  return entry.count <= 10;
+}
+
+/** For tests: start counting afresh. */
+export function resetAttempts(): void {
+  failures.clear();
+  allFailures = [];
 }

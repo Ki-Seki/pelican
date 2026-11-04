@@ -61,27 +61,27 @@ npx pelican-cc --demo
 <span class="c"># install it</span>
 npm install -g pelican-cc
 pelican</code></pre>
-      <p>Open <code>http://localhost:7860</code>: your sessions are there already. When Pelican listens beyond this computer it also prints a QR code to open it on your phone, and Settings shows one for whatever address you are using.</p>
+      <p>Pelican prints a link, <code>http://localhost:7860/?token=…</code>. Open it: it signs this browser in, and your sessions are there already. <code>pelican token</code> prints it again. When Pelican listens beyond this computer it also prints a QR code to open it on your phone, and Settings shows one for whatever address you are using.</p>
       <p>To run it from a clone instead: <code>git clone https://github.com/Ki-Seki/pelican && cd pelican && npm ci && npm run build && npm link</code>.</p>
       <div class="callout"><b>Keep it running.</b> Pelican only answers while it runs. Start it at login with a launchd agent on macOS or a systemd user service on Linux, or in a <code>tmux</code> session.</div>
     </section>
 
     <section id="phone">
       <h2>Use it from your phone</h2>
-      <p>Pelican listens on <code>127.0.0.1</code>, so only your computer can reach it until you choose a way in. Whoever can use Pelican can run Claude Code as you, so pick one that keeps everyone else out.</p>
+      <p>Pelican listens on <code>127.0.0.1</code>, so only your computer can reach it until you choose a way in, and every browser signs in, with the link Pelican printed or with a password. Whoever can use Pelican can run Claude Code as you, so pick a way in that keeps everyone else out.</p>
       <h3>Tailscale (recommended)</h3>
       <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need.</p>
-      <pre><code>pelican password             <span class="c"># once; protects Pelican beyond this computer</span>
-tailscale serve --bg 7860    <span class="c"># https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</span></code></pre>
-      <p>Open <code>https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</code> on your phone. If changes are refused with a 403, add that address to <code>PELICAN_ALLOWED_ORIGINS</code>.</p>
+      <pre><code>tailscale serve --bg 7860    <span class="c"># https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</span></code></pre>
+      <p>On the computer, open <code>https://&lt;computer&gt;.&lt;tailnet&gt;.ts.net</code> and paste the link Pelican printed to sign in. Then open Settings and scan the code with your phone: it opens Pelican there, signed in. Or set a password with <code>pelican password</code> and type it on the phone. If changes are refused with a 403, add the address to <code>PELICAN_ALLOWED_ORIGINS</code>.</p>
       <h3>An SSH tunnel</h3>
-      <p>From a laptop, or a phone app that forwards ports (Termius, Blink): <code>ssh -N -L 7860:127.0.0.1:7860 you@computer</code>, then open <code>http://localhost:7860</code>. No password is needed, since the page is local to the phone.</p>
+      <p>From a laptop, or a phone app that forwards ports (Termius, Blink): <code>ssh -N -L 7860:127.0.0.1:7860 you@computer</code>, then open the link Pelican printed.</p>
       <h3>Your own reverse proxy</h3>
-      <p>Put Pelican behind Caddy or nginx with HTTPS. Tell it the public address, and either set a password or let the proxy authenticate:</p>
-      <pre><code>PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican --no-auth</code></pre>
-      <p>Pelican works under any path prefix, so <code>https://example.com/pelican/</code> is fine.</p>
+      <p>Put Pelican behind Caddy or nginx with HTTPS and tell it the public address. Browsers sign in with the token or your password; if the proxy already authenticates, turn Pelican’s own sign-in off:</p>
+      <pre><code>PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican
+PELICAN_ALLOWED_ORIGINS=https://pelican.example.com pelican --no-auth   <span class="c"># the proxy authenticates</span></code></pre>
+      <p>With the proxy on the same computer, <code>PELICAN_TRUSTED_PROXY=1</code> lets Pelican count failed sign-ins per client. Pelican works under any path prefix, so <code>https://example.com/pelican/</code> is fine.</p>
       <h3>On the home network</h3>
-      <p><code>pelican password && pelican --host 0.0.0.0</code> works across your Wi-Fi, but over plain HTTP: the password travels in the clear and notifications are off. Prefer Tailscale.</p>
+      <p><code>pelican --host 0.0.0.0</code> prints a QR code for your phone and works across your Wi-Fi, but over plain HTTP: the sign-in travels in the clear and notifications are off. Prefer Tailscale.</p>
       <h3>Add it to your Home Screen</h3>
       <p>In Safari, Share → Add to Home Screen; in Chrome, Install app. Pelican then opens full screen, and on an iPhone notifications only work this way.</p>
     </section>
@@ -132,31 +132,35 @@ tailscale serve --bg 7860    <span class="c"># https://&lt;computer&gt;.&lt;tail
         <thead><tr><th>Option</th><th>Environment</th><th>Default</th><th></th></tr></thead>
         <tbody>
           <tr><td><code>-p, --port</code></td><td><code>PELICAN_PORT</code></td><td><code>7860</code></td><td>Port to listen on</td></tr>
-          <tr><td><code>-H, --host</code></td><td><code>PELICAN_HOST</code></td><td><code>127.0.0.1</code></td><td>Address to listen on; any other needs a password</td></tr>
+          <tr><td><code>-H, --host</code></td><td><code>PELICAN_HOST</code></td><td><code>127.0.0.1</code></td><td>Address to listen on</td></tr>
           <tr><td><code>--name</code></td><td><code>PELICAN_MACHINE</code></td><td>host name</td><td>Name shown for this computer</td></tr>
-          <tr><td><code>--no-auth</code></td><td><code>PELICAN_AUTH=none</code></td><td></td><td>Never ask for a password, when a proxy in front authenticates</td></tr>
+          <tr><td><code>--no-auth</code></td><td><code>PELICAN_AUTH=none</code></td><td></td><td>Ask no one to sign in, when a proxy in front authenticates</td></tr>
           <tr><td><code>--demo</code></td><td></td><td></td><td>Made-up sessions; nothing runs</td></tr>
           <tr><td></td><td><code>PELICAN_ALLOWED_ORIGINS</code></td><td></td><td>Comma-separated origins allowed to make changes, such as a proxy’s public URL</td></tr>
-          <tr><td></td><td><code>PELICAN_ALLOWED_HOSTS</code></td><td></td><td>Host names answered without a password, besides this computer’s (<code>*</code> for any)</td></tr>
+          <tr><td></td><td><code>PELICAN_ALLOWED_HOSTS</code></td><td></td><td>Host names to answer to, besides this computer’s names and addresses, loopback and <code>*.ts.net</code></td></tr>
+          <tr><td></td><td><code>PELICAN_TRUSTED_PROXY</code></td><td></td><td><code>1</code>: believe <code>X-Forwarded-For</code> from a proxy on this computer, so sign-in limits count each client</td></tr>
+          <tr><td></td><td><code>PELICAN_FRAME_ANCESTORS</code></td><td></td><td>Origins allowed to show Pelican in a frame, besides its own</td></tr>
           <tr><td></td><td><code>PELICAN_SESSION_URL</code></td><td></td><td>Where a tapped notification opens a session (<code>{id}</code> is replaced), for a page that embeds Pelican</td></tr>
           <tr><td></td><td><code>PELICAN_IDLE_CLOSE_MS</code></td><td>30 min</td><td>How long an idle Claude process stays open; the next message resumes the session</td></tr>
           <tr><td></td><td><code>PELICAN_CLAUDE_PATH</code></td><td>bundled</td><td>The Claude Code executable to run</td></tr>
           <tr><td></td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>~/.claude</code></td><td>Where Claude Code keeps its sessions</td></tr>
-          <tr><td></td><td><code>PELICAN_CONFIG_DIR</code></td><td><code>~/.config/pelican</code></td><td>Where the password hash is kept</td></tr>
+          <tr><td></td><td><code>PELICAN_CONFIG_DIR</code></td><td><code>~/.config/pelican</code></td><td>The access token and the password hash</td></tr>
           <tr><td></td><td><code>PELICAN_STATE_DIR</code></td><td><code>~/.local/state/pelican</code></td><td>Uploads, push keys and subscriptions</td></tr>
         </tbody>
       </table>
-      <p><code>pelican password</code> sets or changes the password and <code>pelican password --off</code> removes it; either signs every browser out.</p>
+      <p><code>pelican token</code> prints the link that signs a browser in, and <code>pelican token --reset</code> makes a new token. <code>pelican password</code> sets a password, which replaces the token until <code>pelican password --off</code> removes it. A new token or password signs every browser out.</p>
     </section>
 
     <section id="security">
       <h2>Security</h2>
       <p>Treat access to Pelican like SSH access: it can read your sessions and run Claude Code, and so commands, as you.</p>
       <ul>
-        <li><b>Loopback by default.</b> Pelican listens on <code>127.0.0.1</code> and refuses any other address without a password, unless you pass <code>--no-auth</code>.</li>
-        <li><b>The password</b> is set on the computer itself, never over the network, and kept as a scrypt hash readable only by you. The sign-in cookie is signed with a secret that changes with the password. Each client gets ten attempts every ten minutes.</li>
-        <li><b>DNS rebinding.</b> Without a password, the server answers only to this computer’s names, loopback and the ones you configure, so a web page cannot point its own domain at <code>127.0.0.1</code> and read your sessions through your browser.</li>
-        <li><b>Cross-site requests.</b> Anything that changes something, and the WebSocket, must come from Pelican’s own page or an origin you allowed.</li>
+        <li><b>Every browser signs in, also on this computer.</b> Pelican listens on <code>127.0.0.1</code> and asks for the access token in the link it prints, or for your password, so other accounts and programs on the computer get nowhere. The token is random and kept readable only by you; the password is set on the computer itself and kept as a scrypt hash. Failed sign-ins are limited to 10 per client and 30 in all every 10 minutes.</li>
+        <li><b>Cookies</b> are <code>HttpOnly</code> and <code>SameSite=Strict</code>, signed with a secret that changes with the token or password.</li>
+        <li><b>Only Pelican’s own page.</b> Its requests carry a header another site cannot add, requests a browser says come from another site are refused (reads too), and changes must come from Pelican’s origin or one you allowed. The server answers only to this computer’s names, loopback, <code>*.ts.net</code> and the names you configure (DNS rebinding), and only Pelican’s own origin may frame it.</li>
+        <li><b>What Claude writes stays on the screen.</b> Images in a reply load only from Pelican; pages and visuals Claude makes render in a sandboxed frame that cannot reach Pelican and talks to no server but the public script and font CDNs.</li>
+        <li><b>Folders run nothing of their own until Claude has worked in them.</b> Looking at a fresh clone loads only your user settings, not its hooks or MCP servers, and git runs with the repository’s own helpers turned off.</li>
+        <li><b><code>--no-auth</code></b> is for when something in front of Pelican authenticates. The demo signs no one in, so it stays on <code>127.0.0.1</code> unless you pass it.</li>
         <li><b>No copies.</b> Pelican reads Claude Code’s transcripts where Claude Code writes them. It stores uploads, push keys and subscriptions in its state folder, and sends nothing anywhere but your browser and, for notifications, your browser’s push service.</li>
       </ul>
       <p>Report a vulnerability privately through <a href="https://github.com/Ki-Seki/pelican/security/advisories/new">GitHub security advisories</a>.</p>

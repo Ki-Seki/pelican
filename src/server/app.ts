@@ -1,16 +1,18 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import path from 'node:path';
 
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
 import type { Attachment, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
-import { allowAttempt, checkPassword, cookieName, newSessionCookie, passwordSet, signedIn } from './auth.js';
+import { accessToken, attemptAllowed, authMode, checkPassword, checkToken, cookieName, newSessionCookie, noteFailure, signedIn } from './auth.js';
 import { config } from './config.js';
-import { findUpload, listDirs, readUpload, saveUpload } from './files.js';
+import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { listCompletions, listModels, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
@@ -25,10 +27,10 @@ import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, 
 export const app = new Hono();
 
 /**
- * Who is asking, for limiting password attempts. The address of the connection,
- * unless that is a proxy on this machine (Tailscale, Caddy, nginx): then the
- * client the proxy added last to X-Forwarded-For. Anyone can write that header,
- * so it is believed only from here, and only its last entry.
+ * Who is asking, for limiting sign-in attempts: the address of the connection.
+ * Behind a proxy on this machine that says so (PELICAN_TRUSTED_PROXY=1), the
+ * client the proxy added last to X-Forwarded-For, when that is an IP address.
+ * Anyone can write that header, so it is never believed otherwise.
  */
 function clientAddress(c: Context): string {
   let remote = 'unknown';
@@ -38,9 +40,9 @@ function clientAddress(c: Context): string {
     // Not served by Node (tests): one bucket for all.
   }
   const address = remote.replace(/^::ffff:/, '');
-  if (isLoopback(address)) {
+  if (config.trustedProxy && isLoopback(address)) {
     const forwarded = c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim();
-    if (forwarded) return forwarded;
+    if (forwarded && isIP(forwarded)) return forwarded;
   }
   return address;
 }
@@ -48,23 +50,53 @@ function clientAddress(c: Context): string {
 const secure = (c: { req: { header: (name: string) => string | undefined; url: string } }) =>
   c.req.header('x-forwarded-proto') === 'https' || c.req.url.startsWith('https:');
 
-/** Answers only to host names that point at this server, unless a password protects it. */
+const cookieHeader = (c: Context, name: string, value: string, maxAge: number) =>
+  `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure(c) ? '; Secure' : ''}`;
+
+/** Answers only to host names that point at this server (DNS rebinding). */
 app.use('*', async (c, next) => {
-  if (!passwordSet() && !hostAllowed(c.req.header('host'))) {
-    return c.text('This host name is not allowed. Add it to PELICAN_ALLOWED_HOSTS, or set a password with `pelican password`.', 403);
+  if (!hostAllowed(c.req.header('host'))) {
+    return c.text('This host name is not allowed. Add it to PELICAN_ALLOWED_HOSTS.', 403);
   }
   await next();
 });
 
+// Bodies are small, except an upload; nothing is buffered past these sizes, signed in or not.
+const tooLarge = (c: Context) => c.json({ error: 'Request too large' }, 413);
+const limits = {
+  auth: bodyLimit({ maxSize: 4 * 1024, onError: tooLarge }),
+  upload: bodyLimit({ maxSize: MAX_UPLOAD_BYTES + 64 * 1024, onError: tooLarge }),
+  json: bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }),
+};
+app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth : c.req.path === '/api/uploads' ? limits.upload : limits.json)(c, next));
+
+/** What the page loads without fetch, so it cannot mark: an uploaded image, a download. */
+const unmarked = (c: Context) => c.req.method === 'GET'
+  && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path));
+
 app.use('/api/*', async (c, next) => {
-  if (c.req.method !== 'GET' && c.req.method !== 'HEAD'
-    && !originAllowed(c.req.header('origin'), c.req.header('host'), c.req.header('x-forwarded-host'))) {
+  const origin = c.req.header('origin');
+  const allowedOrigin = Boolean(origin && config.allowedOrigins.includes(origin));
+  // Another site's page can make a browser send requests here, reads included, and some reads
+  // run programs (git, Claude Code). Browsers say where a request comes from: only Pelican's own
+  // page, or a page the config allows, gets in.
+  const site = c.req.header('sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'none' && !allowedOrigin) {
     return c.json({ error: 'Request from another site' }, 403);
   }
-  if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'))) {
+  // Pelican's page also marks every request. Another site cannot add a header without asking
+  // first (CORS), and Pelican never says yes, so this holds in browsers that send no Sec-Fetch-Site.
+  if (!unmarked(c) && c.req.header('x-pelican') !== '1') {
+    return c.json({ error: 'Requests must come from Pelican (send the header X-Pelican: 1)' }, 403);
+  }
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD'
+    && !originAllowed(origin, c.req.header('host'), c.req.header('x-forwarded-host'))) {
+    return c.json({ error: 'Request from another site' }, 403);
+  }
+  if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'), c.req.header('authorization'))) {
     return c.json({ error: 'Sign in to continue', signIn: true }, 401);
   }
-  if (config.demo && c.req.method !== 'GET' && !c.req.path.startsWith('/api/auth') && !c.req.path.startsWith('/api/push')) {
+  if (config.demo && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
     return c.json({ error: 'This is the demo: nothing runs and nothing changes. Start Pelican without --demo to talk to Claude.' }, 403);
   }
   await next();
@@ -75,26 +107,39 @@ app.onError((error, c) => {
   return c.json({ error: error.message }, 500);
 });
 
-app.get('/api/auth', (c) => c.json({ required: passwordSet(), signedIn: signedIn(c.req.header('cookie')) }));
+app.get('/api/auth', (c) => c.json({
+  required: authMode() !== 'none',
+  mode: authMode(),
+  signedIn: signedIn(c.req.header('cookie'), c.req.header('authorization')),
+}));
 
 app.post('/api/auth/login', async (c) => {
-  if (!allowAttempt(clientAddress(c))) return c.json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
-  const { password } = await c.req.json<{ password?: string }>().catch(() => ({ password: undefined }));
-  if (!passwordSet() || typeof password !== 'string' || !(await checkPassword(password))) {
-    return c.json({ error: 'Wrong password' }, 401);
+  const client = clientAddress(c);
+  if (!attemptAllowed(client)) return c.json({ error: 'Too many attempts. Try again in a few minutes.' }, 429);
+  const body = await c.req.json<{ password?: unknown; token?: unknown }>().catch(() => ({} as { password?: unknown; token?: unknown }));
+  const mode = authMode();
+  const ok = mode === 'password' ? typeof body.password === 'string' && (await checkPassword(body.password))
+    : mode === 'token' ? typeof body.token === 'string' && checkToken(body.token.trim())
+      : false;
+  if (!ok) {
+    noteFailure(client);
+    return c.json({ error: mode === 'token' ? 'That is not the access token' : 'Wrong password' }, 401);
   }
   const cookie = newSessionCookie();
-  c.header('Set-Cookie', `${cookie.name}=${cookie.value}; Path=/; Max-Age=${cookie.maxAge}; HttpOnly; SameSite=Lax${secure(c) ? '; Secure' : ''}`);
+  c.header('Set-Cookie', cookieHeader(c, cookie.name, cookie.value, cookie.maxAge));
   return c.json({ ok: true });
 });
 
 app.post('/api/auth/logout', (c) => {
-  c.header('Set-Cookie', `${cookieName()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure(c) ? '; Secure' : ''}`);
+  c.header('Set-Cookie', cookieHeader(c, cookieName(), '', 0));
   return c.json({ ok: true });
 });
 
+/** The access token, for a signed-in page to show as a QR code that signs a phone in. */
+app.get('/api/access', (c) => c.json({ token: accessToken() ?? null }));
+
 app.get('/api/info', (c) => {
-  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: passwordSet(), demo: config.demo };
+  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
   const key = pushKey();
   if (key) info.pushKey = key;
   return c.json(info);
@@ -208,16 +253,9 @@ app.get('/api/sessions/:id/export', async (c) => {
 app.get('/api/models', async (c) => c.json(await listModels()));
 
 app.get('/api/commands', async (c) => {
-  const cwd = c.req.query('cwd');
-  if (!cwd || !(await isDirectory(cwd))) return c.json({ commands: [], agents: [] });
+  const cwd = await folderOf(c);
+  if (!cwd) return c.json({ commands: [], agents: [] });
   return c.json(await listCompletions(cwd));
-});
-
-app.get('/api/qr', async (c) => {
-  const text = c.req.query('text') ?? '';
-  if (!text || text.length > 512) return c.json({ error: 'Nothing to encode' }, 400);
-  const { qrSvg } = await import('./qr.js');
-  return c.body(qrSvg(text), 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'private, max-age=3600' });
 });
 
 app.get('/api/usage', (c) => c.json({
@@ -230,10 +268,24 @@ app.get('/api/usage', (c) => c.json({
 }));
 
 /** The folder a workspace request is about: the session's own, which must exist. */
-async function folderOf(c: Context): Promise<string | undefined> {
-  const cwd = c.req.query('cwd');
-  return cwd && (await isDirectory(cwd)) ? cwd : undefined;
+/** Whether a path is inside the demo's own folder (the demo never shows anything else). */
+async function inDemo(dir: string): Promise<boolean> {
+  try {
+    const [real, root] = await Promise.all([realpath(dir), realpath(config.home)]);
+    return real === root || real.startsWith(`${root}${path.sep}`);
+  } catch {
+    return false;
+  }
 }
+
+/** A folder named in a request: an existing absolute path, and in the demo only the demo's own. */
+async function checkedFolder(cwd: string | undefined): Promise<string | undefined> {
+  if (!cwd || !path.isAbsolute(cwd) || !(await isDirectory(cwd))) return undefined;
+  if (config.demo && !(await inDemo(cwd))) return undefined;
+  return cwd;
+}
+
+const folderOf = (c: Context) => checkedFolder(c.req.query('cwd'));
 
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);
@@ -318,8 +370,8 @@ app.get('/api/sessions/:id/agents/:agent', async (c) => {
 });
 
 app.get('/api/files', async (c) => {
-  const cwd = c.req.query('cwd');
-  if (!cwd || !(await isDirectory(cwd))) return c.json({ files: [] });
+  const cwd = await folderOf(c);
+  if (!cwd) return c.json({ files: [] });
   return c.json({ files: await searchFiles(cwd, c.req.query('q') ?? '') });
 });
 
@@ -347,8 +399,10 @@ app.get('/api/projects', async (c) => {
 });
 
 app.get('/api/dirs', async (c) => {
+  const asked = c.req.query('path');
+  if (config.demo && asked && !(await inDemo(asked))) return c.json({ error: 'Not part of the demo' }, 404);
   try {
-    return c.json(await listDirs(c.req.query('path'), c.req.query('hidden') === '1'));
+    return c.json(await listDirs(asked, c.req.query('hidden') === '1'));
   } catch (error) {
     return c.json({ error: (error as Error).message }, 400);
   }
@@ -372,14 +426,27 @@ app.get('/api/uploads/:id', async (c) => {
 
 app.get('/api/push/key', (c) => c.json({ key: pushKey() ?? null }));
 
+/** A push subscription as browsers make them: an https endpoint, a P-256 key, a 16-byte secret. */
+function validSubscription(value: unknown): value is { endpoint: string; keys: { p256dh: string; auth: string } } {
+  const { endpoint, keys } = (value ?? {}) as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+  const bytes = (text: unknown) => (typeof text === 'string' && /^[\w-]+=*$/.test(text) ? Buffer.from(text, 'base64url').length : -1);
+  return typeof endpoint === 'string' && endpoint.length <= 2048 && endpoint.startsWith('https://')
+    && bytes(keys?.p256dh) === 65 && bytes(keys?.auth) === 16;
+}
+
+const pageUrl = (value: unknown) => typeof value === 'string' && value.length <= 2048 && /^https?:\/\//.test(value);
+
 app.post('/api/push/subscribe', async (c) => {
-  const body = await c.req.json<{ subscription: { endpoint: string; keys: { p256dh: string; auth: string } }; openUrl?: string }>();
-  await addSubscription({ ...body.subscription, ...(body.openUrl ? { openUrl: body.openUrl } : {}) });
+  const body = await c.req.json<{ subscription?: unknown; openUrl?: unknown }>().catch(() => ({}) as { subscription?: unknown; openUrl?: unknown });
+  if (!validSubscription(body.subscription)) return c.json({ error: 'Not a push subscription' }, 400);
+  const { endpoint, keys } = body.subscription;
+  await addSubscription({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth }, ...(pageUrl(body.openUrl) ? { openUrl: body.openUrl as string } : {}) });
   return c.json({ ok: true });
 });
 
 app.post('/api/push/unsubscribe', async (c) => {
-  const { endpoint } = await c.req.json<{ endpoint: string }>();
+  const { endpoint } = await c.req.json<{ endpoint?: unknown }>().catch(() => ({ endpoint: undefined }));
+  if (typeof endpoint !== 'string') return c.json({ error: 'No endpoint' }, 400);
   await removeSubscription(endpoint);
   return c.json({ ok: true });
 });
@@ -392,6 +459,25 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
+/**
+ * - Only Pelican's own origin, and pages the config names, may show it in a frame: any other page
+ *   could lay its own buttons over Pelican's and have you approve something (clickjacking).
+ * - Images and media come only from Pelican: a picture in Claude's reply, or in a page it wrote,
+ *   could otherwise carry what is in the conversation to another server just by loading. The
+ *   preview frames inherit this, on top of their own policy (Preview.tsx).
+ */
+const POLICY: Record<string, string> = {
+  'Content-Security-Policy': [
+    `frame-ancestors 'self'${config.frameAncestors.map((o) => ` ${o}`).join('')}`,
+    "frame-src 'self' blob: data:",
+    "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; '),
+  ...(config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
+};
+
 /** The web app. Every URL in it is relative, so it works under any path a proxy mounts it at. */
 app.get('/*', async (c) => {
   if (!config.webDir) return c.text('The web app is not built. Run `npm run build`, or use `npm run dev`.', 503);
@@ -401,6 +487,17 @@ app.get('/*', async (c) => {
     pathname = decodeURIComponent(new URL(c.req.url).pathname);
   } catch {
     return c.text('Bad path', 400);
+  }
+  // Opening the link Pelican printed (…/?token=…) signs this browser in, then drops the token from the address.
+  const offered = c.req.query('token');
+  if (offered !== undefined) {
+    const url = new URL(c.req.url);
+    url.searchParams.delete('token');
+    // One leading slash: `//other.example/` would send the browser to another site.
+    const location = `${url.pathname.replace(/^\/+/, '/')}${url.search}`;
+    if (!checkToken(offered)) return c.redirect(location, 302);
+    const cookie = newSessionCookie();
+    return c.body(null, 302, { Location: location, 'Set-Cookie': cookieHeader(c, cookie.name, cookie.value, cookie.maxAge), 'Cache-Control': 'no-store' });
   }
   const requested = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
   let file = path.join(root, requested);
@@ -414,6 +511,7 @@ app.get('/*', async (c) => {
       'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
+      ...POLICY,
     });
   } catch {
     return c.notFound();

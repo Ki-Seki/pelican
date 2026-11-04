@@ -13,8 +13,10 @@ npm run dev
 ```
 
 `npm run dev` starts the server on port 7860, restarting it when its code changes, and the web app
-on <http://127.0.0.1:5173> with hot reload. To work without touching your own sessions, build once
-and use the demo: `npm run build && npm run demo`.
+on <http://127.0.0.1:5173> with hot reload. In development nobody signs in (it sets
+`PELICAN_AUTH=none` and stays on `127.0.0.1`); `PELICAN_AUTH=token npm run dev` tries the sign-in.
+To work without touching your own sessions, build once and use the demo:
+`npm run build && npm run demo`.
 
 ## Before you send a change
 
@@ -26,14 +28,16 @@ npm run build
 
 Check what you changed in a browser, at phone size too. `node scripts/shot.mjs <url> <out.png>`
 takes a screenshot with headless Chrome (set `CHROME` if it is not in the usual place), and
-`node scripts/e2e-live.mjs` drives one real turn through the app against a running Pelican.
+`node scripts/e2e-live.mjs <link> <folder> <out>` drives one real turn through the app against a
+running Pelican (the link it printed, with the token).
 
 ## Where things are
 
 | Path | What it holds |
 | --- | --- |
-| `src/server/cli.ts` | The `pelican` command: options, `pelican password`, start-up checks |
-| `src/server/app.ts` | The HTTP API, and the host, origin and sign-in checks in front of it |
+| `src/server/cli.ts` | The `pelican` command: options, `pelican token`, `pelican password`, start-up checks |
+| `src/server/auth.ts` | The access token, the password and the sign-in cookie |
+| `src/server/app.ts` | The HTTP API, and the host, origin, request and sign-in checks in front of it |
 | `src/server/runner.ts` | Runs Claude Code through the Agent SDK, one process per active session |
 | `src/server/history.ts` | Reads a transcript, across compactions, incrementally |
 | `src/server/feed.ts` | Delivers a session's new messages to the pages watching it |

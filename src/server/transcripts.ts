@@ -65,7 +65,11 @@ function replyText(row: { message?: { content?: unknown } }): string | undefined
  * notifications to idle sessions, which moves the file's mtime although
  * nothing was said; only turns count as activity.
  */
-export type LastTurn = { time: number; cwd?: string; gitBranch?: string; preview?: string };
+export type LastTurn = {
+  time: number; cwd?: string; gitBranch?: string; preview?: string;
+  /** The row was copied from another session by a fork (it carries `forkedFrom`): nothing ran here then. */
+  copied?: boolean;
+};
 
 /** After the last turn, how far back to look for a reply with text (tool calls in between). */
 const PREVIEW_SCAN = 4 * 1024 * 1024;
@@ -102,7 +106,7 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
         if (found && !line.includes('"type":"text"') && !line.includes('"content":"')) continue;
         try {
           const row = JSON.parse(line) as {
-            type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown; message?: { content?: unknown };
+            type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown; message?: { content?: unknown }; forkedFrom?: unknown;
           };
           if ((row.type !== 'user' && row.type !== 'assistant') || row.isSidechain || typeof row.timestamp !== 'string') continue;
           if (!found) {
@@ -112,6 +116,7 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
               time,
               ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
               ...(typeof row.gitBranch === 'string' ? { gitBranch: row.gitBranch } : {}),
+              ...(row.forkedFrom ? { copied: true } : {}),
             };
             foundAt = end;
           }
