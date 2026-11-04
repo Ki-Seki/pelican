@@ -1,0 +1,57 @@
+{
+  "name": "pelican",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A phone-first web app for your Claude Code sessions",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "pelican": "dist/server/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build && node scripts/build-server.mjs",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.16",
+    "web-push": "^3.6.7",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.4",
+    "@tanstack/react-query": "^5.105.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/web-push": "^3.6.4",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.2.1",
+    "diff": "^9.0.0",
+    "esbuild": "^0.27.0",
+    "jsdom": "^27.0.0",
+    "lucide-react": "^1.68.0",
+    "playwright-core": "^1.64.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "tailwindcss": "^4.3.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}
