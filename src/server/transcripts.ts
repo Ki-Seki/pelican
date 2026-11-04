@@ -43,23 +43,43 @@ export async function refreshTranscriptIndex(): Promise<void> {
 const CHUNK = 256 * 1024;
 const MAX_SCAN = 16 * 1024 * 1024;
 
+/** Text blocks of an assistant row, as one line for a session-list preview. */
+function replyText(row: { message?: { content?: unknown } }): string | undefined {
+  const content = row.message?.content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((b): b is { type: string; text: string } => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join(' ')
+    .replace(/[`*_#>|]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text ? text.slice(0, 160) : undefined;
+}
+
 /**
- * Timestamp (ms) of the last user or assistant row, read backwards from the end.
+ * The last user or assistant row, read backwards from the end: its time, the
+ * folder and branch it ran in, and the text of Claude's latest reply.
  *
  * Claude Desktop appends metadata rows (titles, cost state) and queued
  * notifications to idle sessions, which moves the file's mtime although
  * nothing was said; only turns count as activity.
  */
-export type LastTurn = { time: number; cwd?: string; gitBranch?: string };
+export type LastTurn = { time: number; cwd?: string; gitBranch?: string; preview?: string };
+
+/** After the last turn, how far back to look for a reply with text (tool calls in between). */
+const PREVIEW_SCAN = 4 * 1024 * 1024;
 
 export async function readLastTurn(file: string): Promise<LastTurn | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let found: LastTurn | undefined;
+  let foundAt = 0;
   try {
     handle = await open(file, 'r');
     const { size } = await handle.stat();
     let end = size;
     let carry = Buffer.alloc(0);
-    while (end > 0 && size - end < MAX_SCAN) {
+    while (end > 0 && size - end < MAX_SCAN && !(found && foundAt - end > PREVIEW_SCAN)) {
       const start = Math.max(0, end - CHUNK);
       const chunk = Buffer.alloc(end - start);
       await handle.read(chunk, 0, chunk.length, start);
@@ -78,17 +98,29 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const line = lines[i]!;
         if (!line.includes('"timestamp"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
+        // Past the last turn, only rows with text matter: a reply, or the prompt that started the turn.
+        if (found && !line.includes('"type":"text"') && !line.includes('"content":"')) continue;
         try {
-          const row = JSON.parse(line) as { type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown };
-          if ((row.type === 'user' || row.type === 'assistant') && !row.isSidechain && typeof row.timestamp === 'string') {
+          const row = JSON.parse(line) as {
+            type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown; message?: { content?: unknown };
+          };
+          if ((row.type !== 'user' && row.type !== 'assistant') || row.isSidechain || typeof row.timestamp !== 'string') continue;
+          if (!found) {
             const time = Date.parse(row.timestamp);
-            if (!Number.isNaN(time)) {
-              return {
-                time,
-                ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
-                ...(typeof row.gitBranch === 'string' ? { gitBranch: row.gitBranch } : {}),
-              };
-            }
+            if (Number.isNaN(time)) continue;
+            found = {
+              time,
+              ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
+              ...(typeof row.gitBranch === 'string' ? { gitBranch: row.gitBranch } : {}),
+            };
+            foundAt = end;
+          }
+          if (row.type === 'assistant') {
+            const preview = replyText(row);
+            if (preview) return { ...found, preview };
+          } else if (found && row.type === 'user' && typeof (row.message as { content?: unknown })?.content === 'string') {
+            // Reached the prompt before any reply text: the turn has said nothing yet.
+            return found;
           }
         } catch {
           // A row can be half-written while Claude is streaming into the file.
@@ -100,7 +132,7 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
   } finally {
     await handle?.close();
   }
-  return undefined;
+  return found;
 }
 
 const lastTurnCache = new Map<string, { size: number; mtimeMs: number; value: LastTurn | undefined }>();

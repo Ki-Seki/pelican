@@ -29,6 +29,7 @@ function localMessage(uuid: string, text: string, attachments: Attachment[]): Ch
 export function Chat({
   sessionId,
   newCwd,
+  scratch = false,
   home,
   wide,
   onBack,
@@ -36,12 +37,14 @@ export function Chat({
 }: {
   sessionId?: string;
   newCwd?: string;
+  /** A new session in a fresh scratch folder, made when the first message is sent. */
+  scratch?: boolean;
   home?: string;
   wide: boolean;
   onBack: () => void;
   onOpen: (id: string, replace?: boolean) => void;
 }) {
-  const viewId = sessionId ?? `new:${newCwd}`;
+  const viewId = sessionId ?? `new:${scratch ? 'scratch' : newCwd}`;
   const view = useSessionView(viewId);
   const queryClient = useQueryClient();
   const { data: models } = useQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000 });
@@ -92,9 +95,9 @@ export function Chat({
       if (sessionId) {
         addLocalMessage(sessionId, message);
         await api.send(sessionId, body);
-      } else if (newCwd) {
+      } else if (newCwd || scratch) {
         addLocalMessage(viewId, message);
-        const { sessionId: created } = await api.create({ ...body, cwd: newCwd });
+        const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -106,7 +109,7 @@ export function Chat({
 
   const firstPrompt = view.messages.find((m) => m.role === 'user' && m.blocks.some((b) => b.type === 'text'));
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
-  const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : newCwd ? 'New session' : '');
+  const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const permissions = view.run?.permissions ?? [];
   const busy = Boolean(view.run?.busy);
@@ -127,7 +130,7 @@ export function Chat({
     }
   };
 
-  const subtitle = useMemo(() => (cwd ? shortPath(cwd, home) : ''), [cwd, home]);
+  const subtitle = useMemo(() => (cwd ? shortPath(cwd, home) : scratch ? 'A new folder in ~/scratch' : ''), [cwd, home, scratch]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -140,7 +143,7 @@ export function Chat({
         <button type="button" onClick={rename} className={`min-w-0 flex-1 rounded-lg px-2 py-1 text-left ${wide ? 'pl-3' : ''}`}>
           <div className="truncate text-[15px] font-medium">{title || ' '}</div>
           <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
-            <StatusBadge status={status} />
+            <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} />
             <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
             {session?.gitBranch && (
               <span className="flex min-w-0 shrink items-center gap-0.5 truncate"><GitBranch className="size-3 shrink-0" />{session.gitBranch}</span>
@@ -167,7 +170,7 @@ export function Chat({
         {session?.status === 'live' && !view.run && (
           <div className="mx-auto mb-2 flex max-w-3xl items-start gap-2 px-1 text-[12.5px] leading-snug text-muted">
             <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-live" />
-            Claude is working on this session in another app right now. Sending here starts a second Claude in it.
+            Claude is working on this session in {session.runningIn ?? 'another app'} right now. Sending here starts a second Claude in it.
           </div>
         )}
         {sendError && (

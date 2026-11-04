@@ -6,6 +6,8 @@ import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, SessionStatus, SessionSummary } from '../shared/protocol.js';
 import { config } from './config.js';
+import { isScratchFolder } from './folders.js';
+import { type LiveProcess, liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
@@ -18,14 +20,16 @@ function titleOf(info: SDKSessionInfo): string {
   return title.replace(/\s+/g, ' ').trim() || 'Untitled session';
 }
 
-async function summarize(info: SDKSessionInfo, status: StatusSource): Promise<SessionSummary> {
+async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>): Promise<SessionSummary> {
   const file = await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file) : undefined;
   const lastTurn = times?.lastTurn;
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
   let state: SessionStatus = own ?? 'idle';
-  if (!own && lastTurn && Date.now() - lastTurn.time < config.liveWindowMs) state = 'live';
+  // Another app's Claude process says it is busy; failing that, a turn written moments ago.
+  const elsewhere = own ? undefined : live.get(info.sessionId);
+  if (!own && (elsewhere?.busy || (lastTurn && Date.now() - lastTurn.time < config.liveWindowMs))) state = 'live';
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
@@ -39,6 +43,9 @@ async function summarize(info: SDKSessionInfo, status: StatusSource): Promise<Se
     ...(info.createdAt ? { createdAt: info.createdAt } : {}),
     status: state,
     ...(info.fileSize ? { sizeBytes: info.fileSize } : {}),
+    ...(cwd && isScratchFolder(cwd) ? { scratch: true } : {}),
+    ...(state === 'live' && elsewhere?.busy ? { runningIn: elsewhere.app } : {}),
+    ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
   };
 }
 
@@ -46,7 +53,8 @@ async function summarize(info: SDKSessionInfo, status: StatusSource): Promise<Se
 export async function listSummaries(status: StatusSource): Promise<SessionSummary[]> {
   const infos = await listSessions({ includeProgrammatic: true });
   for (const info of infos) infoCache.set(info.sessionId, info);
-  const summaries = await Promise.all(infos.map((info) => summarize(info, status)));
+  const live = await liveProcesses();
+  const summaries = await Promise.all(infos.map((info) => summarize(info, status, live)));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -70,7 +78,7 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 
 export async function sessionSummary(sessionId: string, status: StatusSource): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status) : undefined;
+  return info ? summarize(info, status, await liveProcesses()) : undefined;
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

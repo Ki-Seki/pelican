@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Folder, FolderOpen, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Folder, FolderOpen, Loader2, NotebookPen } from 'lucide-react';
 import { useState } from 'react';
 
 import { api } from '../lib/api';
 import { relativeTime, shortPath } from '../lib/format';
 
 /** Where a new session runs: a recent project, or any folder on the machine. */
-export function FolderPicker({ home, onPick }: { home?: string; onPick: (path: string) => void }) {
+export function FolderPicker({ home, onPick, onScratch }: { home?: string; onPick: (path: string) => void; onScratch: () => void }) {
   const { data: projects } = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const [browsing, setBrowsing] = useState<string>();
   const { data: listing, isFetching } = useQuery({
@@ -53,7 +53,20 @@ export function FolderPicker({ home, onPick }: { home?: string; onPick: (path: s
     <div className="mx-auto max-w-xl px-4 py-6">
       <h2 className="text-[20px] font-semibold tracking-tight">New session</h2>
       <p className="mt-1 text-[13.5px] text-muted">Choose the folder Claude works in.</p>
-      <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-panel">
+      <button
+        type="button"
+        onClick={onScratch}
+        className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3 text-left hover:bg-hover"
+      >
+        <NotebookPen className="size-4 shrink-0 text-faint" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[14.5px]">Scratch folder</div>
+          <div className="text-[12px] text-faint">For something quick: a new empty folder in ~/scratch</div>
+        </div>
+        <ChevronRight className="size-4 text-faint" />
+      </button>
+      <div className="mt-5 mb-1.5 px-1 text-[11.5px] font-medium tracking-wide text-faint uppercase">Projects</div>
+      <div className="overflow-hidden rounded-2xl border border-line bg-panel">
         {!projects && <div className="flex justify-center py-8"><Loader2 className="size-5 animate-spin text-faint" /></div>}
         {projects?.slice(0, 12).map((p) => (
           <button key={p.path} type="button" className="flex w-full items-center gap-3 border-b border-line px-4 py-3 text-left hover:bg-hover" onClick={() => onPick(p.path)}>

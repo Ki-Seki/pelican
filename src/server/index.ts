@@ -18,6 +18,7 @@ import type {
 import { config } from './config.js';
 import { connect, subscribe } from './feed.js';
 import { findUpload, listDirs, readUpload, saveUpload } from './files.js';
+import { createScratchFolder, isDirectory } from './folders.js';
 import { listModels } from './models.js';
 import { addSubscription, initPush, pushKey, removeSubscription } from './push.js';
 import { closeAll, getRun, runState, runStatus, sendMessage } from './runner.js';
@@ -78,7 +79,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
   return c.json(await loadPage(c.req.param('id'), before === undefined ? undefined : Number(before), limit));
 });
 
-type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string };
+type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean };
 
 async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]> {
   const found = await Promise.all((ids ?? []).map((id) => findUpload(id)));
@@ -87,7 +88,9 @@ async function attachmentsFrom(ids: string[] | undefined): Promise<Attachment[]>
 
 app.post('/api/sessions', async (c) => {
   const body = await c.req.json<SendBody>();
-  const sessionId = await sendMessage({ cwd: body.cwd }, {
+  // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
+  const cwd = body.scratch ? await createScratchFolder() : body.cwd;
+  const sessionId = await sendMessage({ cwd }, {
     text: body.text ?? '',
     attachments: await attachmentsFrom(body.attachments),
     settings: body.settings ?? {},
@@ -133,15 +136,27 @@ app.patch('/api/sessions/:id', async (c) => {
 
 app.get('/api/models', async (c) => c.json({ models: await listModels() }));
 
+/**
+ * Folders to start a new session in: those of recent sessions, without temp
+ * and scratch folders and without folders that are gone. Two folders with the
+ * same name are told apart by their parent.
+ */
 app.get('/api/projects', async (c) => {
   const seen = new Map<string, { path: string; name: string; lastActivity: number; sessions: number }>();
   for (const s of await listSummaries(runStatus)) {
-    if (!s.cwd) continue;
+    if (!s.cwd || s.scratch) continue;
     const entry = seen.get(s.cwd);
     if (entry) entry.sessions += 1;
     else seen.set(s.cwd, { path: s.cwd, name: s.project, lastActivity: s.lastActivity, sessions: 1 });
   }
-  return c.json({ projects: [...seen.values()] });
+  const existing = (await Promise.all([...seen.values()].map(async (p) => ((await isDirectory(p.path)) ? p : undefined))))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const counts = new Map<string, number>();
+  for (const p of existing) counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
+  for (const p of existing) {
+    if ((counts.get(p.name) ?? 0) > 1) p.name = `${path.basename(path.dirname(p.path))}/${p.name}`;
+  }
+  return c.json({ projects: existing });
 });
 
 app.get('/api/dirs', async (c) => {

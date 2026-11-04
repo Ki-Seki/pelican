@@ -40,6 +40,7 @@ function useRoute() {
     sessionId: params.get('s') ?? undefined,
     isNew: params.has('new'),
     newCwd: params.get('cwd') ?? undefined,
+    scratch: params.has('new') && params.has('scratch'),
     navigate,
   };
 }
@@ -57,7 +58,7 @@ function useWide() {
 }
 
 export function App() {
-  const { sessionId, isNew, newCwd, navigate } = useRoute();
+  const { sessionId, isNew, newCwd, scratch, navigate } = useRoute();
   const wide = useWide();
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
@@ -104,12 +105,13 @@ export function App() {
   );
 
   let main: React.ReactNode;
-  if (sessionId || (isNew && newCwd)) {
+  if (sessionId || (isNew && (newCwd || scratch))) {
     main = (
       <Chat
-        key={sessionId ?? `new:${newCwd}`}
+        key={sessionId ?? `new:${scratch ? 'scratch' : newCwd}`}
         sessionId={sessionId}
         newCwd={newCwd}
+        scratch={scratch}
         home={info?.home}
         wide={wide}
         onBack={() => navigate('')}
@@ -127,7 +129,11 @@ export function App() {
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <FolderPicker home={info?.home} onPick={(path) => navigate(`?new&cwd=${encodeURIComponent(path)}`)} />
+          <FolderPicker
+            home={info?.home}
+            onPick={(path) => navigate(`?new&cwd=${encodeURIComponent(path)}`)}
+            onScratch={() => navigate('?new&scratch')}
+          />
         </div>
       </div>
     );

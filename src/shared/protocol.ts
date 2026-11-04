@@ -18,6 +18,12 @@ export type SessionSummary = {
   createdAt?: number;
   status: SessionStatus;
   sizeBytes?: number;
+  /** Runs in a temp or scratch folder rather than a project. */
+  scratch?: boolean;
+  /** The app working on it right now when that is not this one ('Desktop', 'CloudCLI', ...). */
+  runningIn?: string;
+  /** Start of Claude's latest reply. */
+  preview?: string;
 };
 
 export type TextBlock = { type: 'text'; text: string; truncated?: boolean };

@@ -54,7 +54,7 @@ export const api = {
     ),
   send: (id: string, body: { text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
     send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/messages`, body),
-  create: (body: { cwd: string; text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
+  create: (body: { cwd?: string; scratch?: boolean; text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
     send<{ sessionId: string }>('POST', 'sessions', body),
   interrupt: (id: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/interrupt`),
   decide: (id: string, requestId: string, decision: PermissionDecision) =>

@@ -6,9 +6,12 @@ import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { dayGroup, relativeTime } from '../lib/format';
 
-export function StatusBadge({ status }: { status: SessionStatus }) {
+/** Filter value for sessions in temp and scratch folders. */
+const SCRATCH = '\u0000scratch';
+
+export function StatusBadge({ status, runningIn }: { status: SessionStatus; runningIn?: string }) {
   if (status === 'idle') return null;
-  const label = status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : 'Live';
+  const label = status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : runningIn ? `Working in ${runningIn}` : 'Live';
   const color = status === 'running' ? 'bg-run' : status === 'waiting' ? 'bg-wait' : 'bg-live';
   const text = status === 'running' ? 'text-run' : status === 'waiting' ? 'text-wait' : 'text-live';
   return (
@@ -33,9 +36,14 @@ const Row = memo(function Row({ session, selected, onOpen }: { session: SessionS
         <div className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-snug">{session.title}</div>
         <span className="shrink-0 pt-0.5 text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
       </div>
+      {session.preview && <div className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
       <div className="mt-1 flex items-center gap-2 text-[12.5px] text-muted">
-        <StatusBadge status={session.status} />
-        <span className="min-w-0 truncate">{session.project || '—'}</span>
+        <StatusBadge status={session.status} runningIn={session.runningIn} />
+        {session.scratch ? (
+          <span className="min-w-0 truncate text-faint">Scratch · {session.project}</span>
+        ) : (
+          <span className="min-w-0 truncate">{session.project || '—'}</span>
+        )}
         {session.gitBranch && (
           <span className="flex min-w-0 items-center gap-0.5 truncate text-faint">
             <GitBranch className="size-3 shrink-0" />
@@ -68,16 +76,19 @@ export function SessionList({
   const [query, setQuery] = useState('');
   const [project, setProject] = useState<string>();
 
+  // One chip per real project; sessions in temp and scratch folders share a single "Scratch" chip.
   const projects = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const s of sessions ?? []) if (s.project && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
-    return [...seen.keys()].slice(0, 14);
+    for (const s of sessions ?? []) if (s.project && !s.scratch && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
+    const list = [...seen.keys()].slice(0, 14);
+    if ((sessions ?? []).some((s) => s.scratch)) list.push(SCRATCH);
+    return list;
   }, [sessions]);
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = (sessions ?? []).filter((s) => {
-      if (project && s.project !== project) return false;
+      if (project === SCRATCH ? !s.scratch : project && (s.scratch || s.project !== project)) return false;
       if (!q) return true;
       return s.title.toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q) || s.id.startsWith(q);
     });
@@ -145,7 +156,7 @@ export function SessionList({
                 onClick={() => setProject(p)}
                 className={`h-8 shrink-0 rounded-full px-3 text-[13px] ${project === p ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
               >
-                {p ?? 'All'}
+                {p === SCRATCH ? 'Scratch' : (p ?? 'All')}
               </button>
             ))}
           </div>
