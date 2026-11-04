@@ -20,6 +20,8 @@ const POLL_MS = 1000;
 class Feed {
   readonly listeners = new Set<Listener>();
   private delivered = new Set<string>();
+  /** Recently published messages, replayed to a client that subscribes late (a new session's first prompt). */
+  private recent: ChatMessage[] = [];
   /** Ids last read from the file; one that disappears means the conversation was rewound. */
   private fromFile = new Set<string>();
   private primed?: Promise<void>;
@@ -62,7 +64,13 @@ class Feed {
     await this.prime();
     if (this.delivered.has(message.uuid)) return;
     this.delivered.add(message.uuid);
+    this.recent.push(message);
+    if (this.recent.length > 40) this.recent.shift();
     this.broadcast({ type: 'message', sessionId: this.sessionId, message });
+  }
+
+  replayRecent(listener: Listener): void {
+    for (const message of this.recent) listener({ type: 'message', sessionId: this.sessionId, message });
   }
 
   watch(): void {
@@ -164,6 +172,7 @@ export function connect(listener: Listener): () => void {
 export function subscribe(sessionId: string, listener: Listener): () => void {
   const feed = feedFor(sessionId);
   feed.listeners.add(listener);
+  feed.replayRecent(listener);
   feed.watch();
   return () => {
     feed.listeners.delete(listener);

@@ -208,7 +208,8 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running }: {
 
   if (call.name === 'TodoWrite') return <TodoList input={call.input} />;
   if (call.name === 'AskUserQuestion' && call.result) return <QuestionsAnswered call={call} />;
-  if (call.name === 'ExitPlanMode' && str(call.input.plan)) return <PlanCard call={call} />;
+  // While it waits for approval, the approval card shows the plan; the transcript only notes it.
+  if (call.name === 'ExitPlanMode' && str(call.input.plan) && call.result) return <PlanCard call={call} />;
 
   const Icon = summary.icon;
   const pending = !call.result;

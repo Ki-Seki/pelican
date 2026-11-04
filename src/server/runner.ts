@@ -89,6 +89,8 @@ export class SessionRun {
   private q?: Query;
   private emitTimer?: NodeJS.Timeout;
   private title = '';
+  /** Set by Stop: the turn then ends with an error result that is not a failure. */
+  private interrupted = false;
 
   constructor(
     readonly sessionId: string,
@@ -284,6 +286,7 @@ export class SessionRun {
   }
 
   async interrupt(): Promise<void> {
+    this.interrupted = true;
     for (const [id] of this.permissions) this.decide(id, { behavior: 'deny', message: 'Interrupted by the user.' });
     try {
       await this.q?.interrupt();
@@ -365,18 +368,22 @@ export class SessionRun {
             }
             break;
           case 'result': {
-            const failed = message.subtype !== 'success' || message.is_error;
+            const stopped = this.interrupted;
+            this.interrupted = false;
+            const failed = !stopped && (message.subtype !== 'success' || message.is_error);
             this.error = failed
               ? ('errors' in message && message.errors.length > 0 ? message.errors.join('\n') : ('result' in message ? String(message.result) : message.subtype))
               : undefined;
             this.setBusy(false);
             this.emit();
-            void notify({
-              title: this.title || 'Claude Code',
-              body: failed ? `Stopped: ${this.error ?? 'error'}`.slice(0, 180) : 'Finished',
-              sessionId: this.sessionId,
-              tag: `${this.sessionId}:done`,
-            });
+            if (!stopped) {
+              void notify({
+                title: this.title || 'Claude Code',
+                body: failed ? `Stopped: ${this.error ?? 'error'}`.slice(0, 180) : 'Finished',
+                sessionId: this.sessionId,
+                tag: `${this.sessionId}:done`,
+              });
+            }
             break;
           }
           default:

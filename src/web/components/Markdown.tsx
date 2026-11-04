@@ -2,6 +2,7 @@ import { Check, Copy } from 'lucide-react';
 import { memo, type ReactNode, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
 function textOf(node: ReactNode): string {
@@ -44,7 +45,8 @@ const components: Components = {
   ),
 };
 
-const remarkPlugins = [remarkGfm];
+// Line breaks are kept, as in Claude's own apps: output like logs and lists of numbers stays readable.
+const remarkPlugins = [remarkGfm, remarkBreaks];
 const rehypePlugins = [[rehypeHighlight, { detect: false, ignoreMissing: true }]] as never;
 
 export const Markdown = memo(function Markdown({ text, className = '' }: { text: string; className?: string }) {
