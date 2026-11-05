@@ -267,11 +267,14 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
       note.current = '';
       setEditing(undefined);
       markTipSeen('line-comments');
+      // The keys go back to the file's text, as on a diff, where Esc still closes the view.
+      box.current?.focus({ preventScroll: true });
       if (now) send?.();
     },
     cancel: () => {
       note.current = '';
       setEditing(undefined);
+      box.current?.focus({ preventScroll: true });
     },
     remove: (comment) => setComments(latest.current.cwd, commentsOf(latest.current.cwd).filter((c) => c.id !== comment.id)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -337,6 +340,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
             <div
               ref={box}
               role="group"
+              tabIndex={-1}
               aria-label={`The text of ${path}`}
               className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] [tab-size:4] ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
             >

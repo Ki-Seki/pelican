@@ -114,6 +114,23 @@ describe('what Changes shows', () => {
     expect(screen.getByRole('button', { name: 'Changes' }).getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('on a tablet with a keyboard: Esc puts away a comment being written on a file, and the next closes the view', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const onClose = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-line="2"]')!);
+    const box = screen.getByLabelText('Comment for Claude');
+    fireEvent.change(box, { target: { value: 'Rename b' } });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.queryByLabelText('Comment for Claude')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    // The keys are back on the file's text, in the view, as they are on a diff.
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'The text of src/a.ts' }));
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('on a phone, says at its foot that Claude waits for an answer, which leads back to the conversation', async () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onClose = vi.fn();
