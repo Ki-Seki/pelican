@@ -127,7 +127,8 @@ const WIDTHS: ReadonlyArray<readonly [number, string]> = [
   [11, '@'],
 ];
 const tenths = new Map(WIDTHS.flatMap(([width, chars]) => [...chars].map((char) => [char, width] as const)));
-const widthOf = (text: string) => [...text].reduce((sum, char) => sum + tenths.get(char)!, 0);
+/** How wide text may be drawn; a character the table does not have is wider than any line. */
+const widthOf = (text: string) => [...text].reduce((sum, char) => sum + (tenths.get(char) ?? Infinity), 0);
 
 /**
  * Where a notification's text is narrowest: how wide a line is, in tenths of an em, and how many

@@ -208,6 +208,15 @@ describe('which requests a notification may answer', async () => {
     }
   });
 
+  it('takes a character it has no width for as too wide for any line: text holding one never fits', async () => {
+    const { ANDROID_POP_UP, BANNER, fits } = await import('../src/server/push');
+    for (const text of ['caf\u00e9', 'echo caf\u00e9', 'echo \u{1f600}', 'a\u00a0b', 'npm\ttest']) {
+      expect(fits(text, BANNER), JSON.stringify(text)).toBe(false);
+      expect(fits(text, ANDROID_POP_UP), JSON.stringify(text)).toBe(false);
+    }
+    expect(fits('echo cafe', BANNER)).toBe(true);
+  });
+
   it('counts every printable character as some width: a word of any of them can be too wide', () => {
     for (let code = 0x21; code <= 0x7e; code += 1) {
       const char = String.fromCharCode(code);
