@@ -16,7 +16,7 @@ import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { addQuote } from '../lib/quote';
-import { commentsOf, dropComments, useComments, withComments } from '../lib/review';
+import { CommentsChat, commentsOf, dropComments, useComments, withComments } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
@@ -493,8 +493,8 @@ export function Chat({
       return;
     }
     const uuid = newId();
-    // Line comments go with the next prompt, as in Claude Desktop; a command takes none.
-    const notes = cwd && !text.trimStart().startsWith('/') ? commentsOf(cwd) : [];
+    // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command takes none.
+    const notes = !text.trimStart().startsWith('/') ? commentsOf(viewId) : [];
     const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
@@ -509,12 +509,12 @@ export function Chat({
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
         clearDraft(viewId, text);
-        if (cwd) dropComments(cwd, notes);
+        dropComments(viewId, notes);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
         clearDraft(viewId, text);
-        if (cwd) dropComments(cwd, notes);
+        dropComments(viewId, notes);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -650,8 +650,8 @@ export function Chat({
   }, [busy, cwd, sessionId, queryClient]);
   // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
   const { show: showWorkspace } = workspace;
-  // Line comments waiting to go with the next message.
-  const waitingComments = useComments(cwd ?? '');
+  // Line comments waiting to go with the next message from this chat.
+  const waitingComments = useComments(viewId);
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
     openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
@@ -789,6 +789,7 @@ export function Chat({
 
   return (
     <PathLinksContext.Provider value={links}>
+    <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {/* Also while Changes and files has folded the list away, beside the conversation. */}
@@ -969,7 +970,7 @@ export function Chat({
             else setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
           onSendComments={() => {
-            if (commentsOf(cwd).length === 0) return;
+            if (commentsOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
             void send('', [], prefs.sendWhileBusy);
           }}
@@ -1024,6 +1025,7 @@ export function Chat({
         />
       )}
     </div>
+    </CommentsChat.Provider>
     </PathLinksContext.Provider>
   );
 }

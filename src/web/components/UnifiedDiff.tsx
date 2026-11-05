@@ -2,7 +2,7 @@ import { useId, useMemo, useRef, useState } from 'react';
 
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
-import { type CodeLine, commentKey, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
+import { type CodeLine, commentKey, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments, useCommentsChat } from '../lib/review';
 import { CommentBox, CommentNote, useSendComments } from './Comments';
 import { useLinePick } from './line-pick';
 
@@ -15,7 +15,8 @@ const isCode = (line: { kind: string }): line is CodeLine => line.kind === 'add'
  */
 export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; cwd: string }) {
   const lines = useMemo(() => parseDiff(diff), [diff]);
-  const all = useComments(cwd);
+  const chat = useCommentsChat(cwd);
+  const all = useComments(chat);
   const comments = useMemo(() => all.filter((c) => c.path === path), [all, path]);
   // What is typed follows a tap on another line, so a missed line costs nothing.
   const [editing, setEditing] = useState<{ key: string; note: string }>();
@@ -36,13 +37,13 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
 
   const pick = useLinePick((line: CodeLine) => setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' })));
   const save = (line: CodeLine, note: string, now: boolean) => {
-    setComments(cwd, [...all, { id: newId(), path, kind: line.kind, line: lineNumber(line), code: line.text, note: note.trim() }]);
+    setComments(chat, [...all, { id: newId(), path, kind: line.kind, line: lineNumber(line), code: line.text, note: note.trim() }]);
     setEditing(undefined);
     markTipSeen('line-comments');
     box.current?.focus({ preventScroll: true });
     if (now) sendAll?.();
   };
-  const remove = (comment: LineComment) => setComments(cwd, all.filter((c) => c.id !== comment.id));
+  const remove = (comment: LineComment) => setComments(chat, all.filter((c) => c.id !== comment.id));
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.target !== e.currentTarget || codeAt.length === 0) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {

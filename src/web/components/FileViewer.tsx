@@ -10,7 +10,7 @@ import { formatBytes } from '../lib/format';
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
 import { quoteLines } from '../lib/quote';
-import { commentsOf, type LineComment, setComments, useComments } from '../lib/review';
+import { commentsOf, type LineComment, setComments, useComments, useCommentsChat } from '../lib/review';
 import { CommentBox, CommentNote, useSendComments } from './Comments';
 import { useLinePick } from './line-pick';
 import { Markdown } from './Markdown';
@@ -199,7 +199,8 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
   const wrap = useWrapping();
   const text = data?.text;
   const texts = useMemo(() => (text === undefined ? [] : splitText(text)), [text]);
-  const all = useComments(cwd);
+  const chat = useCommentsChat(cwd);
+  const all = useComments(chat);
   const mine = useMemo(() => all.filter((c) => c.path === path && c.kind !== 'del'), [all, path]);
   // What is typed follows a tap on another line, so a missed line costs nothing.
   const [editing, setEditing] = useState<number>();
@@ -209,8 +210,8 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
   const box = useRef<HTMLDivElement>(null);
   const selection = useLineSelection(box);
   const pick = useLinePick((n: number) => setEditing(n));
-  const latest = useRef({ cwd, path, texts, editing, sendAll });
-  latest.current = { cwd, path, texts, editing, sendAll };
+  const latest = useRef({ chat, path, texts, editing, sendAll });
+  latest.current = { chat, path, texts, editing, sendAll };
 
   // Opening at a line: Source, the line in the middle of the view, marked.
   useEffect(() => {
@@ -241,9 +242,9 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
     note,
     pick,
     save: (typed, now) => {
-      const { cwd: folder, path: file, texts: text, editing: at, sendAll: send } = latest.current;
+      const { chat: owner, path: file, texts: text, editing: at, sendAll: send } = latest.current;
       if (!at || !typed.trim()) return;
-      setComments(folder, [...commentsOf(folder), { id: newId(), path: file, kind: 'same', line: at, code: text[at - 1] ?? '', note: typed.trim() }]);
+      setComments(owner, [...commentsOf(owner), { id: newId(), path: file, kind: 'same', line: at, code: text[at - 1] ?? '', note: typed.trim() }]);
       note.current = '';
       setEditing(undefined);
       markTipSeen('line-comments');
@@ -253,7 +254,7 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
       note.current = '';
       setEditing(undefined);
     },
-    remove: (comment) => setComments(latest.current.cwd, commentsOf(latest.current.cwd).filter((c) => c.id !== comment.id)),
+    remove: (comment) => setComments(latest.current.chat, commentsOf(latest.current.chat).filter((c) => c.id !== comment.id)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [path, texts, wrap, line, onLine, editing]);
   const language = LANGUAGE[ext];

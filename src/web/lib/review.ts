@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { createContext, useContext, useSyncExternalStore } from 'react';
 
 /** One line of a unified diff, numbered in the old file, the new one, or both. */
 export type DiffLine =
@@ -85,75 +85,104 @@ export function commentsMessage(comments: readonly LineComment[]): string {
     .join('\n\n');
 }
 
-/** A message with line comments after it, as they go with the next message (or alone, Send now). */
+/**
+ * A message with line comments before it, a blank line between, as Claude Desktop sends them with
+ * the next message (or alone, Send now).
+ */
 export function withComments(text: string, comments: readonly LineComment[]): string {
   if (comments.length === 0) return text;
-  const body = text.replace(/\s+$/, '');
-  return body ? `${body}\n\n${commentsMessage(comments)}` : commentsMessage(comments);
+  const body = text.trim();
+  return body ? `${commentsMessage(comments)}\n\n${body}` : commentsMessage(comments);
 }
 
 /**
- * Comments not sent yet, by folder: the changes are the folder's, whichever of its sessions is
- * open. As in Claude Desktop they go with the next message sent from it, or all at once with
- * Send now. Kept with the drafts in this browser, so a reload loses none, and forgotten with
- * them when it signs out.
+ * Comments not sent yet, by the chat they were written in (its view id: a session, or a new
+ * session in a folder), as Claude Desktop keeps them per session: they go with the next message
+ * sent there, or all at once with Send now, never with another session's, even in the same folder.
+ * Kept with the drafts in this browser, so a reload loses none, and forgotten with them when it
+ * signs out.
+ *
+ * Stored as `{ chats: { [chat]: comments } }`. Earlier builds of 0.4.0 kept them by folder, at the
+ * top level: those are dropped, since nothing says which of the folder's sessions each was written in.
  */
 const KEY = 'pelican:comments';
-const KEEP_FOLDERS = 20;
+const KEEP_CHATS = 50;
 const KEEP_EACH = 200;
 const listeners = new Set<() => void>();
 const NONE: LineComment[] = [];
 
+function isComment(value: unknown): value is LineComment {
+  if (!value || typeof value !== 'object') return false;
+  const { id, path, kind, line, code, note } = value as Record<string, unknown>;
+  return typeof id === 'string' && typeof path === 'string' && (kind === 'add' || kind === 'del' || kind === 'same')
+    && typeof line === 'number' && typeof code === 'string' && typeof note === 'string';
+}
+
 function load(): Map<string, LineComment[]> {
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as unknown;
-    if (!raw || typeof raw !== 'object') return new Map();
-    return new Map(Object.entries(raw as Record<string, unknown>).filter((entry): entry is [string, LineComment[]] => Array.isArray(entry[1])));
+    const raw = localStorage.getItem(KEY);
+    const stored = raw ? (JSON.parse(raw) as { chats?: unknown }) : undefined;
+    const chats = stored?.chats;
+    if (!chats || typeof chats !== 'object') {
+      if (raw) localStorage.removeItem(KEY);
+      return new Map();
+    }
+    return new Map(Object.entries(chats as Record<string, unknown>).flatMap(([chat, list]) => {
+      const kept = Array.isArray(list) ? list.filter(isComment) : [];
+      return kept.length > 0 ? [[chat, kept] as [string, LineComment[]]] : [];
+    }));
   } catch {
     return new Map();
   }
 }
 
-const byFolder = load();
+const byChat = load();
 
 function keep(): void {
   try {
-    if (byFolder.size === 0) localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, JSON.stringify(Object.fromEntries([...byFolder].slice(-KEEP_FOLDERS))));
+    if (byChat.size === 0) localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, JSON.stringify({ chats: Object.fromEntries([...byChat].slice(-KEEP_CHATS)) }));
   } catch {
     // Private mode or full: the comments live as long as the page.
   }
 }
 
-export function useComments(cwd: string): LineComment[] {
+/**
+ * The chat whose comments the views inside it show and add to, given by the chat (its view id). A
+ * view shown on its own, outside any chat, keeps them by its folder.
+ */
+export const CommentsChat = createContext<string | undefined>(undefined);
+export const useCommentsChat = (cwd: string): string => useContext(CommentsChat) ?? cwd;
+
+export function useComments(chat: string): LineComment[] {
   return useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    () => byFolder.get(cwd) ?? NONE,
+    () => byChat.get(chat) ?? NONE,
   );
 }
 
-/** The folder's comments as they are now, outside a component. */
-export const commentsOf = (cwd: string): LineComment[] => byFolder.get(cwd) ?? NONE;
+/** The chat's comments as they are now, outside a component. */
+export const commentsOf = (chat: string): LineComment[] => byChat.get(chat) ?? NONE;
 
-export function setComments(cwd: string, comments: LineComment[]): void {
-  byFolder.delete(cwd);
-  if (comments.length > 0) byFolder.set(cwd, comments.slice(-KEEP_EACH));
+export function setComments(chat: string, comments: LineComment[]): void {
+  byChat.delete(chat);
+  if (comments.length > 0) byChat.set(chat, comments.slice(-KEEP_EACH));
   keep();
   for (const listener of listeners) listener();
 }
 
 /** Takes away comments that went with a message (others may have been added meanwhile). */
-export function dropComments(cwd: string, sent: readonly LineComment[]): void {
+export function dropComments(chat: string, sent: readonly LineComment[]): void {
   const gone = new Set(sent.map((c) => c.id));
-  setComments(cwd, commentsOf(cwd).filter((c) => !gone.has(c.id)));
+  setComments(chat, commentsOf(chat).filter((c) => !gone.has(c.id)));
 }
 
 /** Signing out leaves no comments behind in this browser. */
 export function forgetComments(): void {
-  byFolder.clear();
+  byChat.clear();
   keep();
   for (const listener of listeners) listener();
 }

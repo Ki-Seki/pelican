@@ -6,7 +6,7 @@ import { enterSends } from '../lib/prefs';
 import type { LineComment } from '../lib/review';
 
 /**
- * Sends the folder's line comments to Claude now, all at once (Claude Desktop's ⌘↵); otherwise
+ * Sends the session's line comments to Claude now, all at once (Claude Desktop's ⌘↵); otherwise
  * they go with the next message. Provided by Changes and files.
  */
 export const SendComments = createContext<(() => void) | undefined>(undefined);

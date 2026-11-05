@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { baseName } from '../lib/format';
 import { composing } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
-import { useComments } from '../lib/review';
+import { useComments, useCommentsChat } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
 import { PathLabel } from './PathLabel';
@@ -135,7 +135,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
 }) {
-  const comments = useComments(cwd);
+  const comments = useComments(useCommentsChat(cwd));
   const commentsIn = useMemo(() => {
     const count = new Map<string, number>();
     for (const c of comments) count.set(c.path, (count.get(c.path) ?? 0) + 1);

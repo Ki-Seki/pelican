@@ -7,7 +7,10 @@ import type { Attachment, GitStatus, RunState, SessionSummary } from '../src/sha
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CREATED = '44444444-2222-4333-8444-555555555555';
+/** Another session in the same folder. */
+const OTHER = '66666666-2222-4333-8444-555555555555';
 const CWD = '/code/app';
+const FILE = 'const a = 1;\nconst b = 2;\nconst c = 3;\n';
 
 /** What the computer answers, as each test sets it. */
 const server = vi.hoisted(() => ({
@@ -45,6 +48,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         return server.git;
       },
       tree: async () => [],
+      file: async (_cwd: string, path: string) => ({ path, size: FILE.length, text: FILE }),
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...server.session },
         run: server.run,
@@ -93,13 +97,13 @@ const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
 const { setPrefs } = await import('../src/web/lib/prefs');
-const { setComments } = await import('../src/web/lib/review');
+const { commentsOf, setComments } = await import('../src/web/lib/review');
 const { setRun } = await import('../src/web/lib/store');
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
-  setComments(CWD, []);
+  for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
   Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address.
@@ -107,7 +111,7 @@ afterEach(() => {
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
-const session = () => wrap(<Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+const session = (id = SESSION) => wrap(<Chat sessionId={id} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
 const loaded = () => screen.findAllByText('Clean up the build');
@@ -234,21 +238,51 @@ describe('a new session moved to another folder before it starts', () => {
 
 describe('line comments, as in Claude Desktop', () => {
   const comment = { id: 'c1', path: 'src/styles/theme.css', kind: 'add' as const, line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' };
+  const said = "src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too";
 
-  it('go with the next message, after what was typed, and are gone once it went', async () => {
-    setComments(CWD, [comment]);
+  it('go with the next message, before what was typed and a blank line, and are gone once it went', async () => {
+    setComments(SESSION, [comment]);
     session();
     await loaded();
     expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
     fireEvent.change(box(), { target: { value: 'Looks good otherwise' } });
     fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe("Looks good otherwise\n\nsrc/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
+    expect(server.sent[0]!.text).toBe(`${said}\n\nLooks good otherwise`);
     await waitFor(() => expect(screen.queryByText('1 comment goes with your next message')).toBeNull());
   });
 
+  it('belong to the session they were written in: another session in the folder neither shows nor sends them', async () => {
+    media['(min-width: 1024px)'] = true;
+    setPrefs({ workspacePane: true });
+    history.replaceState(null, '', `/?s=${SESSION}&w=files&p=src%2Fa.ts`);
+    try {
+      session();
+      await loaded();
+      // Written in the file this session's pane shows.
+      await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+      fireEvent.click(document.querySelector('[data-line="2"]')!);
+      fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Name it b2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+      expect(commentsOf(SESSION)).toMatchObject([{ path: 'src/a.ts', line: 2, note: 'Name it b2' }]);
+      expect(commentsOf(CWD)).toEqual([]);
+      cleanup();
+
+      history.replaceState(null, '', `/?s=${OTHER}`);
+      session(OTHER);
+      await loaded();
+      expect(within(screen.getByRole('complementary', { name: 'Changes and files' })).queryByText(/comment/)).toBeNull();
+      sendText('Run the login test once more');
+      await waitFor(() => expect(server.sent).toHaveLength(1));
+      expect(server.sent[0]!.text).toBe('Run the login test once more');
+      expect(commentsOf(SESSION)).toHaveLength(1);
+    } finally {
+      setPrefs({ workspacePane: false });
+    }
+  });
+
   it('stay when the message does not go through, and never go with a command', async () => {
-    setComments(CWD, [comment]);
+    setComments(SESSION, [comment]);
     server.answers = [new Error('Can’t reach studio')];
     session();
     await loaded();
@@ -264,13 +298,22 @@ describe('line comments, as in Claude Desktop', () => {
   });
 
   it('are sent on their own with Send now, from Changes and files', async () => {
-    setComments(CWD, [comment]);
+    setComments(SESSION, [comment]);
     session();
     await loaded();
     fireEvent.click(screen.getByLabelText('Changes and files'));
     fireEvent.click(await screen.findByText('Send now'));
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe("src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
+    expect(server.sent[0]!.text).toBe(said);
+  });
+
+  it('written before a new session starts, go with its first message', async () => {
+    setComments(`new:${CWD}`, [comment]);
+    fresh();
+    sendText('Start with the theme');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe(`${said}\n\nStart with the theme`);
+    expect(commentsOf(`new:${CWD}`)).toEqual([]);
   });
 });
 
