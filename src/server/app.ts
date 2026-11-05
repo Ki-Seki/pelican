@@ -20,7 +20,7 @@ import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
-import { demoTaskOutput } from './demo.js';
+import { demoRunState, demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
@@ -44,6 +44,7 @@ import { transcriptImage } from './history.js';
 import { instance } from './running.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
+import { AGENT_ID, CALL_ID, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
 
 export const app = new Hono();
 
@@ -931,6 +932,45 @@ app.get('/api/sessions/:id/images/:uuid/:n', async (c) => {
     ETag: tag,
     ...INERT,
   });
+});
+
+/** What this Pelican's Claude reports of a workflow it runs, by the Workflow call that started it. */
+const liveWorkflow = (sessionId: string, call: string) => (config.demo ? demoRunState(sessionId)?.workflows?.[call] : getRun(sessionId)?.workflow(call));
+
+/** A session's Workflow calls, oldest first, with the runs they started. */
+app.get('/api/sessions/:id/workflows', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  return c.json({ workflows: id ? await workflowCalls(id) : [] });
+});
+
+/**
+ * One Workflow call's run: its phases and agents and how it stands, as Claude Code reports it,
+ * from this Pelican's Claude or from the run's own files (workflows.ts). A page asks again while it
+ * runs; an answer it has already comes back short.
+ */
+app.get('/api/sessions/:id/workflows/:call', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const call = c.req.param('call');
+  if (!id || !CALL_ID.test(call)) return c.json({ error: 'No such workflow' }, 404);
+  const answer = await workflowView(id, call, liveWorkflow(id, call));
+  if (!answer) return c.json({ error: 'No such workflow' }, 404);
+  if (unchanged(c, answer.tag)) return c.body(null, 304, { ETag: answer.tag, 'Cache-Control': KEPT_ASKING });
+  return c.json({ workflow: answer.workflow }, 200, { ETag: answer.tag, 'Cache-Control': KEPT_ASKING });
+});
+
+/** A page of a workflow agent's own transcript (the last messages by default; `before` for earlier ones). */
+app.get('/api/sessions/:id/workflows/:call/agents/:agent', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const call = c.req.param('call');
+  const agent = c.req.param('agent');
+  const before = c.req.query('before');
+  const at = before === undefined ? undefined : Number(before);
+  if (!id || !CALL_ID.test(call) || !AGENT_ID.test(agent) || (at !== undefined && !(Number.isSafeInteger(at) && at >= 0))) {
+    return c.json({ error: 'No such agent' }, 404);
+  }
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 60) || 60, 1), 300);
+  const page = await workflowAgentPage(id, call, agent, at, limit, liveWorkflow(id, call));
+  return page ? c.json(page) : c.json({ error: 'No such agent' }, 404);
 });
 
 app.get('/api/push/key', (c) => c.json({ key: pushKey() ?? null }));
