@@ -1,4 +1,6 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -88,8 +90,13 @@ vi.mock('../src/server/push', async (importOriginal) => ({
 const { closeAll, getRun, sendMessage } = await import('../src/server/runner');
 const { listModels } = await import('../src/server/models');
 const { feedFor } = await import('../src/server/feed');
-const { BASH_CAVEAT } = await import('../src/server/shell');
+const { BASH_CAVEAT, MAX_OUTPUT } = await import('../src/server/shell');
 const { liveShells, shellsEvent, startShell, stopShell } = await import('../src/server/shell-runs');
+const { app } = await import('../src/server/app');
+const { accessToken, loadAuth } = await import('../src/server/auth');
+const { config } = await import('../src/server/config');
+const { rememberChoice } = await import('../src/server/trust');
+const { refreshTranscriptIndex } = await import('../src/server/transcripts');
 
 const folder = process.cwd();
 const settle = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,7 +155,8 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     expect(input).toMatchObject({ uuid: shell.id, shouldQuery: false, client_composed: true });
     expect(textOf(input!)).toBe('<bash-input>echo first; sleep 0.3; echo second >&2</bash-input>');
     expect(out).toMatchObject({ shouldQuery: true, client_composed: true });
-    expect(textOf(out!)).toBe('<bash-stdout>first\n</bash-stdout><bash-stderr>second\n</bash-stderr>');
+    // stdout and stderr together, as they came, as Claude Code's bash mode writes a command that went well.
+    expect(textOf(out!)).toBe('<bash-stdout>first\nsecond</bash-stdout><bash-stderr></bash-stderr>');
     expect(claude.prompts.some((p) => textOf(p) === BASH_CAVEAT)).toBe(false);
     expect(getRun(sessionId)!.busy).toBe(true);
 
@@ -181,7 +189,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     expect(liveShells(sessionId)[0]).toMatchObject({ stopping: true });
     await until(() => liveShells(sessionId).length === 0);
     const out = claude.prompts.at(-1)!;
-    expect(textOf(out)).toBe('<bash-stdout>started\n</bash-stdout><bash-stderr>\n(stopped)</bash-stderr>');
+    expect(textOf(out)).toBe('<bash-stdout></bash-stdout><bash-stderr>started\n\n(stopped)</bash-stderr>');
     expect(out.shouldQuery).toBe(false);
     expect(claude.prompts.some((p) => textOf(p) === BASH_CAVEAT)).toBe(true);
     expect(getRun(sessionId)!.busy).toBe(false);
@@ -206,6 +214,46 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     expect(claude.prompts.at(-1)!.shouldQuery).toBe(true);
   });
 
+  it('that prints without end holds no more of it than the page keeps, and Pelican stays small', async () => {
+    const { sessionId, events } = await idleSession();
+    const before = process.memoryUsage().rss;
+    let peak = before;
+    const sampling = setInterval(() => {
+      peak = Math.max(peak, process.memoryUsage().rss);
+    }, 20);
+    try {
+      // A gigabyte or more a second: before, every bit of it was held until the next look.
+      const shell = startShell(sessionId, folder, 'yes "a fairly long line of output, to fill the pipe as fast as it goes ..........."');
+      await settle(3000);
+      expect(liveShells(sessionId)[0]).toMatchObject({ id: shell.id, truncated: true });
+      expect(liveShells(sessionId)[0]!.output.length).toBe(MAX_OUTPUT);
+      stopShell(sessionId, shell.id);
+      await until(() => liveShells(sessionId).length === 0, 10_000);
+      const sent = events.flatMap((e) => (e.type === 'shell_output' && e.id === shell.id ? [e.text] : [])).join('');
+      expect(sent.length).toBe(MAX_OUTPUT);
+    } finally {
+      clearInterval(sampling);
+    }
+    expect(peak - before).toBeLessThan(300e6);
+  }, 20_000);
+
+  it('longer than Claude gets inline is saved where Claude Code saves it, and Claude gets its start', async () => {
+    const { sessionId, claude } = await idleSession();
+    // The session's transcript, beside which Claude Code keeps what it saves of it.
+    const project = path.join(scratch, 'claude', 'projects', '-work');
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(project, `${sessionId}.jsonl`), `${JSON.stringify({ type: 'user', uuid: 'p1', sessionId, message: { role: 'user', content: 'hi' } })}\n`);
+    await refreshTranscriptIndex();
+    startShell(sessionId, folder, `'${process.execPath}' -e 'process.stdout.write("x".repeat(40000) + "\\n")'`);
+    await until(() => liveShells(sessionId).length === 0, 10_000);
+    const out = textOf(claude.prompts.at(-1)!);
+    const file = /Full output saved to: (\S+)\n/.exec(out)?.[1];
+    expect(file).toMatch(new RegExp(`^${project}/${sessionId}/tool-results/b[0-9a-z]{8}\\.txt$`));
+    expect(out).toBe(`<bash-stdout><persisted-output>\nOutput too large (39.1KB). Full output saved to: ${file}\n\nPreview (first 2KB):\n${'x'.repeat(2000)}\n...\n</persisted-output></bash-stdout><bash-stderr></bash-stderr>`);
+    expect(await readFile(file!, 'utf8')).toBe(`${'x'.repeat(40_000)}\n`);
+    expect(claude.prompts.at(-1)!.shouldQuery).toBe(true);
+  });
+
   it('a page that subscribes is told of the commands running there, all of them', async () => {
     const { sessionId } = await idleSession();
     const shell = startShell(sessionId, folder, 'sleep 30');
@@ -215,6 +263,53 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
   });
+});
+
+describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to your settings only', () => {
+  it('runs git as Claude Code does there: none of the repository’s own programs run', async () => {
+    const session = '7b7b7b7b-1111-4222-8333-444444444444';
+    const shell = process.env.SHELL;
+    // A plain shell: nothing of the developer's login profile runs.
+    process.env.SHELL = '/bin/sh';
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pelican-user-only-')));
+    try {
+      config.auth = 'auto';
+      await loadAuth();
+      // A repository someone sent you, whose config runs a program of its own on `git status`.
+      const repo = path.join(dir, 'downloaded');
+      const marker = path.join(dir, 'fsmonitor-ran');
+      await mkdir(repo);
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      await writeFile(path.join(repo, 'README.md'), 'hello\n');
+      const program = path.join(dir, 'fsmonitor.sh');
+      await writeFile(program, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+      execFileSync('git', ['config', 'core.fsmonitor', program], { cwd: repo });
+      const ran = () => stat(marker).then(() => true, () => false);
+      // It does run for a git of its own.
+      execFileSync('git', ['status', '--short'], { cwd: repo });
+      expect(await ran()).toBe(true);
+      await rm(marker);
+
+      // A session there, as Claude Code records one, in a folder its owner kept to their settings only.
+      const projects = path.join(scratch, 'claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'));
+      await mkdir(projects, { recursive: true });
+      const prompt = { type: 'user', uuid: 'p1', parentUuid: null, sessionId: session, cwd: repo, timestamp: '2026-11-05T10:00:00Z', message: { role: 'user', content: 'Look around' } };
+      await writeFile(path.join(projects, `${session}.jsonl`), `${JSON.stringify(prompt)}\n`);
+      await rememberChoice(repo, 'user-only');
+
+      const response = await app.request(`/api/sessions/${session}/shell`, {
+        method: 'POST',
+        headers: { host: 'localhost:7860', origin: 'http://localhost:7860', 'x-pelican': '1', 'content-type': 'application/json', authorization: `Bearer ${accessToken()}` },
+        body: JSON.stringify({ command: 'git status --short' }),
+      });
+      expect(response.status).toBe(202);
+      await until(() => liveShells(session).length === 0, 10_000);
+      expect(await ran()).toBe(false);
+    } finally {
+      process.env.SHELL = shell;
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe('what a turn has cost', () => {

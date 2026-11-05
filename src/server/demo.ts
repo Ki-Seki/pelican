@@ -34,9 +34,128 @@ const tool = (id: string, name: string, input: Record<string, unknown>): Block =
 const result = (id: string, content: string, isError = false): Block => ({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) });
 const text = (value: string): Block => ({ type: 'text', text: value });
 
-function numbered(source: string): string {
-  return source.split('\n').map((line, i) => `${String(i + 1).padStart(6)}\t${line}`).join('\n');
+function numbered(source: string, from = 1): string {
+  return source.split('\n').map((line, i) => `${String(i + from).padStart(6)}\t${line}`).join('\n');
 }
+
+/** The line a text's first line starting with `start` is on. */
+const lineOf = (text: string, start: string) => text.split('\n').findIndex((line) => line.startsWith(start)) + 1;
+
+/** What Claude Code's Read shows of a file from line `offset` on, `limit` lines at most. */
+const read = (text: string, offset: number, limit: number) => numbered(text.replace(/\n$/, '').split('\n').slice(offset - 1, offset - 1 + limit).join('\n'), offset);
+
+const EXPORT_PY = `"""The nightly export: every account, with its owner, to the warehouse, in batches."""
+
+import argparse
+import logging
+import time
+
+from pipeline import db
+from pipeline.writer import write
+
+log = logging.getLogger(__name__)
+
+BATCH_SIZE = 5_000
+
+
+def batches(rows, size=BATCH_SIZE):
+    """Yields the rows in batches, the last one shorter."""
+    batch = []
+    for row in rows:
+        batch.append(row)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def run(sample=None):
+    """Exports every account, or only a sample of them."""
+    started = time.monotonic()
+    for batch in batches(db.account_rows(limit=sample)):
+        export_rows(batch)
+    log.info("exported in %.1f s", time.monotonic() - started)
+
+
+def export_rows(batch):
+    for row in batch:
+        owner = db.fetch_owner(row.owner_id)
+        write(row, owner)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sample", type=int, help="export only this many accounts")
+    run(parser.parse_args().sample)
+`;
+
+const DB_PY = `"""The accounts database, read only."""
+
+import os
+
+import psycopg
+from psycopg.rows import namedtuple_row
+
+_conn = None
+
+
+def connect():
+    global _conn
+    if _conn is None:
+        _conn = psycopg.connect(os.environ["DATABASE_URL"], row_factory=namedtuple_row)
+    return _conn
+
+
+def account_rows(limit=None):
+    """Every account, oldest first."""
+    sql = "SELECT id, owner_id, plan, created_at FROM accounts ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with connect().cursor() as cur:
+        cur.execute(sql)
+        yield from cur
+
+
+def fetch_owner(owner_id):
+    """One account's owner: a query of its own."""
+    with connect().cursor() as cur:
+        cur.execute("SELECT id, name, email FROM owners WHERE id = %s", (owner_id,))
+        return cur.fetchone()
+`;
+
+const WRITER_PY = `"""Writes the export as CSV, one account a line."""
+
+import csv
+import sys
+
+_out = csv.writer(sys.stdout)
+
+
+def write(row, owner):
+    """An account with its owner's name and email."""
+    _out.writerow([row.id, row.plan, row.created_at.isoformat(), owner.name, owner.email])
+`;
+
+const TEST_EXPORT_PY = `from pipeline import export
+
+
+class Row:
+    def __init__(self, id, owner_id):
+        self.id = id
+        self.owner_id = owner_id
+
+
+def test_every_row_is_written_with_its_owner(monkeypatch):
+    written = []
+    monkeypatch.setattr(export.db, "fetch_owner", lambda owner_id: f"owner {owner_id}")
+    monkeypatch.setattr(export, "write", lambda row, owner: written.append((row.id, owner)))
+    export.export_rows([Row(1, 10), Row(2, 20)])
+    assert written == [(1, "owner 10"), (2, "owner 20")]
+`;
+
+/** Where the slow export's loop is, as the session finds it. */
+const EXPORT_AT = lineOf(EXPORT_PY, 'def export_rows');
 
 /** What Claude Code records of an Edit: the file before, and the patch it made of it. */
 function edited(file: string, before: string, oldString: string, newString: string): Record<string, unknown> {
@@ -168,14 +287,14 @@ const SESSIONS: DemoSession[] = [
       return [
         { role: 'user', at: t, content: 'The nightly export went from 4 minutes to 40. Can you find out why?' },
         { role: 'assistant', at: t + 5000, content: [tool('g1', 'Grep', { pattern: 'def export_rows', path: `${cwd}/pipeline` })] },
-        { role: 'user', at: t + 6000, content: [result('g1', 'pipeline/export.py:41:def export_rows(batch):')] },
-        { role: 'assistant', at: t + 9000, content: [tool('g2', 'Read', { file_path: `${cwd}/pipeline/export.py`, offset: 35, limit: 30 })] },
-        { role: 'user', at: t + 10000, content: [result('g2', numbered('def export_rows(batch):\n    for row in batch:\n        owner = db.fetch_owner(row.owner_id)\n        write(row, owner)'))] },
+        { role: 'user', at: t + 6000, content: [result('g1', `pipeline/export.py:${EXPORT_AT}:def export_rows(batch):`)] },
+        { role: 'assistant', at: t + 9000, content: [tool('g2', 'Read', { file_path: `${cwd}/pipeline/export.py`, offset: EXPORT_AT, limit: 30 })] },
+        { role: 'user', at: t + 10000, content: [result('g2', read(EXPORT_PY, EXPORT_AT, 30))] },
         { role: 'assistant', at: t + 15000, content: [tool('g3', 'Bash', { command: 'python -m cProfile -s cumtime -m pipeline.export --sample 5000 | head -8', description: 'Profile the export on a 5,000-row sample' })] },
         {
           role: 'user',
           at: t + 31000,
-          content: [result('g3', '   ncalls  tottime  cumtime  filename:lineno(function)\n     5000    0.412   61.902  db.py:88(fetch_owner)\n        1    0.020   62.410  export.py:41(export_rows)\n     5000    0.301    0.488  writer.py:12(write)')],
+          content: [result('g3', `   ncalls  tottime  cumtime  filename:lineno(function)\n     5000    0.412   61.902  db.py:${lineOf(DB_PY, 'def fetch_owner')}(fetch_owner)\n        1    0.020   62.410  export.py:${EXPORT_AT}(export_rows)\n     5000    0.301    0.488  writer.py:${lineOf(WRITER_PY, 'def write')}(write)`)],
         },
         {
           role: 'assistant',
@@ -354,21 +473,63 @@ export function Settings() {
 
 const DARK_CSS = `${THEME_CSS.replace('  --accent: #2563eb;\n}', "  --accent: #2563eb;\n}\n\n:root[data-theme='dark'] {\n  --bg: #0b0b0c;\n  --fg: #ededed;\n  --muted: #a1a1a1;\n  --accent: #60a5fa;\n}")}\n`;
 
+const PACKAGE_JSON = `${JSON.stringify({
+  name: 'acme-web',
+  version: '1.4.0',
+  private: true,
+  type: 'module',
+  scripts: { dev: 'vite', build: 'vite build', test: 'playwright test' },
+  dependencies: { react: '^19.2.0', 'react-dom': '^19.2.0' },
+  devDependencies: { '@playwright/test': '^1.56.0', vite: '^7.1.4' },
+}, null, 2)}\n`;
+
+const APP_TSX = `import { createRoot } from 'react-dom/client';
+
+import { Settings } from './settings/Settings';
+import './styles/theme.css';
+
+createRoot(document.getElementById('root')!).render(<Settings />);
+`;
+
+const RELEASES_MD = `# Releases
+
+## v2.3
+
+- Projects can be shared with a link that expires.
+- The export page shows how far an export got.
+- Fixed: two-factor codes from some authenticator apps were refused.
+
+## v2.2
+
+- Invite your team from Settings.
+- Search is faster in large projects.
+`;
+
+/** Every demo file has text, as the conversations show it; ThemeToggle.tsx also where git is missing. */
 const FILE_TEXT: Record<string, string> = {
+  'acme-web/package.json': PACKAGE_JSON,
+  'acme-web/src/app.tsx': APP_TSX,
   'acme-web/src/styles/theme.css': `${THEME_CSS}\n`,
   'acme-web/src/settings/Settings.tsx': SETTINGS_TSX,
+  'acme-web/src/settings/ThemeToggle.tsx': TOGGLE_TSX,
   'acme-web/README.md': '# acme-web\n\nThe Acme web app.\n',
   'acme-web/tests/login.spec.ts': LOGIN_SPEC,
   'data-pipeline/README.md': '# data-pipeline\n\nNightly exports and the numbers behind them.\n',
   'data-pipeline/data/signups.csv': SIGNUPS_CSV,
+  'data-pipeline/pipeline/export.py': EXPORT_PY,
+  'data-pipeline/pipeline/db.py': DB_PY,
+  'data-pipeline/pipeline/writer.py': WRITER_PY,
   'data-pipeline/reports/signups-week-45.html': REPORT_HTML,
+  'data-pipeline/tests/test_export.py': TEST_EXPORT_PY,
   'docs-site/README.md': '# docs-site\n\nThe public docs.\n',
+  'docs-site/docs/releases.md': RELEASES_MD,
 };
 
 /**
  * The first project is a git repository: main, a branch with one commit of its own, and Claude's
  * work so far left uncommitted, so Changes has something to show since the last commit and since
- * the branch split. Skipped without git.
+ * the branch split. It has a remote, as a repository you push from does, at an address nothing
+ * answers (nothing in the demo contacts it). Skipped without git.
  */
 async function demoRepository(dir: string): Promise<void> {
   const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
@@ -376,6 +537,7 @@ async function demoRepository(dir: string): Promise<void> {
   const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
   try {
     await git(['init', '-q', '-b', 'main']);
+    await git(['remote', 'add', 'origin', 'https://git.example.com/acme/acme-web.git']);
     await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });
     await git(['add', '-A']);
     await git(['commit', '-q', '--no-verify', '-m', 'Settings page']);
@@ -578,7 +740,8 @@ export async function prepareDemo(): Promise<void> {
         ...(row.result ? { toolUseResult: row.result } : {}),
         ...(from && session.copies ? { forkedFrom: { sessionId: session.copies, messageUuid: from } } : {}),
       }));
-      if (row.checkpoint) {
+      // Files kept for a prompt of the session's own: forkSession copies no checkpoints with the rows.
+      if (row.checkpoint && !from) {
         const at = new Date(row.at).toISOString();
         lines.push(JSON.stringify({ type: 'file-history-snapshot', messageId: uuid, snapshot: { messageId: uuid, trackedFileBackups: {}, timestamp: at }, isSnapshotUpdate: false }));
       }

@@ -644,12 +644,13 @@ app.get('/api/git', async (c) => {
   return c.json(await gitStatus(cwd, scopeOf(c)));
 });
 
+/** One file's diff; `from`, a renamed file's old path, so git pairs the two. */
 app.get('/api/git/diff', async (c) => {
   const cwd = await folderOf(c);
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
   if (!(await gitAllowed(cwd))) return c.json({ diff: '' });
-  return c.json({ diff: await gitDiff(cwd, file, scopeOf(c)) });
+  return c.json({ diff: await gitDiff(cwd, file, scopeOf(c), c.req.query('from') || undefined) });
 });
 
 app.get('/api/tree', async (c) => {
@@ -679,14 +680,19 @@ app.get('/api/file/raw', async (c) => {
     await opened.handle.close();
     return c.json({ error: 'That file is larger than 200 MB' }, 413);
   }
-  const stream = opened.handle.createReadStream();
-  return c.body(Readable.toWeb(stream) as ReadableStream, 200, {
+  const headers = {
     'Content-Type': 'application/octet-stream',
     'Content-Length': String(opened.size),
     'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
     'Cache-Control': 'private, no-store',
     ...INERT,
-  });
+  };
+  // HEAD takes this route too and wants no body: a stream nobody reads would hold the file open.
+  if (c.req.method === 'HEAD') {
+    await opened.handle.close();
+    return c.body(null, 200, headers);
+  }
+  return c.body(Readable.toWeb(opened.handle.createReadStream()) as ReadableStream, 200, headers);
 });
 
 /**
@@ -715,26 +721,30 @@ app.get('/api/exists', async (c) => {
 
 /**
  * What each turn of a session changed (T1, T2…), from Claude Code's records of its edits: no git,
- * so in any folder. With `turn` and `path`, that turn's diff of that file.
+ * so in any folder. With `turn` and `path`, that turn's diff of that file. A side chat changes
+ * nothing: the turns it copied of its session are that session's.
  */
 app.get('/api/sessions/:id/changes', async (c) => {
   const id = c.req.param('id');
   const file = await transcriptPath(id);
   if (!file) return c.json({ turns: [], lines: {} });
   const cwd = (await sessionInfo(id))?.cwd;
+  const ownOnly = await isSideChat(id);
   const turn = c.req.query('turn');
   const target = c.req.query('path');
   if (turn !== undefined || target !== undefined) {
     if (!turn || !target || target.length > 4096) return c.json({ error: 'Which turn and file?' }, 400);
-    return c.json({ diff: await turnDiff(file, cwd, turn, target) });
+    return c.json({ diff: await turnDiff(file, cwd, turn, target, ownOnly) });
   }
-  return c.json(await sessionChanges(file, cwd));
+  return c.json(await sessionChanges(file, cwd, ownOnly));
 });
 
 /**
  * A `!` command: it starts at once, its output goes to the session's pages as it comes, and once
  * done it goes into the conversation (shell-runs.ts). A folder nobody trusted is asked about
- * before anything runs, as for a message, since recording it starts Claude Code there.
+ * before anything runs, as for a message, since recording it starts Claude Code there; the
+ * command runs as Claude Code would there, so in a folder kept to the user's settings only, git
+ * runs none of the repository's programs.
  */
 app.post('/api/sessions/:id/shell', async (c) => {
   const id = c.req.param('id');
@@ -746,8 +756,8 @@ app.post('/api/sessions/:id/shell', async (c) => {
   // A side chat reads; it runs nothing in the folder.
   if (await isSideChat(id)) return c.json({ error: 'A side chat runs no commands. Run it in the session itself.' }, 409);
   if (body.trust === 'trusted' || body.trust === 'user-only') await rememberChoice(cwd, body.trust);
-  await launchFor(cwd);
-  return c.json({ shell: startShell(id, cwd, command) }, 202);
+  const launch = await launchFor(cwd);
+  return c.json({ shell: startShell(id, cwd, command, launch.env) }, 202);
 });
 
 app.post('/api/sessions/:id/shell/:shell/stop', (c) => (stopShell(c.req.param('id'), c.req.param('shell'))

@@ -110,6 +110,16 @@ export function withFiles(text: string, files: SentFile[]): string {
 
 const unescape = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
+/**
+ * A `!` command's output as it shows: unescaped, or, for one too long for the conversation, what
+ * Claude Code saved in its place (`<persisted-output>`, written as it came) unwrapped: the start
+ * Claude got, then Claude Code's line saying where all of it is.
+ */
+function shellOutput(raw: string): string {
+  const saved = /^<persisted-output>\n([^\n]*)\n\n(?:Preview \([^)\n]*\):\n)?([\s\S]*?)\n?<\/persisted-output>$/.exec(raw);
+  return saved ? `${saved[2]!.replace(/\n+$/, '')}\n${saved[1]}` : unescape(raw);
+}
+
 /** Splits what Claude Code wraps in tags out of a user message's text. */
 function classifyUserText(raw: string): Classified | undefined {
   const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
@@ -118,10 +128,10 @@ function classifyUserText(raw: string): Classified | undefined {
   // A `!` command and its output (Claude Code's bash mode), from any client.
   const bash = tag(text, 'bash-input');
   if (bash !== undefined) {
-    return { kind: 'shell', command: unescape(bash), stdout: unescape(tag(text, 'bash-stdout') ?? ''), stderr: unescape(tag(text, 'bash-stderr') ?? '') };
+    return { kind: 'shell', command: unescape(bash), stdout: shellOutput(tag(text, 'bash-stdout') ?? ''), stderr: shellOutput(tag(text, 'bash-stderr') ?? '') };
   }
   if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) {
-    return { kind: 'shell-output', stdout: unescape(tag(text, 'bash-stdout') ?? ''), stderr: unescape(tag(text, 'bash-stderr') ?? '') };
+    return { kind: 'shell-output', stdout: shellOutput(tag(text, 'bash-stdout') ?? ''), stderr: shellOutput(tag(text, 'bash-stderr') ?? '') };
   }
   const commandName = tag(text, 'command-name');
   if (commandName) {

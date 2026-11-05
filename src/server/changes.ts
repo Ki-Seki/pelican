@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { applyHunks, diffCounts, type Hunk, lineDiff, splitLines, toHunks, unifiedDiff } from '../shared/line-diff.js';
+import { type Hunk, lineDiff, splitLines, toHunks, unifiedDiff } from '../shared/line-diff.js';
 import type { ChatMessage, SessionChanges, TurnChanges, TurnFile } from '../shared/protocol.js';
 import { readHistory } from './history.js';
 import { openRegular } from './open.js';
@@ -11,16 +11,18 @@ import { openRegular } from './open.js';
  * Claude's own file edits as the transcript records them (each Edit, MultiEdit, Write and
  * NotebookEdit result carries a structured patch), not from git, so it works in any folder and
  * runs nothing. A change Claude made through a command shows only in git's views, as in the CLI.
- * Turns are the prompts that led Claude to edit files, T1 first; a turn's diff of a file is the
- * file before its first edit in the turn against the file after its last.
+ * Turns are the prompts that led Claude to edit files, numbered as /diff numbers them: by the
+ * prompt's place among the conversation's prompts, so one that changed nothing leaves a gap. A
+ * turn's diff of a file is each of its edits' patches in turn, and its counts their lines added
+ * up, as in /diff.
  *
  * The transcript is read the way history.ts reads it: incrementally, parsing only the rows that
  * matter here (edit results, checkpoints and prompts); an edit's patch is read again from its row
  * when a diff is asked for, so what is kept per edit is a few numbers.
  */
 
-/** One file one tool call changed. `net`: what the turn changed in it so far, when worked out. */
-type FileEdit = { path: string; added: number; removed: number; line?: number; created?: boolean; net?: { added: number; removed: number }; prompt?: string };
+/** One file one tool call changed. */
+type FileEdit = { path: string; added: number; removed: number; line?: number; created?: boolean };
 type EditRow = { at: number; bytes: number; toolUseId?: string; edits: FileEdit[] };
 
 type Scan = {
@@ -30,14 +32,11 @@ type Scan = {
   rows: Map<string, EditRow>;
   /** The prompts Claude Code kept the files for (file-history snapshots), by the prompt's id. */
   checkpoints: Set<string>;
-  /** In the file's order: the latest prompt, and each file's text before its first edit since then. */
-  prompt?: string;
-  starts: Map<string, string | null>;
+  /** Rows copied from another session (a side chat's, a fork's), which ran there, not here. */
+  copied: Set<string>;
   readAt: number;
 };
 
-/** A file kept for working out a turn's diff: larger ones get their edits shown one by one. */
-const MAX_TEXT = 1024 * 1024;
 const CHUNK = 8 * 1024 * 1024;
 const KEEP = 8;
 const KEEP_UNREAD_MS = 10 * 60_000;
@@ -48,7 +47,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
 
 /** What one tool result says it did to one file. */
-type Recorded = { file: string; hunks: Hunk[]; before?: string; after?: string; created: boolean };
+type Recorded = { file: string; hunks: Hunk[]; created: boolean };
 
 function hunksOf(value: unknown): Hunk[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -80,14 +79,10 @@ export function recordedEdit(result: unknown): Recorded | undefined {
   if (!file) return undefined;
   if (result.type === 'create' && typeof result.content === 'string') {
     const ops = lineDiff([], splitLines(result.content));
-    return { file, hunks: ops ? toHunks(ops) : [], before: '', after: result.content.length <= MAX_TEXT ? result.content : undefined, created: true };
+    return { file, hunks: ops ? toHunks(ops) : [], created: true };
   }
   const hunks = hunksOf(result.structuredPatch);
-  if (!hunks) return undefined;
-  const original = str(result.originalFile) ?? str(result.originalFileContents);
-  const before = original !== undefined && original.length <= MAX_TEXT ? original : undefined;
-  const after = typeof result.content === 'string' && result.type === 'update' ? result.content : before !== undefined ? applyHunks(before, hunks) : undefined;
-  return { file, hunks, ...(before !== undefined ? { before } : {}), ...(after !== undefined && after.length <= MAX_TEXT ? { after } : {}), created: false };
+  return hunks ? { file, hunks, created: false } : undefined;
 }
 
 function counts(hunks: readonly Hunk[]): { added: number; removed: number } {
@@ -114,28 +109,18 @@ function firstLine(hunks: readonly Hunk[]): number | undefined {
   return Math.max(1, hunk.newStart);
 }
 
-/** Whether a row is a prompt someone typed (or a command they ran), as against a tool's result or a note. */
-function isPromptRow(row: Record<string, unknown>): boolean {
-  if (row.type !== 'user' || row.isSidechain === true || row.isMeta === true || row.isCompactSummary === true) return false;
-  const content = isRecord(row.message) ? row.message.content : undefined;
-  const texts = typeof content === 'string' ? [content]
-    : Array.isArray(content) ? (content.some((b) => isRecord(b) && b.type === 'tool_result') ? undefined : content.filter(isRecord).map((b) => (b.type === 'text' ? str(b.text) ?? '' : b.type === 'image' ? 'image' : '')))
-      : undefined;
-  return texts !== undefined && isPrompt(texts.join('\n'));
-}
-
 /** What Claude Code writes into a user row that nobody typed: command output, `!` commands, notes. */
 const NOT_TYPED = /^\s*(?:<(?:bash-input|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|local-command-caveat|task-notification|system-reminder)>|\[Request interrupted)/;
 const isPrompt = (text: string) => Boolean(text.trim()) && !NOT_TYPED.test(text);
 
 function empty(ino: number): Scan {
-  return { ino, offset: 0, carry: Buffer.alloc(0), rows: new Map(), checkpoints: new Set(), starts: new Map(), readAt: Date.now() };
+  return { ino, offset: 0, carry: Buffer.alloc(0), rows: new Map(), checkpoints: new Set(), copied: new Set(), readAt: Date.now() };
 }
 
 /** The relative path of a file inside `cwd`, or the path as it is. */
 const relative = (file: string, cwd: string | undefined) => (cwd && file.startsWith(`${cwd}${path.sep}`) ? file.slice(cwd.length + 1) : file);
 
-function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string | undefined): void {
+function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string | undefined, own: string): void {
   if (line.length < 2 || line.charCodeAt(0) !== 123) return;
   const snapshot = line.includes('"file-history-snapshot"');
   const result = line.includes('"toolUseResult"');
@@ -155,18 +140,11 @@ function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string
   }
   const uuid = str(row.uuid);
   if (!uuid || row.isSidechain === true) return;
-  if (isPromptRow(row)) {
-    scan.prompt = uuid;
-    scan.starts = new Map();
-    return;
-  }
+  // Copied as Claude Code's forkSession copies (it says from where), or as Claude Desktop's side
+  // chats carry their session's rows (under its id).
+  if ((row.forkedFrom !== undefined && row.forkedFrom !== null) || (typeof row.sessionId === 'string' && row.sessionId !== own)) scan.copied.add(uuid);
   const edit = result ? recordedEdit(row.toolUseResult) : undefined;
   if (!edit) return;
-  const file = relative(edit.file, cwd);
-  // What the turn changed in the file so far: its text before the turn's first edit of it, against now.
-  if (!scan.starts.has(file)) scan.starts.set(file, edit.before ?? null);
-  const start = scan.starts.get(file);
-  const ops = typeof start === 'string' && edit.after !== undefined ? lineDiff(splitLines(start), splitLines(edit.after)) : undefined;
   const content = isRecord(row.message) && Array.isArray(row.message.content) ? row.message.content : [];
   const toolUseId = content.map((b) => (isRecord(b) ? str(b.tool_use_id) : undefined)).find(Boolean);
   const line1 = firstLine(edit.hunks);
@@ -174,18 +152,12 @@ function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string
     at,
     bytes,
     ...(toolUseId ? { toolUseId } : {}),
-    edits: [{
-      path: file,
-      ...counts(edit.hunks),
-      ...(line1 ? { line: line1 } : {}),
-      ...(edit.created ? { created: true } : {}),
-      ...(ops ? { net: diffCounts(ops) } : {}),
-      ...(scan.prompt ? { prompt: scan.prompt } : {}),
-    }],
+    edits: [{ path: relative(edit.file, cwd), ...counts(edit.hunks), ...(line1 ? { line: line1 } : {}), ...(edit.created ? { created: true } : {}) }],
   });
 }
 
 async function readNew(file: string, scan: Scan, size: number, cwd: string | undefined): Promise<void> {
+  const own = path.basename(file, '.jsonl');
   const handle = await openRegular(file);
   try {
     while (scan.offset < size) {
@@ -203,7 +175,7 @@ async function readNew(file: string, scan: Scan, size: number, cwd: string | und
       scan.carry = Buffer.from(data.subarray(lastBreak + 1));
       for (let from = 0; from <= lastBreak;) {
         const end = data.indexOf(0x0a, from);
-        addRow(scan, data.toString('utf8', from, end), start + from, end - from, cwd);
+        addRow(scan, data.toString('utf8', from, end), start + from, end - from, cwd, own);
         from = end + 1;
       }
     }
@@ -249,16 +221,36 @@ function promptOf(message: ChatMessage): string | undefined {
   return words.replace(/\s+/g, ' ').trim() || (images ? 'An image' : '');
 }
 
-type Turn = { uuid: string; text: string; at?: number; rows: Array<{ uuid: string; row: EditRow }> };
+/**
+ * Whether Claude Code's /diff counts a message as a prompt, numbering turns by it (its diff
+ * panel's own test): a user row with text in it and no tool result, not one Claude Code added
+ * itself. A `!` command, its output, a `/` command and its output count, and so does the summary
+ * a compaction left.
+ */
+function countsAsPrompt(message: ChatMessage): boolean {
+  return message.role === 'user' && !message.meta && !message.steered && !message.parentToolUseId
+    && !message.blocks.some((b) => b.type === 'tool_result') && message.blocks.some((b) => b.type === 'text' && b.text !== '');
+}
 
-/** The conversation as it stands (its current branch), cut into prompts with the edit rows of each. */
-function turnsOf(messages: readonly ChatMessage[], scan: Scan): Turn[] {
+type Turn = { uuid: string; n: number; text: string; at?: number; rows: Array<{ uuid: string; row: EditRow }> };
+
+/**
+ * The conversation as it stands (its current branch), cut into prompts with the edit rows of
+ * each, numbered by the prompt's place among the conversation's prompts as /diff counts them
+ * (an image sent without words counts too, being a turn here). /diff sees only what followed the
+ * last compaction and numbers from there; here, where the turns before it show too, the count
+ * runs on through it. `ownOnly`: without the rows copied from another session (a side chat's).
+ */
+function turnsOf(messages: readonly ChatMessage[], scan: Scan, ownOnly: boolean): Turn[] {
   const turns: Turn[] = [];
   let turn: Turn | undefined;
+  let place = 0;
   for (const message of messages) {
+    if (ownOnly && scan.copied.has(message.uuid)) continue;
     const text = promptOf(message);
+    if (text !== undefined || countsAsPrompt(message)) place += 1;
     if (text !== undefined) {
-      turn = { uuid: message.uuid, text, ...(message.timestamp ? { at: message.timestamp } : {}), rows: [] };
+      turn = { uuid: message.uuid, n: place, text, ...(message.timestamp ? { at: message.timestamp } : {}), rows: [] };
       turns.push(turn);
       continue;
     }
@@ -268,7 +260,7 @@ function turnsOf(messages: readonly ChatMessage[], scan: Scan): Turn[] {
   return turns.filter((t) => t.rows.length > 0);
 }
 
-/** A turn's files, in the order Claude first edited them, each with what the turn changed in it. */
+/** A turn's files, in the order Claude first edited them, each with its edits' lines added up, as /diff counts them. */
 function filesOf(turn: Turn): TurnFile[] {
   const byPath = new Map<string, FileEdit[]>();
   for (const { row } of turn.rows) {
@@ -276,31 +268,32 @@ function filesOf(turn: Turn): TurnFile[] {
   }
   return [...byPath].map(([file, edits]) => {
     const first = edits[0]!;
-    const last = edits.at(-1)!;
-    // Worked out in the transcript's own order, under this very prompt: else each edit counts.
-    const net = edits.length === 1 ? { added: first.added, removed: first.removed } : last.net && last.prompt === turn.uuid ? last.net : undefined;
-    const summed = edits.reduce((acc, e) => ({ added: acc.added + e.added, removed: acc.removed + e.removed }), { added: 0, removed: 0 });
-    return { path: file, ...(net ?? summed), ...(first.created ? { created: true } : {}), ...(first.line ? { line: first.line } : {}) };
+    const added = edits.reduce((sum, e) => sum + e.added, 0);
+    const removed = edits.reduce((sum, e) => sum + e.removed, 0);
+    return { path: file, added, removed, ...(first.created ? { created: true } : {}), ...(first.line ? { line: first.line } : {}) };
   });
 }
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
-/** What each turn of the session in `file` changed, T1 first. `cwd`: the session's folder, for relative paths. */
-export async function sessionChanges(file: string, cwd: string | undefined): Promise<SessionChanges> {
+/**
+ * What each turn of the session in `file` changed, oldest first. `cwd`: the session's folder, for
+ * relative paths; `ownOnly`: a side chat's, which leaves out the turns it copied of its session.
+ */
+export async function sessionChanges(file: string, cwd: string | undefined, ownOnly = false): Promise<SessionChanges> {
   const scan = await scanned(file, cwd);
-  const turns: TurnChanges[] = turnsOf(await readHistory(file), scan).map((turn, i) => ({
+  const turns: TurnChanges[] = turnsOf(await readHistory(file), scan, ownOnly).map((turn) => ({
     uuid: turn.uuid,
-    n: i + 1,
+    n: turn.n,
     text: clip(turn.text, 120),
     ...(turn.at ? { at: turn.at } : {}),
     files: filesOf(turn),
     checkpoint: scan.checkpoints.has(turn.uuid),
   }));
   const lines: Record<string, number> = {};
-  for (const row of scan.rows.values()) {
+  for (const [uuid, row] of scan.rows) {
     const line = row.edits[0]?.line;
-    if (row.toolUseId && line) lines[row.toolUseId] = line;
+    if (row.toolUseId && line && !(ownOnly && scan.copied.has(uuid))) lines[row.toolUseId] = line;
   }
   return { turns, lines };
 }
@@ -320,26 +313,18 @@ async function readEdit(file: string, row: EditRow): Promise<Recorded | undefine
   }
 }
 
-/** Past this many edits of one file in one turn, only the first ones are shown one by one. */
+/** Past this many edits of one file in one turn, only the first ones are shown. */
 const MAX_EDITS_SHOWN = 50;
 
 /**
- * What one turn changed in one file, as a unified diff: the file before the turn's first edit of
- * it against after its last, else (a file too large to keep, an edit that does not fit) each
- * edit's own patch, one after the other. Empty when the turn did not edit the file.
+ * What one turn changed in one file, as Claude Code's /diff shows it: each edit's patch, in the
+ * order Claude made them. Empty when the turn did not edit the file.
  */
-export async function turnDiff(file: string, cwd: string | undefined, turnId: string, target: string): Promise<string> {
+export async function turnDiff(file: string, cwd: string | undefined, turnId: string, target: string, ownOnly = false): Promise<string> {
   const scan = await scanned(file, cwd);
-  const turn = turnsOf(await readHistory(file), scan).find((t) => t.uuid === turnId);
+  const turn = turnsOf(await readHistory(file), scan, ownOnly).find((t) => t.uuid === turnId);
   const rows = (turn?.rows ?? []).filter(({ row }) => row.edits.some((e) => e.path === target)).map(({ row }) => row);
   if (rows.length === 0) return '';
-  if (rows.length > 1) {
-    const [first, last] = await Promise.all([readEdit(file, rows[0]!), readEdit(file, rows.at(-1)!)]);
-    if (first?.before !== undefined && last?.after !== undefined) {
-      const ops = lineDiff(splitLines(first.before), splitLines(last.after));
-      if (ops) return unifiedDiff(target, toHunks(ops));
-    }
-  }
   const edits = await Promise.all(rows.slice(0, MAX_EDITS_SHOWN).map((row) => readEdit(file, row)));
   const diff = unifiedDiff(target, edits.flatMap((edit) => edit?.hunks ?? []));
   return rows.length > MAX_EDITS_SHOWN ? `${diff}… (${rows.length - MAX_EDITS_SHOWN} more edits of this file in this turn)\n` : diff;

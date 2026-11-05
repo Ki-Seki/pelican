@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { LiveShell, ServerEvent, ShellResult } from '../shared/protocol.js';
 import { feedFor } from './feed.js';
 import { ensureRun, getRun } from './runner.js';
-import { MAX_OUTPUT, respondsToBashCommands, startCommand, type CommandRun } from './shell.js';
+import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, startCommand } from './shell.js';
 
 /**
  * The `!` commands running in each session, shown to its pages as their output comes, and added to
- * the conversation once done, as Claude Code's bash mode adds them. Then Claude answers, as in the
- * CLI, unless the user's settings say not to (`respondToBashCommands: false`), or the command did
- * not finish on its own (Stop, the time limit).
+ * the conversation once done, as Claude Code's bash mode adds them: inline up to its limit, past it
+ * saved to a file Claude gets the start of. Then Claude answers, as in the CLI, unless the user's
+ * settings say not to (`respondToBashCommands: false`), or the command did not finish on its own
+ * (Stop, the time limit).
  */
 
 /** Output goes to the pages at most this often. */
@@ -19,7 +20,8 @@ const WAIT_MS = 500;
 /** A command whose record could not be written stays on show this long, saying why. */
 const FAILED_SHOWN_MS = 2 * 60_000;
 
-type Entry = { shell: LiveShell; run: CommandRun; pending: string; flush?: NodeJS.Timeout };
+/** `pending`: output not sent to the pages yet; `cut`: some went past what they keep. */
+type Entry = { shell: LiveShell; run: CommandRun; pending: string; cut?: boolean; flush?: NodeJS.Timeout };
 
 const bySession = new Map<string, Map<string, Entry>>();
 
@@ -33,24 +35,32 @@ export const shellsEvent = (sessionId: string): ServerEvent => ({ type: 'shells'
 
 const tell = (sessionId: string) => feedFor(sessionId).broadcast(shellsEvent(sessionId));
 
-/** What came since the last look goes out in one piece, up to what the page keeps. */
+/** What came since the last look goes out in one piece; once some was left out, the pages are told. */
 function flush(sessionId: string, entry: Entry): void {
   clearTimeout(entry.flush);
   entry.flush = undefined;
-  if (!entry.pending) return;
-  const room = MAX_OUTPUT - entry.shell.output.length;
-  const text = entry.pending.slice(0, Math.max(0, room));
-  const cut = text.length < entry.pending.length;
-  entry.pending = '';
-  if (text) {
+  if (entry.pending) {
     const from = entry.shell.output.length;
-    entry.shell.output += text;
-    feedFor(sessionId).broadcast({ type: 'shell_output', sessionId, id: entry.shell.id, from, text });
+    entry.shell.output += entry.pending;
+    feedFor(sessionId).broadcast({ type: 'shell_output', sessionId, id: entry.shell.id, from, text: entry.pending });
+    entry.pending = '';
   }
-  if (cut && !entry.shell.truncated) {
+  if (entry.cut && !entry.shell.truncated) {
     entry.shell.truncated = true;
     tell(sessionId);
   }
+}
+
+/**
+ * Output as it comes, held until the next look only up to what the page keeps: past that it is
+ * let go as it comes, since a command can print gigabytes (`!yes`) and keep at it for its half hour.
+ */
+function take(sessionId: string, entry: Entry, text: string): void {
+  const room = MAX_OUTPUT - entry.shell.output.length - entry.pending.length;
+  if (text.length > room) entry.cut = true;
+  if (room > 0) entry.pending += text.length > room ? text.slice(0, room) : text;
+  else if (entry.shell.truncated) return;
+  entry.flush ??= setTimeout(() => flush(sessionId, entry), FLUSH_MS);
 }
 
 function forget(sessionId: string, id: string): void {
@@ -74,26 +84,27 @@ async function record(sessionId: string, cwd: string, id: string, result: ShellR
   await turnOver(sessionId);
   // Pelican is closing its Claude processes: none is started again for this.
   if (shuttingDown) return;
-  const respond = result.endedBy === undefined && (await respondsToBashCommands(cwd));
+  const settings = await bashModeSettings(cwd);
+  const respond = result.endedBy === undefined && settings.respond;
+  const toClaude = await forClaude(sessionId, result, settings.inlineMax);
   const run = await ensureRun(sessionId);
   // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
-  await run.appendShell(result, respond && !run.busy, id);
+  await run.appendShell(toClaude, respond && !run.busy, id);
 }
 
 /**
- * Starts a `!` command in the session's folder. Its pages see it at once and its output as it
- * comes; once done it goes into the conversation under the command's id.
+ * Starts a `!` command in the session's folder, with the environment Claude Code gets there
+ * (`env`, from launchFor). Its pages see it at once and its output as it comes; once done it goes
+ * into the conversation under the command's id.
  */
-export function startShell(sessionId: string, cwd: string, command: string): LiveShell {
+export function startShell(sessionId: string, cwd: string, command: string, env?: Record<string, string>): LiveShell {
   const id = randomUUID();
   const shell: LiveShell = { id, command, startedAt: Date.now(), output: '' };
   let entry: Entry | undefined;
   const run = startCommand(cwd, command, {
+    ...(env ? { env } : {}),
     onOutput: (text) => {
-      if (!entry) return;
-      entry.pending += text;
-      const current = entry;
-      current.flush ??= setTimeout(() => flush(sessionId, current), FLUSH_MS);
+      if (entry) take(sessionId, entry, text);
     },
   });
   entry = { shell, run, pending: '' };
@@ -133,8 +144,22 @@ export function stopShell(sessionId: string, id: string): boolean {
 
 let shuttingDown = false;
 
-/** Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. */
-export function stopAllShells(): void {
+/** How long the commands still running get to end when Pelican shuts down, before they are made to. */
+const SHUTDOWN_GRACE_MS = 1500;
+/** How often it looks whether they have. */
+const SHUTDOWN_LOOK_MS = 50;
+
+/**
+ * Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. Each
+ * is asked to end (SIGTERM: a dev server or a test runner tidies up), and given a moment; then what
+ * is left of any of them is made to (SIGKILL), while Pelican is still there to do it. Settles once
+ * nothing of them runs.
+ */
+export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS): Promise<void> {
   shuttingDown = true;
-  for (const entries of bySession.values()) for (const entry of entries.values()) if (!entry.shell.done) entry.run.stop();
+  const running = [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
+  for (const entry of running) entry.run.stop();
+  const until = Date.now() + graceMs;
+  while (running.some((entry) => entry.run.alive()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
+  for (const entry of running) entry.run.kill();
 }

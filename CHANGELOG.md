@@ -7,13 +7,13 @@ from every app.
 
 ### Highlights
 
-- **Changes and files.** See what each turn changed (T1, T2…, from Claude Code's own record, so
-  also outside git), what is uncommitted, or everything since your branch split from main, with
-  diffs, and Rewind code where Claude Code kept a checkpoint. Search the folder by name or in the
-  text, and read a file with line numbers, Markdown and HTML previewed. A file a step names, or a
-  `path:line` in a reply, opens at its line, and under a turn that edited files "3 files changed"
-  opens them. On a phone it is a view of its own that the back gesture steps through; on a computer
-  it sits beside the conversation from 1024px wide.
+- **Changes and files.** See what each turn changed (T1, T2…, numbered and counted as Claude Code's
+  `/diff` does, from its own record, so also outside git), what is uncommitted, or everything since
+  your branch split from main, with diffs, and Rewind code where Claude Code kept a checkpoint.
+  Search the folder by name or in the text, and read a file with line numbers, Markdown and HTML
+  previewed. A file a step names, or a `path:line` in a reply, opens at its line, and under a turn
+  that edited files "3 files changed" opens them. On a phone it is a view of its own that the back
+  gesture steps through; on a computer it sits beside the conversation from 1024px wide.
 - **Side chats.** `/btw`, Cmd/Ctrl+; or Side chat in the session menu asks something on the side,
   as in Claude Desktop. Claude answers from a read-only copy of the session (Read, Grep and Glob,
   no MCP servers, never Bypass), and nothing goes back to the session, which keeps working. It sits
@@ -31,7 +31,8 @@ from every app.
   sessions, active days and streaks, and where they went by project, model, app and session, with
   a few highlights. On a plan its limits are at the top; on an API key or a provider, the cost
   Claude Code estimates. Each reply counts once, also when it was copied into a side chat or a
-  branch. The session menu shows what that session used.
+  branch; Claude Code's `/stats` counts each content block, so its totals are higher. The session
+  menu shows what that session used.
 
 ### Changes in behavior
 
@@ -41,7 +42,15 @@ from every app.
   them. Thinking shows in a session's menu once Claude has thought there. A session set to Summary
   opens in Normal.
 - A `!` command may run 30 minutes instead of two, and Claude answers it when it ends, which is a
-  turn like a prompt. A command you stop gets no answer.
+  turn like a prompt. A command you stop gets no answer, and one still running when Pelican stops
+  ends with it.
+- Claude gets a `!` command's output as in the terminal: stdout and stderr together, up to 30,000
+  characters or what `bashOutputMaxChars` sets, instead of up to 200,000 of each. A longer one is
+  saved whole in the session's `tool-results` folder, where Claude Code saves one, and Claude gets
+  its start and where it is; the conversation shows the same, also for a command run in the
+  terminal.
+- A renamed file's diff shows the rename and what changed in it, instead of the whole file as new.
+- Push and Create PR, on the branch line, show only where the repository has a remote.
 - Changes and files docks from 1024px wide instead of 1440px; below 1280px the session list folds
   away while it is open, and Cmd/Ctrl+K brings it back.
 - Commit, Push and Create PR, on the branch line, put a request to Claude in the message box, so
@@ -61,6 +70,8 @@ from every app.
 
 ### Security
 
+- In a folder kept to your settings only, a `!` command runs git as Claude Code does there, with
+  none of the repository's own programs (its file-system monitor, filters or hooks folder).
 - Changes and files reads only regular files inside the session's folder, links followed and
   checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
   config, an empty environment, no git and no links followed.
@@ -69,6 +80,8 @@ from every app.
 
 ### Site, docs and project
 
+- The demo's files have their text, and the files its conversations name open at the lines they
+  name.
 - The docs cover Changes and files, side chats, quotes, live `!` commands, the views and the
   usage page, and the coverage table moves side questions, views, quotes and Create PR to Yes.
 - On a phone, the website leads with the two buttons and the install command, then shows the app

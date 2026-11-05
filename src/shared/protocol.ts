@@ -240,8 +240,8 @@ export type SendMode = 'steer' | 'queue';
 /** A `!` command run in the session's folder, once it is done; it goes into the conversation as Claude Code's bash mode writes it. */
 export type ShellResult = {
   command: string;
-  stdout: string;
-  stderr: string;
+  /** What it printed, stdout and stderr together as they came, as Claude Code's bash mode takes them; up to a limit (`truncated` past it). */
+  output: string;
   /** Exit code; null when it did not finish on its own (see `endedBy`). */
   code: number | null;
   durationMs: number;
@@ -252,6 +252,10 @@ export type ShellResult = {
   endedBy?: 'stop' | 'limit';
   /** The limit it ran under, for saying it when it was hit. */
   limitMs?: number;
+  /** How much of the output Claude gets in the conversation: Claude Code's `bashOutputMaxChars`. */
+  inlineMax?: number;
+  /** Where all of the output was saved when it was more than that, as Claude Code saves it (the session's tool-results folder). */
+  savedTo?: string;
 };
 
 /**
@@ -296,13 +300,14 @@ export type Account = { email?: string; organization?: string; plan?: string };
 
 export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
 
-/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it. */
-export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as the turn left it. */ line?: number };
+/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it, with each edit's lines added up, as /diff counts them. */
+export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as its first edit left it. */ line?: number };
 
 /**
- * One prompt that led Claude to edit files, as Claude Code's /diff offers it: T1, T2… in order.
- * `uuid` is the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so
- * Rewind code can put them back.
+ * One prompt that led Claude to edit files, as Claude Code's /diff offers it: `n` its place among
+ * the conversation's prompts, so a prompt that changed nothing leaves a gap (T1, T3…). `uuid` is
+ * the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so Rewind
+ * code can put them back.
  */
 export type TurnChanges = { uuid: string; n: number; text: string; at?: number; files: TurnFile[]; checkpoint: boolean };
 
@@ -310,9 +315,10 @@ export type TurnChanges = { uuid: string; n: number; text: string; at?: number; 
 export type SessionChanges = { turns: TurnChanges[]; lines: Record<string, number> };
 /**
  * A folder's changes, as git says. `upstream`: the branch it pushes to, when set; `base`: the
- * repository's default branch, which "since the branch split" compares with.
+ * repository's default branch, which "since the branch split" compares with; `remote`: the
+ * repository has a remote to push to.
  */
-export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; upstream?: string; base?: string; ahead?: number; behind?: number; files: GitFile[] };
+export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; upstream?: string; base?: string; remote?: boolean; ahead?: number; behind?: number; files: GitFile[] };
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };

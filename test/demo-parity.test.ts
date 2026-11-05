@@ -1,10 +1,13 @@
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
 import { readLastTurn } from '../src/server/transcripts';
+import { gitStatus } from '../src/server/workspace';
 
 const DEV = 'c4b7d2e9-8888-4c8d-9e1f-000000000010';
 const STOPPED = 'e6f9a3b1-9999-4e9f-a0b2-000000000011';
@@ -36,6 +39,63 @@ describe('the demo shows what runs on and what waits', () => {
     const live = demoLiveProcesses();
     expect(live.get(WAITING)).toMatchObject({ app: 'the terminal', busy: true, waiting: 'permission prompt' });
     expect([...live.values()].some((p) => p.app === 'Claude Desktop' && p.busy && !p.waiting)).toBe(true);
+  });
+});
+
+const SLOW = 'b7e2a9c1-2222-4b2c-9d4e-000000000002';
+const SIDE = 'a3f1c2d4-1111-4a1b-8c3d-0000000000a1';
+const transcriptOf = (project: string, id: string) => path.join(config.claudeHome, 'projects', path.join(config.home, 'code', project).replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);
+const rowsOf = async (file: string) => (await readFile(file, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line) as Record<string, any>);
+
+/** Every file under a folder, its git folder left out. */
+async function filesIn(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.name === '.git') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...await filesIn(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+describe('the demo’s folders', () => {
+  it('hold files with text in them, as the conversations show them', async () => {
+    const files = await filesIn(path.join(config.home, 'code'));
+    expect(files.length).toBeGreaterThan(10);
+    const empty = [];
+    for (const file of files) if ((await stat(file)).size === 0) empty.push(path.relative(config.home, file));
+    expect(empty).toEqual([]);
+  });
+
+  it('hold the export the slow-export session reads, with its loop where the session finds it', async () => {
+    const lines = (await readFile(path.join(config.home, 'code', 'data-pipeline', 'pipeline', 'export.py'), 'utf8')).split('\n');
+    expect(lines.slice(34, 38)).toEqual(['def export_rows(batch):', '    for row in batch:', '        owner = db.fetch_owner(row.owner_id)', '        write(row, owner)']);
+    const rows = await rowsOf(transcriptOf('data-pipeline', SLOW));
+    const blocks = rows.flatMap((row) => (Array.isArray(row.message?.content) ? row.message.content : []));
+    const call = blocks.find((b: any) => b.type === 'tool_use' && b.name === 'Read');
+    expect(call.input.offset).toBe(35);
+    // What the Read shows is the file from that line on, numbered as the file is.
+    const shown = blocks.find((b: any) => b.type === 'tool_result' && b.tool_use_id === call.id).content as string;
+    expect(shown.split('\n').slice(0, 4)).toEqual(lines.slice(34, 38).map((line, i) => `${String(35 + i).padStart(6)}\t${line}`));
+    expect(blocks.find((b: any) => b.type === 'tool_result' && String(b.content).startsWith('pipeline/export.py:')).content).toBe('pipeline/export.py:35:def export_rows(batch):');
+  });
+
+  it('keep a remote for the repository, as one you push from has: Push and Create PR show as they would', async () => {
+    const status = await gitStatus(path.join(config.home, 'code', 'acme-web'));
+    expect(status.repo && status.remote).toBe(true);
+  });
+});
+
+describe('the demo’s side chat', () => {
+  it('copies no checkpoints with its session’s rows, as forkSession copies none, and its Changes show none of their turns', async () => {
+    const file = transcriptOf('acme-web', SIDE);
+    const rows = await rowsOf(file);
+    const copied = new Set(rows.filter((row) => row.forkedFrom).map((row) => row.uuid));
+    expect(copied.size).toBeGreaterThan(0);
+    const kept = rows.filter((row) => row.type === 'file-history-snapshot').map((row) => row.messageId);
+    expect(kept.filter((id) => copied.has(id))).toEqual([]);
+    expect((await sessionChanges(file, path.join(config.home, 'code', 'acme-web'), true)).turns).toEqual([]);
   });
 });
 

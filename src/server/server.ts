@@ -203,11 +203,13 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   const sweeping = setInterval(sweep, DAY_MS);
   sweeping.unref();
 
+  // Claude's processes get half a second to close; `!` commands still running are asked to end
+  // and then made to, before Pelican exits: once it has, nothing would end them.
   const shutdown = () => {
-    stopAllShells();
+    const shells = stopAllShells();
     closeAll();
     server.close();
-    setTimeout(() => process.exit(0), 500).unref();
+    void Promise.all([shells, new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

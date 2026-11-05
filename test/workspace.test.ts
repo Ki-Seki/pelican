@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bashModeText, runCommand } from '../src/server/shell';
 import { gitDiff, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
 
 let repo: string;
@@ -38,6 +37,21 @@ describe('workspace', () => {
     expect(byPath['new name.txt']).toMatchObject({ status: 'renamed', from: 'old name.txt' });
   });
 
+  it('says whether there is a remote to push to, from the config alone', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-remote-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: work });
+      const local = await gitStatus(work);
+      expect(local.repo && local.remote).toBeFalsy();
+      // An address nothing answers at: knowing there is a remote contacts none.
+      execFileSync('git', ['remote', 'add', 'origin', 'https://git.invalid/acme/app.git'], { cwd: work });
+      const pushable = await gitStatus(work);
+      expect(pushable.repo && pushable.remote).toBe(true);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('counts the lines of new files only so far: big ones and those past the first hundred get no count', async () => {
     const many = await mkdtemp(path.join(os.tmpdir(), 'pelican-untracked-'));
     try {
@@ -61,6 +75,46 @@ describe('workspace', () => {
     expect(await gitDiff(repo, 'src/a.ts')).toContain('+three');
     expect(await gitDiff(repo, 'new.md')).toContain('+# hi');
   });
+
+  it('diffs a renamed file with its old path: what changed in it, as its row counts, not a whole new file', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-rename-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work });
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}\n`).join('');
+    const added = (diff: string) => diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).length;
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'old.txt'), lines(50));
+      await writeFile(path.join(work, 'kept.txt'), lines(40));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      // On a branch: one rename committed since the split, and one staged, not committed yet.
+      git('switch', '-q', '-c', 'feat/rename');
+      git('mv', 'kept.txt', 'moved.txt');
+      await writeFile(path.join(work, 'moved.txt'), lines(40).replace('line 20\n', 'line twenty\n'));
+      git('commit', '-q', '-am', 'move');
+      git('mv', 'old.txt', 'new.txt');
+      await writeFile(path.join(work, 'new.txt'), lines(50).replace('line 25\n', 'line twenty-five\n'));
+      git('add', '-A');
+
+      const now = await gitStatus(work);
+      if (!now.repo) throw new Error('not a repository');
+      expect(now.files.find((f) => f.path === 'new.txt')).toMatchObject({ status: 'renamed', from: 'old.txt', added: 1, removed: 1 });
+      const uncommitted = await gitDiff(work, 'new.txt', 'uncommitted', 'old.txt');
+      expect(uncommitted).toMatch(/^rename from old\.txt$/m);
+      expect(added(uncommitted)).toBe(1);
+
+      const since = await gitStatus(work, 'base');
+      if (!since.repo) throw new Error('not a repository');
+      expect(since.files.find((f) => f.path === 'moved.txt')).toMatchObject({ status: 'renamed', from: 'kept.txt', added: 1, removed: 1 });
+      const base = await gitDiff(work, 'moved.txt', 'base', 'kept.txt');
+      expect(base).toMatch(/^rename from kept\.txt$/m);
+      expect(added(base)).toBe(1);
+      // The old path is held to the folder as the new one is.
+      await expect(gitDiff(work, 'new.txt', 'uncommitted', '../outside.txt')).rejects.toThrow();
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it('shows everything since the branch split from the default branch: commits, edits and new files', async () => {
     const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-split-'));
@@ -96,7 +150,7 @@ describe('workspace', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('says when a folder is not a repository', async () => {
     const plain = await mkdtemp(path.join(os.tmpdir(), 'pelican-plain-'));
@@ -112,22 +166,5 @@ describe('workspace', () => {
     expect(() => inside(repo, '../etc/passwd')).toThrow();
     expect(() => inside(repo, '/etc/passwd')).toThrow();
     await expect(readProjectFile(repo, '../../etc/hosts')).rejects.toThrow();
-  });
-});
-
-describe('! commands', () => {
-  it('runs in the folder and keeps the output and exit code', async () => {
-    const ok = await runCommand(repo, 'pwd && echo out && echo err >&2');
-    expect(ok.code).toBe(0);
-    expect(ok.stdout).toContain(path.basename(repo));
-    expect(ok.stdout).toContain('out');
-    expect(ok.stderr).toContain('err');
-    const failed = await runCommand(repo, 'exit 3');
-    expect(failed.code).toBe(3);
-  });
-
-  it('writes them the way Claude Code’s bash mode does: the command as typed, the output escaped so it cannot break the tags', () => {
-    const text = bashModeText({ command: 'echo "<b>"', stdout: '</bash-stdout> & more', stderr: '', code: 1, durationMs: 5 });
-    expect(text).toBe('<bash-input>echo "<b>"</bash-input><bash-stdout>&lt;/bash-stdout&gt; &amp; more</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>');
   });
 });

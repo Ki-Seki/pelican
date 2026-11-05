@@ -248,8 +248,9 @@ export const api = {
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
   /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
   git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
-  gitDiff: (cwd: string, path: string, scope?: 'base') =>
-    request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ''}`).then((r) => r.diff),
+  /** One file's diff; `from`, a renamed file's old path, so it shows what changed rather than a new file. */
+  gitDiff: (cwd: string, path: string, scope?: 'base', from?: string) =>
+    request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ''}${from ? `&from=${encodeURIComponent(from)}` : ''}`).then((r) => r.diff),
   tree: (cwd: string, path: string) => request<{ entries: TreeEntry[] }>(`tree?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.entries),
   file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>

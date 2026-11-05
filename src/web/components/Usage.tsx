@@ -107,7 +107,7 @@ function Figures({ summary, showCost, onOpenSession }: { summary: UsageSummary; 
           <Tile
             label="Longest session"
             value={span(summary.activity.longest.ms)}
-            sub={summary.activity.longest.title ?? `on ${new Date(summary.activity.longest.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
+            sub={summary.activity.longest.title ?? `on ${new Date(summary.activity.longest.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })}`}
             wide
           />
         )}
@@ -145,7 +145,7 @@ function Figures({ summary, showCost, onOpenSession }: { summary: UsageSummary; 
       />
 
       <p className="px-3 pt-5 pb-2 text-[12px] leading-snug text-faint">
-        From Claude Code’s transcripts on this computer, each reply counted once. Days are UTC dates, as in Claude Code’s /stats.
+        From Claude Code’s transcripts on this computer, each reply counted once. Claude Code’s /stats counts each content block of a reply, so its totals are higher. Days are UTC dates, as in /stats.
       </p>
     </>
   );
