@@ -1,7 +1,7 @@
 {
   "name": "Pelican",
   "short_name": "Pelican",
-  "description": "Your Claude Code sessions, from any browser",
+  "description": "Every Claude Code session on your computer, on your phone.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
