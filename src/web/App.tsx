@@ -16,6 +16,7 @@ import { shortcutsShown, ShortcutsSheet, showShortcuts } from './components/Shor
 import { announce } from './lib/announce';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
+import { forgetDrafts } from './lib/drafts';
 import { withMod } from './lib/keyboard';
 import {
   disableNotifications,
@@ -188,6 +189,7 @@ function Main() {
   };
 
   const signOut = () => {
+    forgetDrafts();
     void api.logout().finally(() => {
       setSettingsOpen(false);
       // Everything but the sign-in state goes; that one is asked again, so the sign-in screen shows.

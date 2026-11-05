@@ -11,7 +11,7 @@ Object.assign(globalThis, {
     removeItem: (key: string) => void store.delete(key),
   },
 });
-const { clearDraft, loadDraft, saveDraft } = await import('../src/web/lib/drafts');
+const { clearDraft, forgetDrafts, loadDraft, saveDraft } = await import('../src/web/lib/drafts');
 
 const file: Attachment = { id: 'u1', name: 'shot.png', mime: 'image/png', size: 10, path: '/tmp/u1' };
 
@@ -49,6 +49,14 @@ describe('drafts', () => {
     expect(kept).toHaveLength(50);
     expect(kept).toContain('latest');
     expect(kept).not.toContain('s0');
+  });
+
+  it('all go when this browser signs out', () => {
+    saveDraft('s1', 'a prompt');
+    saveDraft('s2', 'another');
+    forgetDrafts();
+    expect(loadDraft('s1')).toBeUndefined();
+    expect(loadDraft('s2')).toBeUndefined();
   });
 
   it('survive a broken store', () => {

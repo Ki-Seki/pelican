@@ -61,6 +61,15 @@ export function clearDraft(viewId: string, sent?: string): void {
   writeAll(all);
 }
 
+/** Signing out leaves no prompts behind in this browser. */
+export function forgetDrafts(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    // Nothing was kept.
+  }
+}
+
 /**
  * Saves what is typed a moment after typing stops, and at once when the chat closes or the page
  * goes to the background (a phone may drop a background tab without warning). `now` saves at once:
