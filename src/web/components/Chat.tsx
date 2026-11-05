@@ -5,11 +5,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
-import type { Start } from '../lib/start';
 import { baseName, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
+import type { Start } from '../lib/start';
 import {
   addLocalMessage,
   adoptView,
