@@ -2,10 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Agent, Attachment, Command, ModelOption, PermissionMode, RunSettings, SendMode } from '../../shared/protocol';
+import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
+import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { enterSends, getPrefs, PERMISSION_MODES } from '../lib/prefs';
+import { enterSends, getPrefs } from '../lib/prefs';
 import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
 import { Sheet, SheetOption } from './Sheet';
 
@@ -209,8 +210,10 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null);
 
   const model = modelOf(models, settings);
-  const modes = PERMISSION_MODES.filter((m) => m.value !== 'auto' || model?.supportsAuto !== false);
-  const permission = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
+  const permission = settings.permissionMode ?? 'default';
+  // The session's own mode is listed even when it is not offered (Don't ask), so the list says where it is.
+  const offered = OFFERED_MODES.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
+  const modes = offered.includes(permission) ? offered : [permission, ...offered];
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
 
@@ -480,8 +483,8 @@ export function Composer({
               <ModelSummary settings={settings} models={models} />
             </Chip>
             <span aria-hidden className="h-3.5 w-px shrink-0 bg-line" />
-            <Chip label="Permission mode" tone={permission.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
-              {permission.short}
+            <Chip label="Permission mode" tone={permission === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
+              {MODE_INFO[permission].short}
             </Chip>
           </div>
           )}
@@ -526,8 +529,8 @@ export function Composer({
 
       <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
         {modes.map((m) => (
-          <SheetOption key={m.value} label={m.label} description={m.description} selected={m.value === permission.value} onSelect={() => {
-            set({ permissionMode: m.value as PermissionMode });
+          <SheetOption key={m} label={MODE_INFO[m].label} description={MODE_INFO[m].description} selected={m === permission} onSelect={() => {
+            if (OFFERED_MODES.includes(m)) set({ permissionMode: m });
             setSheet(undefined);
           }} />
         ))}

@@ -1,5 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 
+import { isPermissionMode } from '../shared/modes.js';
 import type { ChatMessage, RecordedSettings } from '../shared/protocol.js';
 import { toChatMessage } from './normalize.js';
 
@@ -66,8 +67,6 @@ function empty(ino: number): Transcript {
   };
 }
 
-const MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
-
 /** Keeps the settings a row shows the session ran with: the latest row wins. */
 function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
   if (row.type === 'assistant') {
@@ -77,8 +76,8 @@ function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
     const speed = str((row.message as { usage?: { speed?: unknown } } | undefined)?.usage?.speed);
     if (speed) recorded.fast = speed === 'fast';
     recorded.ultracode ??= false;
-  } else if (row.type === 'user' && str(row.permissionMode) && MODES.has(str(row.permissionMode)!)) {
-    recorded.permissionMode = str(row.permissionMode) as RecordedSettings['permissionMode'];
+  } else if (row.type === 'user' && isPermissionMode(row.permissionMode)) {
+    recorded.permissionMode = row.permissionMode;
   } else if (row.type === 'attachment') {
     const kind = str((row.attachment as { type?: unknown } | undefined)?.type) ?? '';
     // Claude Code notes ultracode turning on (and off) as attachments.

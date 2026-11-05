@@ -34,7 +34,7 @@ const closeSheet = async () => {
 };
 await closeSheet();
 await page.getByRole('button', { name: 'Permission mode' }).click();
-await page.getByRole('dialog').getByText('Ask before acting').click();
+await page.getByRole('dialog').getByText('Manual', { exact: true }).click();
 await closeSheet();
 await page.locator('textarea').fill('Create a file named hello.txt containing the single word hi. Then reply with one short sentence.');
 await shot('1-new');

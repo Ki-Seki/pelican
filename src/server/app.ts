@@ -7,7 +7,8 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { Attachment, ChatMessage, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import { isPermissionMode } from '../shared/modes.js';
+import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -182,9 +183,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
 
 type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
 
-const PERMISSION_MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
-const permissionMode = (value: unknown): PermissionMode | undefined =>
-  (PERMISSION_MODES as unknown[]).includes(value) ? (value as PermissionMode) : undefined;
+const permissionMode = (value: unknown) => (isPermissionMode(value) ? value : undefined);
 
 /** The settings a request may carry, and only those, each of its own type. */
 function cleanSettings(raw: unknown): RunSettings {

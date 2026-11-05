@@ -1,6 +1,8 @@
 // Types shared by the server and the web app: REST payloads and WebSocket events.
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
+import type { PermissionMode } from './modes';
+
+export type { PermissionMode } from './modes';
 
 /** idle: nothing running · running: this app is running a turn · waiting: a turn waits for an
  *  approval or an answer · live: another client (Desktop, the terminal) wrote to it just now. */
