@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import type { GitFile, GitStatus, SessionChanges, TurnChanges } from '../../shared/protocol';
 import { api } from '../lib/api';
+import { requestsFor } from '../lib/requests';
 import type { WorkspaceStep } from '../lib/workspace-route';
 import { PathLabel } from './PathLabel';
 import { Sheet, SheetOption } from './Sheet';
@@ -101,7 +102,7 @@ function ShowSheet({ open, onClose, scope, status, base, turns, onPick }: {
  * records and show in any folder. A turn ends with Rewind code when Claude Code kept the files
  * as they were before it.
  */
-export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind }: {
+export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind, onRequest }: {
   cwd: string;
   sessionId?: string;
   step: WorkspaceStep;
@@ -113,6 +114,8 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   go: (step: WorkspaceStep) => void;
   setScope: (step: WorkspaceStep) => void;
   onRewind?: (uuid: string) => void;
+  /** Puts a request to Claude in the message box (Commit, Push, Create PR), to be sent from there. */
+  onRequest?: (text: string) => void;
 }) {
   const scope = scopeOf(step);
   const [picking, setPicking] = useState(false);
@@ -163,6 +166,16 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
           <button type="button" aria-label="Refresh" onClick={() => void status.refetch()} className="-my-1.5 ml-auto grid size-10 shrink-0 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg">
             <RefreshCw className={`size-3.5 ${status.isFetching ? 'animate-spin' : ''}`} />
           </button>
+        </div>
+      )}
+      {git && onRequest && requestsFor(git).length > 0 && (
+        // Requests to Claude, as Claude Desktop's Create PR is: into the message box, sent from there.
+        <div className="flex flex-wrap gap-1.5 px-3 pt-0.5 pb-2">
+          {requestsFor(git).map((request) => (
+            <button key={request.label} type="button" title="Ask Claude to do it: the request goes into the message box" onClick={() => onRequest(request.text)} className="h-8 rounded-full border border-line px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-9">
+              {request.label}
+            </button>
+          ))}
         </div>
       )}
       {choices > 1 && (

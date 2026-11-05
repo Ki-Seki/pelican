@@ -274,6 +274,19 @@ describe('line comments, as in Claude Desktop', () => {
   });
 });
 
+describe('Commit, Push and Create PR', () => {
+  it('fill the message box with a request to Claude, to be read and sent from there: nothing runs', async () => {
+    server.git = { repo: true, branch: 'feat/x', base: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
+    session();
+    await loaded();
+    fireEvent.change(box(), { target: { value: 'First this.' } });
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }));
+    await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
+    expect(server.sent).toEqual([]);
+  });
+});
+
 describe('a session another app is waiting in, while Claude is idle here', () => {
   it('says so, and that a message sent here starts a second Claude', async () => {
     server.session = { status: 'waiting', runningIn: 'the terminal' };

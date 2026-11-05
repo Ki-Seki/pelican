@@ -213,6 +213,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           go={go}
           setScope={(to) => goTo(to, false)}
           {...(onRewind ? { onRewind } : {})}
+          onRequest={(text) => onAddToMessage(text, true)}
         />
       )}
       {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}
