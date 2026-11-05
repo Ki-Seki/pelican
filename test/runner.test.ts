@@ -134,6 +134,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
 }));
 
 const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks, startSideChat } = await import('../src/server/runner');
+const { sideChatPrompt } = await import('../src/server/side-chat');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
@@ -953,8 +954,10 @@ describe('side chats', () => {
       effort: 'high',
     });
     expect(claude.options.settings).toBeUndefined();
+    // The session's own system prompt; the note that it is a side chat goes with each question.
+    expect(claude.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
     await settle();
-    expect(claude.prompts.map(textOf)).toEqual(['Why CSS variables?']);
+    expect(claude.prompts.map(textOf)).toEqual([sideChatPrompt('Why CSS variables?')]);
     // Anything Claude Code would still ask about is refused there, with nobody asked.
     const { answer } = ask(claude, 'Bash', { command: 'git commit -am wip' });
     expect((await answer).behavior).toBe('deny');
@@ -989,6 +992,8 @@ describe('side chats', () => {
     const again = claudes.at(-1)!;
     expect(again).not.toBe(claude);
     expect(again.options).toMatchObject({ resume: side, tools: ['Read', 'Grep', 'Glob'], strictMcpConfig: true, permissionMode: 'dontAsk', allowDangerouslySkipPermissions: false });
+    await settle();
+    expect(again.prompts.map(textOf)).toEqual([sideChatPrompt('And where is it kept?')]);
   });
 });
 

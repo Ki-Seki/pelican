@@ -19,8 +19,19 @@ export const SIDE_CHAT_TOOLS = ['Read', 'Grep', 'Glob'];
 /** The mode a side chat runs in: anything not already allowed is refused, never asked about, and Bypass never applies. */
 export const SIDE_CHAT_MODE = 'dontAsk' as const;
 
-/** Said to Claude in a side chat, so it answers rather than reaching for tools it does not have. */
-const SIDE_CHAT_NOTE = 'This is a side chat about the conversation above. Answer the user\'s questions from it, reading files when that helps. You cannot change files or run commands here, and nothing said here reaches the main session.';
+/**
+ * Said to Claude with each question in a side chat, so it answers rather than reaching for tools
+ * that do not run there: the session's tools are still listed to it, as they were.
+ */
+const SIDE_CHAT_NOTE = 'This is a side chat about the conversation above. Here you can only read, with Read, Grep and Glob, in the working folder: any other tool listed is refused, so do not call one. Answer the user\'s questions, reading files when that helps. Nothing you say or do here reaches the main session.';
+
+/**
+ * A question as a side chat sends it to Claude: after the note, in a system reminder, as Claude
+ * Desktop sends its own. Not in the system prompt, which Claude Code keeps as the session had it
+ * when it resumes a copy. Pelican shows the question alone, as Desktop does; the terminal shows
+ * the note as well, as it does for Desktop's.
+ */
+export const sideChatPrompt = (text: string) => `<system-reminder>\n${SIDE_CHAT_NOTE}\n</system-reminder>\n\n${text}`;
 
 /** Whatever Claude Code would still ask about in a side chat is refused: there is nobody there to ask. */
 const refuse: CanUseTool = async () => ({ behavior: 'deny', message: 'A side chat only reads. Ask in the session itself for anything else.' });
@@ -31,6 +42,7 @@ const refuse: CanUseTool = async () => ({ behavior: 'deny', message: 'A side cha
  *   given), whatever the folder or the user's settings configure;
  * - Don't ask, with Bypass not allowed, so a mode picked elsewhere never reaches it;
  * - no checkpoints, since it changes no file, and no prompt suggestions, which nobody reads there.
+ * Its system prompt stays the session's (see sideChatPrompt).
  */
 export function sideChatOptions(): Partial<Options> {
   return {
@@ -42,7 +54,6 @@ export function sideChatOptions(): Partial<Options> {
     canUseTool: refuse,
     enableFileCheckpointing: false,
     promptSuggestions: false,
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: SIDE_CHAT_NOTE },
   };
 }
 

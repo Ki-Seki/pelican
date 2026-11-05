@@ -8,8 +8,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fork } from '../src/server/actions';
 import { config } from '../src/server/config';
 import { listSummaries } from '../src/server/sessions';
-import { isSideChat, SIDE_CHAT_TITLE, sideChatOf, sideChatOptions, sideChatSettings } from '../src/server/side-chat';
+import { isSideChat, SIDE_CHAT_TITLE, sideChatOf, sideChatOptions, sideChatPrompt, sideChatSettings } from '../src/server/side-chat';
 import { refreshTranscriptIndex, transcriptPath } from '../src/server/transcripts';
+import { buildItems } from '../src/web/lib/turns';
 
 // The Agent SDK's own forkSession, on transcripts in a folder of this test's: nothing of this
 // computer's Claude Code is read or written.
@@ -101,6 +102,15 @@ describe('what a side chat runs with', () => {
     expect(options.permissionMode).toBe('dontAsk');
     expect(options.allowDangerouslySkipPermissions).toBe(false);
     expect(options.enableFileCheckpointing).toBe(false);
+    // The session's own system prompt, which Claude Code keeps for a resumed copy anyway.
+    expect(options).not.toHaveProperty('systemPrompt');
+  });
+
+  it('tells Claude with each question, in a system reminder as Claude Desktop does, that it is a side chat that only reads', () => {
+    const prompt = sideChatPrompt('Why CSS variables?');
+    expect(prompt).toMatch(/^<system-reminder>\nThis is a side chat about the conversation above\. Here you can only read, with Read, Grep and Glob, in the working folder: any other tool listed is refused, so do not call one\. .*Nothing you say or do here reaches the main session\.\n<\/system-reminder>\n\nWhy CSS variables\?$/s);
+    // Pelican shows the question alone, as Desktop does.
+    expect(buildItems([{ uuid: 'q', role: 'user', blocks: [{ type: 'text', text: prompt }] }])).toMatchObject([{ kind: 'user', text: 'Why CSS variables?' }]);
   });
 
   it('refuses whatever Claude Code would still ask about', async () => {

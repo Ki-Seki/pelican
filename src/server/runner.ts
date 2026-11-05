@@ -49,7 +49,7 @@ import { toChatMessage } from './normalize.js';
 import { answerable, notify } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages } from './shell.js';
-import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatSettings } from './side-chat.js';
+import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
@@ -520,7 +520,7 @@ export class SessionRun {
   }
 
   private async deliver(prompt: Prompt, steer: boolean): Promise<void> {
-    const content = await contentOf(prompt.text, prompt.attachments);
+    const content = await contentOf(this.sideChat ? sideChatPrompt(prompt.text) : prompt.text, prompt.attachments);
     if (this.closed) throw new RunClosed();
     const message: SDKUserMessage = {
       type: 'user',

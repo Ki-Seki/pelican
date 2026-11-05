@@ -16,9 +16,10 @@ from every app.
   it sits beside the conversation from 1024px wide.
 - **Side chats.** `/btw`, Cmd/Ctrl+; or Side chat in the session menu asks something on the side,
   as in Claude Desktop. Claude answers from a read-only copy of the session (Read, Grep and Glob,
-  no MCP servers, never Bypass), and nothing goes back to the session, which keeps working. It sits
-  beside the conversation on a computer and is a sheet on a phone. Side chats are Claude Code
-  sessions titled "Side chat", folded under their session, and continue in the CLI and Desktop.
+  no MCP servers, never Bypass), and is told so with each question, as in Desktop. Nothing goes
+  back to the session, which keeps working. It sits beside the conversation on a computer and is a
+  sheet on a phone. Side chats are Claude Code sessions titled "Side chat", folded under their
+  session, and continue in the CLI and Desktop.
 - **Quote.** Select text in a reply, a step's output or a file and tap Quote. The quote waits
   above the message box with your draft and goes above your words as a `>` quote; lines of a file
   carry where they are, as `src/app.ts:7-8`.
