@@ -29,6 +29,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **Notifications follow the sign-in.** Each device's push subscription is tied to the secret it
   signed in under: a new token or password stops notifications to every device, and signing out
   turns them off on that device first.
+- **A browser signed out keeps nothing to show.** Signing out forgets its drafts and asks the
+  browser to drop what it keeps of Pelican, and the pictures of a conversation are checked with
+  Pelican each time they are shown, so a signed-out browser gets none from its cache.
 - **`--no-auth` turns signing in off**, for when something in front of Pelican already
   authenticates (a reverse proxy, a gateway). Pelican says so loudly when it listens beyond this
   computer that way. The demo (`--demo`) signs no one in, so it listens only on `127.0.0.1`

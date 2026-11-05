@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
-import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
+import { findUpload, listDirs, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { defaultMode, knownModels, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
@@ -165,6 +166,9 @@ app.post('/api/auth/login', async (c) => {
 
 app.post('/api/auth/logout', (c) => {
   c.header('Set-Cookie', cookieHeader(c, cookieName(), '', 0));
+  // What the browser kept of Pelican (a conversation's pictures) goes too; where the browser does
+  // not take this (an http address that is not this computer), the pictures are checked anyway.
+  c.header('Clear-Site-Data', '"cache"');
   return c.json({ ok: true });
 });
 
@@ -719,17 +723,31 @@ const INERT = {
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
 
+/**
+ * Pictures and files of a conversation: a browser keeps them, but asks the server each time it shows
+ * one, so a browser signed out (or whose sign-in was reset) is refused instead of showing its copy.
+ * The answer to a browser that has the very one is short: no picture again.
+ */
+const KEPT_ASKING = 'private, no-cache';
+const unchanged = (c: Context, tag: string) => (c.req.header('if-none-match') ?? '').split(',').some((t) => t.trim().replace(/^W\//, '') === tag);
+
 app.get('/api/uploads/:id', async (c) => {
-  const found = await readUpload(c.req.param('id'));
-  if (!found) return c.notFound();
+  const upload = await findUpload(c.req.param('id'));
+  if (!upload) return c.notFound();
+  // An upload never changes under its id.
+  const tag = `"${upload.id}"`;
+  if (unchanged(c, tag)) return c.body(null, 304, { ETag: tag, 'Cache-Control': KEPT_ASKING });
+  const data = await readFile(upload.path).catch(() => undefined);
+  if (!data) return c.notFound();
   // Shown in the page only as an image; anything else downloads. Either way it runs nothing:
   // no sniffing, no scripts, no frames.
-  const image = found.attachment.mime.startsWith('image/') && found.attachment.mime !== 'image/svg+xml';
-  return c.body(new Uint8Array(found.data), 200, {
-    'Content-Type': found.attachment.mime,
-    'Cache-Control': 'private, max-age=86400',
+  const image = upload.mime.startsWith('image/') && upload.mime !== 'image/svg+xml';
+  return c.body(new Uint8Array(data), 200, {
+    'Content-Type': upload.mime,
+    'Cache-Control': KEPT_ASKING,
+    ETag: tag,
     ...INERT,
-    ...(image ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.attachment.name)}` }),
+    ...(image ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(upload.name)}` }),
   });
 });
 
@@ -739,17 +757,21 @@ const PICTURES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 /**
  * A picture a message holds (a screenshot, an image sent with a prompt): pages carry its address
  * instead of the data, so a page of messages stays small and a picture loads only when shown.
- * The same message and position always hold the same picture, so browsers keep it.
+ * The same message and position always hold the same picture: its address is its version, so a
+ * browser that has it is told so without the transcript being read.
  */
 app.get('/api/sessions/:id/images/:uuid/:n', async (c) => {
   const n = Number(c.req.param('n'));
   const file = await transcriptPath(c.req.param('id'));
   if (!file || !Number.isSafeInteger(n)) return c.json({ error: 'No such picture' }, 404);
+  const tag = `"${createHash('sha256').update(`${c.req.param('id')}\0${c.req.param('uuid')}\0${n}`).digest('base64url').slice(0, 27)}"`;
+  if (unchanged(c, tag)) return c.body(null, 304, { ETag: tag, 'Cache-Control': KEPT_ASKING });
   const image = await transcriptImage(file, c.req.param('uuid'), n);
   if (!image || !PICTURES.has(image.mediaType)) return c.json({ error: 'No such picture' }, 404);
   return c.body(new Uint8Array(image.data), 200, {
     'Content-Type': image.mediaType,
-    'Cache-Control': 'private, max-age=31536000, immutable',
+    'Cache-Control': KEPT_ASKING,
+    ETag: tag,
     ...INERT,
   });
 });
