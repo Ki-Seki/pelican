@@ -167,11 +167,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const git = status.data?.repo ? status.data : undefined;
 
   // Not a repository and no turn that changed files: there is nothing to compare, so the view
-  // starts in the files. Changes, tapped, still says why it is empty.
+  // starts in the files. Changes, tapped, still says why it is empty, until the view closes, which
+  // takes its step out of the address: the side chat, in its place beside the conversation for a
+  // while, gives it back as it was.
   const nothingToCompare = status.data && !status.data.repo && !status.data.untrusted && turns.data?.turns.length === 0;
+  const closed = !routed;
   useEffect(() => {
-    if (!open) tapped.current = false;
-    else if (nothingToCompare && tab === 'changes' && !shown && !tapped.current) goTo({ tab: 'files' }, false);
+    if (closed) tapped.current = false;
+  }, [closed]);
+  useEffect(() => {
+    if (open && nothingToCompare && tab === 'changes' && !shown && !tapped.current) goTo({ tab: 'files' }, false);
   }, [open, nothingToCompare, tab, shown]);
 
   const back = shown ? (

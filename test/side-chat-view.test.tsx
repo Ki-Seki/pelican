@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, GitStatus, RunSettings } from '../src/shared/protocol';
+import type { ChatMessage, GitStatus, RunSettings, SessionChanges } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const SIDE = '55555555-2222-4333-8444-555555555555';
@@ -18,6 +18,8 @@ const server = vi.hoisted(() => ({
   /** The side chat's transcript: the copy of the session's conversation, then its own. */
   sideMessages: [] as ChatMessage[],
   git: { repo: false } as GitStatus,
+  /** The turns Claude Code's record says changed files. */
+  turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] as SessionChanges['turns'],
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -35,7 +37,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       tree: async () => [],
       exists: async (_cwd: string, paths: string[]) => paths,
       file: async (_cwd: string, path: string) => ({ path, size: 24, text: 'const key = user.id;\nexport { key };\n' }),
-      changes: async () => ({ turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], lines: {} }),
+      changes: async () => ({ turns: server.turns, lines: {} }),
       turnDiff: async () => '',
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...(id === SIDE ? { title: 'Side chat', sideChatOf: SESSION } : {}) },
@@ -92,7 +94,7 @@ afterEach(() => {
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
-  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false } });
+  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] });
   history.replaceState(null, '', '/');
 });
 
@@ -227,6 +229,48 @@ describe('the side chat', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
     expect(pane()).toBeNull();
     expect(changes()).not.toBeNull();
+  });
+
+  it('in a folder git does not track, where no turn changed files, gives the place back to the Changes tab tapped there', async () => {
+    computer(1280);
+    setPrefs({ workspacePane: true });
+    server.turns = [];
+    history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
+    session();
+    await loaded();
+    const changes = () => screen.queryByRole('complementary', { name: 'Changes and files' });
+    const tab = () => within(changes()!).getByRole('button', { name: 'Changes' });
+    // Nothing to compare: it starts in Files, and Changes, tapped, says why it is empty.
+    await waitFor(() => expect(location.search).toContain('w=files'));
+    fireEvent.click(tab());
+    expect(await within(changes()!).findByText('This folder is not a git repository', {}, LAZY)).toBeTruthy();
+    const stays = async () => {
+      expect(changes()).not.toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(location.search).toContain('w=changes');
+      expect(tab().getAttribute('aria-pressed')).toBe('true');
+      expect(within(changes()!).getByText('This folder is not a git repository')).toBeTruthy();
+    };
+    // The side chat takes its place for a while: closed, it gives the place back as it was.
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    expect(changes()).toBeNull();
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
+    await stays();
+    // And when Changes and files is asked for from its button.
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    expect(changes()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
+    expect(pane()).toBeNull();
+    await stays();
+    // Closed for good and opened again, it starts in Files again.
+    fireEvent.click(within(changes()!).getByRole('button', { name: 'Close' }));
+    expect(changes()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
+    await waitFor(() => expect(location.search).toContain('w=files'));
   });
 
   describe('asked for a file or a turn’s changes', () => {
