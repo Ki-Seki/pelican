@@ -17,8 +17,9 @@ from every app.
 - **Side chats.** `/btw`, Cmd/Ctrl+; or Side chat in the session menu asks something on the side,
   as in Claude Desktop. Claude answers from a read-only copy of the session (Read, Grep and Glob,
   no MCP servers, never Bypass), and nothing goes back to the session, which keeps working. It sits
-  beside the conversation on a computer and is a sheet on a phone. Side chats are Claude Code
-  sessions titled "Side chat", folded under their session, and continue in the CLI and Desktop.
+  beside the conversation from 1024px wide, taking turns with Changes and files, and is a sheet on a
+  phone. Side chats are Claude Code sessions titled "Side chat", folded under their session, and
+  continue in the CLI and Desktop; opened from the list, one keeps its box for questions only.
 - **Quote.** Select text in a reply, a step's output or a file and tap Quote. The quote waits
   above the message box with your draft and goes above your words as a `>` quote; lines of a file
   carry where they are, as `src/app.ts:7-8`.
@@ -35,8 +36,9 @@ from every app.
 
 ### Changes in behavior
 
-- Line comments go with your next message, as in Claude Desktop, or on their own with
-  Cmd/Ctrl+Enter, instead of Add to message. They are kept across reloads and forgotten on sign-out.
+- Line comments go with your next message in the session they were written in, before your words,
+  as in Claude Desktop, or on their own with Cmd/Ctrl+Enter, instead of Add to message. They are
+  kept across reloads and forgotten on sign-out.
 - Transcript views are Claude Desktop's: Normal, Thinking and Verbose, and Ctrl+O steps through
   them. Thinking shows in a session's menu once Claude has thought there. A session set to Summary
   opens in Normal.
@@ -58,6 +60,16 @@ from every app.
   (Chrome on a computer or Android); questions and plans open the session.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
+- A finished `!` command shows the end of its output, as it did while it ran; Show all shows the
+  start. A running one's Stop is named for it.
+- A message that does not go comes back to the message box above anything typed since; one sent
+  for you (Send now, Compact, Retry, Cancel) leaves the box as it is.
+- A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
+  files.
+- Side chat in the session menu leaves the keys in the side chat's box. Quotes that do not fit above
+  the message box fade at its edge, and removing one with the keyboard moves on to the next.
+- A conversation opens without the code of Changes and files, which follows once it is up, and
+  Settings without the usage page.
 
 ### Security
 
@@ -71,8 +83,8 @@ from every app.
 
 - The docs cover Changes and files, side chats, quotes, live `!` commands, the views and the
   usage page, and the coverage table moves side questions, views, quotes and Create PR to Yes.
-- The browser smoke test checks the docked pane at 1024, 1280 and 1440px and the side chat pane,
-  and opens older sessions at one size only, to keep CI quick.
+- The browser smoke test checks the docked pane at 1024, 1280 and 1440px and the side chat pane at
+  1024px, where it asks a question, and opens older sessions at one size only, to keep CI quick.
 
 ## 0.3.1
 
