@@ -52,6 +52,37 @@ describe('workspace', () => {
     }
   }, 15_000);
 
+  // Homebrew's git on some Macs ships a system config with `remote.origin.fetch` alone, so that
+  // `git remote` names origin in every repository; without an address there is nowhere to push.
+  it('finds no remote in a repository whose system or global config names one with no address', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-remote-'));
+    const saved = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_SYSTEM, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'feat/x'], { cwd: work });
+      const config = path.join(work, 'shared.gitconfig');
+      await writeFile(config, '[remote "origin"]\n\tfetch = ^refs/heads/mergeQueue-*\n');
+      process.env.GIT_CONFIG_GLOBAL = config;
+      expect(execFileSync('git', ['remote'], { cwd: work, encoding: 'utf8' }).trim()).toBe('origin');
+      const global = await gitStatus(work);
+      expect(global.repo && global.remote).toBeFalsy();
+      process.env.GIT_CONFIG_GLOBAL = os.devNull;
+      delete process.env.GIT_CONFIG_NOSYSTEM;
+      process.env.GIT_CONFIG_SYSTEM = config;
+      const system = await gitStatus(work);
+      expect(system.repo && system.remote).toBeFalsy();
+      // With an address, in the repository's own config or only a push address, there is one.
+      execFileSync('git', ['config', 'remote.origin.pushurl', 'https://git.invalid/acme/app.git'], { cwd: work });
+      const pushOnly = await gitStatus(work);
+      expect(pushOnly.repo && pushOnly.remote).toBe(true);
+    } finally {
+      for (const [name, value] of [['GIT_CONFIG_GLOBAL', saved.global], ['GIT_CONFIG_SYSTEM', saved.system], ['GIT_CONFIG_NOSYSTEM', saved.nosystem]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('counts the lines of new files only so far: big ones and those past the first hundred get no count', async () => {
     const many = await mkdtemp(path.join(os.tmpdir(), 'pelican-untracked-'));
     try {
