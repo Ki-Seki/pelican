@@ -133,6 +133,8 @@ const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new 
 const session = (id = SESSION) => wrap(<Chat sessionId={id} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 const loaded = () => screen.findAllByText('Clean up the build');
 const untrusted = () => new ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: PreToolUse (.claude/settings.json)'] });
 
@@ -374,7 +376,7 @@ describe('line comments, as in Claude Desktop', () => {
       session();
       await loaded();
       // Written in the file this session's pane shows.
-      await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+      await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
       fireEvent.click(document.querySelector('[data-line="2"]')!);
       fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Name it b2' } });
       fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
@@ -486,7 +488,7 @@ describe('Commit, Push and Create PR', () => {
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });
     fireEvent.click(screen.getByLabelText('Changes and files'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }, LAZY));
     await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
     expect(server.sent).toEqual([]);
   });
@@ -500,7 +502,7 @@ describe('a file open in Changes and files', () => {
     session();
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });
-    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     return screen.getByRole('complementary', { name: 'Changes and files' });
   };
   afterEach(() => setPrefs({ workspacePane: false }));

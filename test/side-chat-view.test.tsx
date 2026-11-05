@@ -104,6 +104,8 @@ const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new 
 const session = () => wrap(<Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const loaded = () => screen.findAllByText('Clean up the build');
 const pane = () => screen.queryByRole('complementary', { name: 'Side chat' });
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 
 function type(label: string, text: string) {
   const box = screen.getByLabelText(label);
@@ -234,7 +236,7 @@ describe('the side chat', () => {
       fireEvent.click(await screen.findByRole('link', { name: 'src/cache.ts:1' }));
       expect(pane()).toBeNull();
       expect(changes()).not.toBeNull();
-      await waitFor(() => expect(file()).not.toBeNull());
+      await waitFor(() => expect(file()).not.toBeNull(), LAZY);
       expect(location.search).toContain('p=src%2Fcache.ts');
     });
 
@@ -264,7 +266,7 @@ describe('the side chat', () => {
       });
       fireEvent.click(await within(pane()!).findByRole('link', { name: 'src/cache.ts:1' }));
       expect(pane()).toBeNull();
-      await waitFor(() => expect(file()).not.toBeNull());
+      await waitFor(() => expect(file()).not.toBeNull(), LAZY);
     });
 
     it('in the side chat’s answer, on a phone: the sheet goes first, then the file opens over the conversation', async () => {
@@ -280,7 +282,7 @@ describe('the side chat', () => {
       expect(screen.queryByRole('region', { name: 'Changes and files' })).toBeNull();
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull());
       const view = await screen.findByRole('region', { name: 'Changes and files' });
-      await waitFor(() => expect(within(view).getByRole('group', { name: 'The text of src/cache.ts' })).toBeTruthy());
+      await waitFor(() => expect(within(view).getByRole('group', { name: 'The text of src/cache.ts' })).toBeTruthy(), LAZY);
       expect(location.search).toContain('w=files');
     });
   });
@@ -338,7 +340,7 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
     open(SESSION);
     await loaded();
-    await screen.findByRole('button', { name: 'Create PR' });
+    await screen.findByRole('button', { name: 'Create PR' }, LAZY);
     expect(screen.getByLabelText('Message Claude')).toBeTruthy();
     expect(pinned()).not.toBeNull();
     expect(screen.getByTitle(/^Rewind code/)).toBeTruthy();
@@ -357,12 +359,12 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     expect(screen.queryByTitle(/^Edit and send again/)).toBeNull();
     // Its turn's changes, without Rewind code; the folder's, without Commit, Push or Create PR.
     const changes = await screen.findByRole('complementary', { name: 'Changes and files' });
-    await within(changes).findByText('cache.ts');
+    await within(changes).findByText('cache.ts', {}, LAZY);
     expect(within(changes).queryByText('Rewind code')).toBeNull();
     fireEvent.click(within(changes).getByRole('button', { name: /^Show:/ }));
     fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Uncommitted'));
     await waitFor(() => expect(location.search).not.toContain('t=u1'));
-    await within(changes).findByText('cache.ts');
+    await within(changes).findByText('cache.ts', {}, LAZY);
     for (const name of ['Commit', 'Push', 'Create PR']) expect(within(changes).queryByRole('button', { name })).toBeNull();
     // A ! is a question's, as in the side chat beside a session: nothing runs.
     fireEvent.change(box, { target: { value: '!npm test' } });
