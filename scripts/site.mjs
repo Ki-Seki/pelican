@@ -1,6 +1,7 @@
 // The project site (site/) with its live demo: the web app built to run without a server,
 // reading what `pelican --demo` answers, saved as files. Needs the app built first.
 //   npm run build && node scripts/site.mjs <out dir>      then serve <out dir>, e.g. npx serve <out dir>
+// PELICAN_DEMO_PORT if 47861 is taken.
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import path from 'node:path';
 import { MARK, startDemo } from './demo-server.mjs';
 
 const out = path.resolve(process.argv[2] ?? '_site');
-const PORT = 47861;
+const PORT = Number(process.env.PELICAN_DEMO_PORT ?? 47861);
 const BASE = `http://127.0.0.1:${PORT}/api/`;
 
 /** The same key the web app uses for a saved answer (src/web/lib/static-demo.ts). */
@@ -74,7 +75,7 @@ async function save(request) {
 }
 const q = encodeURIComponent;
 
-for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs']) await save(request);
+for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs', 'defaults']) await save(request);
 const { sessions } = await save('sessions');
 const folders = new Set();
 for (const session of sessions) {
@@ -85,6 +86,8 @@ for (const session of sessions) {
 }
 for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
+  // The mode a new session there starts in, which the list asks for before + is tapped.
+  await save(`defaults?cwd=${q(cwd)}`);
   await save(`files?cwd=${q(cwd)}&q=`);
   const git = await save(`git?cwd=${q(cwd)}`);
   for (const file of git?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}`);
