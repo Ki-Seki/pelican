@@ -40,6 +40,21 @@ describe('loading the newest page', () => {
     await loadLatest(id);
     expect(uuids(id)).toEqual(['u1', 'a1', 'a2', 'p1']);
   });
+
+  it('keeps a message read from the transcript, pictures by address, when the socket sends it again', async () => {
+    const id = 'session-replayed';
+    const shot = (picture: Record<string, unknown>): ChatMessage => ({
+      uuid: 'r1', role: 'user', timestamp: 1,
+      blocks: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'Took a screenshot' }, picture as never] }],
+    });
+    const addressed = shot({ type: 'image', source: { type: 'url', url: `api/sessions/${id}/images/r1/0` } });
+    vi.spyOn(api, 'messages').mockResolvedValue(page([addressed]));
+    await loadLatest(id);
+    // As the run published it while the step ran: the picture as data, here one too large to send.
+    handleEvent({ type: 'message', sessionId: id, message: shot({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '' }, omitted: true }) });
+    expect(getView(id).messages).toEqual([addressed]);
+    expect(getView(id).total).toBe(1);
+  });
 });
 
 describe('a session’s run', () => {

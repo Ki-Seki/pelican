@@ -108,9 +108,17 @@ class Feed {
     return this.recent.length > 0;
   }
 
-  replayRecent(listener: Listener): void {
-    if (!this.hasRecent()) return;
-    for (const { message } of this.recent) listener({ type: 'message', sessionId: this.sessionId, message });
+  /**
+   * What a late subscriber missed: messages published that the transcript does not hold yet. The
+   * rest its page reads from the transcript, pictures by address, not as megabytes of data again.
+   */
+  async unwritten(): Promise<ChatMessage[]> {
+    if (!this.hasRecent()) return [];
+    const recent = this.recent.map((r) => r.message);
+    // Unreadable, it is no help to the page either: everything goes, as published.
+    const messages = await loadMessages(this.sessionId).catch(() => []);
+    const written = new Set(messages.flatMap((m) => (m.sourceUuid ? [m.uuid, m.sourceUuid] : [m.uuid])));
+    return recent.filter((message) => !written.has(message.uuid));
   }
 
   /** Nobody watches, nothing is on its way, nothing waits for a late subscriber: it can go. */
@@ -226,11 +234,26 @@ export function connect(listener: Listener): () => void {
 
 export function subscribe(sessionId: string, listener: Listener): () => void {
   const feed = feedFor(sessionId);
-  feed.listeners.add(listener);
-  feed.replayRecent(listener);
+  // A late subscriber gets what it missed first; what happens meanwhile waits, to come after it.
+  let waiting: ServerEvent[] | undefined = feed.hasRecent() ? [] : undefined;
+  const subscriber: Listener = (event) => (waiting ? waiting.push(event) : listener(event));
+  feed.listeners.add(subscriber);
+  if (waiting) {
+    void feed.unwritten().catch((): ChatMessage[] => []).then((missed) => {
+      const meanwhile = waiting ?? [];
+      waiting = undefined;
+      if (!feed.listeners.has(subscriber)) return;
+      try {
+        for (const message of missed) listener({ type: 'message', sessionId, message });
+        for (const event of meanwhile) listener(event);
+      } catch {
+        // A closed socket; its unsubscribe follows.
+      }
+    });
+  }
   feed.watch();
   return () => {
-    feed.listeners.delete(listener);
+    feed.listeners.delete(subscriber);
     if (feed.listeners.size > 0) return;
     feed.unwatch();
     // Forgotten once idle, so feeds do not pile up for every session ever opened or run. A run

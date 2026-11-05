@@ -225,7 +225,11 @@ export function handleEvent(event: ServerEvent): void {
   switch (event.type) {
     case 'message':
       if (views.has(event.sessionId)) {
-        update(event.sessionId, (view) => ({ ...view, messages: merge(view.messages, [event.message]), total: view.total + 1 }));
+        // One the page read from the transcript already stays: a copy sent again (to a page that
+        // subscribed late) would bring its pictures back as data, or as not shown, and count it twice.
+        update(event.sessionId, (view) => (view.messages.some((m) => m.uuid === event.message.uuid && !m.pending)
+          ? view
+          : { ...view, messages: merge(view.messages, [event.message]), total: view.total + 1 }));
       }
       break;
     case 'run': {
