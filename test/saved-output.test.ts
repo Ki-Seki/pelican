@@ -18,6 +18,7 @@ let dir: string;
 let folder: string;
 // One byte, then two-byte characters: a page of 256 KB would end inside one.
 const OUTPUT = `x${'é'.repeat(200_000)}`;
+const LINES = Array.from({ length: 40_000 }, (_, i) => `line ${i + 1}\n`).join('');
 
 beforeAll(async () => {
   dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pelican-saved-')));
@@ -34,6 +35,7 @@ beforeAll(async () => {
   folder = path.join(projects, SESSION, 'tool-results');
   await mkdir(folder, { recursive: true });
   await writeFile(path.join(folder, 'b1b2gp6fw.txt'), OUTPUT);
+  await writeFile(path.join(folder, 'blines000.txt'), LINES);
   await writeFile(path.join(dir, 'secret.txt'), 'not for the phone\n');
   await symlink(path.join(dir, 'secret.txt'), path.join(folder, 'blinked00.txt'));
   await mkdir(path.join(projects, OTHER), { recursive: true });
@@ -63,6 +65,11 @@ describe('a long ! command’s saved output, for Show all', () => {
     expect(first.body.text + second.body.text).toBe(OUTPUT);
     // Asked for from inside a character, it starts at the next whole one.
     expect((await page('b1b2gp6fw.txt', 2)).body).toMatchObject({ from: 3, text: 'é'.repeat(Math.floor((SAVED_PAGE_BYTES - 1) / 2)) });
+    // Lines are kept whole where a page can end with one.
+    const lines = await page('blines000.txt');
+    expect(lines.body.next).toBeDefined();
+    expect(lines.body.text.endsWith('\n')).toBe(true);
+    expect(lines.body.text + (await page('blines000.txt', lines.body.next)).body.text).toBe(LINES);
   });
 
   it('is nothing else: no path, no other kind of name, no link, not another session’s, and only for you', async () => {

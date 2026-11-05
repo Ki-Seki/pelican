@@ -474,7 +474,8 @@ export const SAVED_PAGE_BYTES = 256 * 1024;
 
 /**
  * One page of an output Claude Code saved in place of one too long for the conversation (a long
- * `!` command's, as its record names it), from `from` bytes in, whole characters only: read by its
+ * `!` command's, as its record names it), from `from` bytes in, whole lines where it can, whole
+ * characters always: read by its
  * name alone, from that session's own tool-results folder, a regular file reached through no link.
  * Undefined for anything else, or once Claude Code has let it go.
  */
@@ -497,12 +498,16 @@ export async function savedOutputPage(sessionId: string, name: string, from: num
       while (start > 0 && begin < bytesRead && (buffer[begin]! & 0xc0) === 0x80) begin += 1;
       let end = bytesRead;
       if (start + bytesRead < size) {
-        // A character the page would cut in two goes to the next page.
-        let lead = end - 1;
-        while (lead > begin && (buffer[lead]! & 0xc0) === 0x80) lead -= 1;
-        const byte = buffer[lead]!;
-        const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
-        if (lead + length > end) end = lead;
+        // A page ends with a line, where one ends in its second half, and never inside a character.
+        const line = buffer.subarray(0, end).lastIndexOf(0x0a);
+        if (line >= begin + (end - begin) / 2) end = line + 1;
+        else {
+          let lead = end - 1;
+          while (lead > begin && (buffer[lead]! & 0xc0) === 0x80) lead -= 1;
+          const byte = buffer[lead]!;
+          const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+          if (lead + length > end) end = lead;
+        }
       }
       const next = start + end;
       return { text: buffer.toString('utf8', begin, end), from: start + begin, size, ...(next < size ? { next } : {}) };
