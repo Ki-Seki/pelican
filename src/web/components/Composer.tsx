@@ -279,6 +279,7 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const chips = useRef<HTMLUListElement>(null);
   const listId = useId();
 
   const model = modelOf(models, settings);
@@ -447,6 +448,16 @@ export function Composer({
     if (u.preview?.startsWith('blob:')) URL.revokeObjectURL(u.preview);
   };
 
+  /**
+   * A quote taken away. With the keys (or on a computer) they go on to the next quote, else to the
+   * box; a tap on a phone leaves them, so its keyboard stays down.
+   */
+  const removeQuote = (at: number, byKeys: boolean) => {
+    setQuotes((list) => list.filter((_, i) => i !== at));
+    if (!byKeys && !hasKeyboard()) return;
+    requestAnimationFrame(() => (chips.current?.querySelectorAll('button')[at] ?? area.current)?.focus({ preventScroll: true }));
+  };
+
   const submit = () => {
     if (!canSend) return;
     if (shell) {
@@ -581,7 +592,8 @@ export function Composer({
       )}
       <div className="mx-auto max-w-3xl rounded-[22px] border border-line bg-panel shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
         {quotes.length > 0 && (
-          <ul aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3">
+          // Scrolls sideways when the quotes do not fit, fading at the edge as the model row does.
+          <ul ref={chips} aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
             {quotes.map((quote, i) => {
               const label = quoteLabel(quote);
               return (
@@ -592,7 +604,7 @@ export function Composer({
                   <button
                     type="button"
                     aria-label={`Remove the quote ${label}`}
-                    onClick={() => setQuotes((list) => list.filter((_, j) => j !== i))}
+                    onClick={(e) => removeQuote(i, e.detail === 0)}
                     className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-1.5 hover:bg-hover hover:text-fg"
                   >
                     <X className="size-3.5" />
