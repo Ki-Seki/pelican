@@ -49,7 +49,7 @@ function useRun(call: ToolCall, onScreen: boolean) {
   // When this Pelican's Claude lets an ended run go, the card keeps it until the record is read.
   const kept = useRef<Workflow | undefined>(undefined);
   if (live) kept.current = live;
-  return { live, launch, flow: live ?? query.data ?? kept.current, failed: query.isError && !query.data };
+  return { live, launch, flow: live ?? query.data ?? kept.current };
 }
 
 // ---- Small pieces -----------------------------------------------------------------------------
@@ -423,14 +423,19 @@ function Plan({ phases }: { phases: WorkflowPhase[] }) {
 
 // ---- The card ------------------------------------------------------------------------------------
 
-/** Where a call stands before its run is known: on its way, refused, cut short, or never launched. */
-function callState(call: ToolCall, running: boolean, live: Workflow | undefined): { word: string; error?: string; spin?: boolean } | undefined {
+/**
+ * Where a call stands when no run of it is to be read: on its way (a call no app has answered yet
+ * says nothing), refused, cut short, never launched, or launched in a cloud session.
+ */
+function callState(call: ToolCall, running: boolean, live: Workflow | undefined): { word?: string; error?: string; spin?: boolean; url?: string } | undefined {
   const outcome = outcomeOf(call);
   if (live) return undefined;
-  if (outcome.kind === 'pending') return running ? { word: 'Starting workflow', spin: true } : { word: 'Not launched' };
+  if (outcome.kind === 'pending') return running ? { word: 'Starting workflow', spin: true } : {};
   if (outcome.kind === 'denied') return { word: 'Cancelled' };
   if (outcome.kind === 'stopped') return { word: 'Interrupted' };
   if (outcome.kind === 'failed') return { word: 'Not launched', error: resultText(call.result).replace(/^\s*<tool_use_error>|<\/tool_use_error>\s*$/g, '').trim() };
+  const launch = launchOf(call.result);
+  if (launch?.sessionUrl && !launch.runId) return { word: 'Running in a cloud session', url: launch.sessionUrl };
   return undefined;
 }
 
@@ -447,12 +452,12 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
   const [element, setElement] = useState<HTMLElement | null>(null);
   const onScreen = useOnScreen(element);
   const wide = useWide();
-  const { live, launch, flow, failed } = useRun(call, onScreen);
+  const { live, launch, flow } = useRun(call, onScreen);
   const own = useMemo(() => workflowOf(call.input), [call.input]);
   const before = callState(call, running, live);
   const ended = call.ended && !call.ended.orphan ? call.ended : undefined;
   const status: WorkflowStatus | undefined = before ? undefined
-    : live?.status ?? (ended?.status ? ENDED[ended.status] : undefined) ?? flow?.status ?? (call.ended?.orphan || failed ? 'stopped' : undefined);
+    : live?.status ?? (ended?.status ? ENDED[ended.status] : undefined) ?? flow?.status ?? (call.ended?.orphan ? 'stopped' : undefined);
   const now = useNow(Boolean(status && isRunning(status) && onScreen));
   const [stopping, setStopping] = useState(false);
   useEffect(() => {
@@ -535,6 +540,9 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
       {open && (
         <div className="animate-fade border-t border-line">
           {before?.error && <Folded text={before.error} className="mx-3 mt-2.5 font-mono text-[12px] text-danger" />}
+          {before?.url && (
+            <a href={before.url} target="_blank" rel="noreferrer" className="mx-3 mt-2 inline-flex text-[12.5px] text-muted underline decoration-faint underline-offset-2 hover:text-fg">Open the cloud session</a>
+          )}
           {status === 'failed' && error && <Folded text={error} className="mx-3 mt-2.5 rounded-lg bg-chip px-3 py-2 font-mono text-[12px] text-danger" />}
           {call.resumedBy && (
             <button type="button" onClick={() => revealWorkflow(call.resumedBy!)} className="mx-3 mt-2 flex min-h-8 items-center gap-1.5 text-[12.5px] text-muted hover:text-fg">

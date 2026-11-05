@@ -155,6 +155,17 @@ describe('a Workflow call', () => {
     expect(card().textContent).toContain('Review — one agent per area');
   });
 
+  it('not answered yet in another app (waiting there for approval, say) claims nothing; one sent to the cloud says where', () => {
+    show([call()], 'verbose');
+    expect(card().textContent).not.toMatch(/Not launched|Running|Stopped/);
+    expect(card().textContent).toContain('Review — one agent per area');
+    cleanup();
+    show([call(), { uuid: 'r', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 'toolu_w', content: 'Session: https://claude.ai/code/s1', workflow: { taskId: 'r1', name: 'demo-review', sessionUrl: 'https://claude.ai/code/s1' } }] }], 'verbose');
+    expect(card().textContent).toContain('Running in a cloud session');
+    expect(screen.getByRole('link', { name: 'Open the cloud session' }).getAttribute('href')).toBe('https://claude.ai/code/s1');
+    expect(api.workflow).not.toHaveBeenCalled();
+  });
+
   it('is named by its end in the conversation, a line that leads to the card instead of a copy of it', async () => {
     show([call(), launched(), said('n1', noticeOf('completed', `<result>[{"verdicts":[]}]</result>${USAGE}`))]);
     const line = screen.getByRole('button', { name: /Workflow demo-review completed · 6m 1s/ });
