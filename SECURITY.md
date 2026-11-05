@@ -100,14 +100,16 @@ can read your sessions and have Claude run commands as you, so treat access to i
   in Node where that is not there), within limits on files, lines, time and output. What a turn
   changed is read from Claude Code's transcript, not from git, so it shows in any folder. Show all
   on a long `!` command reads the file Claude Code saved its output in, by that file's name alone,
-  never a path, from that session's own `tool-results` folder: a regular file reached through no
-  link.
+  never a path, from that session's own `tool-results` folder, or, for a record a branch copied,
+  from that of the session its row says it came from, when the record's path names that session:
+  a regular file reached through no link and with no other name (no hard link).
 - **A workflow's files stay in its session's folder.** A workflow's card reads, for a run the
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
   formats, each a regular file whose real path, links followed, is inside the session's own folder
-  next to its transcript, and within a size. An agent's steps come a page at a time, at most a few
-  hundred kilobytes (a message larger than 128 KB has its parts cut), and its pictures are left out.
+  next to its transcript, and within a size. An agent's steps come a page at a time, at most 768 KB
+  of them (a message larger than 128 KB has its parts cut, saying how many were left out), and its
+  pictures are left out.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.
