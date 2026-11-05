@@ -23,10 +23,15 @@ class FakeClaude {
   prompts: SDKUserMessage[] = [];
   calls: Array<{ name: string; args: unknown[] }> = [];
   private said: unknown[] = [];
-  private listening?: (result: IteratorResult<unknown>) => void;
+  private listening?: { resolve: (result: IteratorResult<unknown>) => void; reject: (error: Error) => void };
   private ended = false;
+  private failure?: Error;
   models: unknown[] = [];
   account: Record<string, unknown> = {};
+  /** How long a closed process takes to exit: a real one ends its stream a while after close(). */
+  static closeDelay = 0;
+  /** How long control requests (settings, mode) take to be answered. */
+  static controlDelay = 0;
 
   constructor(prompt: AsyncIterable<SDKUserMessage> | string, readonly options: Options) {
     if (typeof prompt !== 'string') {
@@ -40,7 +45,7 @@ class FakeClaude {
     if (this.listening) {
       const listening = this.listening;
       this.listening = undefined;
-      listening({ value: message, done: false });
+      listening.resolve({ value: message, done: false });
     } else {
       this.said.push(message);
     }
@@ -48,33 +53,43 @@ class FakeClaude {
 
   end(): void {
     this.ended = true;
-    this.listening?.({ value: undefined, done: true });
+    this.listening?.resolve({ value: undefined, done: true });
+  }
+
+  /** The process ends on its own, as a crash or a kill ends it. */
+  fail(error = new Error('Claude Code process exited with code 1')): void {
+    this.failure = error;
+    const listening = this.listening;
+    this.listening = undefined;
+    listening?.reject(error);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return {
       next: () => {
         if (this.said.length > 0) return Promise.resolve({ value: this.said.shift(), done: false });
+        if (this.failure) return Promise.reject(this.failure);
         if (this.ended) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => {
-          this.listening = resolve;
+        return new Promise((resolve, reject) => {
+          this.listening = { resolve, reject };
         });
       },
     };
   }
 
-  private record(name: string, ...args: unknown[]) {
+  private async record(name: string, ...args: unknown[]) {
     this.calls.push({ name, args });
+    if (FakeClaude.controlDelay > 0) await new Promise((resolve) => setTimeout(resolve, FakeClaude.controlDelay));
   }
 
   called(name: string) {
     return this.calls.filter((c) => c.name === name).map((c) => c.args);
   }
 
-  async interrupt() { this.record('interrupt'); }
-  async setPermissionMode(mode: string) { this.record('setPermissionMode', mode); }
-  async setModel(model?: string) { this.record('setModel', model); }
-  async applyFlagSettings(settings: unknown) { this.record('applyFlagSettings', settings); }
+  async interrupt() { await this.record('interrupt'); }
+  async setPermissionMode(mode: string) { await this.record('setPermissionMode', mode); }
+  async setModel(model?: string) { await this.record('setModel', model); }
+  async applyFlagSettings(settings: unknown) { await this.record('applyFlagSettings', settings); }
   async getContextUsage(options?: unknown) {
     this.record('getContextUsage', options);
     return { percentage: 12.4, totalTokens: 24_800, maxTokens: 200_000 };
@@ -88,8 +103,9 @@ class FakeClaude {
   async stopTask(taskId: string) { this.record('stopTask', taskId); }
   async initializationResult() { return { models: this.models, account: this.account, commands: [], agents: [], claude_code_version: '2.1.318' }; }
   close() {
-    this.record('close');
-    this.end();
+    this.calls.push({ name: 'close', args: [] });
+    if (FakeClaude.closeDelay > 0) setTimeout(() => this.end(), FakeClaude.closeDelay);
+    else this.end();
   }
 }
 
@@ -116,7 +132,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, askedFor, oneLine, runTasks } = await import('../src/server/runner');
+const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks } = await import('../src/server/runner');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
@@ -178,10 +194,14 @@ beforeEach(() => {
   notices.length = 0;
   nextModels = [];
   nextAccount = {};
+  FakeClaude.closeDelay = 0;
+  FakeClaude.controlDelay = 0;
 });
 afterEach(async () => {
   closeAll();
   await settle();
+  // A process that takes a while to exit ends here, not in the next test.
+  if (FakeClaude.closeDelay > 0) await new Promise((resolve) => setTimeout(resolve, FakeClaude.closeDelay + 5));
 });
 afterAll(() => rm(scratch, { recursive: true, force: true }));
 
@@ -626,6 +646,63 @@ describe('work that runs on its own', () => {
     await vi.waitFor(() => expect(state().context).toEqual({ percent: 12, tokens: 24_800, max: 200_000 }));
     expect(claude.called('getContextUsage')).toEqual([[{ detail: 'summary' }]]);
     expect(run.busy).toBe(false);
+  });
+});
+
+describe('when Claude Code ends', () => {
+  it('a run replaced by a newer one says nothing after it: the page keeps the newer one, at work', async () => {
+    // A real process exits a while after it is closed, after the newer run has started.
+    FakeClaude.closeDelay = 30;
+    const { sessionId, claude, run, events } = await start();
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    const heard: ServerEvent[] = [];
+    const stop = connect((event) => heard.push(event));
+    // The last prompt edited in place: Claude resumed from before it, with the new text.
+    await replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: 'Edited prompt', attachments: [], settings: {} });
+    const fresh = getRun(sessionId)!;
+    expect(fresh).not.toBe(run);
+    const from = events.length;
+    await vi.waitFor(() => expect(run.closed).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(fresh.busy).toBe(true);
+    // Nothing from the old run after the new one spoke: no idle state, no idle status for the lists.
+    expect(events.slice(from).filter((e) => e.type === 'run')).toEqual([]);
+    expect(events.filter((e) => e.type === 'run').at(-1)).toMatchObject({ state: { busy: true } });
+    expect(heard.filter((e) => e.type === 'status' && e.sessionId === sessionId).at(-1)).toMatchObject({ status: 'running' });
+    expect(getRun(sessionId)).toBe(fresh);
+    stop();
+  });
+
+  it('pages watching a run that ended are cleared, as a page opened now would find it', async () => {
+    const { sessionId, claude, run, events } = await start();
+    claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
+    claude.say(system('task_progress', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', usage: { total_tokens: 9, tool_uses: 1, duration_ms: 10 }, summary: 'Reading' }));
+    claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' }] }));
+    claude.say(reply('Started.'));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.state().tasks).toHaveLength(1));
+    // The process ends: with nothing to say why, the pages forget the run, its tasks with it.
+    claude.end();
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    await settle();
+    expect(events.filter((e) => e.type === 'run').at(-1)).toEqual({ type: 'run', sessionId, state: null });
+  });
+
+  it('a run that ended on an error says why, and nothing more of what it was doing', async () => {
+    const { sessionId, claude, events } = await start();
+    claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
+    claude.say(system('task_progress', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', usage: { total_tokens: 9, tool_uses: 1, duration_ms: 10 }, summary: 'Reading' }));
+    claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'a1', task_type: 'local_agent', subagent_type: 'Explore', description: 'Find the flaky test' }] }));
+    await vi.waitFor(() => expect(getRun(sessionId)!.state().progress).toBeDefined());
+    claude.fail(new Error('Claude Code process exited with code 137'));
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    await settle();
+    const last = events.filter((e) => e.type === 'run').at(-1) as Extract<ServerEvent, { type: 'run' }>;
+    expect(last.state).toMatchObject({ busy: false, error: expect.stringContaining('137') });
+    expect(last.state).not.toHaveProperty('tasks');
+    expect(last.state).not.toHaveProperty('progress');
+    expect(last.state).not.toHaveProperty('startedAt');
   });
 });
 

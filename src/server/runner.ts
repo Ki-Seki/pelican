@@ -410,13 +410,28 @@ export class SessionRun {
   }
 
   private lastStatus?: string;
+  /** Its process has ended and its last word is said: nothing it does after that reaches a page. */
+  private finished = false;
+
+  /**
+   * A newer run has taken the session (an edited last prompt, a restart): what this one, closed,
+   * still says while its process exits would undo the newer one's state on every page.
+   */
+  private replaced(): boolean {
+    const current = runs.get(this.sessionId);
+    return current !== undefined && current !== this;
+  }
 
   private emitNow(): void {
+    if (this.finished || this.replaced()) return;
     this.forgetPastChecks();
     const state = this.state();
     feedFor(this.sessionId).broadcast({ type: 'run', state });
-    // Session lists only care about the status and the work left running; streamed text stays
-    // with the session's viewers.
+    this.sayStatus();
+  }
+
+  /** Session lists only care about the status and the work left running; streamed text stays with the session's viewers. */
+  private sayStatus(): void {
     const status = this.status();
     const tasks = this.work();
     if (`${status}:${tasks}` !== this.lastStatus) {
@@ -1040,15 +1055,34 @@ export class SessionRun {
       this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
       this.settleAll('Session closed.');
       this.queued = [];
-      // Its background work and checks ended with the process.
+      // Its background work and checks ended with the process, and what they last said with it.
       this.tasks = [];
       this.taskCount = 0;
       this.wakeup = undefined;
       this.crons.clear();
-      this.setBusy(false);
-      this.emit();
-      // A newer run may have taken this session's place already (see sendMessage).
-      if (runs.get(this.sessionId) === this) runs.delete(this.sessionId);
+      this.progress.clear();
+      this.taskTools.clear();
+      this.activity = undefined;
+      this.busy = false;
+      this.startedAt = undefined;
+      this.partial = [];
+      this.completedBlocks = 0;
+      clearTimeout(this.emitTimer);
+      this.emitTimer = undefined;
+      // A newer run may have taken the session's place already (an edited last prompt, a restart):
+      // it speaks for the session, and this one says nothing more.
+      if (!this.replaced()) {
+        runs.delete(this.sessionId);
+        // Pages show why it ended, if it did on an error, until they next ask and find no run;
+        // otherwise they forget it now, as a page opened now finds no run.
+        if (this.error) {
+          this.emit();
+        } else {
+          feedFor(this.sessionId).broadcast({ type: 'run', sessionId: this.sessionId, state: null });
+          this.sayStatus();
+        }
+      }
+      this.finished = true;
       sessionsChanged();
     }
   }
