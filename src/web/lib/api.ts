@@ -239,6 +239,8 @@ export const api = {
     request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  /** Makes a folder inside `parent` and says where it is. */
+  makeDir: (parent: string, name: string) => send<{ path: string }>('POST', 'dirs', { parent, name }).then((r) => r.path),
   upload: async (file: File): Promise<Attachment> => {
     if (local || STATIC_DEMO) return request<Attachment>('uploads', { method: 'POST' });
     if (file.size > MAX_UPLOAD) throw new ApiError(`${file.name} is larger than 25 MB`, 413);
