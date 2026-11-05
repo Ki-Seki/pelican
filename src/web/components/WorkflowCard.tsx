@@ -270,10 +270,15 @@ function AgentDetail({ agent, status, callId, cwd, onScreen, now }: { agent: Wor
       {agent.agentId && (
         <div className="rounded-lg border border-line bg-bg px-2.5 py-1">
           <div className="flex min-h-7 items-center gap-1.5 text-faint">
-            <span>{pages.page ? `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${pages.offset > 0 ? ' so far shown' : ''}` : 'Steps'}</span>
+            {/* The CLI's words: "last 3 of 31 tool calls". */}
+            <span>
+              {!pages.page ? 'Steps'
+                : pages.offset > 0 && agent.toolCalls && agent.toolCalls > steps.length ? `Last ${steps.length} of ${agent.toolCalls} tool calls`
+                  : `${steps.length} ${steps.length === 1 ? 'tool call' : 'tool calls'}`}
+            </span>
             {(!pages.page && !pages.error) || pages.loading ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {pages.offset > 0 && (
-              <button type="button" onClick={() => void pages.older()} className="ml-auto text-[12px] hover:text-fg">Show earlier steps</button>
+              <button type="button" onClick={() => void pages.older()} className="ml-auto text-[12px] hover:text-fg">Show earlier</button>
             )}
           </div>
           {pages.error && <div className="pb-1 text-danger">{pages.error.message}</div>}
@@ -531,15 +536,21 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
           </span>
           {description && <span className="mt-0.5 line-clamp-2 block text-[13.5px] leading-snug text-fg/85">{description}</span>}
           {line.length > 0 && (
-            // Its parts wrap whole on a narrow screen, never cut off.
-            <span className={`mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] leading-[18px] tabular-nums ${status === 'failed' || before?.error ? 'text-danger' : 'text-faint'}`}>
-              {status ? <StatusGlyph status={status} /> : before?.spin ? <Loader2 className="size-3 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {line.map((part, i) => (
-                <span key={i} className="flex items-center gap-x-1.5 whitespace-nowrap">
-                  {i > 0 && <span aria-hidden className="opacity-70">·</span>}
-                  {part}
+            <span className={`mt-1 flex min-w-0 items-start gap-1.5 text-[12px] leading-[18px] tabular-nums ${status === 'failed' || before?.error ? 'text-danger' : 'text-faint'}`}>
+              {(status || before?.spin) && (
+                <span className="flex h-[18px] shrink-0 items-center">
+                  {status ? <StatusGlyph status={status} /> : <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-hidden />}
                 </span>
-              ))}
+              )}
+              {/* Its parts wrap whole on a narrow screen; the dot before each sits in a margin cut off
+                  at the line's start, so no line starts with one. */}
+              <span className="min-w-0 overflow-hidden">
+                <span className="-ml-3 flex flex-wrap">
+                  {line.map((part, i) => (
+                    <span key={i} className="relative pl-3 whitespace-nowrap before:absolute before:left-[3.5px] before:opacity-70 before:content-['·']">{part}</span>
+                  ))}
+                </span>
+              </span>
             </span>
           )}
           {status && isRunning(status) && agents.length > 0 && <Cells agents={agents} status={status} now={now} />}

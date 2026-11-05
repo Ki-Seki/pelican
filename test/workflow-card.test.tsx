@@ -203,7 +203,7 @@ describe('a workflow agent', () => {
     expect(pages).toHaveBeenCalledWith(SESSION, 'toolu_w', 'a1');
     expect(screen.getByText('Prompt')).toBeTruthy();
     expect(screen.getByText('Outcome')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Show earlier steps' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
     await waitFor(() => expect(screen.getByText('file1.ts')).toBeTruthy());
     expect(pages).toHaveBeenCalledWith(SESSION, 'toolu_w', 'a1', 2);
   });
