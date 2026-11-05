@@ -103,8 +103,16 @@ export function plainText(markdown: string): string {
     .trim();
 }
 
-/** A code span, or emphasis around words: `**`, `__`, `*` or `_`, closed before a space, punctuation or the end. */
-const INLINE = /(`+)([^`]*?)\1|(^|[\s(])(\*\*|__|\*|_)(?![*_\s])(.*?[^*_\s])\4(?=$|\s|[).,;:!?](?:\s|$))/gm;
+/**
+ * A code span, or emphasis around words: `**`, `__`, `*` or `_`, closed before a space, punctuation
+ * or the end. Emphasis spans a few hundred characters at most: a mark that never closes is then
+ * looked past in that many steps, not in as many as the rest of its line has, which made a long line
+ * of `_names` take seconds.
+ */
+const INLINE = /(`+)([^`]*?)\1|(^|[\s(])(\*\*|__|\*|_)(?![*_\s])(.{0,300}?[^*_\s])\4(?=$|\s|[).,;:!?](?:\s|$))/gm;
+
+/** How much of a reply can reach its 160-character preview, with room for the marks it loses on the way. */
+const PREVIEW_SOURCE = 4000;
 
 /** The text blocks of a row's message, joined. */
 function textOf(row: { message?: { content?: unknown } }): string {
@@ -116,9 +124,9 @@ function textOf(row: { message?: { content?: unknown } }): string {
     .join('\n\n');
 }
 
-/** Text blocks of an assistant row, as one line for a session-list preview. */
+/** Text blocks of an assistant row, as one line for a session-list preview: only its start is read. */
 function replyText(row: { message?: { content?: unknown } }): string | undefined {
-  const text = plainText(textOf(row));
+  const text = plainText(textOf(row).slice(0, PREVIEW_SOURCE));
   return text ? text.slice(0, 160) : undefined;
 }
 
