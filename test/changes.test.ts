@@ -43,6 +43,10 @@ function transcript(cwd: string) {
     reply(text: string) {
       row({ type: 'assistant', message: { role: 'assistant', id: `msg_r${lines.length}`, content: [{ type: 'text', text }] } });
     },
+    /** Any other user row: a `!` command, a command's output, a note Claude Code adds. */
+    user(content: string, extra: Record<string, unknown> = {}) {
+      return row({ type: 'user', message: { role: 'user', content }, ...extra });
+    },
   };
 }
 
@@ -87,17 +91,18 @@ beforeAll(async () => {
 afterAll(() => rm(dir, { recursive: true, force: true }));
 
 describe('changes per turn, from Claude Code’s records', () => {
-  it('numbers the prompts that led Claude to edit files, with each file and its lines', async () => {
+  it('numbers the prompts that led Claude to edit files by their place, as /diff does, with each file and its lines', async () => {
     const { turns, lines } = await sessionChanges(file, cwd);
-    expect(turns.map((t) => [t.n, t.text])).toEqual([[1, 'Add a dark theme with a toggle'], [2, 'The text is too dim in the dark'], [3, '/review the theme']]);
+    // The question in between changed nothing: it keeps its number, as in Claude Code's /diff.
+    expect(turns.map((t) => [t.n, t.text])).toEqual([[1, 'Add a dark theme with a toggle'], [3, 'The text is too dim in the dark'], [4, '/review the theme']]);
     expect(turns[0]!.uuid).toBe(ids.first);
     expect(turns[0]!.files).toEqual([
       { path: 'src/theme.css', added: 5, removed: 0, line: 5 },
       { path: 'src/Toggle.tsx', added: 1, removed: 0, created: true, line: 1 },
     ]);
-    // A file Claude edited twice in one turn counts what the turn changed in it, start to end.
+    // A file Claude edited twice in one turn counts each edit's lines, as /diff does.
     const second = turns[1]!.files;
-    expect(second.find((f) => f.path === 'src/theme.css')).toMatchObject({ added: 1, removed: 1 });
+    expect(second.find((f) => f.path === 'src/theme.css')).toMatchObject({ added: 2, removed: 2 });
     expect(second.find((f) => f.path === 'src/App.tsx')).toMatchObject({ added: 2, removed: 1 });
     expect(second.find((f) => f.path === '/elsewhere/notes.md')).toMatchObject({ added: 1, removed: 1 });
     expect(second.find((f) => f.path === 'a.ipynb')).toMatchObject({ added: 2, removed: 1 });
@@ -107,10 +112,10 @@ describe('changes per turn, from Claude Code’s records', () => {
     expect(lines[ids.firstEdit!]).toBe(5);
   });
 
-  it('diffs a file over a turn: before its first edit against after its last', async () => {
+  it('diffs a file over a turn as /diff does: each edit’s patch, in the order Claude made them', async () => {
     const diff = await turnDiff(file, cwd, ids.second!, 'src/theme.css');
     const changed = parseDiff(diff).filter((l) => l.kind === 'add' || l.kind === 'del').map((l) => `${l.kind} ${l.text}`);
-    expect(changed).toEqual(['del   --fg: #eee;', 'add   --fg: #f0f0f0;']);
+    expect(changed).toEqual(['del   --fg: #eee;', 'add   --fg: #ededed;', 'del   --fg: #ededed;', 'add   --fg: #f0f0f0;']);
     expect(await turnDiff(file, cwd, ids.first!, 'src/Toggle.tsx')).toContain('+export const Toggle = () => null;');
     expect(await turnDiff(file, cwd, ids.question!, 'src/theme.css')).toBe('');
     expect(await turnDiff(file, cwd, ids.first!, 'README.md')).toBe('');
@@ -126,6 +131,33 @@ describe('changes per turn, from Claude Code’s records', () => {
     t.lines[0] = JSON.stringify({ ...first, parentUuid: last.uuid });
     await appendFile(file, `${t.lines.join('\n')}\n`);
     const { turns } = await sessionChanges(file, cwd);
-    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 4, files: [{ path: 'b.txt', added: 2, removed: 0, created: true }] });
+    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 2, removed: 0, created: true }] });
+  });
+});
+
+describe('turn numbers, as Claude Code’s /diff gives them', () => {
+  it('count every prompt it counts: one that changed nothing, a ! command and its output, a command’s output, the summary of a compaction', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-turn-numbers-'));
+    try {
+      const t = transcript(path.join(work, 'app'));
+      t.prompt('What does the theme code do?', false);
+      t.reply('It sets the colors.');
+      t.user('<bash-input>npm test</bash-input>');
+      t.user('<bash-stdout>ok</bash-stdout><bash-stderr></bash-stderr>');
+      // Not counted: what Claude Code adds itself.
+      t.user('<local-command-caveat>Caveat: run locally.</local-command-caveat>', { isMeta: true });
+      t.user('<local-command-stdout>Done</local-command-stdout>');
+      t.user('Earlier, the theme was set up.', { isCompactSummary: true });
+      const prompt = t.prompt('Add a dark theme');
+      t.tool('Edit', { file_path: `${work}/app/theme.css` }, edit(`${work}/app/theme.css`, 'a\nb\n', 'a\nB\n'));
+      t.tool('Edit', { file_path: `${work}/app/theme.css` }, edit(`${work}/app/theme.css`, 'a\nB\n', 'a\nBB\n'));
+      const transcriptFile = path.join(work, 's1.jsonl');
+      await writeFile(transcriptFile, `${t.lines.join('\n')}\n`);
+      const { turns } = await sessionChanges(transcriptFile, path.join(work, 'app'));
+      expect(turns.map((turn) => [turn.uuid, turn.n, turn.text])).toEqual([[prompt, 6, 'Add a dark theme']]);
+      expect(turns[0]!.files).toMatchObject([{ path: 'theme.css', added: 2, removed: 2 }]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
   });
 });

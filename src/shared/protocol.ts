@@ -300,13 +300,14 @@ export type Account = { email?: string; organization?: string; plan?: string };
 
 export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
 
-/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it. */
-export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as the turn left it. */ line?: number };
+/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it, with each edit's lines added up, as /diff counts them. */
+export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as its first edit left it. */ line?: number };
 
 /**
- * One prompt that led Claude to edit files, as Claude Code's /diff offers it: T1, T2… in order.
- * `uuid` is the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so
- * Rewind code can put them back.
+ * One prompt that led Claude to edit files, as Claude Code's /diff offers it: `n` its place among
+ * the conversation's prompts, so a prompt that changed nothing leaves a gap (T1, T3…). `uuid` is
+ * the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so Rewind
+ * code can put them back.
  */
 export type TurnChanges = { uuid: string; n: number; text: string; at?: number; files: TurnFile[]; checkpoint: boolean };
 
