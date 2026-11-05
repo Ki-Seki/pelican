@@ -222,6 +222,31 @@ describe('a workflow agent’s prompt', () => {
   });
 });
 
+describe('an agent done before its result reached the journal', () => {
+  it('says its result is coming while the journal has it only started, and gives it once there', async () => {
+    // This Pelican's Claude reports it done; Claude Code appends the journal's result line just after.
+    const id = newSession();
+    const runId = 'wf_6666aaaa-666';
+    await transcript(id, [said('Review it'), call('toolu_rc'), launched('toolu_rc', runId, 'w6')]);
+    const journal = await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
+    await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5000));
+    const live: Workflow = { runId, taskId: 'w6', status: 'running', phases: [], agents: [{ index: 1, label: 'review:server', state: 'done', agentId: 'a1' }], source: 'live' };
+    const early = await workflowAgentPage(id, 'toolu_rc', 'a1', {}, live);
+    expect(early).toMatchObject({ resultComing: true });
+    expect(early).not.toHaveProperty('result');
+    await appendFile(journal, '{"type":"result","key":"v2:a","agentId":"a1","result":"No findings."}\n');
+    const later = await workflowAgentPage(id, 'toolu_rc', 'a1', {}, live);
+    expect(later).toMatchObject({ result: 'No findings.' });
+    expect(later).not.toHaveProperty('resultComing');
+    // One that returned nothing has a result line all the same: nothing more is coming.
+    const empty = newSession();
+    await transcript(empty, [said('Review it'), call('toolu_re'), launched('toolu_re', 'wf_6666bbbb-666', 'w7')]);
+    await put(empty, 'subagents/workflows/wf_6666bbbb-666/journal.jsonl', `${started('v2:a', 'a1', 'review:server')}\n{"type":"result","key":"v2:a","agentId":"a1","result":""}\n`);
+    await put(empty, 'subagents/workflows/wf_6666bbbb-666/agent-a1.jsonl', steps('a1', Date.now() - 5000));
+    expect(await workflowAgentPage(empty, 'toolu_re', 'a1', {}, { ...live, runId: 'wf_6666bbbb-666', taskId: 'w7' })).not.toHaveProperty('resultComing');
+  });
+});
+
 describe('reading a run’s files', () => {
   it('opens only the agent asked for to show its steps, not every agent of the run', async () => {
     const id = newSession();

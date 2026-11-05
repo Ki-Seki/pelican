@@ -133,6 +133,27 @@ describe('an agent at work, opened', () => {
   }, 10_000);
 });
 
+describe('an agent done before its result reached the run’s journal, opened', () => {
+  it('asks again each second for what it returned, instead of saying it returned nothing', async () => {
+    let page: Partial<WorkflowAgentPage> = { resultComing: true };
+    vi.spyOn(api, 'workflow').mockResolvedValue(flow({ agents: [agent(1, 'done', { durationMs: 9000 })] }));
+    const pages = vi.spyOn(api, 'workflowAgent').mockImplementation(async () => ({ messages: step(1), total: 2, offset: 0, ...page }));
+    show([call, launched]);
+    fireEvent.click(await screen.findByText('review:1'));
+    await waitFor(() => expect(pages).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(card().textContent).not.toContain('(empty)');
+    // Claude Code writes the journal's result line: the next ask has it.
+    page = { result: 'No findings.' };
+    await waitFor(() => expect(card().textContent).toContain('No findings.'), { timeout: 3000 });
+    const asked = pages.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Once there, it is not asked for again.
+    expect(pages.mock.calls.length).toBe(asked);
+    expect(card().textContent).not.toContain('(empty)');
+  }, 10_000);
+});
+
 describe('an agent that finished, opened', () => {
   it('says what it returned first, then the last of its steps, the rest a tap away, as the CLI’s agent card does', async () => {
     vi.spyOn(api, 'workflow').mockResolvedValue(flow({ status: 'completed', source: 'record', durationMs: 361_000, agents: [agent(1, 'done', { toolCalls: 12, durationMs: 60_000 })] }));

@@ -896,12 +896,15 @@ export async function workflowAgentPage(
   const prompt = promptOf(all) ?? agent?.promptPreview ?? fromRecord?.promptPreview;
   const result = entry?.state === 'done' ? entry.result : undefined;
   const shown = result ?? agent?.resultPreview ?? fromRecord?.resultPreview;
+  // Done by its run's word while the journal has it only started: its result follows there.
+  const coming = !shown && agent?.state === 'done' && entry?.state === 'started';
   const page: WorkflowAgentPage = {
     messages: all.slice(offset, end).map((m) => onPage(m).message),
     total: all.length,
     offset,
     ...(prompt ? { prompt: clip(prompt, PROMPT_MAX) } : {}),
     ...(shown ? { result: shown } : {}),
+    ...(coming ? { resultComing: true } : {}),
   };
   return { ...page, tag: tagOf(page) };
 }
