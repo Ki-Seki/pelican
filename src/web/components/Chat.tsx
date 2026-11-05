@@ -11,7 +11,7 @@ import { useDemoNote } from '../lib/demo';
 import { clearDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { composing } from '../lib/keyboard';
+import { composing, hasKeyboard } from '../lib/keyboard';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
@@ -827,8 +827,10 @@ export function Chat({
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
-        // On a computer the box takes the keys as soon as a chat opens (the composer skips this on touch screens).
-        autoFocus
+        // On a computer the box takes the keys as soon as a chat opens. On a phone only a new
+        // session, opened to type in, does: a session opened to read must not raise the keyboard
+        // over the conversation.
+        autoFocus={!sessionId || hasKeyboard()}
         placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
