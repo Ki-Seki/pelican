@@ -311,3 +311,19 @@ describe('Changes and files, open beside the conversation', () => {
     }
   });
 });
+
+describe('the folder it is in, picked again', () => {
+  it('leaves the next new session there to start as a new session does', async () => {
+    wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    fireEvent.click(screen.getByLabelText('Permission mode'));
+    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Accept edits'));
+    expect(screen.getByLabelText('Permission mode').textContent).toBe('Accept edits');
+    // The sheet marks the folder it is in; a tap on it changes nothing (the route stays, the chat stays).
+    fireEvent.click(screen.getByLabelText(`Folder: ${CWD}`));
+    fireEvent.click(await screen.findByText('app'));
+    cleanup();
+    // Later, in the same page: a new session in that folder.
+    wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Auto'));
+  });
+});

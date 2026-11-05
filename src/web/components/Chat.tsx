@@ -705,6 +705,8 @@ export function Chat({
   // picked for the other folder.
   const startIn = (start: Start) => {
     const next = `new:${'scratch' in start ? 'scratch' : start.cwd}`;
+    // The folder it is in already: nothing moves, and nothing is set aside for a later new session there.
+    if (next === viewId) return;
     composer.current?.saveDraft();
     moveDraft(viewId, next);
     if (chosen.current) {
