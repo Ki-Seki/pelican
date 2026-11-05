@@ -154,11 +154,20 @@ let hurried = false;
 /**
  * How long the `!` commands still running get to tidy up when Pelican shuts down, before they are
  * made to end: 15 seconds. docker compose gives its containers 10 to stop (Claude Code's own bash
- * mode gives a command 1.5); 15 leaves Pelican time to end what is left and exit inside the 20
- * seconds launchd waits for a login item before it ends it (ExitTimeOut), and well inside the 90
- * systemd waits for a service (TimeoutStopSec). Once Pelican has gone, nothing would end them.
+ * mode gives a command 1.5). Under systemd that is well inside the 90 seconds it waits for a
+ * service (TimeoutStopSec), and past them it ends every process of the service itself. launchd
+ * waits only as long as the job says (ExitTimeOut: 20 for Pelican's login item, 5 where unset),
+ * then ends Pelican alone, and once Pelican has gone nothing would end them: see shutdownGrace.
  */
 export const SHUTDOWN_GRACE_MS = 15_000;
+
+/**
+ * The time to tidy up, inside what launchd allows when it stops Pelican (`exitTimeoutS`, see
+ * launchdExitTimeout): a second and a half before its end, for Pelican to end what is left and exit.
+ */
+export const shutdownGrace = (exitTimeoutS?: number) => (exitTimeoutS === undefined
+  ? SHUTDOWN_GRACE_MS
+  : Math.max(1000, Math.min(SHUTDOWN_GRACE_MS, exitTimeoutS * 1000 - 1500)));
 /** How often it looks whether they have. */
 const SHUTDOWN_LOOK_MS = 50;
 

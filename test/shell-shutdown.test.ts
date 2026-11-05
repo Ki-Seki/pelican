@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 // Recording a command starts no Claude here.
 vi.mock('../src/server/runner', () => ({ ensureRun: async () => ({ appendShell: async () => {}, busy: false }), getRun: () => undefined }));
 
-const { hurryShells, SHUTDOWN_GRACE_MS, startShell, stopAllShells } = await import('../src/server/shell-runs');
+const { hurryShells, SHUTDOWN_GRACE_MS, shutdownGrace, startShell, stopAllShells } = await import('../src/server/shell-runs');
 
 const SESSION = '00000000-0000-4000-8000-00000000d00d';
 let dir: string;
@@ -67,8 +67,16 @@ describe.skipIf(process.platform === 'win32')('! commands when Pelican shuts dow
     expect(groupRuns(group)).toBe(false);
     expect(Date.now() - started).toBeGreaterThan(2500);
     expect(Date.now() - started).toBeLessThan(SHUTDOWN_GRACE_MS);
-    expect(SHUTDOWN_GRACE_MS).toBeLessThan(20_000);
   }, 30_000);
+
+  it('get that time inside what launchd waits, when launchd started Pelican, with a moment to spare for ending the rest', () => {
+    expect(shutdownGrace()).toBe(SHUTDOWN_GRACE_MS);
+    expect(SHUTDOWN_GRACE_MS).toBe(15_000);
+    // Pelican's login item asks for 20 seconds; launchd gives 5 where a job says nothing.
+    expect(shutdownGrace(20)).toBe(15_000);
+    expect(shutdownGrace(5)).toBe(3500);
+    expect(shutdownGrace(1)).toBe(1000);
+  });
 
   it('are made to end once the time is up, also one that ignores the asking', async () => {
     const stubborn = path.join(dir, 'stubborn');
@@ -118,9 +126,11 @@ import { startShell } from ${JSON.stringify(path.join(src, 'shell-runs.ts'))};
 await startServer();
 startShell(${JSON.stringify(SESSION)}, ${JSON.stringify(dir)}, ${JSON.stringify(command)});
 `);
+    // Not a launchd job's, whatever started the tests: the full time to tidy up.
+    const { XPC_SERVICE_NAME: _job, ...env } = process.env;
     const child = spawn(process.execPath, ['--import', 'tsx', script], {
       cwd: path.resolve(import.meta.dirname, '..'),
-      env: { ...process.env, PELICAN_HOST: '127.0.0.1', PELICAN_PORT: '0', SHELL: '/bin/sh' },
+      env: { ...env, PELICAN_HOST: '127.0.0.1', PELICAN_PORT: '0', SHELL: '/bin/sh' },
       stdio: 'ignore',
     });
     const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));

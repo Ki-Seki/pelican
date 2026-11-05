@@ -71,6 +71,37 @@ export const logFile = (home: string) => path.join(home, 'Library', 'Logs', 'pel
 
 const xml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/**
+ * How long launchd waits for a job it stops before it ends it, when the job does not say: 5
+ * seconds on macOS now (`exit timeout = 5` in `launchctl print`).
+ */
+export const LAUNCHD_EXIT_TIMEOUT_S = 5;
+/**
+ * How long Pelican's login item asks launchd to wait (ExitTimeOut) once it asks Pelican to stop:
+ * long enough for `!` commands to tidy up (see SHUTDOWN_GRACE_MS) and for Pelican to end what is
+ * left of them and exit.
+ */
+const EXIT_TIMEOUT_S = 20;
+
+/** The launchd job that started this Pelican, by its label, if one did (see launchdExitTimeout). */
+export function launchdJob(ctx: Pick<ServiceContext, 'platform' | 'env'>): string | undefined {
+  const label = ctx.env.XPC_SERVICE_NAME;
+  return ctx.platform === 'darwin' && label && label !== '0' && !label.startsWith('application.') ? label : undefined;
+}
+
+/**
+ * How long launchd waits, once it asks this Pelican to stop, before it ends it, when a launchd job
+ * started Pelican (the job's label is in XPC_SERVICE_NAME; a terminal says 0, an app application.…):
+ * the job's exit timeout as `launchctl print` says it, else launchd's default. Undefined elsewhere.
+ */
+export async function launchdExitTimeout(ctx: Pick<ServiceContext, 'platform' | 'env' | 'uid' | 'run'>): Promise<number | undefined> {
+  const label = launchdJob(ctx);
+  if (!label) return undefined;
+  const { code, stdout } = await ctx.run('launchctl', ['print', `gui/${ctx.uid}/${label}`]);
+  const seconds = Number(/^\s*exit timeout = (\d+)$/m.exec(stdout)?.[1]);
+  return code === 0 && seconds > 0 ? seconds : LAUNCHD_EXIT_TIMEOUT_S;
+}
+
 /** The launchd agent: started at login, started again when it stops with an error. */
 export function launchdPlist(ctx: ServiceContext): string {
   const { kept } = serviceEnvironment(ctx.env);
@@ -99,6 +130,8 @@ ${env}
     <key>SuccessfulExit</key>
     <false/>
   </dict>
+  <key>ExitTimeOut</key>
+  <integer>${EXIT_TIMEOUT_S}</integer>
   <key>StandardOutPath</key>
   <string>${xml(logFile(ctx.home))}</string>
   <key>StandardErrorPath</key>
