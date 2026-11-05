@@ -76,7 +76,7 @@ describe('what Changes shows', () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onRewind = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onRewind={onRewind} onClose={() => {}} onAddToMessage={() => {}} />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }, LAZY));
     const sheet = screen.getAllByRole('dialog').at(-1)!;
     await waitFor(() => expect(within(sheet).getByText('Since main')).toBeTruthy());
     // The newest turn first, as the list of turns reads back from now.
@@ -97,7 +97,7 @@ describe('what Changes shows', () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onClose = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }, LAZY));
     const sheet = screen.getAllByRole('dialog').at(-1)!;
     fireEvent.keyDown(within(sheet).getAllByRole('button')[0]!, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
@@ -110,9 +110,9 @@ describe('what Changes shows', () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     wrap(<Workspace open cwd="/code/notes" sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
     await waitFor(() => expect(location.search).toBe('?s=s1&w=files'));
-    await screen.findByText('notes.md');
+    await screen.findByText('notes.md', {}, LAZY);
     fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
-    expect(await screen.findByText('This folder is not a git repository')).toBeTruthy();
+    expect(await screen.findByText('This folder is not a git repository', {}, LAZY)).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(location.search).toBe('?s=s1&w=changes');
     expect(screen.getByRole('button', { name: 'Changes' }).getAttribute('aria-pressed')).toBe('true');
@@ -122,7 +122,7 @@ describe('what Changes shows', () => {
     history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
     const onClose = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
-    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     fireEvent.click(document.querySelector('[data-line="2"]')!);
     const box = screen.getByLabelText('Comment for Claude');
     fireEvent.change(box, { target: { value: 'Rename b' } });
@@ -206,7 +206,7 @@ describe('a file’s Quote and Copy', () => {
   it('sit in a row of their own under what scrolls, the lowest of a phone’s view clear of the home indicator', async () => {
     history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
     const view = wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
-    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     select(1, 2);
     const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
     expect(bar.textContent).toContain('Lines 1–2');

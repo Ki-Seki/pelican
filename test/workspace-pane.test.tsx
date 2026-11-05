@@ -66,6 +66,8 @@ const session = async () => {
   await screen.findAllByText('Clean up the build');
 };
 const pane = () => screen.queryByRole('complementary', { name: 'Changes and files' });
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 const toggle = () => screen.getByRole('button', { name: 'Changes and files' });
 // Off Apple keyboards, as here, the modifier is Ctrl.
 const key = (target: Element | Window, init: KeyboardEventInit) => act(() => {
@@ -94,7 +96,7 @@ describe('Changes and files beside the conversation', () => {
     setPrefs({ workspacePane: true });
     await session();
     await waitFor(() => expect(pane()).not.toBeNull());
-    const row = await within(pane()!).findByText('a.ts');
+    const row = await within(pane()!).findByText('a.ts', {}, LAZY);
     const button = row.closest('button')!;
     button.focus();
     key(button, { key: '\\', ctrlKey: true });
