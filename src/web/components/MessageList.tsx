@@ -1,13 +1,15 @@
 import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
-import { apiUrl } from '../lib/api';
+import type { ImageBlock, LiveShell, PartialBlock, RunState } from '../../shared/protocol';
+import { api, apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
 import { composing } from '../lib/keyboard';
+import { promptBefore } from '../lib/next-steps';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
+import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
@@ -61,10 +63,15 @@ function segment(parts: Part[]): Segment[] {
 
 const FOLD_AFTER = 5;
 
-function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; running: boolean; verbose: boolean }) {
+/**
+ * A run of steps. Normal folds a long one, keeping its end in view; Thinking lists every step, one
+ * line each, with the thinking between them open; Verbose opens everything.
+ */
+function Steps({ parts, cwd, running, view }: { parts: Part[]; cwd?: string; running: boolean; view: ViewMode }) {
   const tools = parts.filter((p) => p.kind === 'tool').length;
   const [open, setOpen] = useState(false);
-  const fold = !verbose && !open && !running && parts.length > FOLD_AFTER;
+  const verbose = view === 'verbose';
+  const fold = view === 'normal' && !open && !running && parts.length > FOLD_AFTER;
   const shown = fold ? parts.slice(-2) : parts;
   return (
     <div className="my-1.5">
@@ -79,7 +86,7 @@ function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; 
         part.kind === 'tool' ? (
           <ToolCallView key={part.key} call={part.call} cwd={cwd} running={running} defaultOpen={verbose} />
         ) : part.kind === 'thinking' ? (
-          <Thinking key={part.key} text={part.text} defaultOpen={verbose} />
+          <Thinking key={part.key} text={part.text} defaultOpen />
         ) : null,
       )}
     </div>
@@ -110,34 +117,17 @@ const TurnHeading = () => <h6 className="sr-only">Claude said:</h6>;
 const AssistantTurn = memo(function AssistantTurn({
   item, cwd, running, view, stats,
 }: { item: Extract<Item, { kind: 'assistant' }>; cwd?: string; running: boolean; view: ViewMode; stats?: RunState['lastTurn'] }) {
-  const segments = useMemo(() => segment(item.parts), [item.parts]);
+  // Claude's thinking shows from the Thinking view on, as in Desktop.
+  const segments = useMemo(() => segment(view === 'normal' ? item.parts.filter((p) => p.kind !== 'thinking') : item.parts), [item.parts, view]);
   const texts = item.parts.filter((p): p is Extract<Part, { kind: 'text' }> => p.kind === 'text');
   const lastText = texts.at(-1);
-  const steps = item.parts.filter((p) => p.kind === 'tool').length;
-
-  if (view === 'summary') {
-    // Visuals Claude drew are part of the answer, so they stay with the reply.
-    const visuals = item.parts.filter((p): p is Extract<Part, { kind: 'tool' }> => p.kind === 'tool' && /(^|__)show_widget$/.test(p.call.name));
-    if (!lastText && !running && visuals.length === 0) {
-      return steps > 0 ? <div className="flex items-center gap-2 text-[12.5px] text-faint"><Layers className="size-3.5" />{steps} steps, no reply</div> : null;
-    }
-    return (
-      <div className="group/turn">
-        <TurnHeading />
-        {steps > 0 && <div className="flex items-center gap-2 text-[12px] text-faint"><Layers className="size-3" />{steps} step{steps === 1 ? '' : 's'}</div>}
-        {visuals.map((part) => <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} />)}
-        {lastText && <Markdown text={lastText.text} className="my-2" />}
-        {!running && <TurnFooter text={lastText?.text} timestamp={item.timestamp} stats={stats} />}
-      </div>
-    );
-  }
 
   return (
     <div className="group/turn">
       <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
-          <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} verbose={view === 'verbose'} />
+          <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} view={view} />
         ) : seg.kind === 'text' ? (
           <Markdown key={seg.key} text={seg.text} className="my-2" />
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
@@ -399,7 +389,8 @@ function EditPrompt({ text, images, files, last, onCancel, onSend }: {
   );
 }
 
-function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
+/** `onNext`: the next step an error line offers, where it ends the conversation (Retry, or Compact). */
+function Notice({ item, onNext }: { item: Extract<Item, { kind: 'notice' }>; onNext?: () => void }) {
   const [open, setOpen] = useState(false);
   if (item.tone === 'interrupt') {
     return <div className="flex items-center gap-2 text-[12px] text-faint"><span className="h-px flex-1 bg-line" />Interrupted<span className="h-px flex-1 bg-line" /></div>;
@@ -411,7 +402,12 @@ function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
     return (
       <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
         <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-        <span className="whitespace-pre-wrap">{item.text}</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap">{item.text}</span>
+        {onNext && (
+          <button type="button" onClick={onNext} className="relative -my-1 -mr-1.5 h-7 shrink-0 rounded-full bg-chip px-3 text-[12.5px] text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover">
+            {item.next === 'compact' ? 'Compact' : 'Retry'}
+          </button>
+        )}
       </div>
     );
   }
@@ -439,7 +435,7 @@ function readableSummary(summary: string): string {
 /** A `!` command someone ran in the session, with its output. */
 function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const [all, setAll] = useState(false);
-  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').trimEnd(), [item.stdout, item.stderr]);
+  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
   const long = output.split('\n').length > 14 || output.length > 1600;
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
@@ -455,6 +451,66 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
         <button type="button" aria-expanded={all} className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
           {all ? 'Show less' : 'Show all'}
         </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A `!` command still running: its output as it comes, the end in view, and Stop, which ends it
+ * and everything it started. Once done it waits, if Claude is in a turn, to go into the conversation.
+ */
+function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShell }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (shell.done) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [shell.done]);
+  const output = useMemo(() => cleanOutput(shell.output).replace(/^\s*\n/, '').trimEnd(), [shell.output]);
+  // The end stays in view as output comes, unless the reader scrolled up in it to read.
+  const body = useRef<HTMLPreElement>(null);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    if (body.current && following.current) body.current.scrollTop = body.current.scrollHeight;
+  }, [output]);
+  const stop = () => {
+    markStopping(sessionId, shell.id);
+    void api.stopShell(sessionId, shell.id).catch(() => undefined);
+  };
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-panel">
+      <div className="flex min-h-9 items-center gap-2 py-1 pr-1.5 pl-3 font-mono text-[12.5px]">
+        <SquareTerminal className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 break-all">{shell.command}</span>
+        {shell.done ? (
+          <span className="shrink-0 pr-1.5 font-sans text-[11px] text-faint">{shell.done.code === null ? 'Stopped' : shell.done.code === 0 ? 'Done' : `Exit code ${shell.done.code}`}</span>
+        ) : (
+          <>
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-faint motion-reduce:animate-none" />
+            <span className="shrink-0 font-sans text-[11px] text-faint tabular-nums">{duration(Math.max(0, now - shell.startedAt))}</span>
+            <button type="button" disabled={shell.stopping} onClick={stop} className="relative h-7 shrink-0 rounded-full px-2.5 font-sans text-[12px] text-muted after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg disabled:opacity-50">
+              {shell.stopping ? 'Stopping' : 'Stop'}
+            </button>
+          </>
+        )}
+      </div>
+      {output && (
+        <pre
+          ref={body}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+          }}
+          className="max-h-60 overflow-y-auto overscroll-contain border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted"
+        >
+          {output}
+        </pre>
+      )}
+      {(shell.error || shell.done?.waiting || shell.truncated) && (
+        <div className={`border-t border-line px-3 py-1.5 text-[12px] ${shell.error ? 'text-danger' : 'text-faint'}`}>
+          {shell.error ?? (shell.done?.waiting ? 'Goes into the conversation when Claude’s turn ends' : 'Output past 200 KB is left out; the command runs on')}
+        </div>
       )}
     </div>
   );
@@ -492,7 +548,7 @@ function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Reco
   }
 }
 
-function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: number }) {
+function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; since?: number; view: ViewMode }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -506,7 +562,8 @@ function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: 
     <div>
       {run.partial.map((block, i) => {
         if (block.type === 'text') return block.text ? <StreamingMarkdown key={i} text={block.text} className="my-2" /> : null;
-        if (block.type === 'thinking') return <Thinking key={i} text={block.thinking} live />;
+        // Normal says that Claude thinks; the other views show what, as it comes.
+        if (block.type === 'thinking') return <Thinking key={i} text={view === 'normal' ? '' : block.thinking} live defaultOpen />;
         const summary = describeTool(block.name, partialTarget(block), cwd);
         const Icon = summary.icon;
         return (
@@ -538,7 +595,7 @@ function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: 
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact,
 }: {
   sessionId: string;
   view: SessionView;
@@ -548,8 +605,14 @@ export function MessageList({
   mode: ViewMode;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
+  /** The next step on an API error that ends the conversation: send its prompt again, or /compact. */
+  onRetry?: (prompt: Extract<Item, { kind: 'user' }>) => void;
+  onCompact?: () => void;
 }) {
   const items = useMemo(() => buildItems(view.messages, machine), [view.messages, machine]);
+  // A `!` command shows live until its record replaces it, under the same id.
+  const shells = useLiveShells(sessionId);
+  const live = useMemo(() => new Set(shells.map((shell) => shell.id)), [shells]);
   // The prompt this browser sent last, while it is on its way: sending always brings the end into view.
   const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
   const lastSending = useRef<string | undefined>(undefined);
@@ -707,13 +770,13 @@ export function MessageList({
               <TriangleAlert className="size-4" /> {view.error}
             </div>
           )}
-          <div className={mode === 'summary' ? 'space-y-3' : 'space-y-4'}>
-            {items.map((item) => {
+          <div className="space-y-4">
+            {items.map((item, at) => {
               switch (item.kind) {
                 case 'user':
                   return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
                 case 'shell':
-                  return <ShellItem key={item.key} item={item} />;
+                  return live.has(item.key) ? null : <ShellItem key={item.key} item={item} />;
                 case 'assistant':
                   return (
                     <AssistantTurn
@@ -725,8 +788,13 @@ export function MessageList({
                       {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
                     />
                   );
-                case 'notice':
-                  return mode === 'summary' && item.tone === 'output' ? null : <Notice key={item.key} item={item} />;
+                case 'notice': {
+                  // Only the error the conversation ends on, with Claude idle, offers a way on.
+                  const ends = endsOnError && !busy && at === items.length - 1;
+                  const prompt = ends && item.next === 'retry' && onRetry ? promptBefore(items, at) : undefined;
+                  const next = prompt ? () => onRetry!(prompt) : ends && item.next === 'compact' ? onCompact : undefined;
+                  return <Notice key={item.key} item={item} {...(next ? { onNext: next } : {})} />;
+                }
                 case 'compact':
                   return <Compacted key={item.key} summary={item.summary} />;
                 case 'day':
@@ -735,13 +803,14 @@ export function MessageList({
                   return null;
               }
             })}
-            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} {...(promptAt ? { since: promptAt } : {})} />}
+            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} view={mode} {...(promptAt ? { since: promptAt } : {})} />}
             {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                 <span className="whitespace-pre-wrap">{view.run.error}</span>
               </div>
             )}
+            {shells.map((shell) => <LiveShellItem key={shell.id} sessionId={sessionId} shell={shell} />)}
           </div>
         </div>
       </div>

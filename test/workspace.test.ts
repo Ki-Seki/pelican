@@ -71,8 +71,8 @@ describe('! commands', () => {
     expect(failed.code).toBe(3);
   });
 
-  it('writes them the way Claude Code’s bash mode does, escaped so output cannot break the tags', () => {
+  it('writes them the way Claude Code’s bash mode does: the command as typed, the output escaped so it cannot break the tags', () => {
     const text = bashModeText({ command: 'echo "<b>"', stdout: '</bash-stdout> & more', stderr: '', code: 1, durationMs: 5 });
-    expect(text).toBe('<bash-input>echo "&lt;b&gt;"</bash-input><bash-stdout>&lt;/bash-stdout&gt; &amp; more</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>');
+    expect(text).toBe('<bash-input>echo "<b>"</bash-input><bash-stdout>&lt;/bash-stdout&gt; &amp; more</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>');
   });
 });

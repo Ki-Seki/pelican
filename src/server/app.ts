@@ -17,6 +17,7 @@ import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
+import { demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
@@ -26,7 +27,7 @@ import { searchFiles } from './project-files.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage } from './runner.js';
-import { runCommand } from './shell.js';
+import { startShell, stopShell } from './shell-runs.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
@@ -35,7 +36,7 @@ import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, 
 import { transcriptImage } from './history.js';
 import { instance } from './running.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
-import { folderTrusted, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
+import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 
 export const app = new Hono();
 
@@ -605,17 +606,26 @@ app.get('/api/file', async (c) => {
   return c.json(await readProjectFile(cwd, file));
 });
 
+/**
+ * A `!` command: it starts at once, its output goes to the session's pages as it comes, and once
+ * done it goes into the conversation (shell-runs.ts). A folder nobody trusted is asked about
+ * before anything runs, as for a message, since recording it starts Claude Code there.
+ */
 app.post('/api/sessions/:id/shell', async (c) => {
   const id = c.req.param('id');
-  const { command } = await c.req.json<{ command?: string }>().catch(() => ({ command: undefined }));
-  if (!command?.trim()) return c.json({ error: 'No command' }, 400);
-  const info = await sessionInfo(id);
-  if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
-  const result = await runCommand(info.cwd, command.trim());
-  // Into the conversation without a turn: Claude reads it with the next message.
-  await (await ensureRun(id)).appendShell(result);
-  return c.json(result);
+  const body = await c.req.json<{ command?: unknown; trust?: unknown }>().catch(() => ({}) as { command?: unknown; trust?: unknown });
+  const command = typeof body.command === 'string' ? body.command.trim() : '';
+  if (!command) return c.json({ error: 'No command' }, 400);
+  const cwd = getRun(id)?.cwd ?? (await sessionInfo(id))?.cwd;
+  if (!cwd || !(await isDirectory(cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
+  if (body.trust === 'trusted' || body.trust === 'user-only') await rememberChoice(cwd, body.trust);
+  await launchFor(cwd);
+  return c.json({ shell: startShell(id, cwd, command) }, 202);
 });
+
+app.post('/api/sessions/:id/shell/:shell/stop', (c) => (stopShell(c.req.param('id'), c.req.param('shell'))
+  ? c.json({ ok: true })
+  : c.json({ error: 'That command is not running any more' }, 409)));
 
 app.post('/api/sessions/:id/rewind', async (c) => {
   const { uuid, dryRun } = await c.req.json<{ uuid?: string; dryRun?: boolean }>().catch(() => ({ uuid: undefined, dryRun: undefined }));
@@ -649,6 +659,9 @@ app.post('/api/sessions/:id/tasks/:task/stop', async (c) => {
 
 /** The end of what a background command printed, read while it runs. */
 app.get('/api/sessions/:id/tasks/:task/output', async (c) => {
+  // The demo's command prints what it would have.
+  const demo = config.demo ? demoTaskOutput(c.req.param('id'), c.req.param('task')) : undefined;
+  if (demo) return c.json(demo);
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Claude is not running in this session' }, 409);
   return c.json(await run.taskOutput(c.req.param('task')));

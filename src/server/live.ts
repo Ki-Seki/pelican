@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { config } from './config.js';
-import { DEMO_LIVE_SESSION } from './demo.js';
+import { demoLiveProcesses } from './demo.js';
 
 /**
  * A Claude Code process outside this app with a session open: busy, or idle and holding the
@@ -101,7 +101,7 @@ export async function registry(): Promise<Entry[]> {
  * meanwhile. Entries of exited processes are ignored.
  */
 export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
-  if (config.demo) return new Map([[DEMO_LIVE_SESSION, { app: 'Claude Desktop', busy: true }]]);
+  if (config.demo) return demoLiveProcesses();
   if (cache && Date.now() - cache.at < 1500) return cache.byId;
   const byId = new Map<string, LiveProcess>();
   const entries = await registry();

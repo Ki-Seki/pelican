@@ -1,4 +1,4 @@
-import { errorLine } from '../../shared/errors';
+import { errorLine, nextStep } from '../../shared/errors';
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
 import { todosOf } from '../../shared/tasks';
 
@@ -34,7 +34,11 @@ export type Item =
     steered?: boolean;
   }
   | { kind: 'assistant'; key: string; parts: Part[]; timestamp?: number; model?: string }
-  | { kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info' | 'error'; text: string; detail?: string }
+  | {
+    kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info' | 'error'; text: string; detail?: string;
+    /** For an API error: what can be done about it from here. */
+    next?: 'compact' | 'retry';
+  }
   | { kind: 'compact'; key: string; summary: string }
   | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; timestamp?: number }
   | { kind: 'day'; key: string; timestamp: number };
@@ -68,7 +72,9 @@ export function cleanOutput(text: string): string {
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
   | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
-  | { kind: 'shell'; command: string; stdout: string; stderr: string };
+  | { kind: 'shell'; command: string; stdout: string; stderr: string }
+  /** The output of the `!` command just before, in a message of its own, as Claude Code writes it. */
+  | { kind: 'shell-output'; stdout: string; stderr: string };
 
 /**
  * The files sent with a prompt, out of its text. Pelican tells Claude where they are in an
@@ -114,7 +120,9 @@ function classifyUserText(raw: string): Classified | undefined {
   if (bash !== undefined) {
     return { kind: 'shell', command: unescape(bash), stdout: unescape(tag(text, 'bash-stdout') ?? ''), stderr: unescape(tag(text, 'bash-stderr') ?? '') };
   }
-  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) return undefined;
+  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) {
+    return { kind: 'shell-output', stdout: unescape(tag(text, 'bash-stdout') ?? ''), stderr: unescape(tag(text, 'bash-stderr') ?? '') };
+  }
   const commandName = tag(text, 'command-name');
   if (commandName) {
     return { kind: 'user', text: '', images: [], command: { name: commandName, args: tag(text, 'command-args') ?? '' } };
@@ -184,7 +192,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
     // A failed API call is not Claude's reply: one line saying what went wrong, in plain words.
     if (message.apiError) {
       const text = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim();
-      push({ kind: 'notice', key: message.uuid, tone: 'error', text: errorLine(text, machine, message.error) ?? text });
+      push({ kind: 'notice', key: message.uuid, tone: 'error', text: errorLine(text, machine, message.error) ?? text, next: nextStep(text, message.error) });
       turn = undefined;
       continue;
     }
@@ -209,6 +217,13 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
       } else if (classified.kind === 'shell') {
         push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) });
         turn = undefined;
+      } else if (classified.kind === 'shell-output') {
+        // It goes with its command; on its own, it is nothing to show.
+        const last = items.at(-1);
+        if (last?.kind === 'shell' && !last.stdout && !last.stderr) {
+          last.stdout = classified.stdout;
+          last.stderr = classified.stderr;
+        }
       } else {
         push({ ...classified, key: message.uuid });
       }

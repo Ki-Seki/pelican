@@ -12,8 +12,10 @@ import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
-import { loadDefaults, markSeen, markTipSeen, newSessionDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { cancelCheck, resend } from '../lib/next-steps';
+import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
+import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
@@ -30,6 +32,7 @@ import {
 } from '../lib/store';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
+import type { Item } from '../lib/turns';
 import { Composer, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
@@ -198,7 +201,13 @@ function TaskOutputSheet({ sessionId, task, onClose }: { sessionId: string; task
  * One shows as a row; more fold into a single row, so they never crowd the conversation, and open
  * into a short list. A command's row opens what it printed; an agent's says what it is doing.
  */
-function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; tasks: BackgroundTask[]; scheduled: ScheduledCheck[] }) {
+function BackgroundTasks({ sessionId, tasks, scheduled, onCancel }: {
+  sessionId: string;
+  tasks: BackgroundTask[];
+  scheduled: ScheduledCheck[];
+  /** Asks Claude to cancel a check: it is Claude's to cancel, as in the CLI. */
+  onCancel: (check: ScheduledCheck) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [reading, setReading] = useState<BackgroundTask>();
   const stop = (id: string) => void api.stopTask(sessionId, id);
@@ -215,10 +224,11 @@ function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; t
   );
   // Claude stays running here for these; it says when the next one is due.
   const check = (item: ScheduledCheck) => (
-    <div key={item.id} className="flex h-9 items-center gap-2 pr-3 pl-3 text-[12.5px] text-muted">
+    <div key={item.id} className="flex h-9 items-center gap-2 pr-1 pl-3 text-[12.5px] text-muted">
       <Clock className="size-3.5 shrink-0 text-faint" />
       <span className="min-w-0 flex-1 truncate">{item.what}</span>
       {item.next && <span className="shrink-0 text-faint tabular-nums">{clockTime(item.next)}</span>}
+      <button type="button" title="Ask Claude to cancel it" onClick={() => onCancel(item)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Cancel</button>
     </div>
   );
   const sheet = <TaskOutputSheet sessionId={sessionId} {...(reading ? { task: reading } : {})} onClose={() => setReading(undefined)} />;
@@ -234,7 +244,7 @@ function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; t
       {open ? (
         <div className="rounded-2xl border border-line bg-panel py-1">
           <button type="button" onClick={() => setOpen(false)} className="flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted hover:text-fg">
-            <span className="min-w-0 flex-1 truncate">{tasks.length} background tasks</span>
+            <span className="min-w-0 flex-1 truncate">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}{scheduled.length > 0 ? ` · ${scheduled.length} scheduled` : ''}</span>
             <ChevronDown className="size-4 shrink-0" />
           </button>
           <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}{scheduled.map(check)}</div>
@@ -381,7 +391,6 @@ export function Chat({
   const [menuOpen, setMenuOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
-  const [running, setRunning] = useState<string>();
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
@@ -544,20 +553,40 @@ export function Chat({
   // Between turns: background tasks and subagents still running, and the checks Claude stays running for.
   const working = view.run ? (busy ? 0 : (view.run.tasks?.length ?? 0) + (view.run.scheduled?.length ?? 0)) : session?.tasks ?? 0;
 
-  // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
-  const shell = async (command: string) => {
+  // A `!` command: it runs in the session's folder, its output shows in the conversation as it
+  // comes, and once done Claude answers it, as in the CLI. A folder nobody trusted is asked about
+  // first, as for a message.
+  const shell = async (command: string, trust?: TrustChoice) => {
     if (!sessionId) return;
     setSendError(undefined);
-    setRunning(command);
     try {
-      await api.shell(sessionId, command);
+      addShell(sessionId, (await api.shell(sessionId, command, trust)).shell);
       clearDraft(viewId, `!${command}`);
     } catch (error) {
+      if (error instanceof ApiError && error.trust) {
+        let settled = false;
+        setTrustAsk({
+          brings: error.trust.brings,
+          answer: (choice) => {
+            if (!settled) void shell(command, choice);
+            settled = true;
+          },
+          cancel: () => {
+            if (!settled) setDraftText({ text: `!${command}`, key: Date.now() });
+            settled = true;
+          },
+        });
+        return;
+      }
       failed(error);
       setDraftText({ text: `!${command}`, key: Date.now() });
-    } finally {
-      setRunning(undefined);
     }
+  };
+
+  // An API error the conversation ends on: its prompt goes again, with its pictures and files.
+  const sendAgain = (prompt: Extract<Item, { kind: 'user' }>) => {
+    setSendError(undefined);
+    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy), failed);
   };
 
   // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
@@ -652,6 +681,20 @@ export function Chat({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [busy, sessionId]);
+
+  // Ctrl+O steps through the transcript views, as in Claude Desktop (Ctrl on a Mac too); Thinking
+  // comes in once Claude has thought here.
+  const thought = useMemo(() => view.messages.some((m) => m.blocks.some((b) => b.type === 'thinking' && b.thinking.trim() !== '')), [view.messages]);
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'o' || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      setSessionView(sessionId, nextView(viewOf(getPrefs(), sessionId), thought));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sessionId, thought]);
 
   // Files dropped anywhere on the conversation go to the composer.
   const composer = useRef<ComposerHandle>(null);
@@ -779,6 +822,7 @@ export function Chat({
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
             {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy) } : {})}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -800,12 +844,9 @@ export function Chat({
         )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
-          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} />
+          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy)} />
         )}
-        {running && (
-          <Notice><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Running <code className="font-mono">{running}</code></span></Notice>
-        )}
-        {prefs.suggestions && view.run?.suggestion && !busy && !running && (
+        {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
             <button type="button" onClick={() => setDraftText({ text: view.run!.suggestion!, key: Date.now() })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
               <CornerDownRight className="size-3.5 shrink-0 text-faint" />
@@ -913,6 +954,8 @@ export function Chat({
           {...(cwd ? { cwd } : {})}
           {...(home ? { home } : {})}
           {...(view.run ? { run: view.run } : {})}
+          {...(machine ? { machine } : {})}
+          thinking={thought}
           onRenamed={refresh}
           onForked={(id) => void branchSettings().then((next) => {
             // A branch is new work: it carries this session's settings, except Bypass.

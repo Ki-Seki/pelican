@@ -236,6 +236,16 @@ function interrupt(sessionId: string): { ok: boolean } {
   return { ok: true };
 }
 
+/** Stop on a command Claude left running: it ends, and the session has nothing left at work. */
+function stopTask(sessionId: string, taskId: string): { ok: boolean } {
+  const run = currentRun(sessionId);
+  if (!run?.tasks?.some((t) => t.id === taskId)) return { ok: true };
+  const { tasks, ...rest } = run;
+  const left = tasks.filter((t) => t.id !== taskId);
+  runAs(sessionId, left.length > 0 ? { ...rest, tasks: left } : rest);
+  return { ok: true };
+}
+
 /** A queued message taken back before Claude gets it: dropped, or put back in the box to edit. */
 function unqueue(sessionId: string, uuid: string): { ok: boolean } {
   const run = currentRun(sessionId);
@@ -287,9 +297,11 @@ function summarize(session: SessionSummary): SessionSummary {
   if (!story) return session;
   const last = story.added.at(-1)?.timestamp ?? 0;
   const preview = lastReply(story.added);
+  const working = story.run && !story.run.busy ? (story.run.tasks?.length ?? 0) + (story.run.scheduled?.length ?? 0) : 0;
+  const { tasks: _listed, ...rest } = session;
   return {
-    ...session,
-    ...(story.run ? { status: statusOf(story.run) } : {}),
+    ...(story.run ? rest : session),
+    ...(story.run ? { status: statusOf(story.run), ...(working > 0 ? { tasks: working } : {}) } : {}),
     lastActivity: Math.max(session.lastActivity, last),
     ...(preview ? { preview } : {}),
   };
@@ -351,7 +363,7 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
     if (run) runAs(id, { ...run, settings });
     return { ok: true };
   }
-  if (id && rest.startsWith('/tasks/')) return { ok: true };
+  if (id && rest.startsWith('/tasks/')) return stopTask(id, decodeURIComponent(rest.split('/')[2] ?? ''));
   throw new DemoRefusal(DEMO_NOTE);
 }
 

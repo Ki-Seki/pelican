@@ -39,15 +39,15 @@ import type {
 } from '../shared/protocol.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
-import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
+import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
-import { notify } from './push.js';
+import { answerable, notify } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
-import { bashModeText } from './shell.js';
+import { bashModeMessages } from './shell.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
@@ -408,6 +408,7 @@ export class SessionRun {
       partial: this.partial.slice(this.completedBlocks).filter(Boolean),
       ...(this.error ? { error: this.error } : {}),
       ...(this.lastTurn ? { lastTurn: this.lastTurn } : {}),
+      ...(this.costSoFar && !onSubscription() ? { costUsd: this.costSoFar } : {}),
       ...(this.context ? { context: this.context } : {}),
       ...(this.activity ? { activity: this.activity } : {}),
       ...(this.tasks.length > 0 ? {
@@ -544,24 +545,43 @@ export class SessionRun {
   }
 
   /**
-   * Adds a `!` command and its output to the conversation without starting a
-   * turn, the way Claude Code's bash mode does: Claude reads it with the next message.
+   * Adds a `!` command and its output to the conversation the way Claude Code's bash mode does:
+   * the command, then what it printed, as typed text that is no prompt to expand. With `respond`
+   * Claude answers it, as the CLI's Claude does; without, Claude keeps it for later and the caveat
+   * before it says so. `uuid`: the id of the message holding the command.
    */
-  async appendShell(result: ShellResult): Promise<void> {
-    const uuid = randomUUID();
-    const text = bashModeText(result);
-    const message: SDKUserMessage = {
+  async appendShell(result: ShellResult, respond: boolean, uuid: string = randomUUID()): Promise<void> {
+    if (this.closed) throw new RunClosed();
+    const parts = bashModeMessages(result, respond);
+    const messages = parts.map(({ text, meta }, i): SDKUserMessage => ({
       type: 'user',
-      uuid,
+      uuid: (i === parts.length - 2 ? uuid : randomUUID()) as UUID,
       session_id: this.sessionId,
       parent_tool_use_id: null,
       origin: { kind: 'human' },
-      shouldQuery: false,
+      // Typed as it stands: an @ or a / in the output is no file to attach or command to run.
+      client_composed: true,
+      ...(meta ? { isSynthetic: true } : {}),
+      shouldQuery: respond && i === parts.length - 1,
       message: { role: 'user', content: text },
-    };
-    const chat = toChatMessage({ type: 'user', uuid, message: { role: 'user', content: text } });
-    if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
-    this.input.push(message);
+    }));
+    for (const message of messages) {
+      const chat = toChatMessage({ type: 'user', uuid: message.uuid, ...(message.isSynthetic ? { isMeta: true } : {}), message: message.message });
+      if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
+    }
+    if (this.closed) throw new RunClosed();
+    if (respond) {
+      // A turn starts with the output, as with a prompt: the page shows Claude at work at once.
+      this.error = undefined;
+      this.suggestion = undefined;
+      this.modeChanged = undefined;
+      if (!this.busy) {
+        this.interrupted = false;
+        this.lastReply = '';
+      }
+      this.setBusy(true);
+    }
+    for (const message of messages) this.input.push(message);
   }
 
   /** Puts files back the way they were before the prompt `uuid`; `dryRun` only says what would change. */
@@ -700,7 +720,7 @@ export class SessionRun {
     });
     this.emit();
     sessionsChanged();
-    void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask` });
+    void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask`, ...answerable(pending.request) });
   }
 
   private canUseTool: CanUseTool = (toolName, input, options) => {
@@ -1181,13 +1201,13 @@ export function runIn(cwd: string): SessionRun | undefined {
 
 /** Status of a session this app runs; undefined when it has no Claude process here. */
 export function runStatus(sessionId: string): SessionStatus | undefined {
-  if (config.demo) return sessionId === DEMO_WAITING_SESSION ? 'waiting' : undefined;
+  if (config.demo) return demoRunStatus(sessionId);
   return getRun(sessionId)?.status();
 }
 
 /** Background work running in a session this app runs (see SessionRun.backgroundCount); 0 for none. */
 export function runTasks(sessionId: string): number {
-  if (config.demo) return 0;
+  if (config.demo) return demoRunTasks(sessionId);
   return getRun(sessionId)?.backgroundCount ?? 0;
 }
 

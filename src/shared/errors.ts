@@ -80,6 +80,12 @@ const STOPPED: Record<Kind, string> = {
   'too-long-reply': 'reply too long',
 };
 
+/**
+ * What can be done about the error from here: shorten the conversation (/compact) when it is too
+ * long for the model, else send the prompt again once the cause is gone.
+ */
+export const nextStep = (text: string, code?: string): 'compact' | 'retry' => (kindOf(text, code) === 'too-long' ? 'compact' : 'retry');
+
 /** Why a turn ended on an error, in a few words for the session list ("not signed in"). */
 export function stoppedBecause(text: string, code?: string): string {
   const kind = kindOf(text, code);

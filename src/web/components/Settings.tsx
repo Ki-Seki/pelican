@@ -9,7 +9,7 @@ import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
 import { hasKeyboard, MOD } from '../lib/keyboard';
 import type { NotificationState } from '../lib/notifications';
-import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
+import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, VIEW_OPTIONS, type ViewMode } from '../lib/prefs';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
@@ -86,11 +86,7 @@ export function SettingsSheet({
       <Segmented<ViewMode>
         value={prefs.view}
         onChange={(view) => setPrefs({ view })}
-        options={[
-          { value: 'summary', label: 'Summary', title: 'Your prompts and Claude’s replies' },
-          { value: 'normal', label: 'Normal', title: 'Replies, with the steps folded' },
-          { value: 'verbose', label: 'Verbose', title: 'Every step open' },
-        ]}
+        options={[...VIEW_OPTIONS]}
       />
 
       {/* Each session keeps its own model and mode; this is what new ones start with. */}

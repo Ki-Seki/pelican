@@ -37,7 +37,7 @@ describe('Claude Code’s errors in plain words', () => {
       { uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Go' }] },
       { uuid: 'a1', role: 'assistant', apiError: true, model: '<synthetic>', blocks: [{ type: 'text', text: 'API Error: 529 {"type":"error"}' }] },
     ];
-    expect(buildItems(messages).at(-1)).toEqual({ kind: 'notice', key: 'a1', tone: 'error', text: 'Anthropic’s API is overloaded. Try again in a moment.' });
+    expect(buildItems(messages).at(-1)).toEqual({ kind: 'notice', key: 'a1', tone: 'error', text: 'Anthropic’s API is overloaded. Try again in a moment.', next: 'retry' });
     const signedOut: ChatMessage = { uuid: 'a2', role: 'assistant', apiError: true, error: 'authentication_failed', model: '<synthetic>', blocks: [{ type: 'text', text: 'Not logged in · Please run /login' }] };
     expect(buildItems([messages[0]!, signedOut], 'studio').at(-1)).toMatchObject({ tone: 'error', text: expect.stringMatching(/^Claude Code was not signed in on studio, so Claude did not answer\. Run claude/) });
   });

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import webpush from 'web-push';
 
+import type { PermissionRequest } from '../shared/protocol.js';
 import { cookieName } from './auth.js';
 import { config } from './config.js';
 
@@ -60,7 +61,24 @@ export async function removeSubscription(endpoint: string): Promise<void> {
   await save(subsFile(), subscriptions);
 }
 
-export type PushPayload = { title: string; body: string; sessionId: string; tag: string };
+export type PushPayload = {
+  title: string;
+  body: string;
+  sessionId: string;
+  tag: string;
+  /** A request the notification can answer: Allow and Deny, where the device shows buttons. */
+  request?: string;
+};
+
+/**
+ * What a notification for a request may answer: a tool Claude wants to use, yes or no. Not a
+ * question or a plan, which want more than that, not an MCP server's form, and not a request
+ * Claude Code says must not be allowed by a stray tap.
+ */
+export function answerable(request: PermissionRequest): Pick<PushPayload, 'request'> {
+  const yesOrNo = !request.elicitation && !request.defaultToNo && request.toolName !== 'AskUserQuestion' && request.toolName !== 'ExitPlanMode';
+  return yesOrNo ? { request: request.id } : {};
+}
 
 /** Sends a notification to every subscribed device; drops subscriptions the push service rejects. */
 export async function notify(payload: PushPayload): Promise<void> {

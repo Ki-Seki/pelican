@@ -79,7 +79,9 @@ for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'project
 const { sessions } = await save('sessions');
 const folders = new Set();
 for (const session of sessions) {
-  await save(`sessions/${q(session.id)}`);
+  const detail = await save(`sessions/${q(session.id)}`);
+  // What a command left running has printed, for its Output sheet.
+  for (const task of detail?.run?.tasks ?? []) if (task.output) await save(`sessions/${q(session.id)}/tasks/${q(task.id)}/output`);
   await save(`sessions/${q(session.id)}/messages?limit=120`);
   await save(`sessions/${q(session.id)}/mcp`);
   if (session.cwd) folders.add(session.cwd);
