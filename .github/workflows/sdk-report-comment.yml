@@ -1,0 +1,82 @@
+name: Agent SDK report comment
+
+# Posts what sdk-report.yml wrote as one comment on its pull request, edited when the pull request
+# changes. A pull request's own runs cannot comment (Dependabot's and forks' get read-only
+# tokens), so this runs after them, from main: it runs no code of the pull request's and reads the
+# report as text. Only for pull requests from this repository, Dependabot's among them: a fork's
+# report is made by the fork's own code, and stays on its run's page.
+on:
+  workflow_run:
+    workflows: [Agent SDK report]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  comment:
+    name: Comment on the pull request
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      pull-requests: write
+    concurrency:
+      group: sdk-report-comment-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Comment, or edit the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          case "$PR" in ''|*[!0-9]*) echo "No pull request for this run."; exit 0 ;; esac
+          # A report on the commit the pull request is at now; a newer push has a run of its own.
+          if [ "$(gh api "repos/$repo/pulls/$PR" --jq .head.sha)" != "$HEAD_SHA" ]; then
+            echo "The pull request has moved on."
+            exit 0
+          fi
+
+          marker='<!-- sdk-report -->'
+          body="$RUNNER_TEMP/comment.md"
+          artifact=$(gh api "repos/$repo/actions/runs/$RUN_ID/artifacts" --jq '[.artifacts[] | select(.name == "sdk-report")][0].id // empty')
+          if [ -n "$artifact" ]; then
+            dir="$RUNNER_TEMP/sdk-report"
+            gh run download "$RUN_ID" --repo "$repo" --name sdk-report --dir "$dir"
+            if [ ! -f "$dir/report.md" ]; then
+              echo "The artifact holds no report."
+              exit 1
+            fi
+            {
+              echo "$marker"
+              cat "$dir/report.md"
+              echo
+              echo "All of it, with the whole diff: [the report's run]($RUN_URL)."
+            } > "$body"
+          else
+            { echo "$marker"; echo "This pull request no longer moves the Agent SDK."; } > "$body"
+          fi
+          # GitHub holds 65,536 characters in a comment; the script keeps to 60,000.
+          if [ "$(LC_ALL=C.UTF-8 wc -m < "$body")" -gt 65536 ]; then
+            echo "The report is too long for a comment."
+            exit 1
+          fi
+
+          # The comment this workflow made before, if any: edited, so the pull request has one.
+          comment=$(gh api --paginate "repos/$repo/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")
+          comment=${comment%%$'\n'*}
+          if [ -n "$comment" ]; then
+            gh api -X PATCH "repos/$repo/issues/comments/$comment" -F "body=@$body" > /dev/null
+          elif [ -n "$artifact" ]; then
+            gh api -X POST "repos/$repo/issues/$PR/comments" -F "body=@$body" > /dev/null
+          fi
