@@ -11,6 +11,7 @@ import type {
   ModelOption,
   PlanUsage,
   PermissionDecision,
+  PermissionMode,
   RecordedSettings,
   RewindResult,
   RunSettings,
@@ -19,6 +20,7 @@ import type {
   ServerInfo,
   SessionSummary,
   ShellResult,
+  TaskOutput,
   TreeEntry,
   UsageLimit,
 } from '../../shared/protocol';
@@ -129,6 +131,12 @@ export const api = {
   setMcp: (id: string, name: string, change: { enabled?: boolean; reconnect?: boolean }) =>
     send<{ servers: McpServer[] }>('POST', `sessions/${encodeURIComponent(id)}/mcp/${encodeURIComponent(name)}`, change),
   stopTask: (id: string, task: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/stop`),
+  /** The end of what a background command printed. */
+  taskOutput: (id: string, task: string) => request<TaskOutput>(`sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/output`),
+  /** Takes back a prompt waiting for the turn to end. */
+  unqueue: (id: string, uuid: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}/queued/${encodeURIComponent(uuid)}`),
+  /** The mode a new session starts in, from Claude Code's settings (no folder: a scratch session). */
+  defaults: (cwd?: string) => request<{ permissionMode: PermissionMode | null }>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   subagent: (id: string, agent: string) =>
     request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
   usage: () => request<{ limits: UsageLimit[] }>('usage').then((r) => r.limits),

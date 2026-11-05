@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, ChevronUp, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronUp, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
+import { MODE_INFO } from '../../shared/modes';
+import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
-import { baseName, shortPath, untilTime } from '../lib/format';
+import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
@@ -25,6 +26,7 @@ import { currentTasks, type Todo } from '../lib/tools';
 import { Composer } from './Composer';
 import { MessageList } from './MessageList';
 import { PermissionCard } from './PermissionCard';
+import { QueuedStrip } from './QueuedStrip';
 import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
@@ -34,6 +36,13 @@ import { Workspace } from './Workspace';
 /** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
 const withoutBypass = (settings: RunSettings): RunSettings =>
   (settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: 'default' } : settings);
+
+/**
+ * /clear, /reset and /new, as in Claude Code: a fresh conversation in the same folder, going on
+ * with the same settings (Bypass aside). Handed to the new session's view by its id.
+ */
+const CLEAR = /^\/(clear|reset|new)(\s|$)/;
+const carried = new Map<string, RunSettings>();
 
 function localMessage(uuid: string, text: string, attachments: Attachment[]): ChatMessage {
   const blocks: Block[] = [];
@@ -145,21 +154,68 @@ const Pulse = () => (
   <span className="relative flex size-1.5 shrink-0"><span className="absolute inline-flex size-full animate-ping rounded-full bg-run opacity-60" /><span className="relative inline-flex size-1.5 rounded-full bg-run" /></span>
 );
 
+// eslint-disable-next-line no-control-regex
+const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g, '');
+
+/** What a background command printed, its last 8 KiB, read again every two seconds while open. */
+function TaskOutputSheet({ sessionId, task, onClose }: { sessionId: string; task?: BackgroundTask; onClose: () => void }) {
+  const { data, error } = useQuery({
+    queryKey: ['task-output', sessionId, task?.id],
+    queryFn: () => api.taskOutput(sessionId, task!.id),
+    enabled: Boolean(task),
+    refetchInterval: 2000,
+    gcTime: 0,
+  });
+  return (
+    <Sheet open={Boolean(task)} onClose={onClose} title={task?.description || 'Background task'}>
+      <div className="px-3 pt-1 pb-3">
+        {error ? <div className="text-[13px] text-danger">{(error as Error).message}</div>
+          : !data ? <div className="flex justify-center py-3"><Loader2 className="size-4 animate-spin text-faint" /></div>
+            : data.output.trim() ? (
+              <pre className="max-h-[60dvh] overflow-auto rounded-lg bg-chip px-3 py-2 font-mono text-[12px] leading-[1.5] whitespace-pre-wrap break-words text-muted">
+                {data.truncated ? '…\n' : ''}{stripAnsi(data.output)}
+              </pre>
+            ) : <div className="text-[13px] text-muted">Nothing printed yet.</div>}
+      </div>
+    </Sheet>
+  );
+}
+
 /**
- * Background tasks (shells and agents Claude left running). One shows as a row with Stop; more
- * fold into a single row, so they never crowd the conversation, and open into a short list.
+ * Background tasks (shells and agents Claude left running) and the check-ins Claude scheduled.
+ * One shows as a row; more fold into a single row, so they never crowd the conversation, and open
+ * into a short list. A command's row opens what it printed; an agent's says what it is doing.
  */
-function BackgroundTasks({ sessionId, tasks }: { sessionId: string; tasks: BackgroundTask[] }) {
+function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; tasks: BackgroundTask[]; scheduled: ScheduledCheck[] }) {
   const [open, setOpen] = useState(false);
+  const [reading, setReading] = useState<BackgroundTask>();
   const stop = (id: string) => void api.stopTask(sessionId, id);
   const row = (task: BackgroundTask) => (
     <div key={task.id} className="flex items-center gap-2 py-1 pr-1 pl-3 text-[12.5px] text-muted">
       <Pulse />
-      <span className="min-w-0 flex-1 truncate">{task.description || 'Background task'}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {task.description || 'Background task'}
+        {task.summary && <span className="text-faint"> · {task.summary}</span>}
+      </span>
+      {task.output && <button type="button" onClick={() => setReading(task)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Output</button>}
       <button type="button" onClick={() => stop(task.id)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Stop</button>
     </div>
   );
-  if (tasks.length === 1) return <div className="mx-auto mb-2 max-w-3xl rounded-full border border-line bg-panel">{row(tasks[0]!)}</div>;
+  // Claude stays running here for these; it says when the next one is due.
+  const check = (item: ScheduledCheck) => (
+    <div key={item.id} className="flex h-9 items-center gap-2 pr-3 pl-3 text-[12.5px] text-muted">
+      <Clock className="size-3.5 shrink-0 text-faint" />
+      <span className="min-w-0 flex-1 truncate">{item.what}</span>
+      {item.next && <span className="shrink-0 text-faint tabular-nums">{clockTime(item.next)}</span>}
+    </div>
+  );
+  const sheet = <TaskOutputSheet sessionId={sessionId} {...(reading ? { task: reading } : {})} onClose={() => setReading(undefined)} />;
+  if (tasks.length + scheduled.length === 1) {
+    return <div className="mx-auto mb-2 max-w-3xl rounded-full border border-line bg-panel">{tasks[0] ? row(tasks[0]) : check(scheduled[0]!)}{sheet}</div>;
+  }
+  if (tasks.length === 0) {
+    return <div className="mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel py-0.5">{scheduled.map(check)}</div>;
+  }
   const latest = tasks.at(-1)!;
   return (
     <div className="mx-auto mb-2 max-w-3xl">
@@ -169,16 +225,17 @@ function BackgroundTasks({ sessionId, tasks }: { sessionId: string; tasks: Backg
             <span className="min-w-0 flex-1 truncate">{tasks.length} background tasks</span>
             <ChevronDown className="size-4 shrink-0" />
           </button>
-          <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}</div>
+          <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}{scheduled.map(check)}</div>
         </div>
       ) : (
         <button type="button" onClick={() => setOpen(true)} className="flex h-8 w-full items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted hover:text-fg">
           <Pulse />
-          <span className="shrink-0 tabular-nums">{tasks.length} tasks</span>
+          <span className="shrink-0 tabular-nums">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}{scheduled.length > 0 ? ` · ${scheduled.length} scheduled` : ''}</span>
           <span className="min-w-0 flex-1 truncate text-faint">{latest.description || 'Background task'}</span>
           <ChevronUp className="size-4 shrink-0" />
         </button>
       )}
+      {sheet}
     </div>
   );
 }
@@ -264,9 +321,14 @@ export function Chat({
   });
   const listed = queryClient.getQueryData<SessionSummary[]>(['sessions'])?.find((s) => s.id === sessionId);
   const session = detail?.session ?? listed;
+  const [carry] = useState(() => {
+    const settings = sessionId ? undefined : carried.get(viewId);
+    carried.delete(viewId);
+    return settings;
+  });
   const [settings, setSettings] = useState<RunSettings>(() => {
     const base = loadDefaults();
-    if (!sessionId) return base;
+    if (!sessionId) return carry ? { ...base, ...carry } : base;
     const live = getView(sessionId).run?.settings;
     if (live) return { ...base, ...live };
     const choice = sessionChoice(sessionId);
@@ -281,6 +343,7 @@ export function Chat({
   const [rewinding, setRewinding] = useState<string>();
   const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
   const [running, setRunning] = useState<string>();
+  const [modeSeen, setModeSeen] = useState<string>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
 
   useEffect(() => clearDraft(viewId), [viewId]);
@@ -306,7 +369,7 @@ export function Chat({
   // also when plan mode ends or another tab changes them); else a choice made here that no turn has
   // used yet; else what its last turn ran with (its transcript), the model named as it was picked
   // here. New sessions start from the defaults in Settings, which only Settings changes.
-  const chosen = useRef(false);
+  const chosen = useRef(Boolean(carry));
   const runSettings = view.run?.settings;
   const runKey = JSON.stringify(runSettings ?? null);
   useEffect(() => {
@@ -325,6 +388,20 @@ export function Chat({
     else if (recorded) setSettings({ ...loadDefaults(), ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, recordedKey, session?.lastActivity, Boolean(runSettings)]);
+
+  // A new session starts in the mode Claude Code's settings give (permissions.defaultMode), as in
+  // the terminal; with none, it asks first.
+  const { data: defaults } = useQuery({
+    queryKey: ['defaults', scratch ? '' : newCwd ?? ''],
+    queryFn: () => api.defaults(scratch ? undefined : newCwd),
+    enabled: !sessionId && (scratch || Boolean(newCwd)),
+    staleTime: 30_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (sessionId || chosen.current || !defaults?.permissionMode) return;
+    setSettings((current) => ({ ...current, permissionMode: defaults.permissionMode! }));
+  }, [sessionId, defaults?.permissionMode]);
 
   const changeSettings = (next: RunSettings) => {
     chosen.current = true;
@@ -345,9 +422,14 @@ export function Chat({
       setDraftText({ text, key: Date.now() });
       return;
     }
+    if (sessionId && CLEAR.test(text) && cwd) {
+      carried.set(`new:${cwd}`, withoutBypass(settings));
+      onStartIn(cwd);
+      return;
+    }
     const uuid = newId();
-    const queued = busy && mode === 'queue';
-    addLocalMessage(viewId, { ...localMessage(uuid, text, attachments), ...(queued ? { queued: true } : {}) });
+    // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
+    if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
     const body = { text, attachments: attachments.map((a) => a.id), settings, uuid, ...(busy ? { mode } : {}) };
     try {
       if (sessionId) {
@@ -512,7 +594,9 @@ export function Chat({
           <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
         ))}
         {showTasks && <TasksBar tasks={tasks} />}
-        {sessionId && view.run?.tasks && view.run.tasks.length > 0 && <BackgroundTasks sessionId={sessionId} tasks={view.run.tasks} />}
+        {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
+          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} />
+        )}
         {running && (
           <Notice><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Running <code className="font-mono">{running}</code></span></Notice>
         )}
@@ -545,8 +629,18 @@ export function Chat({
             Claude Code is not signed in on {machine || 'this machine'}. Run <code className="font-mono">claude</code> in a terminal there, sign in, then come back.
           </Notice>
         )}
+        {view.run?.modeChanged && view.run.modeChanged !== modeSeen && (
+          <Notice onDismiss={() => setModeSeen(view.run?.modeChanged)}>{MODE_INFO[view.run.modeChanged].now}</Notice>
+        )}
         {note && <Notice onDismiss={() => setNote(undefined)}>{note}</Notice>}
         {sendError && <Notice tone="error" onDismiss={() => setSendError(undefined)}>{sendError}</Notice>}
+        {sessionId && view.run?.queued && view.run.queued.length > 0 && (
+          <QueuedStrip
+            queued={view.run.queued}
+            onRemove={(prompt) => void api.unqueue(sessionId, prompt.uuid).catch(() => undefined)}
+            onEdit={(prompt) => void api.unqueue(sessionId, prompt.uuid).then(() => setDraftText({ text: prompt.text, key: Date.now(), append: true }), () => undefined)}
+          />
+        )}
       </div>
 
       <Composer
@@ -557,8 +651,9 @@ export function Chat({
         onSend={(text, attachments, mode) => void send(text, attachments, mode)}
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
+        stopping={Boolean(view.run?.stopping)}
         autoFocus={!sessionId || Boolean(initialDraft)}
-        placeholder={busy ? 'Queue a message' : sessionId ? 'Reply to Claude' : 'Message Claude'}
+        placeholder={sessionId ? 'Reply to Claude' : 'Message Claude'}
         {...(cwd ? { cwd } : {})}
         {...(draft ? { draft } : {})}
       />

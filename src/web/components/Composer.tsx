@@ -133,7 +133,8 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
     queryKey: ['completions', cwd],
     queryFn: () => api.completions(cwd!),
     enabled: Boolean(cwd) && Boolean(trigger),
-    staleTime: 10 * 60_000,
+    // Claude Code finds skills as it works; a running session answers at once.
+    staleTime: 60_000,
   });
   const files = useQuery({
     queryKey: ['files', cwd, fileQuery],
@@ -178,6 +179,7 @@ export function Composer({
   onSend,
   onShell,
   onStop,
+  stopping,
   placeholder = 'Message Claude',
   autoFocus,
   cwd,
@@ -192,6 +194,9 @@ export function Composer({
   /** Runs a `!` command in the session's folder; without it, `!` is ordinary text. */
   onShell?: (command: string) => void;
   onStop: () => void;
+  /** Stop was asked for and the turn is ending. */
+  stopping?: boolean;
+  /** What the empty box says while Claude is idle; while it works, the box says where a message goes. */
   placeholder?: string;
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
@@ -446,7 +451,7 @@ export function Composer({
           value={text}
           rows={1}
           disabled={disabled}
-          placeholder={placeholder}
+          placeholder={busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder}
           onChange={(e) => {
             setDictationError(undefined);
             setText(e.target.value);
@@ -508,8 +513,8 @@ export function Composer({
               {listening ? <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" /><Square className="relative size-3 fill-current" /></span> : <Mic className="size-[18px]" />}
             </button>
           ) : busy && !canSend ? (
-            <button type="button" aria-label="Stop" onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg">
-              <Square className="size-3.5 fill-current" />
+            <button type="button" aria-label={stopping ? 'Stopping' : 'Stop'} disabled={stopping} onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg disabled:opacity-40">
+              {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
             </button>
           ) : (
             <button
