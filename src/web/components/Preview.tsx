@@ -1,8 +1,8 @@
 import { Code2, Eye, Maximize2, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { createPortal } from 'react-dom';
 
 import { getPrefs } from '../lib/prefs';
+import { Modal } from './Modal';
 
 /**
  * Rendered HTML and SVG: pages Claude writes, `html`/`svg` blocks in a reply,
@@ -131,26 +131,20 @@ export function PreviewOverlay() {
     },
     () => current,
   );
-  useEffect(() => {
-    if (!source) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') openPreview(undefined);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [source]);
-  if (!source) return null;
-  return createPortal(
-    <div className="animate-fade fixed inset-0 z-[60] flex flex-col bg-bg">
-      <div className="pt-safe flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{source.title ?? 'Preview'}</span>
-        <button type="button" aria-label="Close preview" onClick={() => openPreview(undefined)} className="grid size-9 place-items-center rounded-full hover:bg-hover">
-          <X className="size-5" />
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-panel"><Sandbox source={source} fill /></div>
-    </div>,
-    document.body,
+  return (
+    <Modal open={Boolean(source)} onClose={() => openPreview(undefined)} label={source?.title ?? 'Preview'}>
+      {source && (
+        <div className="animate-fade flex h-full flex-col bg-bg transition-opacity duration-200 group-data-closing/modal:opacity-0">
+          <div className="pt-safe flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+            <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{source.title ?? 'Preview'}</span>
+            <button type="button" aria-label="Close preview" onClick={() => openPreview(undefined)} className="grid size-9 place-items-center rounded-full hover:bg-hover">
+              <X className="size-5" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto bg-panel"><Sandbox source={source} fill /></div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
