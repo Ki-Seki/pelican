@@ -13,6 +13,7 @@ import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
 import { RunChannel } from './stream.js';
+import { watchWaiting } from './waiting.js';
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 /** A browser follows a handful of sessions at once; more from one socket is not a browser. */
@@ -179,6 +180,8 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     });
   });
 
+  const stopWatching = watchWaiting();
+
   const shutdown = () => {
     closeAll();
     server.close();
@@ -188,6 +191,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   process.on('SIGTERM', shutdown);
 
   const close = async () => {
+    stopWatching();
     process.off('SIGINT', shutdown);
     process.off('SIGTERM', shutdown);
     for (const client of wss.clients) client.terminate();

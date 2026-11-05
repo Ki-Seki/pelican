@@ -3,7 +3,8 @@
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 
 /** idle: nothing running · running: this app is running a turn · waiting: a turn waits for an
- *  approval or an answer · live: another client (Desktop, the terminal) wrote to it just now. */
+ *  approval or an answer (in another app when `runningIn` says so) · live: another client
+ *  (Desktop, the terminal) is working on it, or wrote to it just now. */
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'live';
 
 export type SessionSummary = {
@@ -28,7 +29,7 @@ export type SessionSummary = {
   archived?: boolean;
   /** Open (idle) in another app too, which does not see what is sent here until it reopens the session. */
   openIn?: string;
-  /** Which Claude Code client is working on it right now, when that is not this app and is known. */
+  /** The other app working on it right now, or waiting there for an answer: "the terminal", "Claude Desktop". */
   runningIn?: string;
   /** Start of Claude's latest reply. */
   preview?: string;

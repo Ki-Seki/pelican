@@ -29,14 +29,17 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
   let state: SessionStatus = own ?? 'idle';
-  // Another app's Claude process says it is busy; failing that, a turn written moments ago
-  // (not one a fork just copied over: a new branch is idle until someone sends to it).
+  // Another app's Claude process says it waits for an answer, or is busy; failing that, a turn
+  // written moments ago (not one a fork just copied over: a new branch is idle until someone
+  // sends to it). Idle here but at work in another app: that is what the session is doing.
   const other = live.get(info.sessionId);
-  const elsewhere = own ? undefined : other;
+  const elsewhere = !own || own === 'idle' ? other : undefined;
   const recent = lastTurn && !lastTurn.copied && Date.now() - lastTurn.time < config.liveWindowMs;
-  if (!own && (elsewhere?.busy || recent)) state = 'live';
-  // Idle here but working in another app: that is what the session is doing.
-  else if (own === 'idle' && other?.busy) state = 'live';
+  if (elsewhere?.waiting) state = 'waiting';
+  else if (elsewhere?.busy || (!own && recent)) state = 'live';
+  // Where it needs you, or works: always said for a wait, since one in this app looks the same.
+  const runningIn = state === 'waiting' && elsewhere?.waiting ? elsewhere.app ?? 'another app'
+    : state === 'live' && elsewhere?.busy ? elsewhere.app : undefined;
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
@@ -56,7 +59,7 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
     ...(info.fileSize ? { sizeBytes: info.fileSize } : {}),
     ...(cwd && folderKind(cwd) === 'scratch' ? { scratch: true } : {}),
     ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
-    ...(state === 'live' && other?.busy && other.app ? { runningIn: other.app } : {}),
+    ...(runningIn ? { runningIn } : {}),
     ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
     ...(archived.has(info.sessionId) ? { archived: true } : {}),

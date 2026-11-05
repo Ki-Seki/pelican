@@ -530,6 +530,11 @@ export function Chat({
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
           </Notice>
         )}
+        {session?.status === 'waiting' && session.runningIn && !view.run && (
+          <Notice>
+            Claude is waiting for an answer in {session.runningIn}. Sending here runs a second Claude on the same conversation.
+          </Notice>
+        )}
         {/* Open, idle, in another app too: explained once, the first time it happens; the session
             menu says it for each session after that. */}
         {session?.openIn && status !== 'live' && !busy && !openElsewhereSeen && (
