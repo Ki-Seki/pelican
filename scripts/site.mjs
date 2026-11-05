@@ -2,7 +2,7 @@
 // reading what `pelican --demo` answers, saved as files. Needs the app built first.
 //   npm run build && node scripts/site.mjs <out dir>      then serve <out dir>, e.g. npx serve <out dir>
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { MARK, startDemo } from './demo-server.mjs';
@@ -33,6 +33,29 @@ await cp('docs/how-it-works.svg', path.join(out, 'assets', 'how-it-works.svg'));
 const demo = path.join(out, 'demo');
 const vite = spawnSync(process.execPath, ['node_modules/vite/bin/vite.js', 'build', '--mode', 'static-demo', '--outDir', demo, '--emptyOutDir'], { stdio: 'inherit' });
 if (vite.status !== 0) process.exit(vite.status ?? 1);
+
+// The demo is the page people share most: it gets the site's card instead of the app's bare head.
+const SITE = 'https://ki-seki.github.io/pelican/';
+const DESCRIPTION = 'Every Claude Code session on your computer, on your phone. The real app with made-up sessions, in your browser; nothing to install.';
+const card = [
+  `<link rel="canonical" href="${SITE}demo/" />`,
+  '<meta property="og:type" content="website" />',
+  '<meta property="og:site_name" content="Pelican" />',
+  `<meta property="og:url" content="${SITE}demo/" />`,
+  '<meta property="og:title" content="Pelican live demo" />',
+  `<meta property="og:description" content="${DESCRIPTION}" />`,
+  `<meta property="og:image" content="${SITE}assets/shots/og.png" />`,
+  '<meta property="og:image:alt" content="Pelican: every Claude Code session on your computer, on your phone. Two phone screens: the session list, and an edit waiting for approval with its diff." />',
+  '<meta name="twitter:card" content="summary_large_image" />',
+  `<meta name="twitter:image" content="${SITE}assets/shots/og.png" />`,
+].map((tag) => `    ${tag}\n`).join('');
+const page = path.join(demo, 'index.html');
+const head = (await readFile(page, 'utf8'))
+  .replace(/<title>[^<]*<\/title>/, '<title>Pelican live demo</title>')
+  .replace(/<meta name="description"[^>]*>/, `<meta name="description" content="${DESCRIPTION}" />`)
+  .replace(/\n\s*<\/head>/, `\n${card}  </head>`);
+if (!head.includes('<title>Pelican live demo</title>') || !head.includes('og:image')) throw new Error(`${page}: no <title> or </head> to fill in`);
+await writeFile(page, head);
 
 // The demo server, in folders of its own, answers what the app will ask.
 const demoServer = await startDemo({ port: PORT });
