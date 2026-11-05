@@ -967,7 +967,8 @@ describe('notifications', () => {
         expect(Buffer.byteLength(line)).toBeLessThanOrEqual(4 * max);
       }
     }
-    // Text in any script is cut by its characters, unless they take more than most.
+    // Text in any script is cut by its characters, and sooner where each holds several code
+    // points, as conjuncts and joined emoji do.
     expect(oneLine('\u6d4b'.repeat(300))).toBe(`${'\u6d4b'.repeat(119)}…`);
     expect(oneLine('\u0915\u094d\u0937'.repeat(300))).toBe(`${'\u0915\u094d\u0937'.repeat(53)}…`);
     expect(oneLine(family.repeat(300))).toBe(`${family.repeat(19)}…`);
