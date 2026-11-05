@@ -285,7 +285,11 @@ export type TurnChanges = { uuid: string; n: number; text: string; at?: number; 
 
 /** What each turn changed; `lines`, for each edit's tool call, the line its change starts at. */
 export type SessionChanges = { turns: TurnChanges[]; lines: Record<string, number> };
-export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] };
+/**
+ * A folder's changes, as git says. `upstream`: the branch it pushes to, when set; `base`: the
+ * repository's default branch, which "since the branch split" compares with.
+ */
+export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; upstream?: string; base?: string; ahead?: number; behind?: number; files: GitFile[] };
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };

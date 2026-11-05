@@ -232,8 +232,10 @@ export const api = {
   /** The plan's usage as Claude Code's /usage shows it, or null where plan limits do not apply. */
   planUsage: () => request<{ plan: PlanUsage | null }>('usage/plan').then((r) => r.plan),
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
-  git: (cwd: string) => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}`),
-  gitDiff: (cwd: string, path: string) => request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),
+  /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
+  git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
+  gitDiff: (cwd: string, path: string, scope?: 'base') =>
+    request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ''}`).then((r) => r.diff),
   tree: (cwd: string, path: string) => request<{ entries: TreeEntry[] }>(`tree?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.entries),
   file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>

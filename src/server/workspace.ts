@@ -51,8 +51,59 @@ async function repositoryOf(cwd: string): Promise<string | undefined> {
   }
 }
 
-/** What changed in the session's folder since the last commit, with line counts. */
-export async function gitStatus(cwd: string): Promise<GitStatus> {
+/**
+ * The repository's default branch, as Claude Code's /diff compares against it ("since your branch
+ * split from the default branch"): the one the remote's HEAD names, else a local main or master.
+ * `ref` is what git compares with; `name` what people call it.
+ */
+async function defaultBranch(cwd: string): Promise<{ name: string; ref: string } | undefined> {
+  const remote = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], 5000).then((out) => out.trim(), () => '');
+  if (/^origin\/[\w./-]+$/.test(remote) && !remote.includes('..')) return { name: remote.slice('origin/'.length), ref: `refs/remotes/${remote}` };
+  for (const name of ['main', 'master']) {
+    if (await git(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], 5000).then(() => true, () => false)) return { name, ref: `refs/heads/${name}` };
+  }
+  return undefined;
+}
+
+/** Where the branch split from the default branch, when it is another branch: a commit's full id. */
+async function splitPoint(cwd: string, branch: string | undefined): Promise<string | undefined> {
+  const base = await defaultBranch(cwd);
+  if (!base || !branch || branch === base.name) return undefined;
+  const sha = await git(cwd, ['merge-base', 'HEAD', base.ref], 5000).then((out) => out.trim(), () => '');
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : undefined;
+}
+
+/**
+ * The files changed since a commit, by git's own letters (`git diff --name-status`), renames found
+ * as git finds them: committed since then and not, as `git diff <commit>` compares the work tree.
+ */
+async function changedSince(cwd: string, commit: string): Promise<GitFile[]> {
+  const raw = await git(cwd, ['diff', '--name-status', '-M', '-z', '--relative', commit]);
+  const fields = raw.split('\0');
+  const files: GitFile[] = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const code = fields[i]!;
+    if (!code) continue;
+    const kind = code[0]!;
+    if (kind === 'R' || kind === 'C') {
+      const from = fields[i + 1];
+      const to = fields[i + 2];
+      i += 2;
+      if (to) files.push({ path: to, status: kind === 'R' ? 'renamed' : 'added', ...(kind === 'R' && from ? { from } : {}) });
+    } else {
+      const file = fields[(i += 1)];
+      if (file) files.push({ path: file, status: KIND[kind] ?? 'modified' });
+    }
+  }
+  return files;
+}
+
+/**
+ * What changed in the session's folder, with line counts: since the last commit (`uncommitted`,
+ * the default), or since the branch split from the default branch (`base`), its commits and what
+ * is not committed yet, new files included. Also the branch, its upstream, and the default branch.
+ */
+export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'uncommitted'): Promise<GitStatus> {
   if (!(await repositoryOf(cwd))) return { repo: false };
   let raw: string;
   let prefix = '';
@@ -64,13 +115,15 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
     return { repo: false };
   }
   const local = (file: string | undefined) => (file && prefix && file.startsWith(prefix) ? file.slice(prefix.length) : file);
-  const out: { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] } = { repo: true, files: [] };
+  const out: Extract<GitStatus, { repo: true }> = { repo: true, files: [] };
   const entries = raw.split('\0');
   for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i]!;
     if (entry.startsWith('# branch.head ')) {
       const head = entry.slice(14);
       if (head !== '(detached)') out.branch = head;
+    } else if (entry.startsWith('# branch.upstream ')) {
+      out.upstream = entry.slice(18);
     } else if (entry.startsWith('# branch.ab ')) {
       const [ahead, behind] = entry.slice(12).split(' ');
       out.ahead = Number(ahead?.slice(1)) || 0;
@@ -92,10 +145,24 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
       out.files.push({ path: local(entry.slice(2))!, status: 'untracked' });
     }
   }
-  // Line counts against the last commit (or the empty tree before the first one).
+  const base = await defaultBranch(cwd).catch(() => undefined);
+  if (base) out.base = base.name;
+  // Since the branch split: what git diff says changed since then, and the new files status found.
+  let since: string | undefined;
+  if (scope === 'base') {
+    since = await splitPoint(cwd, out.branch);
+    if (!since) return { ...out, files: [] };
+    const untracked = out.files.filter((f) => f.status === 'untracked');
+    try {
+      out.files = [...await changedSince(cwd, since), ...untracked];
+    } catch {
+      out.files = untracked;
+    }
+  }
+  // Line counts against the last commit (or the empty tree before the first one), or the split.
   try {
-    const base = await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']).then(() => 'HEAD', () => '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
-    const numstat = await git(cwd, ['diff', '--numstat', '--relative', '-z', base]);
+    const against = since ?? await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD']).then(() => 'HEAD', () => '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
+    const numstat = await git(cwd, ['diff', '--numstat', '-M', '--relative', '-z', against]);
     const counts = new Map<string, { added?: number; removed?: number }>();
     const fields = numstat.split('\0');
     for (let i = 0; i < fields.length; i += 1) {
@@ -150,8 +217,11 @@ async function countUntracked(cwd: string, files: GitFile[]): Promise<void> {
   }
 }
 
-/** The diff of one file against the last commit; an untracked file shows as all added. */
-export async function gitDiff(cwd: string, file: string): Promise<string> {
+/**
+ * The diff of one file against the last commit, or (`base`) against where the branch split from
+ * the default branch; an untracked file shows as all added.
+ */
+export async function gitDiff(cwd: string, file: string, scope: 'uncommitted' | 'base' = 'uncommitted'): Promise<string> {
   if (!(await repositoryOf(cwd))) return '';
   // The file itself may be gone (a deleted file has a diff), but the folder it is in may not lead
   // out of the session's folder through a link.
@@ -160,13 +230,18 @@ export async function gitDiff(cwd: string, file: string): Promise<string> {
   if (parent && !within(root, parent)) throw new Error(OUTSIDE);
   let diff = '';
   try {
-    diff = await git(cwd, ['diff', 'HEAD', '--', file]);
+    const branch = scope === 'base' ? (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 5000)).trim() : undefined;
+    const against = scope === 'base' ? await splitPoint(cwd, branch) : 'HEAD';
+    if (against) diff = await git(cwd, ['diff', '-M', against, '--', file]);
   } catch {
     diff = '';
   }
-  if (!diff) {
-    // Untracked (or no commits yet): git diff --no-index exits with 1 when the files differ.
-    // `./`: a file named `-` would otherwise be read from stdin.
+  // Untracked (or no commits yet): all added. A tracked file with nothing to show has no diff.
+  const committed = !diff && await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD'], 5000).then(() => true, () => false);
+  const tracked = committed && await git(cwd, ['ls-files', '-z', '--', file], 5000).then((out) => out.length > 0, () => false);
+  if (!diff && !tracked) {
+    // git diff --no-index exits with 1 when the files differ. `./`: a file named `-` would
+    // otherwise be read from stdin.
     diff = await git(cwd, ['diff', '--no-index', '--', '/dev/null', `./${file}`]).catch((error: { stdout?: string }) => error.stdout ?? '');
   }
   return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… (diff cut short)` : diff;

@@ -62,6 +62,42 @@ describe('workspace', () => {
     expect(await gitDiff(repo, 'new.md')).toContain('+# hi');
   });
 
+  it('shows everything since the branch split from the default branch: commits, edits and new files', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-split-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work });
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'a.txt'), 'one\n');
+      await writeFile(path.join(work, 'b.txt'), 'two\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      git('switch', '-q', '-c', 'feat/x');
+      await writeFile(path.join(work, 'a.txt'), 'one\nmore\n');
+      git('commit', '-q', '-am', 'on the branch');
+      await writeFile(path.join(work, 'b.txt'), 'changed\n');
+      await writeFile(path.join(work, 'c.txt'), 'new\n');
+      const now = await gitStatus(work);
+      if (!now.repo) throw new Error('not a repository');
+      expect(now).toMatchObject({ branch: 'feat/x', base: 'main' });
+      expect(now.files.map((f) => f.path).sort()).toEqual(['b.txt', 'c.txt']);
+      const since = await gitStatus(work, 'base');
+      if (!since.repo) throw new Error('not a repository');
+      const byPath = Object.fromEntries(since.files.map((f) => [f.path, f]));
+      expect(byPath['a.txt']).toMatchObject({ status: 'modified', added: 1, removed: 0 });
+      expect(byPath['b.txt']).toMatchObject({ status: 'modified', added: 1, removed: 1 });
+      expect(byPath['c.txt']).toMatchObject({ status: 'untracked', added: 1 });
+      expect(await gitDiff(work, 'a.txt', 'base')).toContain('+more');
+      expect(await gitDiff(work, 'a.txt')).toBe('');
+      // On the default branch itself there is no split to show.
+      git('stash', '-q', '-u');
+      git('switch', '-q', 'main');
+      const onMain = await gitStatus(work, 'base');
+      expect(onMain.repo && onMain.files).toEqual([]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
   it('says when a folder is not a repository', async () => {
     const plain = await mkdtemp(path.join(os.tmpdir(), 'pelican-plain-'));
     expect(await gitStatus(plain)).toEqual({ repo: false });

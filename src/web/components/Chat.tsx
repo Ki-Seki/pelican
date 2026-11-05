@@ -899,6 +899,7 @@ export function Chat({
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
+          {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
           onAddToMessage={(text) => {
             if (!workspace.docked) workspace.setOpen(false);
             setDraftText({ text, key: Date.now(), append: true });

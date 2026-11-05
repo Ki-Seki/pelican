@@ -578,11 +578,14 @@ async function insideRepository(cwd: string): Promise<boolean> {
 /** Git runs only in a trusted folder (trust.ts): a folder you are only shown runs nothing of its own. */
 const gitAllowed = (cwd: string) => folderTrusted(cwd);
 
+/** What Changes compares with: the last commit, or (`scope=base`) where the branch split from the default one. */
+const scopeOf = (c: Context) => (c.req.query('scope') === 'base' ? 'base' : 'uncommitted');
+
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);
   if (!cwd) return c.json({ error: 'No such folder' }, 404);
   if (!(await gitAllowed(cwd))) return c.json(await insideRepository(cwd) ? { repo: false, untrusted: true } : { repo: false });
-  return c.json(await gitStatus(cwd));
+  return c.json(await gitStatus(cwd, scopeOf(c)));
 });
 
 app.get('/api/git/diff', async (c) => {
@@ -590,7 +593,7 @@ app.get('/api/git/diff', async (c) => {
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
   if (!(await gitAllowed(cwd))) return c.json({ diff: '' });
-  return c.json({ diff: await gitDiff(cwd, file) });
+  return c.json({ diff: await gitDiff(cwd, file, scopeOf(c)) });
 });
 
 app.get('/api/tree', async (c) => {
