@@ -14,11 +14,12 @@ const KEEP = 50;
 const MAX_TEXT = 100_000;
 
 /**
- * What waits above the message box to be put back: a message that came back from a send that
- * failed but could not share the box with what was there (a `!` or `/` command, or a message
- * beside one), its words and its files.
+ * What waits above the message box to be put back, words and files: a message that came back from
+ * a send that failed but could not share the box with what was there (a `!` or `/` command, or a
+ * message beside one), or, `aside`, what was in the box when Put back put one of those in its
+ * place, which was never sent.
  */
-export type Held = { text: string; attachments?: Attachment[] };
+export type Held = { text: string; attachments?: Attachment[]; aside?: boolean };
 
 /**
  * `quotes`: those waiting above the message box (lib/quote), which go above the words when sent.
@@ -78,7 +79,7 @@ const helds = (list: unknown): Held[] => (Array.isArray(list) ? list.flatMap((h:
   if (!entry || typeof entry.text !== 'string') return [];
   const attachments = Array.isArray(entry.attachments) ? entry.attachments.filter(isAttachment) : [];
   if (!entry.text.trim() && attachments.length === 0) return [];
-  return [{ text: entry.text, ...(attachments.length > 0 ? { attachments } : {}) }];
+  return [{ text: entry.text, ...(attachments.length > 0 ? { attachments } : {}), ...(entry.aside === true ? { aside: true } : {}) }];
 }) : []);
 
 export function loadDraft(viewId: string): Draft | undefined {

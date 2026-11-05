@@ -163,8 +163,9 @@ function sendText(text: string) {
   fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
 }
 
-/** What waits above the box to be put back. */
+/** What waits above the box to be put back: what did not go, and what Put back took out of the box for it. */
 const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
+const setAside = () => screen.queryAllByText(/^Set aside:/).map((row) => row.textContent?.replace(/^Set aside:\s*/, ''));
 
 describe('opening a chat', () => {
   it('puts the keys in the message box on a computer', async () => {
@@ -235,7 +236,7 @@ describe('a message that did not go', () => {
     fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
     await waitFor(() => expect(server.sent).toHaveLength(2));
     expect(server.sent[1]).toMatchObject({ text: '/compact', attachments: [] });
-    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Put back Why does this log say the export failed? with export.log' }));
     expect(box().value).toBe('Why does this log say the export failed?');
     expect(screen.getByLabelText('Remove export.log')).toBeTruthy();
     sendText('Why does this log say the export failed?');
@@ -359,9 +360,10 @@ describe('a message from the box that does not go', () => {
     await waitFor(() => expect(waiting()).toEqual(['/compact']));
     expect(box().value).toBe('next question');
     // Put back, it takes the box, and the words wait in its place until they are put back in turn.
-    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Put back /compact' }));
     expect(box().value).toBe('/compact');
-    expect(waiting()).toEqual(['next question']);
+    expect(waiting()).toEqual([]);
+    expect(setAside()).toEqual(['next question']);
     await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '/compact', held: [{ text: 'next question' }] }), { timeout: 2000 });
   });
 
@@ -384,7 +386,7 @@ describe('a message from the box that does not go', () => {
     await waitFor(() => expect(server.sent.map((body) => body.text)).toEqual(['Then fix what fails']));
     expect(waiting()).toEqual(['!npm test']);
     await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '', held: [{ text: '!npm test' }] }), { timeout: 2000 });
-    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Put back !npm test' }));
     expect(box().value).toBe('!npm test');
     expect(waiting()).toEqual([]);
   });

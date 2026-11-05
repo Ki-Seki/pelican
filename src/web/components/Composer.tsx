@@ -242,10 +242,15 @@ function givenBack(box: Content, back: Content): { text: string; held?: boolean 
 /** How a text waiting to be put back is shown: its first line. */
 const firstLine = (text: string) => text.trim().split('\n')[0]!;
 
-/** A text waiting to be put back, in a few words: its first line, and the files that go with it. */
-function heldWords(held: Held): { words: string; files: string } {
+/**
+ * A text waiting to be put back, in a few words: its first line, and the files that go with it;
+ * `name`, both, to tell its buttons from another's.
+ */
+function heldWords(held: Held): { words: string; files: string; name: string } {
   const names = (held.attachments ?? []).map((a) => a.name);
-  return { words: held.text.trim() ? firstLine(held.text) : '', files: names.length > 1 ? `${names.length} files` : names[0] ?? '' };
+  const words = held.text.trim() ? firstLine(held.text) : '';
+  const files = names.length > 1 ? `${names.length} files` : names[0] ?? '';
+  return { words, files, name: [words.slice(0, 60), files].filter(Boolean).join(' with ') };
 }
 
 const sameHeld = (a: Held, b: Held) =>
@@ -504,7 +509,8 @@ export function Composer({
   /**
    * Puts a text that waited back in the box, its files with it, by the rule it came back by: above
    * what is typed, or, where one of the two is a command, in its place, what was in the box, words
-   * and files, waiting where it was. A file still on its way waits for Put back, as it does for Send.
+   * and files, waiting where it was, set aside. A file still on its way waits for Put back, as it
+   * does for Send.
    */
   const putBack = (at: number) => {
     const back = held[at];
@@ -514,7 +520,7 @@ export function Composer({
     const next = joined.held ? back.text : joined.text;
     if (joined.held) {
       const attached = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
-      const aside: Held = { text, ...(attached.length > 0 ? { attachments: attached } : {}) };
+      const aside: Held = { text, ...(attached.length > 0 ? { attachments: attached } : {}), aside: true };
       for (const u of uploads) if (u.attachment) forget(u);
       setHeld((list) => list.map((h, i) => (i === at ? aside : h)));
       setUploads((list) => [...files.map(restored), ...list.filter((u) => !u.attachment)]);
@@ -725,17 +731,17 @@ export function Composer({
         {problems.length > 0 && <div className="px-4 pt-2 text-[12.5px] leading-snug text-danger">{problems.join(' · ')}</div>}
         {notes.length > 0 && <div className="flex items-start gap-1.5 px-4 pt-2 text-[12.5px] leading-snug text-muted"><Info className="mt-px size-3.5 shrink-0" />{notes.join(' · ')}</div>}
         {held.map((h, i) => {
-          const { words, files } = heldWords(h);
+          const { words, files, name } = heldWords(h);
           return (
             <div key={`${i}:${h.text}:${files}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
               <span title={[h.text.trim(), ...(h.attachments ?? []).map((a) => a.name)].filter(Boolean).join('\n')} className="min-w-0 flex-1 truncate">
-                Not sent: <span className={`text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
+                {h.aside ? 'Set aside' : 'Not sent'}: <span className={`text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
                 {words && files && <span className="text-faint"> · {files}</span>}
               </span>
-              <button type="button" disabled={uploading} onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover disabled:opacity-40">
+              <button type="button" aria-label={`Put back ${name}`} disabled={uploading} onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover disabled:opacity-40">
                 Put back
               </button>
-              <button type="button" aria-label={`Discard ${(words || files).slice(0, 60)}`} onClick={(e) => discard(i, e.detail === 0)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg">
+              <button type="button" aria-label={`Discard ${name}`} onClick={(e) => discard(i, e.detail === 0)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg">
                 <X className="size-3.5" />
               </button>
             </div>

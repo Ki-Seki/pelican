@@ -85,12 +85,13 @@ describe('drafts', () => {
     expect(loadDraft('s1')).toMatchObject({ text: 'Then fix what fails', held: [{ text: '!npm test' }] });
     clearDraft('s1', 'Then fix what fails');
     expect(loadDraft('s1')).toMatchObject({ text: '', held: [{ text: '!npm test' }] });
-    saveDraft('new:/code/acme', '', [], [], [{ text: 'What does this show?', attachments: [file] }]);
+    saveDraft('new:/code/acme', '/compact', [], [], [{ text: 'What does this show?', attachments: [file], aside: true }]);
     moveDraft('new:/code/acme', 'new:/code/site');
-    expect(loadDraft('new:/code/site')?.held).toEqual([{ text: 'What does this show?', attachments: [file] }]);
+    // Set aside by Put back, it says so after a reload too.
+    expect(loadDraft('new:/code/site')?.held).toEqual([{ text: 'What does this show?', attachments: [file], aside: true }]);
     expect(loadDraft('new:/code/acme')).toBeUndefined();
     // A text alone, as kept before its files waited with it; what holds neither words nor files goes.
-    store.set('pelican:drafts', JSON.stringify({ s1: { text: '', held: ['!kept', 3, null, ' ', { text: ' ' }, { text: '', attachments: [file, { id: 3 }] }], at: 1 } }));
+    store.set('pelican:drafts', JSON.stringify({ s1: { text: '', held: ['!kept', 3, null, ' ', { text: ' ' }, { text: '', attachments: [file, { id: 3 }], aside: 'yes' }], at: 1 } }));
     expect(loadDraft('s1')?.held).toEqual([{ text: '!kept' }, { text: '', attachments: [file] }]);
   });
 

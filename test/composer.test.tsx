@@ -181,13 +181,17 @@ describe('a message that did not go, given back while more was typed', () => {
     const view = render(node());
     const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
     fireEvent.change(box(), { target: { value: typed } });
-    view.rerender(node({ ...given, key: 1, back: true }));
-    return { box, reload: () => (view.unmount(), render(node())) };
+    let sends = 0;
+    /** Another message given back, from another send that failed. */
+    const give = (next: Omit<Given, 'key' | 'back'>) => view.rerender(node({ ...next, key: (sends += 1), back: true }));
+    give(given);
+    return { box, give, reload: () => (view.unmount(), render(node())) };
   }
   const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-  /** What waits above the box, each with Put back. */
+  /** What waits above the box, each with Put back: what did not go, and what Put back took out of the box for it. */
   const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
-  const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: 'Put back' })[at]!);
+  const setAside = () => screen.queryAllByText(/^Set aside:/).map((row) => row.textContent?.replace(/^Set aside:\s*/, ''));
+  const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: /^Put back / })[at]!);
   const upload = (name: string): Attachment => ({ id: `up-${name}`, name, mime: 'text/plain', size: 20, path: `/tmp/${name}` });
   /** The files in the box, which go with what is sent from it. */
   const inBox = () => screen.queryAllByRole('button', { name: /^Remove (?!the quote )/ }).map((b) => b.getAttribute('aria-label')!.replace(/^Remove /, ''));
@@ -211,17 +215,29 @@ describe('a message that did not go, given back while more was typed', () => {
     expect(screen.getByLabelText('Remove shot.png')).toBeTruthy();
   });
 
-  it('a / command waits above the box: the words typed never become its arguments, and Put back swaps the two', async () => {
+  it('a / command waits above the box: the words typed never become its arguments, and Put back swaps the two, the words set aside, never sent', async () => {
     const { box } = typedThenGiven('next question', { text: '/compact' });
     await frame();
     expect(box().value).toBe('next question');
     expect(waiting()).toEqual(['/compact']);
     putBack();
     expect(box().value).toBe('/compact');
-    expect(waiting()).toEqual(['next question']);
+    expect(waiting()).toEqual([]);
+    expect(setAside()).toEqual(['next question']);
     putBack();
     expect(box().value).toBe('next question');
-    expect(waiting()).toEqual(['/compact']);
+    expect(setAside()).toEqual(['/compact']);
+  });
+
+  it('names the buttons of each row for what it puts back, so two rows are told apart', async () => {
+    const { give } = typedThenGiven('next question', { text: '/compact' }, 'g9');
+    give({ text: '!npm test\nnpm run lint', attachments: [upload('trace.txt')] });
+    await frame();
+    expect(waiting()).toEqual(['/compact', '!npm test · trace.txt']);
+    expect(screen.getAllByRole('button', { name: /^Put back / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Put back /compact', 'Put back !npm test with trace.txt']);
+    expect(screen.getAllByRole('button', { name: /^Discard / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Discard /compact', 'Discard !npm test with trace.txt']);
+    // Named as it reads: the visible Put back starts each name.
+    expect(screen.getAllByRole('button', { name: /^Put back / }).every((b) => b.textContent === 'Put back')).toBe(true);
   });
 
   it('a ! command waits above the box too, and Put back puts it in once the box is empty', async () => {
@@ -295,7 +311,7 @@ describe('a message that did not go, given back while more was typed', () => {
     putBack();
     expect(box().value).toBe('/compact');
     expect(inBox()).toEqual([]);
-    expect(waiting()).toEqual(['Summarise these notes · notes.txt']);
+    expect(setAside()).toEqual(['Summarise these notes · notes.txt']);
     fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
     expect(onSend).toHaveBeenCalledWith('/compact', [], 'steer');
     putBack();
