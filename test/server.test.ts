@@ -87,8 +87,12 @@ describe('the live socket', () => {
     ws.send(JSON.stringify({ type: 'subscribe', sessionId: id }));
     ws.send(JSON.stringify({ type: 'subscribe', sessionId: id }));
     ws.send(JSON.stringify({ type: 'subscribe', sessionId: '../../etc' }));
-    for (const start = Date.now(); events.length < 2 && Date.now() - start < 2000;) await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const start = Date.now(); events.length < 4 && Date.now() - start < 2000;) await new Promise((resolve) => setTimeout(resolve, 20));
     ws.close();
-    expect(events).toEqual([{ type: 'run', sessionId: id, state: null }, { type: 'run', sessionId: id, state: null }]);
+    // With the run, its ! commands running, all of them: a page that missed one ending is set right too.
+    expect(events).toEqual([
+      { type: 'run', sessionId: id, state: null }, { type: 'shells', sessionId: id, shells: [] },
+      { type: 'run', sessionId: id, state: null }, { type: 'shells', sessionId: id, shells: [] },
+    ]);
   });
 });

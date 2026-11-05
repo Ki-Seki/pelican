@@ -237,17 +237,40 @@ export type RecordedSettings = { model?: string; effort?: string; fast?: boolean
 /** While Claude works, a new message joins the turn at Claude's next step (steer) or waits for the turn to end (queue). */
 export type SendMode = 'steer' | 'queue';
 
-/** A `!` command run in the session's folder; Claude sees it with the next message. */
+/** A `!` command run in the session's folder, once it is done; it goes into the conversation as Claude Code's bash mode writes it. */
 export type ShellResult = {
   command: string;
   stdout: string;
   stderr: string;
-  /** Exit code; null when it was stopped for taking too long. */
+  /** Exit code; null when it did not finish on its own (see `endedBy`). */
   code: number | null;
   durationMs: number;
   truncated?: boolean;
   /** It left a process running in the background (`npm run dev &`), which goes on after it. */
   background?: boolean;
+  /** Ended by Stop, or by Pelican once it ran past the limit (`limitMs`), rather than on its own. */
+  endedBy?: 'stop' | 'limit';
+  /** The limit it ran under, for saying it when it was hit. */
+  limitMs?: number;
+};
+
+/**
+ * A `!` command still running, as its output comes. Its record in the conversation has the same
+ * id (the message holding the command), and replaces it once written.
+ */
+export type LiveShell = {
+  id: string;
+  command: string;
+  startedAt: number;
+  /** stdout and stderr together, as they came, up to a limit (`truncated` past it; it runs on). */
+  output: string;
+  truncated?: boolean;
+  /** Stop was asked for; the command is ending. */
+  stopping?: boolean;
+  /** Done: its exit code (null: it did not finish on its own), and whether it waits for Claude's turn to end to go into the conversation. */
+  done?: { code: number | null; waiting?: boolean };
+  /** It could not be added to the conversation. */
+  error?: string;
 };
 
 /** One of the account's usage limits, as Claude Code last reported it. */
@@ -297,6 +320,13 @@ export type ServerEvent =
   /** A session's status, or how much background work it has (`tasks`), changed; sent to every client, for session lists. */
   | { type: 'status'; sessionId: string; status: SessionStatus; tasks?: number }
   | { type: 'reload'; sessionId: string }
+  /** The session's `!` commands still running, all of them: when one starts, stops or ends, and in answer to a subscribe. */
+  | { type: 'shells'; sessionId: string; shells: LiveShell[] }
+  /**
+   * What a running `!` command printed since: `text` goes at `from` of its output. A page whose
+   * copy does not end there subscribes again and gets the whole list.
+   */
+  | { type: 'shell_output'; sessionId: string; id: string; from: number; text: string }
   /** Every 25 s: pages cannot see pings, and a socket that has gone quiet is a dead one. */
   | { type: 'tick' };
 

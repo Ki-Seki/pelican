@@ -1,13 +1,14 @@
 import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
-import { apiUrl } from '../lib/api';
+import type { ImageBlock, LiveShell, PartialBlock, RunState } from '../../shared/protocol';
+import { api, apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
 import { composing } from '../lib/keyboard';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
+import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
@@ -448,6 +449,55 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   );
 }
 
+/**
+ * A `!` command still running: its output as it comes, the end in view, and Stop, which ends it
+ * and everything it started. Once done it waits, if Claude is in a turn, to go into the conversation.
+ */
+function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShell }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (shell.done) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [shell.done]);
+  const output = useMemo(() => cleanOutput(shell.output).trimEnd(), [shell.output]);
+  const body = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    if (body.current) body.current.scrollTop = body.current.scrollHeight;
+  }, [output]);
+  const stop = () => {
+    markStopping(sessionId, shell.id);
+    void api.stopShell(sessionId, shell.id).catch(() => undefined);
+  };
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-panel">
+      <div className="flex min-h-9 items-center gap-2 py-1 pr-1.5 pl-3 font-mono text-[12.5px]">
+        <SquareTerminal className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 break-all">{shell.command}</span>
+        {shell.done ? (
+          <span className="shrink-0 pr-1.5 font-sans text-[11px] text-faint">{shell.done.code === null ? 'Stopped' : shell.done.code === 0 ? 'Done' : `Exit code ${shell.done.code}`}</span>
+        ) : (
+          <>
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-faint motion-reduce:animate-none" />
+            <span className="shrink-0 font-sans text-[11px] text-faint tabular-nums">{duration(Math.max(0, now - shell.startedAt))}</span>
+            <button type="button" disabled={shell.stopping} onClick={stop} className="relative h-7 shrink-0 rounded-full px-2.5 font-sans text-[12px] text-muted after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg disabled:opacity-50">
+              {shell.stopping ? 'Stopping' : 'Stop'}
+            </button>
+          </>
+        )}
+      </div>
+      {output && (
+        <pre ref={body} className="max-h-60 overflow-y-auto overscroll-contain border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted">{output}</pre>
+      )}
+      {(shell.error || shell.done?.waiting || shell.truncated) && (
+        <div className={`border-t border-line px-3 py-1.5 text-[12px] ${shell.error ? 'text-danger' : 'text-faint'}`}>
+          {shell.error ?? (shell.done?.waiting ? 'Goes into the conversation when Claude’s turn ends' : 'Output past 200 KB is left out; the command runs on')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
 function Compacted({ summary }: { summary: string }) {
   const [open, setOpen] = useState(false);
@@ -539,6 +589,9 @@ export function MessageList({
   onRewind?: (uuid: string) => void;
 }) {
   const items = useMemo(() => buildItems(view.messages, machine), [view.messages, machine]);
+  // A `!` command shows live until its record replaces it, under the same id.
+  const shells = useLiveShells(sessionId);
+  const live = useMemo(() => new Set(shells.map((shell) => shell.id)), [shells]);
   // The prompt this browser sent last, while it is on its way: sending always brings the end into view.
   const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
   const lastSending = useRef<string | undefined>(undefined);
@@ -702,7 +755,7 @@ export function MessageList({
                 case 'user':
                   return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
                 case 'shell':
-                  return <ShellItem key={item.key} item={item} />;
+                  return live.has(item.key) ? null : <ShellItem key={item.key} item={item} />;
                 case 'assistant':
                   return (
                     <AssistantTurn
@@ -731,6 +784,7 @@ export function MessageList({
                 <span className="whitespace-pre-wrap">{view.run.error}</span>
               </div>
             )}
+            {shells.map((shell) => <LiveShellItem key={shell.id} sessionId={sessionId} shell={shell} />)}
           </div>
         </div>
       </div>

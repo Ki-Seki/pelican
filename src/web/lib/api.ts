@@ -6,6 +6,7 @@ import type {
   Command,
   FileContent,
   GitStatus,
+  LiveShell,
   McpServer,
   MessagesPage,
   ModelOption,
@@ -19,7 +20,6 @@ import type {
   SendMode,
   ServerInfo,
   SessionSummary,
-  ShellResult,
   TaskOutput,
   TreeEntry,
   UsageLimit,
@@ -213,7 +213,10 @@ export const api = {
   exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
   models: () => request<{ models: ModelOption[]; signedIn: boolean | null; account?: Account }>('models'),
   completions: (cwd: string) => request<{ commands: Command[]; agents: Agent[] }>(`commands?cwd=${encodeURIComponent(cwd)}`),
-  shell: (id: string, command: string) => send<ShellResult>('POST', `sessions/${encodeURIComponent(id)}/shell`, { command }),
+  /** Starts a `!` command; its output comes over the socket (lib/shells). `trust`: the answer for a folder nobody trusted. */
+  shell: (id: string, command: string, trust?: TrustChoice) =>
+    send<{ shell: LiveShell }>('POST', `sessions/${encodeURIComponent(id)}/shell`, { command, ...(trust ? { trust } : {}) }),
+  stopShell: (id: string, shell: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/shell/${encodeURIComponent(shell)}/stop`),
   rewind: (id: string, uuid: string, dryRun: boolean) => send<RewindResult>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun }),
   mcp: (id: string) => request<{ servers: McpServer[]; live: boolean }>(`sessions/${encodeURIComponent(id)}/mcp`),
   setMcp: (id: string, name: string, change: { enabled?: boolean; reconnect?: boolean }) =>

@@ -1,0 +1,103 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { ChatMessage, LiveShell } from '../src/shared/protocol';
+import type { SessionView } from '../src/web/lib/store';
+
+Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
+Object.assign(window, { matchMedia: (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }) });
+
+const { buildItems } = await import('../src/web/lib/turns');
+const { addShell, handleShellEvent, useLiveShells } = await import('../src/web/lib/shells');
+const { socket } = await import('../src/web/lib/socket');
+const { api } = await import('../src/web/lib/api');
+const { MessageList } = await import('../src/web/components/MessageList');
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+const user = (uuid: string, text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], ...extra });
+
+describe('a ! command in the conversation', () => {
+  it('as Claude Code writes it, the command and its output in two messages, is one item', () => {
+    const items = buildItems([
+      user('c0', '<local-command-caveat>The command below was run directly in Claude Code…</local-command-caveat>', { meta: true }),
+      user('c1', '<bash-input>npm test</bash-input>'),
+      user('c2', '<bash-stdout>2 passed</bash-stdout><bash-stderr>warn: slow</bash-stderr>'),
+    ]);
+    expect(items).toEqual([{ kind: 'shell', key: 'c1', command: 'npm test', stdout: '2 passed', stderr: 'warn: slow' }]);
+  });
+
+  it('output with no command before it shows nothing', () => {
+    expect(buildItems([user('c2', '<bash-stdout>stray</bash-stdout><bash-stderr></bash-stderr>')])).toEqual([]);
+  });
+});
+
+const live = (extra: Partial<LiveShell> = {}): LiveShell => ({ id: 'run-1', command: 'npm test', startedAt: Date.now(), output: '', ...extra });
+
+describe('the commands a page knows of', () => {
+  function Probe({ sessionId }: { sessionId: string }) {
+    return <div data-testid="ids">{useLiveShells(sessionId).map((s) => `${s.id}:${s.output}`).join(',')}</div>;
+  }
+
+  it('follow the server: the list, then the output as it comes', () => {
+    render(<Probe sessionId="s1" />);
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's1', shells: [live()] }));
+    act(() => handleShellEvent({ type: 'shell_output', sessionId: 's1', id: 'run-1', from: 0, text: 'PASS ' }));
+    act(() => handleShellEvent({ type: 'shell_output', sessionId: 's1', id: 'run-1', from: 5, text: 'a.test.ts' }));
+    expect(screen.getByTestId('ids').textContent).toBe('run-1:PASS a.test.ts');
+  });
+
+  it('ask for the whole list again when a piece is missing', () => {
+    const refresh = vi.spyOn(socket, 'refresh').mockImplementation(() => {});
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's2', shells: [live({ output: 'abc' })] }));
+    act(() => handleShellEvent({ type: 'shell_output', sessionId: 's2', id: 'run-1', from: 9, text: 'x' }));
+    expect(refresh).toHaveBeenCalledWith('s2');
+  });
+
+  it('a command that ended before the answer to starting it came back stays gone', () => {
+    render(<Probe sessionId="s3" />);
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's3', shells: [live({ id: 'quick' })] }));
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's3', shells: [] }));
+    act(() => addShell('s3', live({ id: 'quick' })));
+    expect(screen.getByTestId('ids').textContent).toBe('');
+    act(() => addShell('s3', live({ id: 'slow' })));
+    expect(screen.getByTestId('ids').textContent).toBe('slow:');
+  });
+});
+
+describe('a running command', () => {
+  const view = (messages: ChatMessage[]): SessionView => ({ messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false });
+
+  it('shows its output and Stop, which stops it', () => {
+    const stop = vi.spyOn(api, 'stopShell').mockResolvedValue({ ok: true });
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's4', shells: [live({ output: 'Running 12 tests\n' })] }));
+    render(<MessageList sessionId="s4" view={view([])} mode="normal" />);
+    expect(screen.getByText('npm test')).toBeTruthy();
+    expect(screen.getByText(/Running 12 tests/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(stop).toHaveBeenCalledWith('s4', 'run-1');
+    expect(screen.getByRole('button', { name: 'Stopping' })).toBeTruthy();
+  });
+
+  it('gives way to its record, never both at once', () => {
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's5', shells: [live({ id: 'r5', output: 'ok\n', done: { code: 0 } })] }));
+    const record = [user('r5', '<bash-input>npm test</bash-input>'), user('o5', '<bash-stdout>ok</bash-stdout><bash-stderr></bash-stderr>')];
+    const { rerender } = render(<MessageList sessionId="s5" view={view(record)} mode="normal" />);
+    expect(screen.getAllByText('npm test')).toHaveLength(1);
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's5', shells: [] }));
+    rerender(<MessageList sessionId="s5" view={view(record)} mode="normal" />);
+    expect(screen.getAllByText('npm test')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
+  it('done while Claude works says it waits for the turn', () => {
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's6', shells: [live({ id: 'r6', done: { code: 1, waiting: true } })] }));
+    render(<MessageList sessionId="s6" view={view([])} mode="normal" />);
+    expect(screen.getByText('Exit code 1')).toBeTruthy();
+    expect(screen.getByText('Goes into the conversation when Claude’s turn ends')).toBeTruthy();
+  });
+});

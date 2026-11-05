@@ -28,6 +28,7 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
+import { addShell } from '../lib/shells';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import { Composer, type ComposerHandle } from './Composer';
@@ -381,7 +382,6 @@ export function Chat({
   const [menuOpen, setMenuOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
-  const [running, setRunning] = useState<string>();
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
@@ -544,19 +544,33 @@ export function Chat({
   // Between turns: background tasks and subagents still running, and the checks Claude stays running for.
   const working = view.run ? (busy ? 0 : (view.run.tasks?.length ?? 0) + (view.run.scheduled?.length ?? 0)) : session?.tasks ?? 0;
 
-  // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
-  const shell = async (command: string) => {
+  // A `!` command: it runs in the session's folder, its output shows in the conversation as it
+  // comes, and once done Claude answers it, as in the CLI. A folder nobody trusted is asked about
+  // first, as for a message.
+  const shell = async (command: string, trust?: TrustChoice) => {
     if (!sessionId) return;
     setSendError(undefined);
-    setRunning(command);
     try {
-      await api.shell(sessionId, command);
+      addShell(sessionId, (await api.shell(sessionId, command, trust)).shell);
       clearDraft(viewId, `!${command}`);
     } catch (error) {
+      if (error instanceof ApiError && error.trust) {
+        let settled = false;
+        setTrustAsk({
+          brings: error.trust.brings,
+          answer: (choice) => {
+            if (!settled) void shell(command, choice);
+            settled = true;
+          },
+          cancel: () => {
+            if (!settled) setDraftText({ text: `!${command}`, key: Date.now() });
+            settled = true;
+          },
+        });
+        return;
+      }
       failed(error);
       setDraftText({ text: `!${command}`, key: Date.now() });
-    } finally {
-      setRunning(undefined);
     }
   };
 
@@ -816,10 +830,7 @@ export function Chat({
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
           <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} />
         )}
-        {running && (
-          <Notice><span className="flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Running <code className="font-mono">{running}</code></span></Notice>
-        )}
-        {prefs.suggestions && view.run?.suggestion && !busy && !running && (
+        {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
             <button type="button" onClick={() => setDraftText({ text: view.run!.suggestion!, key: Date.now() })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
               <CornerDownRight className="size-3.5 shrink-0 text-faint" />

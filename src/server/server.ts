@@ -13,6 +13,7 @@ import { keepDays, sweepUploads } from './files.js';
 import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
+import { shellsEvent, stopAllShells } from './shell-runs.js';
 import { RunChannel } from './stream.js';
 import { watchWaiting } from './waiting.js';
 
@@ -177,6 +178,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
         // one: a page that comes back after a while asks again and is set right, whatever it missed.
         channels.get(id)!.reset();
         sendRun(id, runState(id) ?? null);
+        send(shellsEvent(id));
       } else {
         subscriptions.get(id)?.();
         subscriptions.delete(id);
@@ -202,6 +204,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   sweeping.unref();
 
   const shutdown = () => {
+    stopAllShells();
     closeAll();
     server.close();
     setTimeout(() => process.exit(0), 500).unref();
