@@ -52,7 +52,16 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, the browser smoke test, the site, screenshots and icons |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, and what changed upstream |
+
+## Keeping up with Claude Code
+
+Pelican pins the Agent SDK exactly, and with it the Claude Code it runs. Dependabot proposes each
+new version about a day after it ships, in a pull request of its own that runs all the checks, and
+a comment on it says what changed upstream: the Agent SDK's and Claude Code's changelog entries in
+between, and the changes to the SDK's types. `node scripts/upstream-report.mjs <from> <to>` prints
+that report, and `node scripts/upstream-report.mjs` what is newer than the pinned version, which the
+issue "Claude Code updates to consider" keeps each week.
 
 ## Releasing
 
