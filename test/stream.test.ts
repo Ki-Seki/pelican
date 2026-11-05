@@ -38,6 +38,21 @@ describe('a client’s copy of a run', () => {
     expect(channel.next(run([{ type: 'text', text: 'abcd' }]))).toMatchObject({ type: 'run' });
   });
 
+  it('sends what a block gained when the run added it to the same block, as the run does', () => {
+    const channel = new RunChannel('s1');
+    const text: PartialBlock = { type: 'text', text: 'Hel' };
+    const thinking: PartialBlock = { type: 'thinking', thinking: 'hm' };
+    expect(channel.next(run([thinking, text]))).toMatchObject({ type: 'run', state: { partial: [{ thinking: 'hm' }, { text: 'Hel' }] } });
+    text.text += 'lo';
+    thinking.thinking += 'm';
+    expect(channel.next(run([thinking, text]))).toEqual({
+      type: 'partial', sessionId: 's1', appends: [{ index: 0, from: 2, text: 'm' }, { index: 1, from: 3, text: 'lo' }],
+    });
+    text.text += ', world';
+    expect(channel.next(run([thinking, text]))).toEqual({ type: 'partial', sessionId: 's1', appends: [{ index: 1, from: 5, text: ', world' }] });
+    expect(channel.next(run([thinking, text]))).toBeUndefined();
+  });
+
   it('streams a tool call’s input only as far as the page names the call from it', () => {
     const channel = new RunChannel('s1');
     const head = '{"file_path":"/w/big.txt","content":"';

@@ -8,8 +8,15 @@ export const PARTIAL_INPUT_MAX = 2048;
 
 const textOf = (block: PartialBlock) => (block.type === 'text' ? block.text : block.type === 'thinking' ? block.thinking : block.inputJson);
 
-const shown = (block: PartialBlock): PartialBlock =>
-  (block.type === 'tool_use' && block.inputJson.length > PARTIAL_INPUT_MAX ? { ...block, inputJson: block.inputJson.slice(0, PARTIAL_INPUT_MAX) } : block);
+/**
+ * A block as the page gets it, always a copy: the run adds each piece of text to its blocks in
+ * place, so a block kept as it was sent would grow with them and show nothing to append.
+ */
+export const shown = (block: PartialBlock): PartialBlock =>
+  (block.type === 'tool_use' && block.inputJson.length > PARTIAL_INPUT_MAX ? { ...block, inputJson: block.inputJson.slice(0, PARTIAL_INPUT_MAX) } : { ...block });
+
+/** A run as a page gets it, by any way: its blocks as shown, never the whole file being written. */
+export const shownRun = (state: RunState): RunState => ({ ...state, partial: state.partial.map(shown) });
 
 const restOf = new WeakMap<RunState, string>();
 

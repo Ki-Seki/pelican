@@ -133,21 +133,32 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
       if (event) send(event);
     };
 
-    // A socket that missed a pong is gone (a phone that changed networks, a closed lid): it is
-    // dropped with its subscriptions, instead of being polled for until TCP gives up. Pages
-    // cannot see pings, so a tick tells them the socket still works.
-    let alive = true;
+    // A socket that does not answer a ping is gone (a phone that changed networks, a closed lid):
+    // it is dropped with its subscriptions, instead of being polled for until TCP gives up. A ping
+    // waits behind what was sent before it, though: a phone on a slow link still reading pictures
+    // is kept while its backlog goes down. That shows only once a whole message has gone out, and
+    // one large message can take longer than a heartbeat, so a backlog gets a second heartbeat.
+    // Pages cannot see pings, so a tick tells them the socket still works.
+    let answered = true;
+    /** What was still to send at the last heartbeat, and heartbeats since that last went down. */
+    let backlog = 0;
+    let stalled = 0;
     ws.on('pong', () => {
-      alive = true;
+      answered = true;
     });
     const heartbeat = setInterval(() => {
-      if (!alive) {
-        ws.terminate();
+      const left = ws.bufferedAmount;
+      if (answered) {
+        answered = false;
+        backlog = left;
+        stalled = 0;
+        ws.ping();
+        send({ type: 'tick' });
         return;
       }
-      alive = false;
-      ws.ping();
-      send({ type: 'tick' });
+      stalled = left < backlog ? 0 : stalled + 1;
+      backlog = left;
+      if (stalled > (left > 0 ? 1 : 0)) ws.terminate();
     }, HEARTBEAT_MS);
     // A frame too large or malformed closes this socket; unheard, the error would stop the server.
     ws.on('error', () => ws.terminate());

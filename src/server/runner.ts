@@ -107,6 +107,13 @@ export type SendInput = {
 
 type Prompt = { uuid: string; text: string; attachments: Attachment[] };
 
+/** The run closed while a message to it was on its way: it never reached Claude, and can go to another. */
+class RunClosed extends Error {
+  constructor() {
+    super('Claude Code stopped in this session');
+  }
+}
+
 /** What a user message holds, as the SDK types it, so an SDK change fails the typecheck here. */
 type UserContent = Exclude<Extract<SDKUserMessage['message'], { role: 'user' }>['content'], string>;
 
@@ -143,6 +150,7 @@ const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, th
 
 /** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
 const CLEARS = /^\/(clear|reset|new)(\s|$)/;
+const AFRESH = 'To start afresh, open a new session in this folder.';
 
 /** Claude Code's error, or what it means for someone who edited their last prompt, in plain words. */
 export function readableError(text: string): string {
@@ -210,6 +218,8 @@ function formValues(input: Record<string, unknown>): Record<string, string | num
 
 /** A scheduled check stays counted this long after it was due, in case it fires late. */
 const DUE_GRACE_MS = 10 * 60_000;
+/** Claude Code lets a recurring check go this long after it was made (CronCreate: "auto-expired after 7 days"). */
+const RECURRING_MAX_AGE_MS = 7 * 24 * 3600_000;
 
 /** One Claude Code process driving one session. It stays alive between turns until idle. */
 export class SessionRun {
@@ -242,10 +252,14 @@ export class SessionRun {
   private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
   private wakeup?: ScheduledCheck;
   private crons = new Map<string, ScheduledCheck>();
+  /** When Claude Code lets each recurring check go. */
+  private cronEnds = new Map<string, number>();
   /** Prompts waiting for the turn to end; Claude gets them together when it does. */
   private queued: Prompt[] = [];
   /** The turn ended with prompts waiting, which went out at once: the idle that follows is not the end. */
   private continuing = false;
+  /** Of the prompts that went out when a turn ended, those no result has answered yet: Claude goes on with them. */
+  private unanswered = new Set<string>();
   /** The session's total cost after the last turn; unknown for a resumed session until its first turn. */
   private costSoFar?: number;
   /** While settings picked here are being applied, Claude Code's reports of the old ones are stale. */
@@ -260,6 +274,8 @@ export class SessionRun {
   });
   // Most callers never wait for it: a failure here must not count as unhandled.
   private readonly readyHandled = this.ready.catch(() => undefined);
+  /** Claude Code said something: it started, and the session is there to resume. */
+  private began = false;
   private suggestion?: string;
 
   constructor(
@@ -299,12 +315,34 @@ export class SessionRun {
     return this.tasks.length + (this.wakeup ? 1 : 0) + this.crons.size;
   }
 
-  /** Drops one-off checks long past due; whether any went. */
+  /**
+   * The checks still to come at `now`: not one-off checks long past due, nor recurring ones Claude
+   * Code has let go. A recurring check that fired shows no time: Claude Code works out the next one
+   * as it goes, its own way, and a time gone by would say it is late.
+   */
+  private checksAt(now: number): { wakeup: ScheduledCheck | undefined; crons: Map<string, ScheduledCheck> } {
+    const wakeup = this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now ? undefined : this.wakeup;
+    const crons = new Map<string, ScheduledCheck>();
+    for (const [id, cron] of this.crons) {
+      if (cron.repeats ? (this.cronEnds.get(id) ?? Infinity) < now : (cron.next ?? 0) + DUE_GRACE_MS < now) continue;
+      if (cron.repeats && cron.next !== undefined && cron.next < now) {
+        const { next: _fired, ...rest } = cron;
+        crons.set(id, rest);
+      } else {
+        crons.set(id, cron);
+      }
+    }
+    return { wakeup, crons };
+  }
+
+  /** Keeps only the checks still to come; whether that changed anything. */
   private forgetPastChecks(now = Date.now()): boolean {
-    const before = (this.wakeup ? 1 : 0) + this.crons.size;
-    if (this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now) this.wakeup = undefined;
-    for (const [id, cron] of this.crons) if (!cron.repeats && (cron.next ?? 0) + DUE_GRACE_MS < now) this.crons.delete(id);
-    return (this.wakeup ? 1 : 0) + this.crons.size !== before;
+    const { wakeup, crons } = this.checksAt(now);
+    const changed = wakeup !== this.wakeup || crons.size !== this.crons.size || [...crons].some(([id, cron]) => this.crons.get(id) !== cron);
+    this.wakeup = wakeup;
+    this.crons = crons;
+    for (const id of this.cronEnds.keys()) if (!crons.has(id)) this.cronEnds.delete(id);
+    return changed;
   }
 
   start(): void {
@@ -358,7 +396,8 @@ export class SessionRun {
       const tool = this.taskTools.get(task);
       return tool ? [[tool, report]] : [];
     }));
-    const scheduled = [...(this.wakeup ? [this.wakeup] : []), ...this.crons.values()];
+    const checks = this.checksAt(Date.now());
+    const scheduled = [...(checks.wakeup ? [checks.wakeup] : []), ...checks.crons.values()];
     return {
       sessionId: this.sessionId,
       cwd: this.cwd,
@@ -408,13 +447,28 @@ export class SessionRun {
   }
 
   private lastStatus?: string;
+  /** Its process has ended and its last word is said: nothing it does after that reaches a page. */
+  private finished = false;
+
+  /**
+   * A newer run has taken the session (an edited last prompt, a restart): what this one, closed,
+   * still says while its process exits would undo the newer one's state on every page.
+   */
+  private replaced(): boolean {
+    const current = runs.get(this.sessionId);
+    return current !== undefined && current !== this;
+  }
 
   private emitNow(): void {
+    if (this.finished || this.replaced()) return;
     this.forgetPastChecks();
     const state = this.state();
     feedFor(this.sessionId).broadcast({ type: 'run', state });
-    // Session lists only care about the status and the work left running; streamed text stays
-    // with the session's viewers.
+    this.sayStatus();
+  }
+
+  /** Session lists only care about the status and the work left running; streamed text stays with the session's viewers. */
+  private sayStatus(): void {
     const status = this.status();
     const tasks = this.work();
     if (`${status}:${tasks}` !== this.lastStatus) {
@@ -438,8 +492,10 @@ export class SessionRun {
 
   async send(input: SendInput): Promise<void> {
     // In the same process Claude Code would go on under a new id, beside this session's.
-    if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
+    if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     await this.applySettings(input.settings);
+    // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
+    if (this.closed) throw new RunClosed();
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
     // Queued: not part of the conversation until the turn ends and Claude gets it.
     if (this.busy && input.mode === 'queue') {
@@ -453,6 +509,7 @@ export class SessionRun {
 
   private async deliver(prompt: Prompt, steer: boolean): Promise<void> {
     const content = await contentOf(prompt.text, prompt.attachments);
+    if (this.closed) throw new RunClosed();
     const message: SDKUserMessage = {
       type: 'user',
       uuid: prompt.uuid as UUID,
@@ -472,6 +529,8 @@ export class SessionRun {
     this.setBusy(true);
     const chat = toChatMessage({ type: 'user', uuid: prompt.uuid, message: { role: 'user', content } });
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
+    // Shown already: the Claude it goes to instead publishes it under the same id, which the feed has.
+    if (this.closed) throw new RunClosed();
     this.input.push(message);
   }
 
@@ -552,12 +611,17 @@ export class SessionRun {
   /**
    * Settings picked here, applied to Claude now: from its next step, also mid-turn. A mode picked
    * here (`pick`) is always sent, even when Pelican thinks Claude is in it already.
+   *
+   * They are all the settings the page has: one left out is its default (Default effort is no
+   * effort at all), which Claude gets and the run then says it has. Only the mode stays as it is
+   * when none is given, as Claude Code changes it too.
    */
   async applySettings(next: RunSettings, pick = false): Promise<void> {
     const q = this.q;
     if (!q) return;
     const prev = this.settings;
-    this.settings = { ...prev, ...next };
+    const mode = next.permissionMode ?? prev.permissionMode;
+    this.settings = { ...next, ...(mode ? { permissionMode: mode } : {}) };
     if (next.permissionMode) this.modeChanged = undefined;
     if (next.permissionMode === 'plan' && prev.permissionMode !== 'plan') this.modeBeforePlan = prev.permissionMode ?? 'default';
     this.applying += 1;
@@ -585,9 +649,9 @@ export class SessionRun {
     this.emit();
   }
 
-  /** Settings changed in the composer, applied to Claude now: from its next step, also mid-turn. */
+  /** Settings changed in the composer, all of them, applied to Claude now: from its next step, also mid-turn. */
   async updateSettings(next: RunSettings): Promise<void> {
-    await this.applySettings({ ...this.settings, ...next });
+    await this.applySettings(next);
     this.emit();
   }
 
@@ -829,14 +893,17 @@ export class SessionRun {
         const id = str(output.id);
         if (!id) continue;
         const prompt = str(call.input.prompt);
+        const repeats = output.recurring !== false;
         this.crons.set(id, {
           id,
           what: oneLine(`${str(output.humanSchedule) || str(call.input.cron)}${prompt ? `: ${prompt}` : ''}`, 100),
           ...(typeof output.nextFireAt === 'number' ? { next: output.nextFireAt } : {}),
-          repeats: output.recurring !== false,
+          repeats,
         });
+        if (repeats) this.cronEnds.set(id, Date.now() + RECURRING_MAX_AGE_MS);
       } else {
         this.crons.delete(str(call.input.id));
+        this.cronEnds.delete(str(call.input.id));
       }
     }
   }
@@ -884,6 +951,7 @@ export class SessionRun {
     try {
       for await (const message of q as AsyncIterable<SDKMessage>) {
         this.lastActive = Date.now();
+        this.began = true;
         this.started.resolve();
         const raw = message as unknown as Record<string, unknown>;
         switch (message.type) {
@@ -992,21 +1060,31 @@ export class SessionRun {
             // A turn Claude starts on its own (a scheduled check) may say nothing: it must not repeat the last reply.
             const reply = this.lastReply;
             this.lastReply = '';
-            // What waited for this turn goes out now, together, as Claude Code sends what was queued.
+            // Claude Code says which prompts a result answers. One that answers none of those still
+            // waiting is about something else, or from a Claude Code that does not say: the turn ends.
+            const answered = message.user_message_uuids ?? (message.user_message_uuid ? [message.user_message_uuid] : []);
+            const before = this.unanswered.size;
+            for (const uuid of answered) this.unanswered.delete(uuid);
+            if (this.unanswered.size === before) this.unanswered.clear();
+            // What waited for this turn goes out now, each prompt as it was typed, as Claude Code takes
+            // what is typed while it works: plain prompts together, a command as a command. Joined
+            // into one text, a command would take the prompts after it as its arguments.
             const waiting = this.queued.splice(0);
             if (waiting.length > 0) {
               this.continuing = true;
-              await this.deliver({
-                uuid: waiting[0]!.uuid,
-                text: waiting.map((p) => p.text).filter(Boolean).join('\n\n'),
-                attachments: waiting.flatMap((p) => p.attachments),
-              }, false);
-            } else {
-              this.setBusy(false);
+              // A turn of its own: its time counts from now, not from the turn that just ended.
+              this.startedAt = Date.now();
+              for (const prompt of waiting) {
+                this.unanswered.add(prompt.uuid);
+                await this.deliver(prompt, false);
+              }
             }
+            // A command is answered on its own, before the prompts that went with it.
+            const goesOn = this.unanswered.size > 0;
+            if (!goesOn) this.setBusy(false);
             this.emit();
             void this.readContext();
-            if (!stopped && waiting.length === 0) {
+            if (!stopped && !goesOn) {
               void notify({
                 title: this.title || 'Claude Code',
                 body: failed ? oneLine(`Stopped: ${this.error ?? 'error'}`, 180) : oneLine(reply.split('\n').find((line) => line.trim()) ?? '') || 'Finished',
@@ -1021,28 +1099,72 @@ export class SessionRun {
         }
       }
     } catch (error) {
-      this.error = readableError((error as Error).message);
-      console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
+      // Closed here while what was queued went out: no error of Claude's.
+      if (!(error instanceof RunClosed)) {
+        this.error = readableError((error as Error).message);
+        console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
+      }
     } finally {
+      // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
+      const closedHere = this.closed;
       this.closed = true;
       this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
       this.settleAll('Session closed.');
-      this.queued = [];
-      // Its background work and checks ended with the process.
+      const leftover = this.queued.splice(0);
+      // Its background work and checks ended with the process, and what they last said with it.
       this.tasks = [];
       this.taskCount = 0;
       this.wakeup = undefined;
       this.crons.clear();
-      this.setBusy(false);
-      this.emit();
-      // A newer run may have taken this session's place already (see sendMessage).
-      if (runs.get(this.sessionId) === this) runs.delete(this.sessionId);
+      this.cronEnds.clear();
+      this.progress.clear();
+      this.taskTools.clear();
+      this.activity = undefined;
+      this.busy = false;
+      this.startedAt = undefined;
+      this.partial = [];
+      this.completedBlocks = 0;
+      clearTimeout(this.emitTimer);
+      this.emitTimer = undefined;
+      // A newer run may have taken the session's place already (an edited last prompt, a restart):
+      // it speaks for the session, and this one says nothing more.
+      if (!this.replaced()) {
+        runs.delete(this.sessionId);
+        // Pages show why it ended, if it did on an error, until they next ask and find no run;
+        // otherwise they forget it now, as a page opened now finds no run.
+        if (this.error) {
+          this.emit();
+        } else {
+          feedFor(this.sessionId).broadcast({ type: 'run', sessionId: this.sessionId, state: null });
+          this.sayStatus();
+        }
+        // What waited for the turn goes when it ends, also when Claude Code ended it by exiting: to the
+        // session's Claude, resumed. Not when Pelican closed it (shutting down closes every one), nor
+        // when it never started: that one would only fail again.
+        if (leftover.length > 0 && !closedHere && this.began) void sendLeftovers(this.sessionId, this.cwd, this.settings, leftover);
+      }
+      this.finished = true;
       sessionsChanged();
     }
   }
 }
 
 const queuedPrompt = ({ uuid, text, attachments }: Prompt): QueuedPrompt => ({ uuid, text, ...(attachments.length > 0 ? { attachments } : {}) });
+
+/**
+ * Prompts queued for a turn whose Claude Code ended part way, sent to the session's Claude, resumed,
+ * in order: the first starts a turn and the others wait for it, listed, as they waited before.
+ */
+async function sendLeftovers(sessionId: string, cwd: string, settings: RunSettings, prompts: Prompt[]): Promise<void> {
+  for (const { uuid, text, attachments } of prompts) {
+    try {
+      await sendMessage({ sessionId, cwd }, { text, attachments, settings, uuid, mode: 'queue' });
+    } catch (error) {
+      console.warn(`[pelican] what was queued in ${sessionId.slice(0, 8)} could not be sent:`, (error as Error).message);
+      return;
+    }
+  }
+}
 
 const runs = new Map<string, SessionRun>();
 
@@ -1098,7 +1220,19 @@ async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
     if (runs.get(sessionId) === run) runs.delete(sessionId);
     return getRun(sessionId);
   }
-  return run;
+  // It may have closed while that was looked into (the idle close, an exit): then it is not current.
+  return run?.closed ? getRun(sessionId) : run;
+}
+
+/** Sends to a run that is there; false when it closed before the message reached it, for the caller to resume the session. */
+async function sentTo(run: SessionRun, input: SendInput): Promise<boolean> {
+  try {
+    await run.send(input);
+    return true;
+  } catch (error) {
+    if (error instanceof RunClosed) return false;
+    throw error;
+  }
 }
 
 /**
@@ -1107,23 +1241,17 @@ async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
  */
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
-  if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
+  if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   if (target.sessionId) {
     const existing = await currentRun(target.sessionId);
-    if (existing) {
-      await existing.send(input);
-      return existing.sessionId;
-    }
+    if (existing && (await sentTo(existing, input))) return existing.sessionId;
     const info = await sessionInfo(target.sessionId);
     const cwd = info?.cwd ?? target.cwd;
     if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
     const launch = await launchFor(cwd);
     // Another request may have started one while this one looked the folder up.
     const started = getRun(target.sessionId);
-    if (started) {
-      await started.send(input);
-      return started.sessionId;
-    }
+    if (started && (await sentTo(started, input))) return started.sessionId;
     const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch);
     runs.set(run.sessionId, run);
     run.start();
@@ -1146,6 +1274,8 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
  */
 export async function replaceLastTurn(sessionId: string, cwd: string, entry: string, prompt: string, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
+  // Turned away before anything changes: the running Claude stays as it is.
+  if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   const launch = await launchFor(cwd);
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
@@ -1156,7 +1286,15 @@ export async function replaceLastTurn(sessionId: string, cwd: string, entry: str
   const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch);
   runs.set(sessionId, run);
   run.start();
-  await run.send(input);
+  try {
+    await run.send(input);
+  } catch (error) {
+    // This Claude resumed from before the last turn: left running, it would take the next message
+    // and the last turn would drop out of the conversation. Without it, that message resumes it whole.
+    run.close();
+    if (runs.get(sessionId) === run) runs.delete(sessionId);
+    throw error;
+  }
   return sessionId;
 }
 

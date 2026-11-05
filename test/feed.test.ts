@@ -104,7 +104,9 @@ describe('a session’s feed', () => {
     // Published with nobody watching (a new session's first prompt): kept for a page that subscribes late.
     await feedFor(id).publish({ uuid: 'p9', role: 'user', blocks: [{ type: 'text', text: 'first' }] });
     const late: ServerEvent[] = [];
-    subscribe(id, (event) => late.push(event))();
+    const unsubscribe = subscribe(id, (event) => late.push(event));
+    await until(() => delivered(late).length > 0);
+    unsubscribe();
     expect(delivered(late)).toEqual(['p9']);
     expect(feedCount()).toBe(before + 1);
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -113,6 +115,31 @@ describe('a session’s feed', () => {
       expect(feedFor(id).idle).toBe(true);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('gives a late subscriber only what the transcript does not hold yet, before what happens meanwhile', async () => {
+    const id = '0f0f0f0f-0000-4000-8000-000000000004';
+    const file = await transcript(id, say('u1', null, 'user', 'Take a screenshot'));
+    // A step the run published with its picture as data, and the transcript then wrote.
+    const picture = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo'.repeat(1000) } };
+    await feedFor(id).publish({ uuid: 'r1', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 't1', content: [picture as never] }] });
+    await appendFile(file, `${JSON.stringify({
+      uuid: 'r1', parentUuid: 'u1', type: 'user', timestamp: new Date((clock += 1000)).toISOString(),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [picture] }] },
+    })}\n`);
+    // One the transcript has not got yet.
+    await feedFor(id).publish({ uuid: 'a1', role: 'assistant', blocks: [{ type: 'text', text: 'Here it is.' }] });
+    const late: ServerEvent[] = [];
+    const unsubscribe = subscribe(id, (event) => late.push(event));
+    try {
+      feedFor(id).broadcast({ type: 'reload', sessionId: id });
+      await until(() => late.length >= 2);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The page reads the picture from the transcript, by address: it is not sent again as data.
+      expect(delivered(late)).toEqual(['a1', 'reload']);
+    } finally {
+      unsubscribe();
     }
   });
 });

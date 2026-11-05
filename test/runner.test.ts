@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { Options, PermissionResult, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,10 +24,15 @@ class FakeClaude {
   prompts: SDKUserMessage[] = [];
   calls: Array<{ name: string; args: unknown[] }> = [];
   private said: unknown[] = [];
-  private listening?: (result: IteratorResult<unknown>) => void;
+  private listening?: { resolve: (result: IteratorResult<unknown>) => void; reject: (error: Error) => void };
   private ended = false;
+  private failure?: Error;
   models: unknown[] = [];
   account: Record<string, unknown> = {};
+  /** How long a closed process takes to exit: a real one ends its stream a while after close(). */
+  static closeDelay = 0;
+  /** How long control requests (settings, mode) take to be answered. */
+  static controlDelay = 0;
 
   constructor(prompt: AsyncIterable<SDKUserMessage> | string, readonly options: Options) {
     if (typeof prompt !== 'string') {
@@ -40,7 +46,7 @@ class FakeClaude {
     if (this.listening) {
       const listening = this.listening;
       this.listening = undefined;
-      listening({ value: message, done: false });
+      listening.resolve({ value: message, done: false });
     } else {
       this.said.push(message);
     }
@@ -48,33 +54,43 @@ class FakeClaude {
 
   end(): void {
     this.ended = true;
-    this.listening?.({ value: undefined, done: true });
+    this.listening?.resolve({ value: undefined, done: true });
+  }
+
+  /** The process ends on its own, as a crash or a kill ends it. */
+  fail(error = new Error('Claude Code process exited with code 1')): void {
+    this.failure = error;
+    const listening = this.listening;
+    this.listening = undefined;
+    listening?.reject(error);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return {
       next: () => {
         if (this.said.length > 0) return Promise.resolve({ value: this.said.shift(), done: false });
+        if (this.failure) return Promise.reject(this.failure);
         if (this.ended) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => {
-          this.listening = resolve;
+        return new Promise((resolve, reject) => {
+          this.listening = { resolve, reject };
         });
       },
     };
   }
 
-  private record(name: string, ...args: unknown[]) {
+  private async record(name: string, ...args: unknown[]) {
     this.calls.push({ name, args });
+    if (FakeClaude.controlDelay > 0) await new Promise((resolve) => setTimeout(resolve, FakeClaude.controlDelay));
   }
 
   called(name: string) {
     return this.calls.filter((c) => c.name === name).map((c) => c.args);
   }
 
-  async interrupt() { this.record('interrupt'); }
-  async setPermissionMode(mode: string) { this.record('setPermissionMode', mode); }
-  async setModel(model?: string) { this.record('setModel', model); }
-  async applyFlagSettings(settings: unknown) { this.record('applyFlagSettings', settings); }
+  async interrupt() { await this.record('interrupt'); }
+  async setPermissionMode(mode: string) { await this.record('setPermissionMode', mode); }
+  async setModel(model?: string) { await this.record('setModel', model); }
+  async applyFlagSettings(settings: unknown) { await this.record('applyFlagSettings', settings); }
   async getContextUsage(options?: unknown) {
     this.record('getContextUsage', options);
     return { percentage: 12.4, totalTokens: 24_800, maxTokens: 200_000 };
@@ -88,8 +104,9 @@ class FakeClaude {
   async stopTask(taskId: string) { this.record('stopTask', taskId); }
   async initializationResult() { return { models: this.models, account: this.account, commands: [], agents: [], claude_code_version: '2.1.318' }; }
   close() {
-    this.record('close');
-    this.end();
+    this.calls.push({ name: 'close', args: [] });
+    if (FakeClaude.closeDelay > 0) setTimeout(() => this.end(), FakeClaude.closeDelay);
+    else this.end();
   }
 }
 
@@ -116,7 +133,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, askedFor, oneLine, runTasks } = await import('../src/server/runner');
+const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks } = await import('../src/server/runner');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
@@ -178,10 +195,14 @@ beforeEach(() => {
   notices.length = 0;
   nextModels = [];
   nextAccount = {};
+  FakeClaude.closeDelay = 0;
+  FakeClaude.controlDelay = 0;
 });
 afterEach(async () => {
   closeAll();
   await settle();
+  // A process that takes a while to exit ends here, not in the next test.
+  if (FakeClaude.closeDelay > 0) await new Promise((resolve) => setTimeout(resolve, FakeClaude.closeDelay + 5));
 });
 afterAll(() => rm(scratch, { recursive: true, force: true }));
 
@@ -222,8 +243,9 @@ describe('a message while Claude works', () => {
     expect(messages().map((m) => m.uuid)).toContain('00000000-0000-4000-8000-000000000001');
   });
 
-  it('queues: Pelican holds it, out of the conversation, and Claude gets the queue together when the turn ends', async () => {
+  it('queues: Pelican holds it, out of the conversation, and Claude gets each prompt as typed when the turn ends', async () => {
     const { run, claude, messages, state, runs } = await start();
+    const firstTurn = state().startedAt!;
     await run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000002' });
     await run.send({ text: 'And update the changelog', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000003' });
     await settle();
@@ -234,20 +256,48 @@ describe('a message while Claude works', () => {
       { uuid: '00000000-0000-4000-8000-000000000003', text: 'And update the changelog' },
     ]);
 
+    await new Promise((resolve) => setTimeout(resolve, 20));
     claude.say(reply('Fixed.'));
     claude.say(result());
-    // Claude Code says the turn is over after the result; the queued prompt is already on its way.
+    // Claude Code says the turn is over after the result; the queued prompts are already on their way.
     claude.say(system('session_state_changed', { state: 'idle' }));
-    await vi.waitFor(() => expect(claude.prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(claude.prompts).toHaveLength(3));
     await settle();
-    expect(textOf(claude.prompts[1]!)).toBe('Then run the tests\n\nAnd update the changelog');
-    expect(claude.prompts[1]!.priority).toBeUndefined();
+    // Each as it was typed, with its own id: Claude Code takes plain prompts together itself.
+    expect(claude.prompts.slice(1).map((p) => [p.uuid, textOf(p), p.priority])).toEqual([
+      ['00000000-0000-4000-8000-000000000002', 'Then run the tests', undefined],
+      ['00000000-0000-4000-8000-000000000003', 'And update the changelog', undefined],
+    ]);
     expect(state().queued).toBeUndefined();
-    expect(messages().map((m) => m.uuid)).toContain('00000000-0000-4000-8000-000000000002');
+    expect(messages().filter((m) => m.role === 'user').map((m) => m.uuid)).toEqual(['00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003']);
     // Claude carries on: never idle in between, and no "Finished" for a turn that is not the last.
     expect(runs().filter((s) => !s.busy)).toHaveLength(0);
     expect(run.busy).toBe(true);
     expect(notices).toHaveLength(0);
+    // It is a turn of its own: its time counts from when Claude got the prompts.
+    expect(state().startedAt).toBeGreaterThan(firstTurn);
+    expect(runs().at(-1)!.startedAt).toBe(state().startedAt);
+  });
+
+  it('a queued command runs as a command, not with the prompt after it, and the turn goes on until Claude answered both', async () => {
+    const { run, claude, state, runs } = await start();
+    await run.send({ text: '/compact', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000005' });
+    await run.send({ text: 'Then carry on with step 2', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000006' });
+    claude.say(reply('Step 1 done.'));
+    claude.say(result());
+    await vi.waitFor(() => expect(claude.prompts).toHaveLength(3));
+    expect(claude.prompts.slice(1).map(textOf)).toEqual(['/compact', 'Then carry on with step 2']);
+    // Claude Code answers a command on its own: that is not the end of what it was given.
+    claude.say(result({ local_command: '/compact', user_message_uuid: '00000000-0000-4000-8000-000000000005', user_message_uuids: ['00000000-0000-4000-8000-000000000005'] }));
+    await settle();
+    expect(run.busy).toBe(true);
+    expect(runs().filter((s) => !s.busy)).toHaveLength(0);
+    expect(notices).toHaveLength(0);
+    claude.say(reply('Step 2 done.'));
+    claude.say(result({ user_message_uuid: '00000000-0000-4000-8000-000000000006', user_message_uuids: ['00000000-0000-4000-8000-000000000006'] }));
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(state().startedAt).toBeUndefined();
+    expect(notices.map((n) => n.body)).toEqual(['Step 2 done.']);
   });
 
   it('a queued prompt taken back is never sent', async () => {
@@ -443,8 +493,23 @@ describe('settings', () => {
     expect(claude.called('applyFlagSettings')).toEqual([[{ effortLevel: 'max', ultracode: true, enableWorkflows: true }], [{ fastMode: true }]]);
     expect(claude.called('setPermissionMode')).toEqual([['plan']]);
     // Unchanged settings send nothing again.
-    await run.updateSettings({ model: 'sonnet' });
+    await run.updateSettings({ model: 'sonnet', effort: 'max', ultracode: true, fast: true, permissionMode: 'plan' });
     expect(claude.called('setModel')).toHaveLength(1);
+    expect(claude.called('applyFlagSettings')).toHaveLength(2);
+    expect(claude.called('setPermissionMode')).toHaveLength(1);
+  });
+
+  it('Default effort picked mid-turn reaches Claude at once, and the run says Default too', async () => {
+    const { run, claude, state } = await start('Go', { model: 'default', effort: 'high' });
+    // The page sends all its settings: Default effort is no effort at all.
+    const picked = { model: 'default', fast: false, ultracode: false, permissionMode: 'default' as const };
+    await run.updateSettings(picked);
+    expect(claude.called('applyFlagSettings')).toEqual([[{ effortLevel: null, ultracode: false }]]);
+    expect(state().settings).toEqual(picked);
+    // The next message carries the same: nothing to apply again.
+    await run.send({ text: 'More', attachments: [], settings: picked });
+    expect(claude.called('applyFlagSettings')).toHaveLength(1);
+    expect(state().settings.effort).toBeUndefined();
   });
 
   it('follow Claude Code: a mode it switched to shows, said once, and picking Manual again reaches it', async () => {
@@ -545,6 +610,31 @@ describe('work that runs on its own', () => {
     expect(run.closed).toBe(true);
   });
 
+  it('a recurring check shows no time gone by, and is let go a week on, as Claude Code lets it go', async () => {
+    const { run, claude, state } = await start();
+    const firstDue = Date.now() + 60_000;
+    claude.say(toolCall('c1', 'CronCreate', { cron: '* * * * *', prompt: 'check the deploy' }));
+    claude.say(toolResult('c1', { id: 'job-1', humanSchedule: 'every minute', recurring: true, nextFireAt: firstDue }));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(state().scheduled).toEqual([{ id: 'job-1', what: 'every minute: check the deploy', next: firstDue, repeats: true }]);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // It fired: when it comes next, Claude Code works out as it goes. Still there, and Claude stays for it.
+      vi.setSystemTime(firstDue + 30_000);
+      expect(state().scheduled).toEqual([{ id: 'job-1', what: 'every minute: check the deploy', repeats: true }]);
+      closeIdle(Date.now() + config.idleCloseMs + 60_000);
+      expect(run.closed).toBe(false);
+      // A week after it was made, Claude Code has let it go: nothing keeps Claude running for it.
+      vi.setSystemTime(Date.now() + 7 * 24 * 3600_000);
+      expect(state().scheduled).toBeUndefined();
+      closeIdle(Date.now() + config.idleCloseMs + 60_000);
+      expect(run.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports what subagents and background tasks are doing, and what a command printed', async () => {
     const { run, claude, state } = await start();
     claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
@@ -597,6 +687,163 @@ describe('work that runs on its own', () => {
     await vi.waitFor(() => expect(state().context).toEqual({ percent: 12, tokens: 24_800, max: 200_000 }));
     expect(claude.called('getContextUsage')).toEqual([[{ detail: 'summary' }]]);
     expect(run.busy).toBe(false);
+  });
+});
+
+describe('a message sent while its Claude closes', () => {
+  // Claude idle for a while: the idle close may come while a message to it is on its way.
+  async function idle() {
+    const started = await start();
+    started.claude.say(init());
+    started.claude.say(result());
+    await vi.waitFor(() => expect(started.run.busy).toBe(false));
+    // Its transcript, where the session's folder is found when it is resumed.
+    const dir = path.join(scratch, 'claude', 'projects', folder.replace(/[^a-zA-Z0-9]/g, '-'));
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${started.sessionId}.jsonl`), `${JSON.stringify({
+      type: 'user', uuid: crypto.randomUUID(), parentUuid: null, sessionId: started.sessionId, cwd: folder,
+      timestamp: new Date(Date.now() - 60_000).toISOString(), message: { role: 'user', content: 'Fix the login test' },
+    })}\n`);
+    return started;
+  }
+
+  async function reachedAgain(sessionId: string, claude: FakeClaude, messages: () => ChatMessage[], uuid: string) {
+    await vi.waitFor(() => expect(claudes.at(-1)).not.toBe(claude));
+    const resumed = claudes.at(-1)!;
+    expect(resumed.options).toMatchObject({ resume: sessionId });
+    await vi.waitFor(() => expect(resumed.prompts.map((p) => p.uuid)).toEqual([uuid]));
+    expect(claude.prompts.map(textOf)).toEqual(['Fix the login test']);
+    // Shown once, as sent, and Claude is at work on it.
+    expect(messages().filter((m) => m.uuid === uuid)).toHaveLength(1);
+    expect(getRun(sessionId)?.busy).toBe(true);
+  }
+
+  it('closed while Pelican looks whether it is still current, goes to Claude resumed', async () => {
+    const { sessionId, claude, run, messages } = await idle();
+    const uuid = '00000000-0000-4000-8000-0000000000c1';
+    const sending = sendMessage({ sessionId }, { text: 'Are you there?', attachments: [], settings: {}, uuid });
+    run.close();
+    expect(await sending).toBe(sessionId);
+    await reachedAgain(sessionId, claude, messages, uuid);
+  });
+
+  it('closed while its settings are being applied, goes to Claude resumed', async () => {
+    FakeClaude.controlDelay = 100;
+    const { sessionId, claude, run, messages } = await idle();
+    const uuid = '00000000-0000-4000-8000-0000000000c2';
+    const sending = sendMessage({ sessionId }, { text: 'Are you there?', attachments: [], settings: { model: 'sonnet' }, uuid });
+    await vi.waitFor(() => expect(claude.called('setModel')).toHaveLength(1), { interval: 2 });
+    run.close();
+    expect(await sending).toBe(sessionId);
+    await reachedAgain(sessionId, claude, messages, uuid);
+  });
+});
+
+describe('the last prompt edited in place', () => {
+  it('into /clear is turned away before the running Claude is touched, and the next message carries on the whole conversation', async () => {
+    const { sessionId, claude, run } = await start();
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    const before = claudes.length;
+    await expect(replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: '/clear', attachments: [], settings: {} })).rejects.toThrow(/new session/);
+    // No Claude resumed from before the last turn is left to take the next message.
+    expect(claudes).toHaveLength(before);
+    expect(claude.called('close')).toHaveLength(0);
+    expect(getRun(sessionId)).toBe(run);
+    await sendMessage({ sessionId }, { text: 'Carry on', attachments: [], settings: {} });
+    await settle();
+    expect(claude.prompts.map(textOf)).toEqual(['Fix the login test', 'Carry on']);
+  });
+});
+
+describe('when Claude Code ends', () => {
+  it('a run replaced by a newer one says nothing after it: the page keeps the newer one, at work', async () => {
+    // A real process exits a while after it is closed, after the newer run has started.
+    FakeClaude.closeDelay = 30;
+    const { sessionId, claude, run, events } = await start();
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    const heard: ServerEvent[] = [];
+    const stop = connect((event) => heard.push(event));
+    // The last prompt edited in place: Claude resumed from before it, with the new text.
+    await replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: 'Edited prompt', attachments: [], settings: {} });
+    const fresh = getRun(sessionId)!;
+    expect(fresh).not.toBe(run);
+    const from = events.length;
+    await vi.waitFor(() => expect(run.closed).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(fresh.busy).toBe(true);
+    // Nothing from the old run after the new one spoke: no idle state, no idle status for the lists.
+    expect(events.slice(from).filter((e) => e.type === 'run' && !e.state?.busy)).toEqual([]);
+    expect(events.filter((e) => e.type === 'run').at(-1)).toMatchObject({ state: { busy: true } });
+    expect(heard.filter((e) => e.type === 'status' && e.sessionId === sessionId).at(-1)).toMatchObject({ status: 'running' });
+    expect(getRun(sessionId)).toBe(fresh);
+    stop();
+  });
+
+  it('pages watching a run that ended are cleared, as a page opened now would find it', async () => {
+    const { sessionId, claude, run, events } = await start();
+    claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
+    claude.say(system('task_progress', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', usage: { total_tokens: 9, tool_uses: 1, duration_ms: 10 }, summary: 'Reading' }));
+    claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' }] }));
+    claude.say(reply('Started.'));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.state().tasks).toHaveLength(1));
+    // The process ends: with nothing to say why, the pages forget the run, its tasks with it.
+    claude.end();
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    await settle();
+    expect(events.filter((e) => e.type === 'run').at(-1)).toEqual({ type: 'run', sessionId, state: null });
+  });
+
+  it('prompts queued for a turn whose Claude Code ended part way go to it resumed, as when a turn ends', async () => {
+    const { sessionId, claude, run, messages } = await start();
+    claude.say(init());
+    await run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000e1' });
+    await run.send({ text: 'And update the changelog', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000e2' });
+    // Killed, or crashed, mid-turn.
+    claude.fail(new Error('Claude Code process exited with code 137'));
+    await vi.waitFor(() => expect(claudes.at(-1)).not.toBe(claude));
+    const resumed = claudes.at(-1)!;
+    expect(resumed.options).toMatchObject({ resume: sessionId, cwd: folder });
+    await vi.waitFor(() => expect(resumed.prompts).toHaveLength(1));
+    expect(resumed.prompts.map((p) => [p.uuid, textOf(p)])).toEqual([['00000000-0000-4000-8000-0000000000e1', 'Then run the tests']]);
+    // The first is in the conversation; the next waits its turn, still listed and still yours to take back.
+    expect(messages().filter((m) => m.role === 'user').map((m) => m.uuid)).toEqual(['00000000-0000-4000-8000-0000000000e1']);
+    const fresh = getRun(sessionId)!;
+    expect(fresh).not.toBe(run);
+    expect(fresh.state()).toMatchObject({ busy: true, queued: [{ uuid: '00000000-0000-4000-8000-0000000000e2', text: 'And update the changelog' }] });
+  });
+
+  it('what was queued for a Claude closed here, or one that never started, starts nothing', async () => {
+    const shutDown = await start();
+    shutDown.claude.say(init());
+    await shutDown.run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue' });
+    const neverStarted = await start();
+    await neverStarted.run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue' });
+    const before = claudes.length;
+    // Pelican shutting down closes every Claude; one that cannot start would only fail again.
+    closeAll();
+    neverStarted.claude.fail(new Error('Claude Code is not signed in'));
+    await vi.waitFor(() => expect(getRun(shutDown.sessionId) ?? getRun(neverStarted.sessionId)).toBeUndefined());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claudes).toHaveLength(before);
+  });
+
+  it('a run that ended on an error says why, and nothing more of what it was doing', async () => {
+    const { sessionId, claude, events } = await start();
+    claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
+    claude.say(system('task_progress', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', usage: { total_tokens: 9, tool_uses: 1, duration_ms: 10 }, summary: 'Reading' }));
+    claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'a1', task_type: 'local_agent', subagent_type: 'Explore', description: 'Find the flaky test' }] }));
+    await vi.waitFor(() => expect(getRun(sessionId)!.state().progress).toBeDefined());
+    claude.fail(new Error('Claude Code process exited with code 137'));
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    await settle();
+    const last = events.filter((e) => e.type === 'run').at(-1) as Extract<ServerEvent, { type: 'run' }>;
+    expect(last.state).toMatchObject({ busy: false, error: expect.stringContaining('137') });
+    expect(last.state).not.toHaveProperty('tasks');
+    expect(last.state).not.toHaveProperty('progress');
+    expect(last.state).not.toHaveProperty('startedAt');
   });
 });
 

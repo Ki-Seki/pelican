@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { readHistory } from '../src/server/history';
 
@@ -105,6 +105,39 @@ describe('readHistory: messages sent mid-turn', () => {
   });
 });
 
+describe('readHistory: notes Claude Code adds to the conversation', () => {
+  it('keeps hook feedback, warnings and notices where they were said, under the id the run published them with', async () => {
+    const file = path.join(dir, 'notes.jsonl');
+    const at = () => new Date((clock += 1000)).toISOString();
+    await writeFile(file, [
+      say('u1', null, 'user', 'Delete the build folder'),
+      JSON.stringify({
+        uuid: 'a1', parentUuid: 'u1', type: 'assistant', timestamp: at(),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'rm -rf build' } }] },
+      }),
+      // A hook's message, as Claude Code records it, and its own notices.
+      JSON.stringify({
+        uuid: 'h1', parentUuid: 'a1', type: 'attachment', timestamp: at(),
+        attachment: { type: 'hook_system_message', content: 'rm -rf is blocked here\nuse the clean script', hookName: 'PreToolUse:Bash', toolUseID: 't1', hookEvent: 'PreToolUse' },
+      }),
+      JSON.stringify({ uuid: 'n1', parentUuid: 'h1', type: 'system', subtype: 'informational', level: 'warning', content: 'The hook took 9 s', isMeta: false, timestamp: at() }),
+      // The terminal shows 'info' lines only in its transcript view; the run does not publish them either.
+      JSON.stringify({ uuid: 'n2', parentUuid: 'n1', type: 'system', subtype: 'informational', level: 'info', content: 'Running hooks', isMeta: false, timestamp: at() }),
+      JSON.stringify({
+        uuid: 'r1', parentUuid: 'n2', type: 'user', timestamp: at(),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Blocked by hook', is_error: true }] },
+      }),
+      say('a2', 'r1', 'assistant', 'I used npm run clean instead.'),
+    ].join('\n') + '\n');
+    const messages = await readHistory(file);
+    expect(messages.map((m) => [m.uuid, m.role])).toEqual([['u1', 'user'], ['a1', 'assistant'], ['h1', 'system'], ['n1', 'system'], ['r1', 'user'], ['a2', 'assistant']]);
+    // In Claude Code's words, as the run shows them while the turn runs.
+    expect(messages[2]!.blocks).toEqual([{ type: 'text', text: 'PreToolUse:Bash says: rm -rf is blocked here\nPreToolUse:Bash says: use the clean script' }]);
+    expect(messages[3]!.blocks).toEqual([{ type: 'text', text: 'The hook took 9 s' }]);
+    expect(messages[3]!.timestamp).toBeTypeOf('number');
+  });
+});
+
 describe('readRecordedSettings', () => {
   it('keeps what the session last ran with: model, effort, speed, ultracode, permission mode', async () => {
     const { readRecordedSettings } = await import('../src/server/history');
@@ -122,4 +155,43 @@ describe('readRecordedSettings', () => {
     ].join('\n') + '\n');
     expect(await readRecordedSettings(file)).toEqual({ model: 'claude-opus-5-5', effort: 'max', fast: true, ultracode: true, permissionMode: 'bypassPermissions' });
   });
+});
+
+describe('readHistory: the parsed transcripts it keeps', () => {
+  it('keeps two long sessions in use at once, reading only what each gains, though together they pass the budget', async () => {
+    // Two sessions of about 35M characters kept each (a message keeps at most 60,000), more together
+    // than the 64 Mi kept for sessions not in use.
+    const long = async (name: string) => {
+      const file = path.join(dir, name);
+      const text = 'x'.repeat(59_000);
+      const rows: string[] = [];
+      for (let i = 0; i < 600; i += 1) rows.push(say(`${name}-${i}`, i === 0 ? null : `${name}-${i - 1}`, i % 2 ? 'assistant' : 'user', text));
+      await writeFile(file, `${rows.join('\n')}\n`);
+      return file;
+    };
+    const a = await long('a.jsonl');
+    const b = await long('b.jsonl');
+    const firstOfA = (await readHistory(a))[0];
+    const firstOfB = (await readHistory(b))[0];
+    // Each grows while the other is read, as two pages following two working sessions see them.
+    for (let i = 0; i < 2; i += 1) {
+      await appendFile(a, `${say(`a-more-${i}`, i === 0 ? 'a.jsonl-599' : `a-more-${i - 1}`, 'user', 'more')}\n`);
+      const nowA = await readHistory(a);
+      await appendFile(b, `${say(`b-more-${i}`, i === 0 ? 'b.jsonl-599' : `b-more-${i - 1}`, 'user', 'more')}\n`);
+      const nowB = await readHistory(b);
+      // Read on from where it was, not parsed again from the start.
+      expect(nowA[0]).toBe(firstOfA);
+      expect(nowB[0]).toBe(firstOfB);
+      expect(texts(nowA).at(-1)).toBe('more');
+    }
+    // Once nobody has looked at one for a minute, it is let go past the budget, as before.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      await readHistory(b);
+      expect((await readHistory(a))[0]).not.toBe(firstOfA);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
 });
