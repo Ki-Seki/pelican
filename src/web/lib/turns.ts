@@ -126,12 +126,15 @@ function shellOutput(raw: string): { text: string; saved?: string } {
   return { text: `${persisted[2]!.replace(/\n+$/, '')}\n${persisted[1]}`, ...(name && SAVED_NAME.test(name) ? { saved: name } : {}) };
 }
 
-/** The output of a `!` command's record, as the card shows it. */
+/**
+ * The output of a `!` command's record, as the card shows it: Claude Code's word that a command
+ * printed nothing is for Claude, and the card shows nothing in its place.
+ */
 function shellRecord(text: string): { stdout: string; stderr: string; saved?: string } {
   const stdout = shellOutput(tag(text, 'bash-stdout') ?? '');
   const stderr = shellOutput(tag(text, 'bash-stderr') ?? '');
   const saved = stdout.saved ?? stderr.saved;
-  return { stdout: stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}) };
+  return { stdout: stdout.text === '(Bash completed with no output)' ? '' : stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}) };
 }
 
 /** Splits what Claude Code wraps in tags out of a user message's text. */

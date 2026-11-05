@@ -161,4 +161,13 @@ describe('a running command', () => {
     expect(await screen.findByText('The saved output is gone; this is its start')).toBeTruthy();
     expect(screen.getByText(/first line/)).toBeTruthy();
   });
+
+  it('that printed nothing shows the command alone; its record keeps Claude Code’s words for Claude', () => {
+    const record = [user('r12', '<bash-input>touch a.txt</bash-input>'), user('o12', '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')];
+    expect(buildItems(record)).toEqual([{ kind: 'shell', key: 'r12', command: 'touch a.txt', stdout: '', stderr: '' }]);
+    const { container } = render(<MessageList sessionId="s12" view={view(record)} mode="normal" />);
+    expect(screen.getByText('touch a.txt')).toBeTruthy();
+    expect(screen.queryByText(/completed with no output/)).toBeNull();
+    expect(container.querySelector('pre')).toBeNull();
+  });
 });
