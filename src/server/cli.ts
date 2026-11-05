@@ -496,17 +496,12 @@ async function main(): Promise<void> {
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${open}\n  ${protection}${claude}\n`);
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
 
-  // The phone: a QR code with a one-time code (never the token) where the address is known.
+  // The phone: a QR code with a one-time code (never the token) where the address is known. Shown
+  // once: the terminal is never read here, or a Pelican started in the background (`pelican &`)
+  // would be stopped by the terminal (SIGTTIN). `pelican phone` makes a new code, on Enter too.
   if (search.address && interactive) {
-    const fresh = () => (mode === 'none' ? null : issueCode());
-    process.stdout.write(`${phoneBlock(search.address, fresh())}`);
-    if (mode !== 'none' && process.stdin.isTTY) {
-      process.stdout.write('  Press Enter for a new code.\n\n');
-      process.stdin.setEncoding('utf8');
-      process.stdin.on('data', () => process.stdout.write(`\n${phoneBlock(search.address!, fresh())}\n`));
-    } else {
-      process.stdout.write('\n');
-    }
+    const code = mode === 'none' ? null : issueCode();
+    process.stdout.write(`${phoneBlock(search.address, code)}${code ? `  A new one: \`${NAME} phone\`\n` : ''}\n`);
   } else if (search.address) {
     console.log(`  On your phone: ${search.address.url}\n`);
   } else if (!config.demo) {
