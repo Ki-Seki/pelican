@@ -69,6 +69,8 @@ export type PushPayload = {
   tag: string;
   /** A request the notification can answer: Allow and Deny, where the device shows buttons. */
   request?: string;
+  /** The command fits the one line of it Android's pop-up shows beside the buttons: Android offers them only then. */
+  fitsOneLine?: true;
 };
 
 /** Characters a lock screen leaves out, outside an emoji: controls, line breaks, invisible and direction-changing ones. */
@@ -128,13 +130,16 @@ const tenths = new Map(WIDTHS.flatMap(([width, chars]) => [...chars].map((char) 
 const widthOf = (text: string) => [...text].reduce((sum, char) => sum + tenths.get(char)!, 0);
 
 /**
- * The narrowest notification body, in tenths of an em, and the lines of it every notification
- * shows: a macOS banner beside the site's icon has about 220 px of 13 px text (17 em) on two
- * lines, and 16.5 em leaves a margin. Windows' toasts and GNOME's banners are wider, and Android
- * shows more lines once a notification is expanded.
+ * Where a notification's text is narrowest: how wide a line is, in tenths of an em, and how many
+ * lines show. A macOS banner beside the site's icon has about 220 px of 13 px text (17 em) on two
+ * lines, and 16.5 em leaves a margin; Windows' toasts and GNOME's banners are wider. Android's
+ * pop-up shows the title and one line of the text beside the buttons, the rest only once it is
+ * expanded: on a phone 360 dp wide, next to the site's icon, about 175 to 200 dp of 14 sp text
+ * (12.5 to 14 em), and 12 em leaves a margin.
  */
-const LINE = 165;
-const LINES = 2;
+export type Layout = { width: number; lines: number };
+export const BANNER: Layout = { width: 165, lines: 2 };
+export const ANDROID_POP_UP: Layout = { width: 120, lines: 1 };
 
 /**
  * Whether a line may break at the space between two words on every device. Unicode's line
@@ -148,11 +153,11 @@ const breaksBetween = (before: string, after: string) => {
 };
 
 /**
- * Whether plain text shows whole in any notification: within two lines at the narrowest, wrapped
- * only where every device may break a line, which takes the most lines, and with no word wider
- * than a line, since devices cut those in different places.
+ * Whether plain text shows whole in a layout: within its lines, wrapped only where every device may
+ * break a line, which takes the most lines, and with no word wider than a line, since devices cut
+ * those in different places.
  */
-function fitsTwoLines(text: string): boolean {
+export function fits(text: string, { width: line, lines: most }: Layout): boolean {
   const words = text.split(' ');
   const space = tenths.get(' ')!;
   // The widths of what no device breaks: words, joined across a space no line breaks at.
@@ -164,15 +169,15 @@ function fitsTwoLines(text: string): boolean {
   let lines = 0;
   let room = 0;
   for (const width of pieces) {
-    if (width > LINE) return false;
+    if (width > line) return false;
     if (lines > 0 && space + width <= room) {
       room -= space + width;
     } else {
       lines += 1;
-      room = LINE - width;
+      room = line - width;
     }
   }
-  return lines <= LINES;
+  return lines <= most;
 }
 
 /** What a Bash or PowerShell request may hold besides its command, none of which changes what runs. */
@@ -187,7 +192,7 @@ const BESIDES_COMMAND = new Set(['description', 'timeout', 'run_in_background'])
 function shownWhole(request: PermissionRequest): string | undefined {
   if (request.toolName !== 'Bash' && request.toolName !== 'PowerShell') return undefined;
   const { command, ...rest } = request.input;
-  if (typeof command !== 'string' || !PLAIN.test(command) || !fitsTwoLines(command)) return undefined;
+  if (typeof command !== 'string' || !PLAIN.test(command) || !fits(command, BANNER)) return undefined;
   const more = Object.entries(rest).some(([key, value]) => !BESIDES_COMMAND.has(key) && value !== undefined && value !== null && value !== false);
   return more ? undefined : command;
 }
@@ -195,15 +200,17 @@ function shownWhole(request: PermissionRequest): string | undefined {
 /**
  * What a notification for a request may answer, Allow and Deny, and the body it then has: a
  * command Claude wants to run, shown whole, since only then does the notification show all that
- * Allow approves. Anything else opens the session: an edit, an MCP tool or another tool whose
- * input it does not show, a command too long or with other characters, a question or a plan, and
- * a request Claude Code says must not be allowed by a stray tap. Not even Deny is offered there:
- * it would answer, unseen, a request the page shows in full, and one rule for when a notification
- * answers stays clear.
+ * Allow approves; on Android only one that fits the one line its pop-up shows beside the buttons
+ * (`fitsOneLine`, which the service worker checks there). Anything else opens the session: an
+ * edit, an MCP tool or another tool whose input it does not show, a command too long or with other
+ * characters, a question or a plan, and a request Claude Code says must not be allowed by a stray
+ * tap. Not even Deny is offered there: it would answer, unseen, a request the page shows in full,
+ * and one rule for when a notification answers stays clear.
  */
-export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request'>> {
+export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request' | 'fitsOneLine'>> {
   const command = request.elicitation || request.defaultToNo ? undefined : shownWhole(request);
-  return command === undefined ? {} : { body: command, request: request.id };
+  if (command === undefined) return {};
+  return { body: command, request: request.id, ...(fits(command, ANDROID_POP_UP) ? { fitsOneLine: true } : {}) };
 }
 
 /**

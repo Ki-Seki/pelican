@@ -96,10 +96,12 @@ from every app.
 - An MCP server that needs you to sign in says where: `claude mcp login <name>` in a terminal on
   the computer, or claude.ai's connectors page.
 - Approval notifications have Allow and Deny where the device shows buttons on notifications
-  (Chrome on a computer or Android), for a command any notification shows whole: plain ASCII with
-  one space between words, on one line, short enough for two lines of the narrowest (about 50
-  characters, fewer when they are wide). A notification shows the command itself, not Claude's
-  description of it; edits, other tools, other commands, questions and plans open the session.
+  (Chrome on a computer or Android), for a command a notification shows whole: printable ASCII with
+  one space between words, on one line, short enough for two lines of the narrowest notification
+  (about 50 characters, fewer when they are wide), and on Android, whose pop-up shows one line
+  beside the buttons, for that one line (about 20). A notification shows the command itself, not
+  Claude's description of it; edits, other tools, other commands, questions and plans open the
+  session.
 - Notifications and check-ins keep emoji whole, also those made of several pictures, and still
   leave out characters that hide text or turn it around, now also from a notification's title, the
   session's. Their text is cut between characters as they show, and sooner where those hold many
@@ -153,8 +155,9 @@ from every app.
 - A side chat only reads, asks for nothing, and takes no `/` or `!` commands. A side chat branched
   from one of its questions is one too.
 - Notification buttons go through the same checks as the page, and Allow is offered only for a
-  command every notification shows in full and as it runs: printable ASCII with one space between
-  words, on one line, that fits two lines of the narrowest notification in its widest letters.
+  command a notification shows in full: printable ASCII with one space between words, on one line,
+  that fits two lines of the narrowest notification in its widest letters, and on Android, whose
+  pop-up shows one line beside the buttons, that one line.
 
 ### Site, docs and project
 
