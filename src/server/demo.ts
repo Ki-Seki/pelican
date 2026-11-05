@@ -10,6 +10,7 @@ import { config } from './config.js';
 import type { LiveProcess } from './live.js';
 import { SETTINGS_SCREENSHOT } from './demo-image.js';
 import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
+import { DEMO_WORKFLOW_FILES, demoWorkflowRun, WORKFLOW_DEMO } from './demo-workflows.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 
 /**
@@ -28,7 +29,7 @@ type Block = Record<string, unknown>;
  * the model's own (an API error). `result`: what Claude Code records of a tool's result next to it
  * (an edit's structured patch); `checkpoint`: Claude Code kept the files as they were before this prompt.
  */
-type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number; model?: string; extra?: Record<string, unknown>; result?: Record<string, unknown>; checkpoint?: boolean };
+export type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number; model?: string; extra?: Record<string, unknown>; result?: Record<string, unknown>; checkpoint?: boolean };
 
 const tool = (id: string, name: string, input: Record<string, unknown>): Block => ({ type: 'tool_use', id, name, input });
 const result = (id: string, content: string, isError = false): Block => ({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) });
@@ -169,8 +170,14 @@ function edited(file: string, before: string, oldString: string, newString: stri
 /** What Claude Code records of a Write that made a file. */
 const created = (file: string, content: string) => ({ type: 'create', filePath: file, content, structuredPatch: [], originalFile: null });
 
-/** `copies`: a side chat's session, whose conversation it starts with (as forkSession copies one). */
-type DemoSession = { id: string; title: string; project: string; branch: string; rows: (cwd: string) => Row[]; scratch?: boolean; copies?: string };
+/**
+ * `copies`: a side chat's session, whose conversation it starts with (as forkSession copies one).
+ * `files`: what Claude Code keeps in the session's own folder (`dir`), next to its transcript.
+ */
+export type DemoSession = {
+  id: string; title: string; project: string; branch: string; rows: (cwd: string, dir?: string) => Row[]; scratch?: boolean; copies?: string;
+  files?: (cwd: string, dir: string) => Record<string, string>;
+};
 
 const THEME_CSS = `:root {
   --bg: #ffffff;
@@ -654,6 +661,13 @@ SESSIONS.push(DEV_SERVER, STOPPED_ON_ERROR, WAITING_IN_TERMINAL);
 DEMO_FILES['docs-site']!.push('docs/getting-started.md');
 FILE_TEXT['docs-site/docs/getting-started.md'] = GETTING_STARTED;
 
+// A review run as a workflow that finished, and the fixes it led to, still running.
+SESSIONS.push(WORKFLOW_DEMO);
+for (const [file, content] of Object.entries(DEMO_WORKFLOW_FILES)) {
+  DEMO_FILES['acme-web']!.push(file);
+  FILE_TEXT[`acme-web/${file}`] = content;
+}
+
 const DEV_TASK = { id: 'bash_1', description: 'Start the dev server', type: 'local_bash', output: true };
 
 /** The dev server Claude left running: its session is idle, with one task. */
@@ -723,7 +737,7 @@ export async function prepareDemo(): Promise<void> {
     // A side chat starts with the conversation it is about, as the Agent SDK's forkSession leaves
     // one: each row under the copy's id, as it was written there, saying which row it came from.
     const copied = (session.copies ? written.get(session.copies) ?? [] : []).map((entry) => ({ ...entry, uuid: randomUUID(), from: entry.uuid as string | undefined }));
-    const own = session.rows(cwd).map((row) => {
+    const own = session.rows(cwd, path.join(dir, session.id)).map((row) => {
       const uuid = randomUUID();
       // A row the model did not write (an API error) used no tokens.
       const { usage, ...meta } = demoRowUsage(session.id, row.role === 'assistant' && !row.model ? 'assistant' : 'user');
@@ -748,6 +762,11 @@ export async function prepareDemo(): Promise<void> {
       parent = uuid;
     }
     await writeFile(path.join(dir, `${session.id}.jsonl`), `${lines.join('\n')}\n`);
+    for (const [file, content] of Object.entries(session.files?.(cwd, path.join(dir, session.id)) ?? {})) {
+      const full = path.join(dir, session.id, file);
+      await mkdir(path.dirname(full), { recursive: true });
+      await writeFile(full, content);
+    }
   }
   await writeDemoUsage(root, claudeHome);
   config.home = root;
@@ -770,6 +789,8 @@ export const DEMO_MODELS: ModelOption[] = [
 export function demoRunState(sessionId: string): RunState | undefined {
   const devServer = devServerRun(sessionId);
   if (devServer) return devServer;
+  const workflows = demoWorkflowRun(sessionId, path.join(config.home, 'code', WORKFLOW_DEMO.project));
+  if (workflows) return workflows;
   const first = SESSIONS[0]!;
   if (sessionId !== first.id) return undefined;
   const cwd = path.join(config.home, 'code', first.project);

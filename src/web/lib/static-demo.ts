@@ -16,7 +16,7 @@ export function requestKey(path: string): string {
   return hash.toString(16).padStart(8, '0');
 }
 
-const TIME_KEYS = new Set(['timestamp', 'lastActivity', 'createdAt', 'resetsAt', 'at']);
+const TIME_KEYS = new Set(['timestamp', 'lastActivity', 'createdAt', 'resetsAt', 'at', 'startedAt', 'queuedAt', 'lastProgressAt']);
 
 function shift(value: unknown, by: number): unknown {
   if (Array.isArray(value)) return value.map((v) => shift(v, by));
@@ -65,9 +65,16 @@ export async function staticRequest(base: URL, path: string, init?: RequestInit)
     search = q.toLowerCase();
     wanted = `files?cwd=${encodeURIComponent(new URLSearchParams(params).get('cwd') ?? '')}&q=`;
   }
+  // A workflow agent's newest steps, asked again while it works: from the page the build saved.
+  const since = /^sessions\/[^/]+\/workflows\/[^/]+\/agents\/[^/]+$/.test(query ?? '') ? new URLSearchParams(params).get('after') : null;
+  if (since !== null) wanted = query!;
   const response = await fetch(new URL(`data/${requestKey(wanted)}.json`, base));
   if (!response.ok) throw new DemoRefusal('Not part of the demo');
   let data = await response.json() as Record<string, unknown>;
   if (search && Array.isArray(data.files)) data = { files: (data.files as string[]).filter((f) => f.toLowerCase().includes(search!)) };
+  if (since !== null && Array.isArray(data.messages) && typeof data.offset === 'number') {
+    const from = Math.max(Number(since) || 0, data.offset);
+    data = { ...data, messages: data.messages.slice(from - data.offset), offset: from };
+  }
   return shift(data, Date.now() - (await generatedAt));
 }

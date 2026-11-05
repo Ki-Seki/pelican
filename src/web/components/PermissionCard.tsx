@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { revealHidden } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
+import { workflowOf } from '../../shared/workflows';
 import { api } from '../lib/api';
 import { describeTool } from '../lib/tools';
+import { fenced } from '../lib/workflows';
 import { Diff } from './Diff';
 import { Markdown } from './Markdown';
 
@@ -82,9 +84,87 @@ const plainWords = (text: string) => text.replace(/\s+/g, ' ').trim().replace(/[
 function headline(request: PermissionRequest, cwd: string | undefined): string {
   if (request.title) return request.title;
   if (request.toolName === 'EnterPlanMode') return 'Claude wants to plan before it changes anything';
+  if (request.toolName === 'Workflow') return 'Claude wants to run a dynamic workflow';
   const { verb } = describeTool(request.toolName, request.input, cwd);
   const plain = ['Read', 'Edit', 'Write', 'Run', 'Search', 'Find', 'Fetch', 'Search the web', 'Edit notebook'].includes(verb);
   return `Claude wants to ${plain ? verb.toLowerCase() : `use ${verb}`}`;
+}
+
+/** What a Workflow call's input holds besides the script: shown, as Claude Code shows its args. */
+const WORKFLOW_KEYS = new Set(['script', 'scriptPath', 'name', 'args', 'resumeFromRunId']);
+
+/**
+ * A workflow asked about as Claude Code asks: its phases, what running it costs, the args its
+ * script runs with (which may say more than the script does), the file it runs or the run it
+ * resumes, and its script a tap away, open already when it hides characters.
+ */
+function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
+  const { name, meta } = workflowOf(input);
+  const script = str(input.script);
+  const shownScript = script ? revealHidden(script) : undefined;
+  const [raw, setRaw] = useState(Boolean(shownScript?.hidden));
+  const phases = meta?.phases ?? [];
+  const file = str(input.scriptPath);
+  const resumes = str(input.resumeFromRunId);
+  const args = input.args === undefined ? undefined : revealHidden(typeof input.args === 'string' ? input.args : JSON.stringify(input.args, null, 2) ?? '');
+  const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !WORKFLOW_KEYS.has(key)));
+  const other = Object.keys(rest).length > 0 ? revealHidden(JSON.stringify(rest, null, 2)) : undefined;
+  return (
+    <div className="space-y-2 text-[13px]">
+      {name && <div className="font-mono text-[12px] text-muted">{revealHidden(name).text}</div>}
+      {(file || resumes) && (
+        <div className="space-y-0.5 text-[12.5px] text-muted">
+          {file && <div className="break-all">Script file: <span className="font-mono text-[12px] text-fg/90">{revealHidden(file).text}</span></div>}
+          {resumes && <div>Resumes run <span className="font-mono text-[12px] text-fg/90">{revealHidden(resumes).text}</span>: completed agents return cached results</div>}
+        </div>
+      )}
+      {phases.length > 0 && (
+        <div>
+          <div className="text-muted">This dynamic workflow will spin up multiple subagents across the following phases:</div>
+          <ol className="mt-1 space-y-0.5">
+            {phases.map((phase, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="w-3.5 shrink-0 text-right text-faint tabular-nums">{i + 1}.</span>
+                <span className="min-w-0">{revealHidden(phase.title).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail).text}</span>}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {args && (
+        <div>
+          <span className="font-medium text-muted">args: </span>
+          <Clamped text={args.text} className="mt-0.5 rounded-lg bg-chip px-3 py-2 font-mono text-[12px] whitespace-pre-wrap break-words text-muted" />
+        </div>
+      )}
+      {other && <pre className="rounded-lg bg-chip px-3 py-2 font-mono text-[12px] whitespace-pre-wrap break-words text-muted">{other.text}</pre>}
+      <div className="text-[12.5px] leading-snug text-faint">
+        Dynamic workflows can use a lot of tokens quickly by running many subagents in parallel, which counts against your usage limit. Stop a running workflow at any time from its card.
+      </div>
+      {shownScript && (
+        <div>
+          <button type="button" aria-expanded={raw} onClick={() => setRaw((v) => !v)} className="relative text-[12.5px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg">{raw ? 'Hide raw script' : 'View raw script'}</button>
+          {raw && <Markdown text={fenced(shownScript.text, 'js')} className="mt-1 text-[13px]" />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A text shown whole up to a dozen lines, the rest a tap away, as Claude Code's View args. */
+function Clamped({ text, className }: { text: string; className: string }) {
+  const [all, setAll] = useState(false);
+  const long = text.split('\n').length > 12 || text.length > 1200;
+  return (
+    <>
+      <div className={`${className} ${long && !all ? 'line-clamp-12' : ''}`}>{text}</div>
+      {long && (
+        <button type="button" aria-expanded={all} onClick={() => setAll((v) => !v)} className="relative mt-0.5 text-[12.5px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg">
+          {all ? 'Show less' : 'View args'}
+        </button>
+      )}
+    </>
+  );
 }
 
 function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request: PermissionRequest; cwd?: string }) {
@@ -98,10 +178,15 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target) : undefined;
-  const raw = !edit && !command && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
+  const workflow = request.toolName === 'Workflow';
+  const raw = !edit && !command && !workflow && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
   const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
-  const hidden = [command, target, raw, head, about, server, always].some((text) => text?.hidden);
+  // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.
+  const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent) : undefined;
+  // A workflow's input shows part by part, each with what hides in it shown; it is warned of all the same.
+  const asked = workflow ? revealHidden(JSON.stringify(input)) : undefined;
+  const hidden = [command, target, raw, asked, head, about, server, always, agent].some((text) => text?.hidden);
   // Claude Code often passes the command's own few words as the request's line too: said once.
   const shownTarget = target && (summary.prose || !command) ? target : undefined;
   const repeats = (text?: string) => Boolean(about && text && plainWords(about.text) === plainWords(text));
@@ -115,7 +200,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
         <ShieldQuestion className="mt-px size-4 shrink-0" />
         <span>{head!.text}</span>
       </div>
-      {request.agent && <div className="mt-0.5 text-[12.5px] text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${request.agent} agent`}</div>}
+      {agent && <div className="mt-0.5 text-[12.5px] break-words text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${agent.text} agent`}</div>}
       {server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {server.text}</div>}
       {aboutShown && <div className="mt-1 text-[12.5px] leading-snug text-muted">{aboutShown.text}</div>}
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
@@ -124,6 +209,8 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
       <div className="mt-2 max-h-[34dvh] overflow-y-auto">
         {edit ? (
           <Diff before={edit.before} after={edit.after} maxLines={160} />
+        ) : workflow ? (
+          <WorkflowAsk input={input} />
         ) : command ? (
           <pre className="rounded-lg bg-chip px-3 py-2 font-mono text-[12.5px] whitespace-pre-wrap break-words">{command.text}</pre>
         ) : raw ? (

@@ -90,6 +90,13 @@ for (const session of sessions) {
     for (const file of turn.files) await save(`sessions/${q(session.id)}/changes?turn=${q(turn.uuid)}&path=${q(file.path)}`);
   }
   await save(`sessions/${q(session.id)}/usage`);
+  // Each workflow's run, and the newest steps of each of its agents.
+  const { workflows = [] } = (await save(`sessions/${q(session.id)}/workflows`)) ?? {};
+  for (const { toolUseId } of workflows) {
+    const view = await save(`sessions/${q(session.id)}/workflows/${q(toolUseId)}`);
+    const agents = [...(view?.workflow?.agents ?? []), ...(detail?.run?.workflows?.[toolUseId]?.agents ?? [])];
+    for (const agent of agents) if (agent.agentId) await save(`sessions/${q(session.id)}/workflows/${q(toolUseId)}/agents/${q(agent.agentId)}`);
+  }
   if (session.cwd) folders.add(session.cwd);
 }
 // The usage page, once the demo has read its transcripts (a saved answer never fills in).

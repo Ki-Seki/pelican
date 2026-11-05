@@ -35,7 +35,12 @@ import type {
   SessionStatus,
   TaskOutput,
   TaskProgress,
+  Workflow,
+  WorkflowAgent,
+  WorkflowPhase,
+  WorkflowStatus,
 } from '../shared/protocol.js';
+import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
@@ -237,6 +242,101 @@ function formValues(input: Record<string, unknown>): Record<string, string | num
   return out;
 }
 
+/**
+ * A workflow Claude runs in this process, as its task events tell it: started, its progress (the
+ * whole list of its phases and agents, on the frames that carry one), its status, its end.
+ */
+type LiveFlow = {
+  taskId: string;
+  toolUseId?: string;
+  runId?: string;
+  name?: string;
+  description?: string;
+  status: WorkflowStatus;
+  startedAt: number;
+  endedAt?: number;
+  /** When it was paused, which stops it as a stop does. */
+  pausedAt?: number;
+  /** The script's own phases, with their details. */
+  phases: WorkflowPhase[];
+  /** Progress items by `type:index`, as Claude Code merges them: a newer one replaces the old whole. */
+  items: Map<string, Record<string, unknown>>;
+  /** Claude Code's totals, from its notification at the end. */
+  totals?: { tokens: number; toolUses: number; durationMs: number };
+  error?: string;
+  /** The page's copy, made again only when something changed. */
+  shown?: Workflow;
+};
+
+/** An ended workflow stays in the run state this long: its card then reads Claude Code's record of it. */
+const FLOW_KEEP_MS = 2 * 60_000;
+
+const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+const clipped = (value: unknown, max: number) => (typeof value === 'string' && value ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : undefined);
+
+/** A `workflow_agent` item as pages get it: Claude Code's fields, its long texts cut. */
+function liveAgent(item: Record<string, unknown>): WorkflowAgent | undefined {
+  const index = num(item.index);
+  const state = item.state;
+  if (index === undefined || (state !== 'start' && state !== 'progress' && state !== 'done' && state !== 'error')) return undefined;
+  const text = (key: string, max = 200) => clipped(item[key], max);
+  const out: WorkflowAgent = { index, label: text('label', 200) ?? `Agent ${index}`, state };
+  for (const key of ['phaseIndex', 'tokens', 'toolCalls', 'durationMs', 'queuedAt', 'startedAt', 'lastProgressAt', 'attempt'] as const) {
+    const value = num(item[key]);
+    if (value !== undefined) out[key] = value;
+  }
+  for (const key of ['phaseTitle', 'agentId', 'agentType', 'model', 'fallbackModel', 'lastToolName'] as const) {
+    const value = text(key, 120);
+    if (value) out[key] = value;
+  }
+  // Its prompt and what it returned are not sent with every frame: nothing shows them but the
+  // agent opened, which reads them from its transcript and the run's journal.
+  const error = text('error', 600);
+  const tool = text('lastToolSummary', 160);
+  if (error) out.error = error;
+  if (tool) out.lastToolSummary = tool;
+  if (item.isolation === 'worktree' || item.isolation === 'remote') out.isolation = item.isolation;
+  if (item.lastAttemptReason === 'stalled' || item.lastAttemptReason === 'throttled' || item.lastAttemptReason === 'user-retry') out.lastAttemptReason = item.lastAttemptReason;
+  for (const key of ['skipped', 'blocked', 'cached'] as const) if (item[key] === true) out[key] = true;
+  return out;
+}
+
+/** A workflow as pages show it: the script's phases and those the run opened, and its agents. */
+function liveWorkflow(flow: LiveFlow): Workflow {
+  if (flow.shown) return flow.shown;
+  const phases = [...flow.phases];
+  const agents: WorkflowAgent[] = [];
+  for (const item of flow.items.values()) {
+    if (item.type === 'workflow_phase') {
+      const title = clipped(item.title, 120);
+      if (title) addPhase(phases, title);
+    } else if (item.type === 'workflow_agent') {
+      const agent = liveAgent(item);
+      if (agent) agents.push(agent);
+    }
+  }
+  const tokens = flow.totals?.tokens ?? agentTokens(agents);
+  const toolUses = flow.totals?.toolUses ?? agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0);
+  flow.shown = {
+    ...(flow.runId ? { runId: flow.runId } : {}),
+    taskId: flow.taskId,
+    ...(flow.name ? { name: flow.name } : {}),
+    ...(flow.description ? { description: flow.description } : {}),
+    status: flow.status,
+    startedAt: flow.startedAt,
+    ...(flow.totals ? { durationMs: flow.totals.durationMs }
+      : flow.endedAt ? { durationMs: flow.endedAt - flow.startedAt }
+        : flow.status === 'paused' && flow.pausedAt ? { durationMs: flow.pausedAt - flow.startedAt } : {}),
+    ...(tokens > 0 ? { totalTokens: tokens } : {}),
+    ...(toolUses > 0 ? { totalToolCalls: toolUses } : {}),
+    phases,
+    agents,
+    ...(flow.error ? { error: clipped(flow.error, 2000)! } : {}),
+    source: 'live',
+  };
+  return flow.shown;
+}
+
 /** A scheduled check stays counted this long after it was due, in case it fires late. */
 const DUE_GRACE_MS = 10 * 60_000;
 /** Claude Code lets a recurring check go this long after it was made (CronCreate: "auto-expired after 7 days"). */
@@ -269,6 +369,8 @@ export class SessionRun {
   private progress = new Map<string, TaskProgress>();
   private taskTools = new Map<string, string>();
   private agentNames = new Map<string, string>();
+  /** Workflows running in this process, by task id. */
+  private flows = new Map<string, LiveFlow>();
   /** Claude's calls to schedule tools, until their results say what was scheduled. */
   private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
   private wakeup?: ScheduledCheck;
@@ -438,6 +540,13 @@ export class SessionRun {
       ...(this.activity ? { activity: this.activity } : {}),
       ...(this.tasks.length > 0 ? {
         tasks: this.tasks.map((task) => {
+          // A workflow, by its name, as Claude Code's task panel lists it, with how far its agents got.
+          const flow = this.flows.get(task.id);
+          if (flow) {
+            const { agents } = liveWorkflow(flow);
+            const done = agents.filter((a) => a.state === 'done').length;
+            return { ...task, description: flow.name ?? task.description, ...(agents.length > 0 ? { summary: `${done}/${agents.length} agents` } : {}) };
+          }
           const report = this.progress.get(task.id);
           const summary = report?.summary ?? report?.lastTool;
           return summary ? { ...task, summary } : task;
@@ -446,6 +555,7 @@ export class SessionRun {
       ...(this.queued.length > 0 ? { queued: this.queued.map(queuedPrompt) } : {}),
       ...(this.busy && this.interrupted ? { stopping: true } : {}),
       ...(Object.keys(progress).length > 0 ? { progress } : {}),
+      ...(this.flows.size > 0 ? { workflows: this.workflowStates() } : {}),
       ...(scheduled.length > 0 ? { scheduled } : {}),
       ...(this.modeChanged ? { modeChanged: this.modeChanged } : {}),
       ...(this.suggestion && !this.busy ? { suggestion: this.suggestion } : {}),
@@ -455,6 +565,103 @@ export class SessionRun {
   status(): SessionStatus {
     if (this.permissions.size > 0) return 'waiting';
     return this.busy ? 'running' : 'idle';
+  }
+
+  /** The workflows Claude runs here, by the Workflow call that started each. */
+  private workflowStates(): Record<string, Workflow> {
+    return Object.fromEntries([...this.flows.values()].flatMap((flow) => (flow.toolUseId ? [[flow.toolUseId, liveWorkflow(flow)]] : [])));
+  }
+
+  /** What this process knows of a workflow it runs, by its Workflow call. */
+  workflow(toolUseId: string): Workflow | undefined {
+    for (const flow of this.flows.values()) if (flow.toolUseId === toolUseId) return liveWorkflow(flow);
+    return undefined;
+  }
+
+  /** A workflow agent asking for something, by the label its script gave it, cut as its card cuts it. */
+  private workflowAgent(agentId: string): string | undefined {
+    for (const flow of this.flows.values()) {
+      for (const item of flow.items.values()) {
+        if (item.type === 'workflow_agent' && item.agentId === agentId) return clipped(item.label, 200);
+      }
+    }
+    return undefined;
+  }
+
+  /** A workflow's task event: it started, made progress, changed status or ended. */
+  private noteFlow(message: Record<string, unknown>): boolean {
+    const taskId = str(message.task_id);
+    const subtype = message.subtype;
+    let flow = this.flows.get(taskId);
+    if (subtype === 'task_started') {
+      if (message.task_type !== 'local_workflow') return false;
+      const meta = typeof message.prompt === 'string' ? parseMeta(message.prompt) : undefined;
+      flow = {
+        taskId,
+        ...(str(message.tool_use_id) ? { toolUseId: str(message.tool_use_id) } : {}),
+        ...(str(message.workflow_name) || meta?.name ? { name: str(message.workflow_name) || meta!.name! } : {}),
+        ...(str(message.description) ? { description: str(message.description) } : {}),
+        status: 'running',
+        startedAt: Date.now(),
+        phases: meta?.phases ?? [],
+        items: new Map(),
+      };
+      this.flows.set(taskId, flow);
+      this.emit();
+      return true;
+    }
+    const items = (message as { workflow_progress?: unknown }).workflow_progress;
+    // A frame of a workflow this process saw start before Pelican listened, or a late start.
+    if (!flow && subtype === 'task_progress' && Array.isArray(items) && taskId) {
+      flow = { taskId, ...(str(message.tool_use_id) ? { toolUseId: str(message.tool_use_id) } : {}), status: 'running', startedAt: Date.now(), phases: [], items: new Map() };
+      this.flows.set(taskId, flow);
+    }
+    if (!flow) return false;
+    flow.shown = undefined;
+    if (subtype === 'task_progress') {
+      flow.toolUseId ??= str(message.tool_use_id) || undefined;
+      // Only some frames carry the list, and each carries it whole; the others only tick usage.
+      if (!Array.isArray(items)) return true;
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const { type, index } = item as { type?: unknown; index?: unknown };
+        if ((type === 'workflow_agent' || type === 'workflow_phase') && typeof index === 'number') flow.items.set(`${type}:${index}`, item as Record<string, unknown>);
+      }
+      this.emit(true);
+      return true;
+    }
+    if (subtype === 'task_updated') {
+      const patch = (message.patch ?? {}) as { status?: unknown; error?: unknown; end_time?: unknown };
+      const status = patch.status;
+      if (status === 'running' || status === 'pending') flow.status = 'running';
+      else if (status === 'paused' || status === 'completed' || status === 'failed' || status === 'killed') flow.status = status;
+      if (typeof patch.error === 'string' && patch.error) flow.error = patch.error;
+      if (typeof patch.end_time === 'number') flow.endedAt = patch.end_time;
+      // A pause stops the run, as a stop does: its time stops there.
+      if (status === 'paused') flow.pausedAt ??= Date.now();
+      else if (status === 'running') flow.pausedAt = undefined;
+      this.emit();
+      return true;
+    }
+    if (subtype === 'task_notification') {
+      const status = message.status;
+      flow.status = status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'killed';
+      flow.endedAt ??= Date.now();
+      const usage = message.usage as { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown } | undefined;
+      if (usage && num(usage.total_tokens) !== undefined) {
+        flow.totals = { tokens: num(usage.total_tokens)!, toolUses: num(usage.tool_uses) ?? 0, durationMs: num(usage.duration_ms) ?? flow.endedAt - flow.startedAt };
+      }
+      // A while after, the card reads Claude Code's own record of the run.
+      const ended = flow;
+      setTimeout(() => {
+        if (this.flows.get(taskId) !== ended) return;
+        this.flows.delete(taskId);
+        this.emit();
+      }, FLOW_KEEP_MS).unref();
+      this.emit();
+      return true;
+    }
+    return false;
   }
 
   /** Sends the run state now, or within 80 ms when called for streamed text. */
@@ -757,7 +964,7 @@ export class SessionRun {
     const { signal, suggestions, blockedPath, decisionReason, title, description, defaultToNo, suppressAlwaysAllowRule, agentID, mcpServer } = options;
     // No "always" where Claude Code says the rule would grant more than this request, or a plugin asked.
     const always = suppressAlwaysAllowRule ? undefined : describeAlways(suggestions, config.home);
-    const agent = agentID ? this.agentNames.get(agentID) ?? 'a subagent' : undefined;
+    const agent = agentID ? this.agentNames.get(agentID) ?? this.workflowAgent(agentID) ?? 'a subagent' : undefined;
     const request: PermissionRequest = {
       id: randomUUID(),
       sessionId: this.sessionId,
@@ -929,6 +1136,17 @@ export class SessionRun {
   private noteResults(raw: Record<string, unknown>): void {
     const content = (raw.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(content)) return;
+    // A workflow's run id is only in its call's result: the folder its agents write to.
+    const launched = (raw.tool_use_result ?? {}) as { taskId?: unknown; runId?: unknown };
+    const flow = typeof launched.taskId === 'string' ? this.flows.get(launched.taskId) : undefined;
+    if (flow && typeof launched.runId === 'string' && RUN_ID.test(launched.runId)) {
+      flow.runId = launched.runId;
+      // The call it answers, should its start not have said.
+      const answered = (content as Array<Record<string, unknown>>).find((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string');
+      flow.toolUseId ??= answered?.tool_use_id as string | undefined;
+      flow.shown = undefined;
+      this.emit(true);
+    }
     for (const block of content as Array<Record<string, unknown>>) {
       if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;
       const call = this.scheduling.get(block.tool_use_id);
@@ -1058,6 +1276,10 @@ export class SessionRun {
                   ...(t.task_type === 'local_bash' || t.task_type.startsWith('monitor') ? { output: true } : {}),
                 }));
               this.emit();
+            } else if ((message.subtype === 'task_started' || message.subtype === 'task_progress' || message.subtype === 'task_updated' || message.subtype === 'task_notification')
+              && this.noteFlow(raw)) {
+              // A workflow's: its card shows it, from what noteFlow kept.
+              if (message.subtype === 'task_notification') this.taskTools.delete(message.task_id);
             } else if (message.subtype === 'task_started') {
               if (message.tool_use_id) this.taskTools.set(message.task_id, message.tool_use_id);
               if (message.subagent_type) this.agentNames.set(message.task_id, message.subagent_type);
@@ -1170,6 +1392,8 @@ export class SessionRun {
       this.cronEnds.clear();
       this.progress.clear();
       this.taskTools.clear();
+      this.agentNames.clear();
+      this.flows.clear();
       this.activity = undefined;
       this.busy = false;
       this.startedAt = undefined;

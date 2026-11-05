@@ -61,6 +61,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
+| `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
