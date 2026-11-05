@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
 import { baseName } from '../lib/format';
-import { composing } from '../lib/keyboard';
+import { closesPane, composing } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
@@ -46,9 +46,11 @@ let lastTab: WorkspaceTab = 'changes';
 /**
  * Whether Changes and files is open, and where. On a computer it is a pane beside the conversation
  * that stays open from one session to the next (remembered in this browser), shown and hidden with
- * Cmd/Ctrl+Shift+D as in Claude Desktop. On a phone it is a view of its own over the conversation,
- * open while the address holds one of its steps, so the back gesture closes it. `show` opens it,
- * at a step when given one (a file named in the conversation).
+ * Cmd/Ctrl+Shift+D as in Claude Desktop, and closed with Cmd/Ctrl+\ from inside it. On a phone it
+ * is a view of its own over the conversation, open while the address holds one of its steps, so
+ * the back gesture closes it. `show` opens it, at a step when given one (a file named in the
+ * conversation). `toggle` is for the button that shows and hides it: closed while it had the
+ * keys, the pane gives them to that button.
  */
 export function useWorkspacePane(available: boolean) {
   const dockable = useMedia(DOCKS);
@@ -91,7 +93,15 @@ export function useWorkspacePane(available: boolean) {
     return () => window.removeEventListener('keydown', onKey);
   }, [available, open, setOpen, hide, dockable, roomy]);
   const docked = dockable && open;
-  return { open, setOpen, show, hide, dockable, docked, folded: docked && !roomy };
+  const toggle = useRef<HTMLButtonElement>(null);
+  const wasDocked = useRef(docked);
+  useEffect(() => {
+    const was = wasDocked.current;
+    wasDocked.current = docked;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (was && !docked && lost) toggle.current?.focus({ preventScroll: true });
+  }, [docked]);
+  return { open, setOpen, show, hide, dockable, docked, folded: docked && !roomy, toggle };
 }
 
 /**
@@ -247,13 +257,19 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       )}
     </div>
   );
-  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop. Keys pressed in a
-  // sheet opened from here reach this too (React passes them up its own tree): those are the sheet's.
+  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop; beside the
+  // conversation, ⌘\ closes it, as it closes the side chat there. Keys pressed in a sheet opened
+  // from here reach this too (React passes them up its own tree): those are the sheet's.
   const own = (e: React.KeyboardEvent) => e.currentTarget.contains(e.target as Node);
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!own(e) || e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.defaultPrevented || composing(e.nativeEvent) || comments.length === 0 || !onSendComments) return;
-    e.preventDefault();
-    onSendComments();
+    if (!own(e) || e.defaultPrevented || composing(e.nativeEvent)) return;
+    if (docked && closesPane(e)) {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && comments.length > 0 && onSendComments) {
+      e.preventDefault();
+      onSendComments();
+    }
   };
 
   const view = useRef<HTMLDivElement>(null);
