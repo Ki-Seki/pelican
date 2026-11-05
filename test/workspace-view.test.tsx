@@ -35,6 +35,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         return `--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,1 @@\n+:root {}\n`;
       },
       tree: async () => (server.plain ? [{ name: 'notes.md', path: 'notes.md', dir: false, size: 30 }] : []),
+      file: async (_cwd: string, path: string) => ({ path, size: 40, text: 'const a = 1;\nconst b = 2;\nconst c = 3;\n' }),
     },
   };
 });
@@ -162,5 +163,39 @@ describe('a diff read again while it is open', () => {
       window.removeEventListener('error', onError);
     }
     expect(errors).toEqual([]);
+  });
+});
+
+describe('a file’s Quote and Copy', () => {
+  function select(from: number, to: number) {
+    const first = document.querySelector(`[data-line="${from}"]`)!;
+    const last = document.querySelector(`[data-line="${to}"]`)!;
+    const range = document.createRange();
+    range.setStart(first.lastChild!, 0);
+    range.setEnd(last.lastChild!, 1);
+    act(() => {
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+  }
+
+  it('sit in a row of their own under what scrolls, the lowest of a phone’s view clear of the home indicator', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const view = wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    select(1, 2);
+    const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    expect(bar.textContent).toContain('Lines 1–2');
+    expect(bar.closest('.overflow-y-auto')).toBeNull();
+    expect(bar.closest('[role="region"]')).toBe(screen.getByRole('region', { name: 'Changes and files' }));
+    expect(bar.classList.contains('pb-safe')).toBe(true);
+    // Below it, the bar saying Claude waits is the lowest row, and keeps clear itself.
+    view.rerender(<QueryClientProvider client={new QueryClient()}><Workspace open cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} /></QueryClientProvider>);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    select(1, 2);
+    const under = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    expect(under.classList.contains('pb-safe')).toBe(false);
+    expect(screen.getByText('Claude wants to run npm test').closest('button')!.classList.contains('pb-safe')).toBe(true);
   });
 });

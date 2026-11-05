@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { AtSign, Check, Copy, Download, Loader2, Maximize2, Play, Quote } from 'lucide-react';
 import { createContext, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
@@ -146,11 +147,18 @@ function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: num
   return range;
 }
 
+/**
+ * Where Changes and files puts a file's selection bar: a row of its own under what scrolls, so
+ * the file never scrolls under it; `safe`: the lowest row of a phone's view, clear of the home
+ * indicator. A viewer with none keeps the bar at the foot of the file as it scrolls.
+ */
+export const SelectionFoot = createContext<{ at: HTMLElement; safe: boolean } | undefined>(undefined);
+
 /** Under a selection of lines: quote them into the message as `path:7-8` and the lines, or copy the text. */
-function SelectionBar({ from, to, onQuote, text }: { from: number; to: number; onQuote: () => void; text: string }) {
+function SelectionBar({ from, to, onQuote, text, place }: { from: number; to: number; onQuote: () => void; text: string; place: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="sticky bottom-0 z-10 -mx-1 flex items-center gap-1 border-t border-line bg-bg px-3 py-1.5 text-[13px]">
+    <div className={`flex items-center gap-1 border-t border-line bg-bg text-[13px] ${place}`}>
       <span className="min-w-0 flex-1 truncate text-muted">{to > from ? `Lines ${from}–${to}` : `Line ${from}`}</span>
       <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onQuote} className="flex h-9 items-center gap-1.5 rounded-full px-3 hover:bg-hover">
         <Quote className="size-3.5" /> Quote
@@ -217,6 +225,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
   const note = useRef('');
   const [showHint] = useState(() => !tipSeen('line-comments'));
   const sendAll = useSendComments();
+  const foot = useContext(SelectionFoot);
   const box = useRef<HTMLDivElement>(null);
   const selection = useLineSelection(box);
   const pick = useLinePick((n: number) => setEditing(n));
@@ -275,6 +284,10 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
     onAddToMessage(quoteLines(path, selection.from, selection.to, texts.slice(selection.from - 1, selection.to)), 'quote');
     window.getSelection()?.removeAllRanges();
   };
+  // Copy takes the lines themselves: a comment shown between them is not part of the file.
+  const bar = selection && ((place: string) => (
+    <SelectionBar from={selection.from} to={selection.to} text={selection.from === selection.to ? selection.text : texts.slice(selection.from - 1, selection.to).join('\n')} onQuote={quote} place={place} />
+  ));
 
   const tool = 'flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] text-muted hover:bg-hover hover:text-fg aria-pressed:text-fg';
   return (
@@ -330,8 +343,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>
           </LinesContext.Provider>
-          {/* Copy takes the lines themselves: a comment shown between them is not part of the file. */}
-      {selection && <SelectionBar from={selection.from} to={selection.to} text={selection.from === selection.to ? selection.text : texts.slice(selection.from - 1, selection.to).join('\n')} onQuote={quote} />}
+          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
         </>
       )}
       {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}

@@ -10,6 +10,7 @@ import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
+import { SelectionFoot } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
 import { WorkspaceChanges } from './WorkspaceChanges';
@@ -226,10 +227,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     </>
   );
 
+  // On a phone the view's lowest row keeps clear of the home indicator: the bar saying Claude
+  // waits, else the comments, else a selection's Quote and Copy; the end of what scrolls, too.
+  const phone = !docked;
+  const [foot, setFoot] = useState<HTMLDivElement | null>(null);
+  const selectionFoot = useMemo(() => (foot ? { at: foot, safe: phone && comments.length === 0 && !needsYou } : undefined), [foot, phone, comments.length, needsYou]);
+
   // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
   // now (⌘↵) sends them on their own.
   const footer = comments.length > 0 && (
-    <div className="flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4">
+    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${phone && !needsYou ? 'pb-safe' : ''}`}>
       <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
         {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> · sent with your next message</span>
       </span>
@@ -264,6 +271,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   if (docked) {
     return (
       <SendComments.Provider value={onSendComments}>
+      <SelectionFoot.Provider value={selectionFoot}>
       <aside aria-label="Changes and files" onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
         <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
@@ -273,13 +281,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </div>
         <div className="shrink-0 px-4">{header}</div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-4">{body}</div>
+        <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>
+      </SelectionFoot.Provider>
       </SendComments.Provider>
     );
   }
   return createPortal(
     <SendComments.Provider value={onSendComments}>
+    <SelectionFoot.Provider value={selectionFoot}>
     <div
       ref={view}
       role="region"
@@ -303,7 +314,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </div>
         <div className="px-3">{header}</div>
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-4">{body}</div>
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+      <div ref={setFoot} className="shrink-0" />
       {footer}
       {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
       <div aria-live="polite" className="shrink-0">
@@ -316,6 +328,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         )}
       </div>
     </div>
+    </SelectionFoot.Provider>
     </SendComments.Provider>,
     document.body,
   );
