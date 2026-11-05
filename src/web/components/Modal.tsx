@@ -9,7 +9,9 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
  * A modal dialog in the browser's top layer: everything behind it is inert, focus moves in (to
  * the element marked data-autofocus, else the dialog) and goes back where it was, and Esc closes
  * only the topmost one. Closing plays out before the dialog goes, showing what it showed while
- * open; meanwhile the dialog carries data-closing, for the way out (group-data-closing/modal).
+ * open; meanwhile the dialog carries data-closing, for the way out (group-data-closing/modal), and
+ * is inert itself: what it still shows takes no taps or keys, so the second tap of a double tap
+ * cannot choose an option again (and send a message twice).
  */
 export function Modal({
   open, onClose, label, labelledBy, className = '', children,
@@ -98,6 +100,7 @@ export function Modal({
       aria-label={labelledBy ? undefined : label}
       aria-labelledby={labelledBy}
       data-closing={closing || undefined}
+      inert={closing || undefined}
       className={`group/modal fixed inset-0 m-0 h-[var(--app-h,100%)] max-h-none w-full max-w-none overflow-hidden border-0 bg-transparent p-0 text-fg outline-none backdrop:bg-transparent ${className}`}
     >
       {open ? children : shown.current}

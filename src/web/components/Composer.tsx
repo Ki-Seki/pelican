@@ -178,8 +178,11 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
   }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading]);
 }
 
-/** What Chat can do to the composer from outside: files dropped anywhere on the conversation. */
-export type ComposerHandle = { addFiles: (files: FileList | File[]) => void };
+/**
+ * What Chat can do to the composer from outside: files dropped anywhere on the conversation, and
+ * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts).
+ */
+export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void };
 
 /** A finished upload as it comes back from a saved draft: the file is on the server already. */
 const restored = (a: Attachment): Upload => ({
@@ -221,8 +224,11 @@ export function Composer({
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
   cwd?: string;
-  /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. `append` adds it after what is there. */
-  draft?: { text: string; key: number; append?: boolean };
+  /**
+   * Text to put in the box, e.g. a prompt being edited, or one that failed to send (with its
+   * files); a new `key` puts it in again. `append` adds it after what is there.
+   */
+  draft?: { text: string; key: number; append?: boolean; attachments?: Attachment[] };
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
@@ -270,12 +276,23 @@ export function Composer({
     if (!draft) return;
     const next = draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
     setText(next);
-    requestAnimationFrame(() => {
+    // A message given back (its send failed) brings its files back too, beside any added since.
+    const back = draft.attachments;
+    if (back?.length) setUploads((list) => [...back.map(restored), ...list.filter((u) => !back.some((a) => a.id === u.attachment?.id))]);
+    const put = () => {
       const el = area.current;
       if (!el) return;
       el.focus();
       el.setSelectionRange(next.length, next.length);
       setCaret(next.length);
+    };
+    requestAnimationFrame(() => {
+      put();
+      // The sheet that put it here (Add to message) may still be on its way out, holding the rest
+      // of the page; once it has gone, and given focus back to what opened it, the box takes it.
+      if (area.current && document.activeElement !== area.current) {
+        [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
@@ -372,7 +389,10 @@ export function Composer({
         .catch((error: Error) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, error: error.message, note: isDemoNote(error) } : u))));
     }
   };
-  useImperativeHandle(ref, () => ({ addFiles }));
+  useImperativeHandle(ref, () => ({
+    addFiles,
+    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : []))),
+  }));
 
   const forget = (u: Upload) => {
     if (u.preview?.startsWith('blob:')) URL.revokeObjectURL(u.preview);
@@ -414,12 +434,13 @@ export function Composer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Keys an input method takes are its own (the Enter that picks a word, the Esc that cancels
+    // one, the arrows through its list), not the / and @ list's or the box's.
+    if (composing(e.nativeEvent)) return;
     // ⌘/Ctrl+Enter sends whatever the Enter key setting, list open or not.
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      if (!composing(e.nativeEvent)) {
-        e.preventDefault();
-        submit();
-      }
+      e.preventDefault();
+      submit();
       return;
     }
     if (showSuggestions && suggestions.length > 0) {
@@ -428,7 +449,7 @@ export function Composer({
         setHighlight((h) => (h + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
         return;
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !composing(e.nativeEvent))) {
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         accept(suggestions[highlight] ?? suggestions[0]!);
         return;

@@ -78,4 +78,37 @@ describe('sheets', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(row);
   });
+
+  it('take no taps or keys on their way out, so the second tap of a double tap chooses nothing', () => {
+    vi.useFakeTimers();
+    const reduced = window.matchMedia;
+    // Full motion: the sheet plays its way out, still showing its options meanwhile.
+    window.matchMedia = ((query: string) => ({
+      matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      function Ask() {
+        const [open, setOpen] = useState(true);
+        return (
+          <Sheet open={open} onClose={() => setOpen(false)} title="Trust this folder?">
+            <SheetOption label="Trust and start" onSelect={() => setOpen(false)} />
+          </Sheet>
+        );
+      }
+      render(<Ask />);
+      const dialog = document.querySelector('dialog')!;
+      expect(dialog.hasAttribute('inert')).toBe(false);
+      act(() => screen.getByText('Trust and start').click());
+      expect(dialog.hasAttribute('open')).toBe(true);
+      expect(screen.getByText('Trust and start')).toBeTruthy();
+      expect(dialog.hasAttribute('inert')).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(document.querySelector('dialog')).toBeNull();
+    } finally {
+      window.matchMedia = reduced;
+      vi.useRealTimers();
+    }
+  });
 });

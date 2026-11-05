@@ -61,6 +61,14 @@ export function clearDraft(viewId: string, sent?: string): void {
   writeAll(all);
 }
 
+/** Takes a chat's draft to another: a new session's, when its folder is changed before it starts. */
+export function moveDraft(from: string, to: string): void {
+  const draft = loadDraft(from);
+  if (!draft || from === to) return;
+  clearDraft(from);
+  saveDraft(to, draft.text, draft.attachments);
+}
+
 /** Signing out leaves no prompts behind in this browser. */
 export function forgetDrafts(): void {
   try {

@@ -11,7 +11,7 @@ Object.assign(globalThis, {
     removeItem: (key: string) => void store.delete(key),
   },
 });
-const { clearDraft, forgetDrafts, loadDraft, saveDraft } = await import('../src/web/lib/drafts');
+const { clearDraft, forgetDrafts, loadDraft, moveDraft, saveDraft } = await import('../src/web/lib/drafts');
 
 const file: Attachment = { id: 'u1', name: 'shot.png', mime: 'image/png', size: 10, path: '/tmp/u1' };
 
@@ -38,6 +38,17 @@ describe('drafts', () => {
     expect(loadDraft('s1')?.text).toBe('first message');
     clearDraft('s1', 'first message  ');
     expect(loadDraft('s1')).toBeUndefined();
+  });
+
+  it('go along with a new session moved to another folder, files and all', () => {
+    saveDraft('new:/code/acme', 'Refactor the export job', [file]);
+    saveDraft('new:/code/site', 'An older start there');
+    moveDraft('new:/code/acme', 'new:/code/site');
+    expect(loadDraft('new:/code/acme')).toBeUndefined();
+    expect(loadDraft('new:/code/site')).toMatchObject({ text: 'Refactor the export job', attachments: [file] });
+    // Nothing typed: what the other folder had stays.
+    moveDraft('new:/code/acme', 'new:/code/site');
+    expect(loadDraft('new:/code/site')?.text).toBe('Refactor the export job');
   });
 
   it('keep the newest fifty', () => {

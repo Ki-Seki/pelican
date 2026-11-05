@@ -42,13 +42,13 @@ const messages: ChatMessage[] = [
 ];
 const view = (extra: Partial<SessionView> = {}): SessionView => ({ messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false, ...extra });
 
-/** The list's scroller, made to report a size, with the content `height` tall and a 400px window. */
+/** The list's scroller, made to report a size, with the content `height` tall and a `client` px window (400). */
 function scroller(container: HTMLElement) {
   const el = container.querySelector('.overflow-y-auto') as HTMLDivElement;
-  const box = { height: 1000, top: 0 };
+  const box = { height: 1000, top: 0, client: 400 };
   Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => box.height });
-  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 });
-  Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => box.top, set: (v: number) => { box.top = Math.max(0, Math.min(v, box.height - 400)); } });
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => box.client });
+  Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => box.top, set: (v: number) => { box.top = Math.max(0, Math.min(v, box.height - box.client)); } });
   const resized = (height: number) => act(() => {
     box.height = height;
     for (const observer of FakeResizeObserver.all) observer.callback();
@@ -104,6 +104,22 @@ describe('following the end of the conversation', () => {
     el.scrollTo = vi.fn();
     fireEvent.click(jump);
     expect(el.scrollTo).toHaveBeenCalledWith({ top: 1600, behavior: 'smooth' });
+  });
+
+  it('goes on following when the list itself grows taller at the end, as when an approval card goes', () => {
+    const { container } = render(<MessageList sessionId="s" view={view()} mode="normal" />);
+    const { el, box, resized } = scroller(container);
+    resized(1000);
+    expect(box.top).toBe(600);
+    // Allow: the card goes and the list is 260px taller. The browser pulls the top down to keep it
+    // in range, and its scroll event comes before the size change is seen.
+    box.client = 660;
+    box.top = 340;
+    fireEvent.scroll(el);
+    // Claude's next steps arrive: still in view.
+    resized(1400);
+    expect(box.top).toBe(740);
+    expect(screen.queryByLabelText('Jump to latest')).toBeNull();
   });
 
   it('stops following when the reader scrolls up, and shows the jump button as more arrives', () => {

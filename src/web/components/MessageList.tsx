@@ -5,6 +5,7 @@ import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
 import { apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
+import { composing } from '../lib/keyboard';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
@@ -377,6 +378,8 @@ function EditPrompt({ text, images, files, last, onCancel, onSend }: {
         readOnly={busy}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
+          // Keys an input method takes are its own: Esc there cancels a conversion, not the edit.
+          if (composing(e.nativeEvent)) return;
           if (e.key === 'Escape' && !busy) onCancel();
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
         }}
@@ -646,12 +649,14 @@ export function MessageList({
 
   // Any move up is the reader's: stop following at once, not only once they are far from the end
   // (streamed text arrives every few frames and would pull them back down before they got there).
-  // Following resumes when they come back to the very end.
+  // Following resumes when they come back to the very end. A move up that leaves the list at its
+  // end is not the reader's but the browser's: the list grew taller (an approval card went) and
+  // the browser pulled the top down with it, before the size change below gets to settle it.
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (el.scrollTop < lastTop.current - 2) atBottom.current = false;
+    if (el.scrollTop < lastTop.current - 2 && distance > 2) atBottom.current = false;
     else if (distance < 24) atBottom.current = true;
     lastTop.current = el.scrollTop;
     setShowJump(distance > 80);

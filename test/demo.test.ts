@@ -92,6 +92,58 @@ describe('the demo', () => {
   });
 });
 
+describe('the demo, a message queued while Claude works', () => {
+  const queue = (uuid: string, text: string) => api.send(SESSION, { text, attachments: [], settings: {}, uuid, mode: 'queue' });
+  const said = (uuid: string) => getView(SESSION).messages.find((m) => m.uuid === uuid);
+
+  it('waits above the composer, not in the conversation, then goes when the turn ends, with any other, as one message', async () => {
+    setRun(SESSION, waiting);
+    await queue('q1', 'Also add a test for the toggle');
+    await queue('q2', 'And mention it in the README');
+    expect(getView(SESSION).run?.queued).toEqual([{ uuid: 'q1', text: 'Also add a test for the toggle' }, { uuid: 'q2', text: 'And mention it in the README' }]);
+    expect(said('q1')).toBeUndefined();
+    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
+    vi.runAllTimers();
+    expect(said('q1')).toMatchObject({ role: 'user', blocks: [{ type: 'text', text: 'Also add a test for the toggle\n\nAnd mention it in the README' }] });
+    expect(said('q2')).toBeUndefined();
+    expect(getView(SESSION).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_REPLY });
+    expect(getView(SESSION).run).toMatchObject({ busy: false });
+    expect(getView(SESSION).run?.queued).toBeUndefined();
+  });
+
+  it('still goes after Stop, as in your own Pelican', async () => {
+    setRun(SESSION, waiting);
+    await queue('q3', 'Then run the tests');
+    await api.interrupt(SESSION);
+    const messages = getView(SESSION).messages;
+    expect(messages.at(-2)?.blocks[0]).toEqual({ type: 'text', text: '[Request interrupted by user]' });
+    expect(messages.at(-1)).toMatchObject({ uuid: 'q3', blocks: [{ type: 'text', text: 'Then run the tests' }] });
+    expect(getView(SESSION).run).toMatchObject({ busy: true });
+    expect(getView(SESSION).run?.queued).toBeUndefined();
+    vi.runAllTimers();
+    expect(getView(SESSION).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_REPLY });
+    expect(getView(SESSION).run?.busy).toBe(false);
+  });
+
+  it('can be taken back before Claude gets it, once', async () => {
+    setRun(SESSION, waiting);
+    await queue('q4', 'Never mind the README');
+    await queue('q5', 'Keep the old toggle label');
+    await expect(api.unqueue(SESSION, 'q4')).resolves.toEqual({ ok: true });
+    expect(getView(SESSION).run?.queued).toEqual([{ uuid: 'q5', text: 'Keep the old toggle label' }]);
+    const again = await api.unqueue(SESSION, 'q4').catch((error: unknown) => error);
+    expect(again).toMatchObject({ status: 409, message: 'That message is no longer waiting' });
+    expect(isDemoNote(again)).toBe(false);
+    await api.unqueue(SESSION, 'q5');
+    expect(getView(SESSION).run?.queued).toBeUndefined();
+    await api.interrupt(SESSION);
+    vi.runAllTimers();
+    expect(said('q4')).toBeUndefined();
+    expect(said('q5')).toBeUndefined();
+    expect(getView(SESSION).run?.busy).toBe(false);
+  });
+});
+
 describe('advance', () => {
   it('finishes the task under way and starts the next', () => {
     expect(advance(tasks)?.map((t) => t.status)).toEqual(['completed', 'completed', 'in_progress', 'pending']);

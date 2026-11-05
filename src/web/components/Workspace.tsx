@@ -6,6 +6,7 @@ import type { GitFile } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { baseName, formatBytes } from '../lib/format';
 import { newId } from '../lib/ids';
+import { composing } from '../lib/keyboard';
 import { markTipSeen, setPrefs, tipSeen, usePrefs } from '../lib/prefs';
 import { type CodeLine, commentKey, commentsMessage, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
 import { Markdown } from './Markdown';
@@ -108,6 +109,8 @@ function CommentBox({ note, onNote, onSave, onCancel }: { note: string; onNote: 
         placeholder="Comment for Claude"
         onChange={(e) => onNote(e.target.value)}
         onKeyDown={(e) => {
+          // Keys an input method takes are its own: Esc there cancels a conversion, not the comment.
+          if (composing(e.nativeEvent)) return;
           if (e.key === 'Escape') {
             // The comment goes; the sheet around it stays.
             e.preventDefault();
@@ -271,9 +274,11 @@ type Open = { kind: 'diff'; path: string } | { kind: 'file'; path: string } | un
  * the files themselves. Read only: comment on the changes, or ask Claude to change things. A sheet
  * over the conversation, or on a wide screen (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, onClose, cwd, onAddToMessage }: {
+export function Workspace({ open, docked = false, busy = false, onClose, cwd, onAddToMessage }: {
   open: boolean;
   docked?: boolean;
+  /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
+  busy?: boolean;
   onClose: () => void;
   cwd: string;
   /** Adds text to the message being written: a file to mention, or comments on the changes. */
@@ -288,7 +293,11 @@ export function Workspace({ open, docked = false, onClose, cwd, onAddToMessage }
   const [tab, setTab] = useState<'changes' | 'files'>('changes');
   const [dir, setDir] = useState('');
   const [shown, setShown] = useState<Open>();
-  const status = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd), enabled: open, refetchInterval: open ? 5_000 : false });
+  // Read again every 5 s while it is looked at: a sheet opened for that, or the pane beside the
+  // conversation while Claude works. The pane stays open from one session to the next; while
+  // Claude is idle the chat's own reading of the same status (every 30 s, and as each turn ends)
+  // keeps it current: in a large repository each read costs about a second of CPU.
+  const status = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd), enabled: open, refetchInterval: open && (busy || !docked) ? 5_000 : false });
   const tree = useQuery({ queryKey: ['tree', cwd, dir], queryFn: () => api.tree(cwd, dir), enabled: open && tab === 'files' });
   const diff = useQuery({
     queryKey: ['gitDiff', cwd, shown?.kind === 'diff' ? shown.path : ''],

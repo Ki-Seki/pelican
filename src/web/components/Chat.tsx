@@ -8,10 +8,10 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
-import { clearDraft } from '../lib/drafts';
+import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { composing } from '../lib/keyboard';
+import { composing, hasKeyboard } from '../lib/keyboard';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
@@ -371,7 +371,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean }>();
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; attachments?: Attachment[] }>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -474,6 +474,8 @@ export function Chat({
       // Out of Bypass, the new conversation starts in the mode a new session does.
       const { permissionMode = 'default', ...rest } = settings;
       carried.set(`new:${cwd}`, permissionMode === 'bypassPermissions' ? rest : { ...rest, permissionMode });
+      // Done with, as a sent message is: left as this session's draft, it would clear again.
+      clearDraft(viewId, text);
       onStartIn({ cwd });
       return;
     }
@@ -497,15 +499,26 @@ export function Chat({
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back and give the text back to edit.
+      // Nothing reached Claude: take the message back and give it back to edit, files and all.
       removeLocalMessage(viewId, uuid);
       if (error instanceof ApiError && error.trust) {
-        // The folder has programs of its own and nobody trusted it: ask, then send it again.
-        setTrustAsk({ brings: error.trust.brings, answer: (choice) => void send(text, attachments, mode, choice), cancel: () => setDraftText({ text, key: Date.now() }) });
+        // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
+        // the first answer counts: a double tap on the sheet must not start two Claudes.
+        let settled = false;
+        const once = (then: () => void) => {
+          if (settled) return;
+          settled = true;
+          then();
+        };
+        setTrustAsk({
+          brings: error.trust.brings,
+          answer: (choice) => once(() => void send(text, attachments, mode, choice)),
+          cancel: () => once(() => setDraftText({ text, attachments, key: Date.now() })),
+        });
         return;
       }
       failed(error);
-      setDraftText({ text, key: Date.now() });
+      setDraftText({ text, attachments, key: Date.now() });
     }
   };
 
@@ -687,6 +700,20 @@ export function Chat({
     void queryClient.invalidateQueries({ queryKey: ['sessions'] });
   };
 
+  // Another folder picked for a new session before it starts: what is typed goes along, and so
+  // do the settings picked here; the mode only when one was picked, and never Bypass, which was
+  // picked for the other folder.
+  const startIn = (start: Start) => {
+    const next = `new:${'scratch' in start ? 'scratch' : start.cwd}`;
+    composer.current?.saveDraft();
+    moveDraft(viewId, next);
+    if (chosen.current) {
+      const { permissionMode, ...rest } = settings;
+      carried.set(next, modePicked && permissionMode && permissionMode !== 'bypassPermissions' ? { ...rest, permissionMode } : rest);
+    }
+    onStartIn(start);
+  };
+
   return (
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
@@ -752,7 +779,7 @@ export function Chat({
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
             <div className="min-w-0 max-w-full">
               <div className="text-[17px] font-medium">What should Claude do?</div>
-              <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={onStartIn} />
+              <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={startIn} />
             </div>
           </div>
         )}
@@ -827,8 +854,10 @@ export function Chat({
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
-        // On a computer the box takes the keys as soon as a chat opens (the composer skips this on touch screens).
-        autoFocus
+        // On a computer the box takes the keys as soon as a chat opens. On a phone only a new
+        // session, opened to type in, does: a session opened to read must not raise the keyboard
+        // over the conversation.
+        autoFocus={!sessionId || hasKeyboard()}
         placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
@@ -846,6 +875,7 @@ export function Chat({
         <Workspace
           open={workspace.open}
           docked={workspace.docked}
+          busy={busy && permissions.length === 0}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           onAddToMessage={(text) => {
