@@ -11,6 +11,7 @@ import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
+import { promptBefore } from '../lib/next-steps';
 import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
@@ -388,7 +389,8 @@ function EditPrompt({ text, images, files, last, onCancel, onSend }: {
   );
 }
 
-function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
+/** `onNext`: the next step an error line offers, where it ends the conversation (Retry, or Compact). */
+function Notice({ item, onNext }: { item: Extract<Item, { kind: 'notice' }>; onNext?: () => void }) {
   const [open, setOpen] = useState(false);
   if (item.tone === 'interrupt') {
     return <div className="flex items-center gap-2 text-[12px] text-faint"><span className="h-px flex-1 bg-line" />Interrupted<span className="h-px flex-1 bg-line" /></div>;
@@ -400,7 +402,12 @@ function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
     return (
       <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
         <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-        <span className="whitespace-pre-wrap">{item.text}</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap">{item.text}</span>
+        {onNext && (
+          <button type="button" onClick={onNext} className="relative -my-1 -mr-1.5 h-7 shrink-0 rounded-full bg-chip px-3 text-[12.5px] text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover">
+            {item.next === 'compact' ? 'Compact' : 'Retry'}
+          </button>
+        )}
       </div>
     );
   }
@@ -577,7 +584,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact,
 }: {
   sessionId: string;
   view: SessionView;
@@ -587,6 +594,9 @@ export function MessageList({
   mode: ViewMode;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
+  /** The next step on an API error that ends the conversation: send its prompt again, or /compact. */
+  onRetry?: (prompt: Extract<Item, { kind: 'user' }>) => void;
+  onCompact?: () => void;
 }) {
   const items = useMemo(() => buildItems(view.messages, machine), [view.messages, machine]);
   // A `!` command shows live until its record replaces it, under the same id.
@@ -750,7 +760,7 @@ export function MessageList({
             </div>
           )}
           <div className="space-y-4">
-            {items.map((item) => {
+            {items.map((item, at) => {
               switch (item.kind) {
                 case 'user':
                   return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
@@ -767,8 +777,13 @@ export function MessageList({
                       {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
                     />
                   );
-                case 'notice':
-                  return <Notice key={item.key} item={item} />;
+                case 'notice': {
+                  // Only the error the conversation ends on, with Claude idle, offers a way on.
+                  const ends = endsOnError && !busy && at === items.length - 1;
+                  const prompt = ends && item.next === 'retry' && onRetry ? promptBefore(items, at) : undefined;
+                  const next = prompt ? () => onRetry!(prompt) : ends && item.next === 'compact' ? onCompact : undefined;
+                  return <Notice key={item.key} item={item} {...(next ? { onNext: next } : {})} />;
+                }
                 case 'compact':
                   return <Compacted key={item.key} summary={item.summary} />;
                 case 'day':

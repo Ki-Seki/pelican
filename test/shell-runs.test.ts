@@ -61,7 +61,10 @@ class FakeClaude {
   }
   async supportedCommands() { return []; }
   async supportedAgents() { return []; }
-  async initializationResult() { return { models: [], account: {}, commands: [], agents: [] }; }
+  static account: Record<string, unknown> = {};
+  async initializationResult() {
+    return { models: [{ value: 'default', displayName: 'Default', description: '' }], account: FakeClaude.account, commands: [], agents: [] };
+  }
   close() {
     this.ended = true;
     this.listening?.({ value: undefined, done: true });
@@ -83,6 +86,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
 }));
 
 const { closeAll, getRun, sendMessage } = await import('../src/server/runner');
+const { listModels } = await import('../src/server/models');
 const { feedFor } = await import('../src/server/feed');
 const { BASH_CAVEAT } = await import('../src/server/shell');
 const { liveShells, shellsEvent, startShell, stopShell } = await import('../src/server/shell-runs');
@@ -210,5 +214,32 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     stopShell(sessionId, shell.id);
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
+  });
+});
+
+describe('what a session has cost', () => {
+  it('is Claude Code’s running total, for the session menu, on an API key or a provider', async () => {
+    const { sessionId, claude } = await idleSession();
+    expect(getRun(sessionId)!.state().costUsd).toBe(0.01);
+    await sendMessage({ sessionId }, { text: 'More', attachments: [], settings: {} });
+    claude.say({ ...result(), total_cost_usd: 0.25 });
+    await until(() => !getRun(sessionId)!.busy);
+    expect(getRun(sessionId)!.state().costUsd).toBe(0.25);
+  });
+
+  it('is not said where a subscription pays', async () => {
+    FakeClaude.account = { email: 'me@example.com', subscriptionType: 'max' };
+    try {
+      // The model list is kept a while; read it afresh with this account.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      await listModels();
+      vi.useRealTimers();
+      const { sessionId } = await idleSession();
+      expect(getRun(sessionId)!.state()).not.toHaveProperty('costUsd');
+    } finally {
+      FakeClaude.account = {};
+      vi.useRealTimers();
+    }
   });
 });

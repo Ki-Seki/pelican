@@ -4,7 +4,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
-import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shortPath } from '../lib/format';
+import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
 import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
 import { DEMO_NOTE } from '../lib/static-demo';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
@@ -12,8 +12,21 @@ import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
 const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', pending: 'Connecting', 'needs-auth': 'Needs sign-in', failed: 'Failed', disabled: 'Off' };
 
+/**
+ * Where a server that needs signing in is signed in to. A session Pelican runs has no /mcp panel to
+ * do it in, so, as Claude Code's docs say, it is done in a terminal on the computer, or for a
+ * claude.ai connector in claude.ai; then Reconnect picks it up, or the next start of Claude here.
+ */
+function SignInHint({ server, machine, live }: { server: McpServer; machine?: string; live: boolean }) {
+  const then = live ? ', then Reconnect' : '';
+  if (server.scope === 'claudeai') {
+    return <>Connect it at <a href="https://claude.ai/customize/connectors" target="_blank" rel="noreferrer" className="underline decoration-faint underline-offset-2 hover:text-fg">claude.ai/customize/connectors</a>{then}.</>;
+  }
+  return <>Sign in with <span className="font-mono text-muted">claude mcp login {shellQuote(server.name)}</span> in a terminal on {machine || 'the computer'}{then}.</>;
+}
+
 /** The session's MCP servers and whether they work; while Claude runs here, each can be turned off or reconnected. */
-function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
+function McpServers({ sessionId, open, machine }: { sessionId: string; open: boolean; machine?: string }) {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['mcp', sessionId], queryFn: () => api.mcp(sessionId), enabled: open, staleTime: 15_000 });
   // Servers can be turned on and off only in a Claude process running here.
@@ -46,6 +59,7 @@ function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
             <div className="truncate text-[12px] text-muted">
               {MCP_LABEL[server.status]}{server.tools > 0 ? ` · ${server.tools} tools` : ''}{server.scope ? ` · ${server.scope}` : ''}{server.error ? ` · ${server.error}` : ''}
             </div>
+            {server.status === 'needs-auth' && <div className="mt-0.5 text-[12px] leading-snug break-words text-faint"><SignInHint server={server} live={live} {...(machine ? { machine } : {})} /></div>}
           </div>
           {busy === server.name ? <Loader2 className="size-4 animate-spin text-faint" /> : live && (
             server.status === 'failed' || server.status === 'needs-auth' ? (
@@ -89,6 +103,7 @@ export function SessionMenu({
   cwd,
   home,
   run,
+  machine,
   thinking = false,
   onRenamed,
   onForked,
@@ -101,6 +116,8 @@ export function SessionMenu({
   cwd?: string;
   home?: string;
   run?: RunState;
+  /** The computer Claude Code runs on, named where something is done there. */
+  machine?: string;
   /** Claude has thought in this session: the Thinking view is offered. */
   thinking?: boolean;
   onRenamed: () => void;
@@ -262,7 +279,7 @@ export function SessionMenu({
         />
       )}
 
-      <McpServers sessionId={sessionId} open={open} />
+      <McpServers sessionId={sessionId} open={open} {...(machine ? { machine } : {})} />
 
       <SheetHeading>Details</SheetHeading>
       {cwd && <Detail label="Folder" mono>{shortPath(cwd, home)}</Detail>}
@@ -283,6 +300,8 @@ export function SessionMenu({
           {run.lastTurn.costUsd ? ` · $${run.lastTurn.costUsd.toFixed(2)}` : ''}
         </Detail>
       )}
+      {/* Claude Code's own count, as its /cost gives it; none where a subscription pays. */}
+      {run?.costUsd ? <Detail label="Session cost">{run.costUsd < 0.01 ? 'Under $0.01' : `$${run.costUsd.toFixed(2)}`} (estimate)</Detail> : null}
       <Detail label="ID" mono>
         <button type="button" className="-my-2 inline-flex items-center gap-1.5 py-2 text-left hover:text-fg" onClick={() => copy('id', sessionId)}>
           {sessionId}

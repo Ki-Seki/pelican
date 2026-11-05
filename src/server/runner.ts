@@ -408,6 +408,7 @@ export class SessionRun {
       partial: this.partial.slice(this.completedBlocks).filter(Boolean),
       ...(this.error ? { error: this.error } : {}),
       ...(this.lastTurn ? { lastTurn: this.lastTurn } : {}),
+      ...(this.costSoFar && !onSubscription() ? { costUsd: this.costSoFar } : {}),
       ...(this.context ? { context: this.context } : {}),
       ...(this.activity ? { activity: this.activity } : {}),
       ...(this.tasks.length > 0 ? {

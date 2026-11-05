@@ -28,9 +28,11 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
+import { cancelCheck, resend } from '../lib/next-steps';
 import { addShell } from '../lib/shells';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
+import type { Item } from '../lib/turns';
 import { Composer, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
@@ -199,7 +201,13 @@ function TaskOutputSheet({ sessionId, task, onClose }: { sessionId: string; task
  * One shows as a row; more fold into a single row, so they never crowd the conversation, and open
  * into a short list. A command's row opens what it printed; an agent's says what it is doing.
  */
-function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; tasks: BackgroundTask[]; scheduled: ScheduledCheck[] }) {
+function BackgroundTasks({ sessionId, tasks, scheduled, onCancel }: {
+  sessionId: string;
+  tasks: BackgroundTask[];
+  scheduled: ScheduledCheck[];
+  /** Asks Claude to cancel a check: it is Claude's to cancel, as in the CLI. */
+  onCancel: (check: ScheduledCheck) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [reading, setReading] = useState<BackgroundTask>();
   const stop = (id: string) => void api.stopTask(sessionId, id);
@@ -216,10 +224,11 @@ function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; t
   );
   // Claude stays running here for these; it says when the next one is due.
   const check = (item: ScheduledCheck) => (
-    <div key={item.id} className="flex h-9 items-center gap-2 pr-3 pl-3 text-[12.5px] text-muted">
+    <div key={item.id} className="flex h-9 items-center gap-2 pr-1 pl-3 text-[12.5px] text-muted">
       <Clock className="size-3.5 shrink-0 text-faint" />
       <span className="min-w-0 flex-1 truncate">{item.what}</span>
       {item.next && <span className="shrink-0 text-faint tabular-nums">{clockTime(item.next)}</span>}
+      <button type="button" title="Ask Claude to cancel it" onClick={() => onCancel(item)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Cancel</button>
     </div>
   );
   const sheet = <TaskOutputSheet sessionId={sessionId} {...(reading ? { task: reading } : {})} onClose={() => setReading(undefined)} />;
@@ -574,6 +583,12 @@ export function Chat({
     }
   };
 
+  // An API error the conversation ends on: its prompt goes again, with its pictures and files.
+  const sendAgain = (prompt: Extract<Item, { kind: 'user' }>) => {
+    setSendError(undefined);
+    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy), failed);
+  };
+
   // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
   // does in Claude Code; an earlier one gets a branch made just before it (the first prompt: a new
   // session in the same folder), and this session stays as it was. A failed send leaves nothing
@@ -807,6 +822,7 @@ export function Chat({
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
             {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy) } : {})}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -828,7 +844,7 @@ export function Chat({
         )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
-          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} />
+          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy)} />
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
@@ -938,6 +954,7 @@ export function Chat({
           {...(cwd ? { cwd } : {})}
           {...(home ? { home } : {})}
           {...(view.run ? { run: view.run } : {})}
+          {...(machine ? { machine } : {})}
           thinking={thought}
           onRenamed={refresh}
           onForked={(id) => void branchSettings().then((next) => {
