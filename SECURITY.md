@@ -55,11 +55,13 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **What Claude writes stays on the screen.** Images in a reply load only from Pelican itself;
   another site's image is a link you can open. Pages and visuals Claude makes show as still
   pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: a visual
-  Claude merely wrote into its reply shows as text. Their scripts run only when you tap Run, in a
-  frame of their own with no access to Pelican, its cookies or its API. Its content policy lets
-  them load scripts, styles and fonts from the public CDNs (cdnjs, jsDelivr, unpkg, Google Fonts)
-  and talk to no other server, and WebRTC is taken away. Still, a page whose scripts run can reach
-  the network in ways no policy covers (WebRTC from a frame it opens, DNS lookups) and send what it
+  Claude merely wrote into its reply shows as text. A still picture keeps no frames, embeds, links
+  or scripts, wherever they hide: a browser looks up a frame's host name before any policy stops
+  it, and the lookup alone can carry data. Their scripts run only when you tap Run, in a frame of
+  their own with no access to Pelican, its cookies or its API. Its content policy lets them load
+  scripts, styles and fonts from the public CDNs (cdnjs, jsDelivr, unpkg, Google Fonts) and talk
+  to no other server, and WebRTC is taken away. Still, a page whose scripts run can reach the
+  network in ways no policy covers (WebRTC from a frame it opens, DNS lookups) and send what it
   shows, so run a page only as you would open it in your browser. Uploaded files are served with
   no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 
 Object.assign(globalThis, { location: new URL('http://localhost:7860/') });
