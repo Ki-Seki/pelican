@@ -149,8 +149,11 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** A step further in: on a phone a step of its own in the history, beside the conversation in place. */
   const go = (to: WorkspaceStep) => goTo(to, !docked);
   const up = (to: WorkspaceStep) => (docked ? goTo(to, false) : goUp(to));
+  // A tab tapped since the view opened is the one to show, also where it has little to say.
+  const tapped = useRef(false);
   const switchTab = (to: WorkspaceTab) => {
     lastTab = to;
+    tapped.current = true;
     goTo({ tab: to }, false);
   };
 
@@ -163,10 +166,12 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const turns = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: open && Boolean(sessionId), staleTime: 30_000 });
   const git = status.data?.repo ? status.data : undefined;
 
-  // Not a repository and no turn that changed files: there is nothing to compare, so start in the files.
+  // Not a repository and no turn that changed files: there is nothing to compare, so the view
+  // starts in the files. Changes, tapped, still says why it is empty.
   const nothingToCompare = status.data && !status.data.repo && !status.data.untrusted && turns.data?.turns.length === 0;
   useEffect(() => {
-    if (open && nothingToCompare && tab === 'changes' && !shown) goTo({ tab: 'files' }, false);
+    if (!open) tapped.current = false;
+    else if (nothingToCompare && tab === 'changes' && !shown && !tapped.current) goTo({ tab: 'files' }, false);
   }, [open, nothingToCompare, tab, shown]);
 
   const back = shown ? (

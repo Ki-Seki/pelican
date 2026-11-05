@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { GitStatus, SessionChanges } from '../src/shared/protocol';
 
 const CWD = '/code/app';
-const server = vi.hoisted(() => ({ asked: [] as string[], diff: '' }));
+const server = vi.hoisted(() => ({ asked: [] as string[], diff: '', /** A folder git does not track, where no turn changed files. */ plain: false }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -25,15 +25,16 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       git: async (_cwd: string, scope?: string) => {
         server.asked.push(`git ${scope ?? ''}`);
+        if (server.plain) return { repo: false };
         return scope === 'base' ? since : status;
       },
-      changes: async () => changes,
+      changes: async () => (server.plain ? { turns: [], lines: {} } : changes),
       gitDiff: async () => server.diff,
       turnDiff: async (_id: string, turn: string, path: string) => {
         server.asked.push(`turn ${turn} ${path}`);
         return `--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,1 @@\n+:root {}\n`;
       },
-      tree: async () => [],
+      tree: async () => (server.plain ? [{ name: 'notes.md', path: 'notes.md', dir: false, size: 30 }] : []),
     },
   };
 });
@@ -59,6 +60,7 @@ afterEach(() => {
   cleanup();
   server.asked = [];
   server.diff = '';
+  server.plain = false;
   history.replaceState(null, '', '/');
 });
 
@@ -96,6 +98,19 @@ describe('what Changes shows', () => {
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.keyDown(screen.getByRole('region', { name: 'Changes and files' }), { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('in a folder git does not track, where no turn changed files: opens on Files, and Changes, tapped, says why it is empty', async () => {
+    server.plain = true;
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    wrap(<Workspace open cwd="/code/notes" sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(location.search).toBe('?s=s1&w=files'));
+    await screen.findByText('notes.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(await screen.findByText('This folder is not a git repository')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(location.search).toBe('?s=s1&w=changes');
+    expect(screen.getByRole('button', { name: 'Changes' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('on a phone, says at its foot that Claude waits for an answer, which leads back to the conversation', async () => {
