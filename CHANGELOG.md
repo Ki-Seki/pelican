@@ -1,5 +1,147 @@
 # Changelog
 
+## 0.3.0
+
+Every Claude Code session on your computer, on your phone. This release follows a ten-angle audit
+(first run, phone, computer and accessibility, the conversation, Claude Code parity, the server,
+security, the launch, competitors, code quality) and an adversarial review of the result.
+
+### Highlights
+
+- **Phone in one step.** `pelican phone` prints a QR code that opens Pelican on your phone, signed
+  in, once, for two minutes. It finds the address from `tailscale serve`, PELICAN_PUBLIC_URL or your
+  network; with Tailscale it is two commands. The start banner shows the code when it knows the
+  address.
+- **Keeps running.** `pelican service install` (also `status`, `restart`, `uninstall`) starts
+  Pelican at login with launchd or a systemd user service. While Claude works, the computer does not
+  idle to sleep (PELICAN_KEEP_AWAKE=0 turns this off).
+- **Sessions waiting in other apps.** A session waiting for an answer in the terminal, Claude
+  Desktop or VS Code shows "Needs you in the terminal", and your phone gets one notification if the
+  wait lasts about 20 seconds. You answer it in that app.
+- **Approvals as in Claude Code.** "Always allow" says what it saves and where ("Always allow
+  `npm test *` in this project", "Allow all edits this session"), and is not offered when Claude
+  Code says it would allow more than asked. Deny works like Claude Code's No. Cards use Claude
+  Code's wording, name the subagent or MCP server asking, and show hidden characters in commands.
+- **Folders you trust.** The first time Claude Code would start in a folder nobody trusted, and
+  the folder brings programs of its own (hooks, MCP servers, helpers, git filters), Pelican lists
+  them and asks: Trust and start, or Use my settings only.
+- **Much lighter on a phone.** Replies stream as appends (a long answer costs a few percent of
+  the data it did), everything is sent compressed, the conversation loads only when you open one,
+  pictures load when shown, and the session list stays fast with thousands of sessions.
+
+### Changes in behavior
+
+- New sessions start in Auto, unless you pick a mode in Settings (New sessions start with > Mode)
+  or Claude Code's `permissions.defaultMode` sets one; a model without Auto starts in Manual. Bypass
+  is never a default: a branch, an edited earlier prompt or `/clear` from a Bypass session starts in
+  that default mode. A mode picked in a session stays with it.
+- Permission modes carry Claude Code's names: Manual, Accept edits, Plan, Auto, Bypass
+  permissions. A session in Claude Code's Don't ask mode keeps it.
+- Deny with no note stops the turn and waits for you; with a note, Claude carries on with it.
+- Queued messages wait in a strip above the message box, where you can edit or remove them, and go
+  to Claude when the turn ends, each as its own message, so a queued `/compact` or `/model` runs as
+  a command.
+- Stop ends the turn but leaves background agents and commands running, as Esc does in the
+  terminal; each has its own Stop.
+- `/clear`, `/reset` and `/new` open a new session in the same folder.
+- Pages and visuals Claude makes show as still pictures until you tap Run, and only for tool calls
+  that ran.
+- A browser in use stays signed in; 30 days without use sign it out. `pelican token --reset` and
+  `pelican password` apply at once.
+- The Agent SDK, and the Claude Code it brings, is pinned, and the package ships
+  npm-shrinkwrap.json: installs get the tree that was tested. Updating Pelican updates its Claude
+  Code. A second command name, `pelican-cc`, is there for machines where `pelican` is taken.
+- Uploaded attachments are deleted after Claude Code's `cleanupPeriodDays` (30 unless set).
+
+### Sessions and the list
+
+- Sessions with the same folder and title (a scheduled task's runs, a named session's branches)
+  fold into one row, with the earlier ones a tap away.
+- A session whose background commands, subagents or scheduled checks keep running after its turn
+  stays under Active, with "2 tasks" and a steady dot.
+- A turn that ended on a Claude Code error shows "Stopped: not signed in" (or the error's kind)
+  instead of the error as Claude's reply.
+- Titles taken from a prompt fit on about one line; renamed sessions and Claude Code's own titles
+  keep theirs.
+- Archive from the list: swipe a row left on a phone, or use the button on hover, with Undo.
+- Rows are links (Cmd/Ctrl-click opens a new tab), the open session is marked, and long lists load
+  150 rows at a time while search still covers every session.
+- + opens a new chat in your latest project, ready to type; tap the folder to start elsewhere, or
+  make a new folder there (New folder in the folder browser).
+
+### The conversation
+
+- Opening a session lands on its newest message, also with pictures, a chart or an approval
+  waiting. While Claude works the view follows the newest output; a stray tap no longer stops that.
+- Diffs wrap long lines. Code blocks have a bar with the language and Copy. Tool output shows
+  without color codes or error tags. Long prompts fold, and files you sent show as chips.
+- What you decided stays visible: your answers to Claude's questions, plans approved or sent back,
+  steps you denied with your note.
+- The task list shows in full when it changes; in between, progress is one line.
+- Half-written messages are kept per session, with their files, across leaving and reloading.
+- Several approvals come one at a time ("1 of 3") and never push the message box off screen.
+- Drop files anywhere on the conversation to attach them.
+- A session another app has looks the same everywhere: the header says "Working in the terminal"
+  or "Needs you in Claude Desktop", each case is explained once, and the message box warns that
+  sending starts a second Claude.
+- API failures show once, in plain words (overloaded, too long: send /compact, not signed in,
+  usage limit and when it resets).
+- Hook feedback, warnings and local command output appear as notes, and stay after the turn and a
+  reload; terminal-only commands are left out of the / list.
+- MCP servers that ask for input get a card to answer instead of being declined.
+- Plans can be approved into Auto, Accept edits or Manual, or sent back with Keep planning.
+- Check-ins Claude schedules (/loop, reminders, session crons) are listed, and Claude keeps running
+  for them and for background work.
+- The cost shown is that turn's own, not the running total, and none on a subscription.
+- Notifications say what Claude wants (the command, the file, the question) or the reply's first
+  line.
+- On screens 1440px and wider, Changes and files sits beside the conversation (Cmd/Ctrl+Shift+D,
+  as in Claude Desktop). Comment on diff lines and add the comments to your message.
+
+### Keyboard and accessibility
+
+- Enter that confirms a Chinese, Japanese or Korean candidate never sends, Safari included.
+  Cmd/Ctrl+Enter always sends. Esc stops Claude. Cmd/Ctrl+K searches sessions. Cmd/Ctrl+/ lists
+  the keys.
+- Sheets are real dialogs: focus moves in and back, one Esc closes one, and on a phone you drag a
+  sheet down to close it.
+- Screen readers hear approvals, questions, plans, replies, failures and the connection state;
+  turns have headings and pictures have names.
+- Grey text and status words pass WCAG AA contrast in both themes; Reduce motion stops the pulsing.
+- On iPhone the message box stays above the keyboard and fields no longer make Safari zoom.
+
+### Reliability
+
+- Nothing a request or an unreadable transcript does crashes the server any more.
+- A chat no longer stays on "Working" after Claude finished while the phone slept or Pelican
+  restarted. Dead connections are noticed and replaced; coming back to the page catches up at once.
+- When the computer cannot be reached, one quiet line says so, with Retry.
+- A `!` command that leaves something running in the background returns at once.
+- A named pipe or device file in a project can no longer freeze Pelican.
+- A signed-out or missing Claude Code is detected and said in Pelican's words; the banner and
+  Settings > About say which Claude Code runs, and when your own `claude` is newer.
+
+### Security
+
+- Folder trust, above. Typing `/` or `@` in an untrusted folder runs nothing of the repository's.
+- The app's own page has a script and connect policy; previews run their scripts only after Run.
+- Notifications stop on every device after a token or password change, and on sign-out.
+- `pelican service` never copies secrets such as API keys into the service.
+
+### Site, docs and project
+
+- The README and website were redesigned around the one line, the live demo, how it works, a
+  dated comparison with Remote Control, Happy and HAPI, Yep Anywhere, CloudCLI and SSH with tmux,
+  and answers to the questions launch threads ask (plan terms, Remote Control, tmux, sleep, cost
+  and telemetry, size).
+- The docs cover everything above and add a Claude Code coverage table, Keep it running, Update
+  and remove, and Folders you trust.
+- The live demo plays out the waiting approval and answers messages calmly.
+- CI runs the app and the site in a real browser on every change, on Node 22.12, 24 and 26 and on
+  macOS; the site publishes only after CI passes. Release candidates publish as `next`.
+- Each new Agent SDK arrives as its own pull request with a report of what changed upstream, and a
+  weekly issue lists Claude Code updates to consider.
+
 ## 0.2.3
 
 - A session keeps its own model, effort, speed, Ultracode and permission mode, Bypass included:
