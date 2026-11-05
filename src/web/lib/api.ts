@@ -97,6 +97,8 @@ export const api = {
   logout: () => send<{ ok: boolean }>('POST', 'auth/logout'),
   /** A one-time code that signs a phone in, good for two minutes (null when nobody signs in). */
   accessCode: () => send<{ code: string | null }>('POST', 'access/code').then((r) => r.code),
+  /** The address a phone uses to reach this Pelican, when the server knows one (PELICAN_PUBLIC_URL, tailscale serve). */
+  phoneAddress: () => request<{ url: string | null }>('access/phone').then((r) => r.url),
   info: () => request<ServerInfo>('info'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>

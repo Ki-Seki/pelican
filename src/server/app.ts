@@ -15,9 +15,11 @@ import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCod
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
+import { claudeCodeInfo } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
+import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runState, runStatus, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
@@ -25,6 +27,7 @@ import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { instance } from './running.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { folderTrusted, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 
@@ -132,6 +135,8 @@ app.get('/api/auth', (c) => c.json({
   required: authMode() !== 'none',
   mode: authMode(),
   signedIn: signedIn(c.req.header('cookie'), c.req.header('authorization')),
+  // Not a secret: lets `pelican phone` tell this server from another behind an address.
+  instance,
 }));
 
 app.post('/api/auth/login', async (c) => {
@@ -160,10 +165,23 @@ app.post('/api/access/code', (c) => {
   return c.json({ code: issueCode() });
 });
 
-app.get('/api/info', (c) => {
+/** The address a phone uses to reach this Pelican, when one is known: looked up at most once a minute. */
+let phoneLookup: { at: number; url: Promise<string | null> } | undefined;
+app.get('/api/access/phone', async (c) => {
+  if (config.demo) return c.json({ url: null });
+  if (!phoneLookup || Date.now() - phoneLookup.at > 60_000) {
+    phoneLookup = { at: Date.now(), url: findPhoneAddress(config.port, config.host).then((found) => found.address?.url ?? null, () => null) };
+  }
+  return c.json({ url: await phoneLookup.url });
+});
+
+app.get('/api/info', async (c) => {
   const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
   const key = pushKey();
   if (key) info.pushKey = key;
+  // Which Claude Code this Pelican runs, for About (and bug reports).
+  const code = await claudeCodeInfo();
+  if (code.version || code.path) info.claudeCode = { ...(code.version ? { version: code.version } : {}), ...(code.path ? { path: code.path } : {}) };
   return c.json(info);
 });
 

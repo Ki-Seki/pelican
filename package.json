@@ -20,7 +20,8 @@
   "author": "Shichao Song",
   "type": "module",
   "bin": {
-    "pelican": "dist/server/index.js"
+    "pelican": "dist/server/index.js",
+    "pelican-cc": "dist/server/index.js"
   },
   "files": [
     "dist",

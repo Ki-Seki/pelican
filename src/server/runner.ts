@@ -718,3 +718,9 @@ setInterval(() => {
 export function closeAll(): void {
   for (const run of runs.values()) run.close();
 }
+
+/** Whether Claude is in a turn in any session this app runs (working, or waiting for an answer). */
+export function anyRunBusy(): boolean {
+  for (const run of runs.values()) if (!run.closed && run.busy) return true;
+  return false;
+}
