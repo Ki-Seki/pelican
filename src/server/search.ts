@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { bundledClaude, claudeBinary } from './claude-code.js';
 import { openRegular } from './open.js';
+import { limiter } from './transcripts.js';
 import { inside } from './workspace.js';
 
 /**
@@ -210,8 +211,13 @@ async function readText(file: string): Promise<string | undefined> {
   }
 }
 
-/** The lines of the folder's files that hold `query`, by file. `engine` names how, for tests and the curious. */
+/** Two searches at a time at most: a burst of them waits its turn instead of loading the computer. */
+const searching = limiter(2);
+
+/** The lines of the folder's files that hold `query`, by file. `engine: 'scan'` skips ripgrep (tests). */
 export async function searchText(cwd: string, query: string, engine?: 'scan'): Promise<SearchResult> {
-  const binary = engine === 'scan' ? undefined : await ripgrep();
-  return binary ? withRipgrep(binary, cwd, query) : withScan(cwd, query);
+  return searching(async () => {
+    const binary = engine === 'scan' ? undefined : await ripgrep();
+    return binary ? withRipgrep(binary, cwd, query) : withScan(cwd, query);
+  });
 }

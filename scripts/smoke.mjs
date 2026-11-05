@@ -172,9 +172,20 @@ async function checkDocked(browser, base, sessions) {
         probe.className = 'truncate';
         probe.textContent = 'A very long line '.repeat(80);
         column?.append(probe);
+        // A file name far longer than its row, in the pane and in a step: it ends in an ellipsis,
+        // and what follows it on the row (its counts) stays in view.
+        const name = 'a-very-long-component-file-name-that-keeps-going-and-going.stories.tsx';
+        for (const span of document.querySelectorAll('aside button span.flex.min-w-0.items-baseline > span:first-child, main span.flex.min-w-0.items-baseline > span:first-child')) span.textContent = name;
         const out = [];
         const r = pane.getBoundingClientRect();
         if (r.right > innerWidth + 1) out.push(`Changes and files ends ${Math.round(r.right - innerWidth)}px past the window`);
+        for (const row of document.querySelectorAll('aside button, main button')) {
+          const end = row.getBoundingClientRect().right;
+          if ([...row.children].some((child) => child.getBoundingClientRect().right > end + 1)) {
+            out.push(`a long name pushes the end of "${row.textContent.slice(0, 40)}" out of view`);
+            break;
+          }
+        }
         // What it shows wider than itself would be cut at its edge (it scrolls only up and down).
         for (const el of pane.querySelectorAll('*')) {
           const box = el.getBoundingClientRect();

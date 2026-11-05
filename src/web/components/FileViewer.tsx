@@ -95,7 +95,7 @@ function LineRow({ n, children }: { n: number; children?: ReactNode }) {
         onClick={() => lines.pick(n)}
         className={`flex cursor-pointer ${marked ? 'bg-hover shadow-[inset_3px_0_0_var(--fg)]' : 'pointer-fine:hover:shadow-[inset_3px_0_0_var(--faint)]'}`}
       >
-        <span className={`shrink-0 pr-3 text-right text-faint tabular-nums select-none ${lines.wrap ? '' : 'sticky left-0 bg-bg'}`} style={{ width: `${lines.digits + 2}ch` }}>{n}</span>
+        <span className={`shrink-0 pr-2.5 pl-2 text-right text-faint tabular-nums select-none ${lines.wrap ? '' : 'sticky left-0 bg-bg'}`} style={{ width: `calc(${lines.digits}ch + 1.125rem)` }}>{n}</span>
         <span className={`min-w-0 flex-1 pr-3 ${lines.wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>{children ?? (lines.texts[n - 1] || ' ')}</span>
       </div>
       {lines.comments.get(n)?.map((c) => <CommentNote key={c.id} comment={c} onRemove={() => lines.remove(c)} />)}
@@ -264,10 +264,11 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
     window.getSelection()?.removeAllRanges();
   };
 
-  const tool = 'flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[13px] text-muted hover:bg-hover hover:text-fg aria-pressed:text-fg';
+  const tool = 'flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] text-muted hover:bg-hover hover:text-fg aria-pressed:text-fg';
   return (
     <div className="px-1 pb-4">
-      <div className="no-scrollbar mb-1.5 flex items-center gap-0.5 overflow-x-auto px-2">
+      {/* The tools wrap onto a second line rather than run off a narrow screen. */}
+      <div className="mb-1.5 flex flex-wrap items-center justify-end gap-0.5 px-2">
         <span className="mr-auto shrink-0 pr-2 text-[12px] text-faint">{data ? formatBytes(data.size) : ''}</span>
         {text !== undefined && !preview && (
           <button type="button" aria-pressed={wrap} onClick={() => setWrapping(!wrap)} className={tool}>Wrap</button>
