@@ -217,6 +217,17 @@ describe('usage from transcripts', () => {
     expect((await sessionUsage(OTHER, await sessionFiles(OTHER, mainFile(OTHER))))?.cost).toBeUndefined();
   });
 
+  it('tells a model’s price of a cache read from its price of input, once its sessions differ enough', async () => {
+    // Claude Code priced these at $4 a million input tokens and $0.20 a million cache reads.
+    const opus = (input: number, read: number) => ({ 'claude-opus-5-5': { inputTokens: input, outputTokens: 0, cacheReadInputTokens: read, cacheCreationInputTokens: 0, costUSD: input * 4e-6 + read * 2e-7, webSearchRequests: 0 } });
+    const start = Date.parse('2026-11-05T09:00:00Z');
+    await transcript(mainFile(MAIN), [prompt(MAIN, '2026-11-05T10:00:00Z'), ...reply(MAIN, 'msg_1', '2026-11-05T10:00:05Z', { read: 1_000_000 }), costState(MAIN, 0.024, start, opus(1000, 100_000))]);
+    await transcript(mainFile(OTHER), [prompt(OTHER, '2026-11-05T11:00:00Z'), costState(OTHER, 0.028, start, opus(6000, 20_000))]);
+    await refreshUsage(0);
+    // A million cache reads at $0.20, where a tenth of the input price would have said $0.40.
+    expect((await sum()).cost?.usd).toBeCloseTo(0.2, 6);
+  });
+
   it('breaks usage down by project and by app, Pelican’s own sessions included', async () => {
     await transcript(mainFile(MAIN), [prompt(MAIN, '2026-11-05T10:00:00Z'), ...reply(MAIN, 'msg_1', '2026-11-05T10:00:05Z', { output: 30 }, { entrypoint: 'claude-desktop' })]);
     await transcript(mainFile(OTHER, '-work-site'), [

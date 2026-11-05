@@ -40,8 +40,10 @@ const SMALL_ROW = 256 * 1024;
 const LARGEST_REPLY = 32 * 1024 * 1024;
 const HEAD = 1024;
 const PRINT = 256;
-/** Each reply keeps five numbers: input, output, cache reads, cache writes, and of those the 1-hour ones. */
-const FIELDS = 5;
+/** Each reply keeps six numbers: input, output, cache reads, cache writes, of those the 1-hour ones, and 1 for fast mode. */
+const FIELDS = 6;
+/** Fast mode costs twice as much per token, on every model that has it. */
+const FAST = 2;
 
 const SESSION_FILE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 const SESSION_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,15 +84,20 @@ export type FileRecord = {
   compactions: number[];
   limits: Array<[number, LimitKind]>;
   /**
-   * Claude Code's own cost estimate, from its cost-state rows: the session's total so far (each run
-   * of a Claude process counts on from where the last one left off, or from zero), and per model the
-   * dollars and the tokens they price, for the price of a token on this computer.
+   * What Claude Code's own estimates say a token costs on this computer, from its cost-state rows:
+   * the total of the Claude process writing them now (one that starts from zero is a new process),
+   * that process's figures per model, and the sums the earlier processes' last figures add to the
+   * fit of each model's prices (see `fitPrices`).
    */
-  cost: number;
   costRun: number;
-  rates: Array<[string, number, number]>;
-  runRates: Array<[string, number, number]>;
+  runPoints: PricePoint[];
+  priceSums: PriceSums[];
 };
+
+/** One model's figures in a cost-state row: its tokens priced like input, its cache reads, and the dollars for both. */
+type PricePoint = [model: string, input: number, cacheRead: number, usd: number];
+/** Sums over many such figures, for a least-squares fit: AA, AB, BB, Ay, By, y, A, B (A input-like tokens, B cache reads, y dollars). */
+type PriceSums = [model: string, ...sums: number[]];
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), 4_000_000_000) : 0);
 const str = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
@@ -112,19 +119,73 @@ export function hash53(text: string): number {
 }
 
 /**
- * What a reply's tokens cost relative to one input token, by the shape of Anthropic's prices: output
- * five times input, cache reads a tenth, cache writes 1.25 times (2 times for the 1-hour cache).
- * Multiplied by a model's price per input token, which comes from Claude Code's own estimates.
+ * A reply's tokens as input tokens, by the shape of Anthropic's prices: output costs five times
+ * input, a cache write 1.25 times (twice for the 1-hour cache). Cache reads are priced apart: a
+ * tenth of input on older models, less on newer ones.
  */
-export const weighted = (input: number, output: number, cacheRead: number, cacheWrite: number, cacheWrite1h: number) =>
-  input + 5 * output + 0.1 * cacheRead + 1.25 * Math.max(0, cacheWrite - cacheWrite1h) + 2 * cacheWrite1h;
+export const inputLike = (input: number, output: number, cacheWrite: number, cacheWrite1h: number) =>
+  input + 5 * output + 1.25 * Math.max(0, cacheWrite - cacheWrite1h) + 2 * cacheWrite1h;
+
+/** A model's prices per token, as Claude Code's estimates on this computer show them. */
+export type Prices = { input: number; cacheRead: number };
+
+/**
+ * Each model's price of an input token and of a cache read, fitted (least squares) to what Claude
+ * Code estimated its sessions cost: its own list prices, or the organization's. With too little to
+ * tell the two apart, cache reads cost a tenth of input.
+ */
+export function fitPrices(sums: Map<string, number[]>): Map<string, Prices> {
+  const prices = new Map<string, Prices>();
+  for (const [model, [aa = 0, ab = 0, bb = 0, ay = 0, by = 0, y = 0, a = 0, b = 0]] of sums) {
+    let input = NaN;
+    let cacheRead = NaN;
+    const det = aa * bb - ab * ab;
+    if (det > 1e-3 * aa * bb) {
+      input = (ay * bb - by * ab) / det;
+      cacheRead = (by * aa - ay * ab) / det;
+    }
+    if (!(input > 0) || !(cacheRead >= 0)) {
+      const tokens = a + 0.1 * b;
+      input = tokens > 0 ? y / tokens : NaN;
+      cacheRead = 0.1 * input;
+    }
+    if (input > 0) prices.set(model, { input, cacheRead });
+  }
+  return prices;
+}
+
+/** What a reply cost at a model's prices. */
+const priceOf = (prices: Prices, t: number[], at: number) =>
+  (t[at + 5] ? FAST : 1) * (prices.input * inputLike(t[at]!, t[at + 1]!, t[at + 3]!, t[at + 4]!) + prices.cacheRead * t[at + 2]!);
+
+/**
+ * Of a model's replies in a transcript so far: the share of cache writes that were 1-hour ones, and
+ * the share of their worth in fast mode. Claude Code's own figures do not always say either.
+ */
+function mixOf(record: FileRecord, model: string): { write1h: number; fast: number } {
+  const m = record.models.indexOf(model);
+  let writes = 0;
+  let writes1h = 0;
+  let worth = 0;
+  let fast = 0;
+  for (let j = 0; m >= 0 && j < record.keys.length; j += 1) {
+    if (record.model[j] !== m) continue;
+    const t = j * FIELDS;
+    writes += record.tokens[t + 3]!;
+    writes1h += record.tokens[t + 4]!;
+    const w = inputLike(record.tokens[t]!, record.tokens[t + 1]!, record.tokens[t + 3]!, record.tokens[t + 4]!) + 0.1 * record.tokens[t + 2]!;
+    worth += w;
+    if (record.tokens[t + 5]) fast += w;
+  }
+  return { write1h: writes > 0 ? writes1h / writes : 0, fast: worth > 0 ? fast / worth : 0 };
+}
 
 function emptyRecord(file: string, found: Found, info: { ino: number; size: number; mtimeMs: number; birthtimeMs: number }): FileRecord {
   return {
     v: RECORD_VERSION, file, dir: found.dir, session: found.session, sub: found.sub,
     ino: info.ino, size: info.size, mtimeMs: info.mtimeMs, born: info.birthtimeMs || 0, offset: 0, print: '',
     days: [], keys: [], minutes: [], model: [], app: [], tokens: [], models: [], apps: [],
-    compactions: [], limits: [], cost: 0, costRun: 0, rates: [], runRates: [],
+    compactions: [], limits: [], costRun: 0, runPoints: [], priceSums: [],
   };
 }
 
@@ -165,32 +226,34 @@ function textOf(content: unknown): string {
 function costRow(record: FileRecord, row: Row): void {
   const usd = typeof row.totalCostUSD === 'number' && Number.isFinite(row.totalCostUSD) && row.totalCostUSD >= 0 ? row.totalCostUSD : undefined;
   if (usd === undefined) return;
-  // A Claude process that did not carry the total on starts from zero: what the last one reached stays.
-  if (usd + 1e-9 < record.costRun) {
-    record.cost += record.costRun;
-    for (const rate of record.runRates) addRate(record.rates, rate[0], rate[1], rate[2]);
-  }
+  // A Claude process that did not carry the total on started from zero: the last one's figures stay.
+  if (usd + 1e-9 < record.costRun) for (const point of record.runPoints) addPoint(record.priceSums, point);
   record.costRun = usd;
-  const runRates: Array<[string, number, number]> = [];
+  const points: PricePoint[] = [];
   const usage = row.modelUsage && typeof row.modelUsage === 'object' ? row.modelUsage as Record<string, Record<string, unknown>> : {};
   for (const [model, u] of Object.entries(usage)) {
     if (!u || typeof u !== 'object' || model.startsWith('<')) continue;
+    // Web searches are priced per search, not per token.
     const cost = typeof u.costUSD === 'number' && Number.isFinite(u.costUSD) ? u.costUSD - 0.01 * num(u.webSearchRequests) : 0;
-    const write1h = num(u.cacheCreationEphemeral1hInputTokens);
-    const priced = weighted(num(u.inputTokens), num(u.outputTokens), num(u.cacheReadInputTokens), num(u.cacheCreationInputTokens), write1h);
-    if (cost > 0 && priced > 0) runRates.push([model, cost, priced]);
+    const mix = mixOf(record, model);
+    const writes = num(u.cacheCreationInputTokens);
+    const writes1h = u.cacheCreationEphemeral1hInputTokens === undefined ? Math.round(writes * mix.write1h) : num(u.cacheCreationEphemeral1hInputTokens);
+    const speed = 1 + (FAST - 1) * mix.fast;
+    const input = inputLike(num(u.inputTokens), num(u.outputTokens), writes, writes1h) * speed;
+    const reads = num(u.cacheReadInputTokens) * speed;
+    if (cost > 0 && input + reads > 0) points.push([model, input, reads, cost]);
   }
-  record.runRates = runRates;
+  record.runPoints = points;
 }
 
-function addRate(rates: Array<[string, number, number]>, model: string, usd: number, priced: number): void {
-  const known = rates.find((r) => r[0] === model);
-  if (known) {
-    known[1] += usd;
-    known[2] += priced;
-  } else {
-    rates.push([model, usd, priced]);
+function addPoint(sums: PriceSums[], [model, a, b, y]: PricePoint): void {
+  let known = sums.find((s) => s[0] === model);
+  if (!known) {
+    known = [model, 0, 0, 0, 0, 0, 0, 0, 0];
+    sums.push(known);
   }
+  const add = [a * a, a * b, b * b, a * y, b * y, y, a, b];
+  for (let i = 0; i < add.length; i += 1) known[i + 1] = (known[i + 1] as number) + add[i]!;
 }
 
 /** Adds one row of the transcript. Rows that cannot matter are looked at only as far as it takes to tell. */
@@ -240,7 +303,7 @@ function addLine(record: FileRecord, state: Reading, line: Buffer): void {
   const creation = usage.cache_creation && typeof usage.cache_creation === 'object' ? usage.cache_creation as Record<string, unknown> : undefined;
   const counts = [
     num(usage.input_tokens), num(usage.output_tokens), num(usage.cache_read_input_tokens), num(usage.cache_creation_input_tokens),
-    num(creation?.ephemeral_1h_input_tokens),
+    num(creation?.ephemeral_1h_input_tokens), usage.speed === 'fast' ? 1 : 0,
   ];
   if (counts[0] === 0 && counts[1] === 0 && counts[2] === 0 && counts[3] === 0) return;
   const id = str(message.id) ?? str(row.uuid);
@@ -466,7 +529,7 @@ function deserialize(raw: Record<string, unknown>): FileRecord | undefined {
   const compactions = numbers(raw.compactions);
   const models = strings(raw.models);
   const apps = strings(raw.apps);
-  if (!days || !compactions || !models || !apps || !Array.isArray(raw.limits) || !Array.isArray(raw.rates) || !Array.isArray(raw.runRates)) return undefined;
+  if (!days || !compactions || !models || !apps || !Array.isArray(raw.limits) || !Array.isArray(raw.runPoints) || !Array.isArray(raw.priceSums)) return undefined;
   return {
     ...(raw as unknown as FileRecord), keys, minutes, model, app, tokens, days, compactions, models, apps,
   };
@@ -785,18 +848,19 @@ function owners(): Ownership {
   return ownership;
 }
 
-/** Per model, what one weighted token cost in Claude Code's own estimates on this computer. */
-function pricesFrom(list: Iterable<FileRecord>): Map<string, number> {
-  const sums = new Map<string, [number, number]>();
+/** Each model's prices, from every transcript's cost-state rows (see `fitPrices`). */
+function pricesFrom(list: Iterable<FileRecord>): Map<string, Prices> {
+  const sums = new Map<string, number[]>();
+  const into = (model: string, values: number[]) => {
+    const sum = sums.get(model) ?? [0, 0, 0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < values.length; i += 1) sum[i] = sum[i]! + values[i]!;
+    sums.set(model, sum);
+  };
   for (const r of list) {
-    for (const [model, usd, priced] of [...r.rates, ...r.runRates]) {
-      const sum = sums.get(model) ?? [0, 0];
-      sum[0] += usd;
-      sum[1] += priced;
-      sums.set(model, sum);
-    }
+    for (const [model, ...values] of r.priceSums) into(model, values as number[]);
+    for (const [model, a, b, y] of r.runPoints) into(model, [a * a, a * b, b * b, a * y, b * y, y, a, b]);
   }
-  return new Map([...sums].filter(([, [, priced]]) => priced > 0).map(([model, [usd, priced]]) => [model, usd / priced]));
+  return fitPrices(sums);
 }
 
 const add = (into: Tokens, t: number[], at: number) => {
@@ -922,7 +986,7 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
       byApp.set(app, used);
       const price = prices.get(model);
       if (price === undefined) unpriced.add(r.session);
-      else usd += price * weighted(r.tokens[t]!, r.tokens[t + 1]!, r.tokens[t + 2]!, r.tokens[t + 3]!, r.tokens[t + 4]!);
+      else usd += priceOf(price, r.tokens, t);
     }
   }
 
@@ -1046,7 +1110,7 @@ export async function sessionUsage(sessionId: string, files: Found[]): Promise<S
       byModel.set(model, (byModel.get(model) ?? 0) + r.tokens[t]! + r.tokens[t + 1]! + r.tokens[t + 2]! + r.tokens[t + 3]!);
       const price = prices.get(model);
       if (price === undefined) priced = false;
-      else usd += price * weighted(r.tokens[t]!, r.tokens[t + 1]!, r.tokens[t + 2]!, r.tokens[t + 3]!, r.tokens[t + 4]!);
+      else usd += priceOf(price, r.tokens, t);
     }
     if (!r.sub) compactions += r.compactions.length;
   }
@@ -1068,6 +1132,9 @@ export async function sessionFiles(sessionId: string, main: string): Promise<Fou
   await subagentFiles(path.join(path.dirname(main), sessionId, 'subagents'), dir, sessionId, found);
   return found;
 }
+
+/** Each model's prices as fitted now, per token (tests, and checking the fit). */
+export const usagePrices = () => pricesFrom(records.values());
 
 /** Forgets everything read (tests). */
 export function resetUsage(): void {
