@@ -38,6 +38,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         { path: '/code/site', name: 'site', lastActivity: Date.now() - 120_000, sessions: 1 },
       ],
       git: async () => ({ repo: false }),
+      tree: async () => [],
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...server.session },
         run: server.run,
@@ -85,10 +86,12 @@ beforeAll(() => {
 const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
+const { setComments } = await import('../src/web/lib/review');
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  setComments(CWD, []);
   media = {};
   Object.assign(server, { answers: [], sent: [], session: {}, run: null });
 });
@@ -216,5 +219,21 @@ describe('a new session moved to another folder before it starts', () => {
     cleanup();
     wrap(<Chat newCwd="/code/site" home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Auto'));
+  });
+});
+
+describe('Add to message, from Changes and files', () => {
+  it('leaves the keys in the message box once the sheet has gone, not on the button that opened it', async () => {
+    setComments(CWD, [{ id: 'c1', path: 'src/styles/theme.css', kind: 'add', line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' }]);
+    session();
+    await loaded();
+    const opener = screen.getByLabelText('Changes and files');
+    // A click puts focus on the button, as browsers do.
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.click(await screen.findByText('Add to message'));
+    await waitFor(() => expect(document.querySelector('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+    expect(box().value).toContain('Use the variables here too');
   });
 });

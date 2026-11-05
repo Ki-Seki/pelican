@@ -279,12 +279,20 @@ export function Composer({
     // A message given back (its send failed) brings its files back too, beside any added since.
     const back = draft.attachments;
     if (back?.length) setUploads((list) => [...back.map(restored), ...list.filter((u) => !back.some((a) => a.id === u.attachment?.id))]);
-    requestAnimationFrame(() => {
+    const put = () => {
       const el = area.current;
       if (!el) return;
       el.focus();
       el.setSelectionRange(next.length, next.length);
       setCaret(next.length);
+    };
+    requestAnimationFrame(() => {
+      put();
+      // The sheet that put it here (Add to message) may still be on its way out, holding the rest
+      // of the page; once it has gone, and given focus back to what opened it, the box takes it.
+      if (area.current && document.activeElement !== area.current) {
+        [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
