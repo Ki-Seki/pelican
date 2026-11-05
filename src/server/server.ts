@@ -13,7 +13,8 @@ import { keepDays, sweepUploads } from './files.js';
 import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
-import { shellsEvent, stopAllShells } from './shell-runs.js';
+import { askedBySystemd } from './service.js';
+import { hurryShells, runningShells, SHUTDOWN_GRACE_MS, shellsEvent, stopAllShells } from './shell-runs.js';
 import { RunChannel } from './stream.js';
 import { watchWaiting } from './waiting.js';
 
@@ -203,10 +204,22 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   const sweeping = setInterval(sweep, DAY_MS);
   sweeping.unref();
 
-  // Claude's processes get half a second to close; `!` commands still running are asked to end
-  // and then made to, before Pelican exits: once it has, nothing would end them.
-  const shutdown = () => {
-    const shells = stopAllShells();
+  // Claude's processes get half a second to close; `!` commands still running are asked to end,
+  // given time to tidy up, then made to, before Pelican exits: once it has, nothing would end
+  // them. Told again (a second Ctrl+C), Pelican ends them at once.
+  let stopping = false;
+  const shutdown = (signal: NodeJS.Signals) => {
+    if (stopping) {
+      hurryShells();
+      return;
+    }
+    stopping = true;
+    const waiting = runningShells();
+    if (waiting > 0) {
+      const what = waiting === 1 ? 'a ! command' : `${waiting} ! commands`;
+      console.log(`[pelican] Giving ${what} up to ${SHUTDOWN_GRACE_MS / 1000} seconds to end.${process.stdin.isTTY ? ` Ctrl+C again ends ${waiting === 1 ? 'it' : 'them'} now.` : ''}`);
+    }
+    const shells = stopAllShells(SHUTDOWN_GRACE_MS, { asked: askedBySystemd(signal) });
     closeAll();
     server.close();
     void Promise.all([shells, new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));

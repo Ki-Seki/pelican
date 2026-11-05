@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -110,6 +110,25 @@ ${env}
 
 /** A value for a unit file: quoted, with systemd's specifiers and variables kept literal. */
 const unitQuote = (text: string) => `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`;
+
+/**
+ * Whether the service manager asked every process of Pelican's service to end, its `!` commands
+ * too, with the signal Pelican got: systemd stopping a unit sends SIGTERM to each process in it at
+ * once (KillMode=control-group, its default, which the unit below keeps). Pelican, started by
+ * systemd itself (its parent, and the INVOCATION_ID it gives a service), takes a SIGTERM as that.
+ */
+export function askedBySystemd(signal: NodeJS.Signals, env: NodeJS.ProcessEnv = process.env, parent: () => string | undefined = parentCommand): boolean {
+  return signal === 'SIGTERM' && Boolean(env.INVOCATION_ID) && parent() === 'systemd';
+}
+
+/** The name of the program that started Pelican, where the system says it (Linux). */
+function parentCommand(): string | undefined {
+  try {
+    return process.platform === 'linux' ? readFileSync(`/proc/${process.ppid}/comm`, 'utf8').trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The systemd user unit: started with the user's session (or at boot, with lingering on), again on failure. */
 export function systemdUnit(ctx: ServiceContext): string {

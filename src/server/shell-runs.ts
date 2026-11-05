@@ -148,23 +148,48 @@ export function stopShell(sessionId: string, id: string): boolean {
 }
 
 let shuttingDown = false;
+/** Pelican was told twice to stop (a second Ctrl+C): what still runs ends now. */
+let hurried = false;
 
-/** How long the commands still running get to end when Pelican shuts down, before they are made to. */
-const SHUTDOWN_GRACE_MS = 1500;
+/**
+ * How long the `!` commands still running get to tidy up when Pelican shuts down, before they are
+ * made to end: 15 seconds. docker compose gives its containers 10 to stop (Claude Code's own bash
+ * mode gives a command 1.5); 15 leaves Pelican time to end what is left and exit inside the 20
+ * seconds launchd waits for a login item before it ends it (ExitTimeOut), and well inside the 90
+ * systemd waits for a service (TimeoutStopSec). Once Pelican has gone, nothing would end them.
+ */
+export const SHUTDOWN_GRACE_MS = 15_000;
 /** How often it looks whether they have. */
 const SHUTDOWN_LOOK_MS = 50;
 
+const running = () => [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
+
+/** How many `!` commands are running now, in every session. */
+export const runningShells = () => running().length;
+
+/** Ends at once what stopAllShells still gives time to: Pelican was told to stop again. */
+export function hurryShells(): void {
+  hurried = true;
+}
+
 /**
  * Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. Each
- * is asked to end (SIGTERM: a dev server or a test runner tidies up), and given a moment; then what
- * is left of any of them is made to (SIGKILL), while Pelican is still there to do it. Settles once
- * nothing of them runs.
+ * is asked to end (SIGTERM: a dev server or docker compose tidies up), unless it has been already
+ * (`asked`: systemd stopping the service asks every process of it at once, and a second request
+ * makes docker compose stop its containers in a hurry), and given time; then what is left of any
+ * of them is made to (SIGKILL), while Pelican is still there to do it. Settles once nothing of
+ * them runs.
  */
-export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS): Promise<void> {
+export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS, { asked = false } = {}): Promise<void> {
   shuttingDown = true;
-  const running = [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
-  for (const entry of running) entry.run.stop();
+  hurried = false;
+  const entries = running();
+  for (const entry of entries) entry.run.ask(!asked);
   const until = Date.now() + graceMs;
-  while (running.some((entry) => entry.run.alive()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
-  for (const entry of running) entry.run.kill();
+  const left = () => entries.some((entry) => entry.run.alive());
+  while (!hurried && left() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
+  for (const entry of entries) entry.run.kill();
+  // Made to end, they are gone in a moment; that moment is waited for.
+  const gone = Date.now() + 1000;
+  while (left() && Date.now() < gone) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
 }

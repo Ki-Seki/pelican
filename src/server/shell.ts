@@ -176,8 +176,13 @@ export type ShellResult = {
 export type CommandRun = {
   /** Settles when the command's shell is done: on its own, by Stop, or at the limit. */
   readonly result: Promise<ShellResult>;
-  /** Ends it and everything it started, the whole process group, not just the shell. */
+  /** Ends it and everything it started, the whole process group, not just the shell: asked, then made to. */
   stop: () => void;
+  /**
+   * Asks it to end, as Pelican does when it shuts down, with no timer of its own to insist: `kill`
+   * does that, when the time to tidy up is over. `signal: false`: it was asked already (by systemd).
+   */
+  ask: (signal: boolean) => void;
   /** Whether anything it started still runs (its process group; on Windows, its shell). */
   alive: () => boolean;
   /** Ends at once what is left of a command asked to stop, which did not: for when Pelican exits. */
@@ -225,13 +230,13 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
       // Already gone.
     }
   };
-  const end = (by: NonNullable<ShellResult['endedBy']>) => {
+  const end = (by: NonNullable<ShellResult['endedBy']>, { ask = true, insist = true } = {}) => {
     // Once its shell has exited it is done: what it left in the background is meant to run on.
     if (done || endedBy || child.exitCode !== null || child.signalCode !== null) return;
     endedBy = by;
-    signal('SIGTERM');
+    if (ask) signal('SIGTERM');
     // What ignores the request still goes, also once the shell itself has exited.
-    setTimeout(() => signal('SIGKILL'), KILL_AFTER_MS).unref();
+    if (insist) setTimeout(() => signal('SIGKILL'), KILL_AFTER_MS).unref();
   };
   // Kept as Claude Code keeps it, and handed on as text, a character split between two reads kept whole.
   const take = (chunk: Buffer) => {
@@ -272,6 +277,7 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
   return {
     result,
     stop: () => end('stop'),
+    ask: (asking) => end('stop', { ask: asking, insist: false }),
     alive: () => (groups && child.pid !== undefined ? running(child.pid) : child.exitCode === null && child.signalCode === null),
     // Only one that was asked to end: what a finished command left in the background runs on.
     kill: () => {

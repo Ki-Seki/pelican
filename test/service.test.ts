@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  cannotInstall, installService, LABEL, launchdPlist, logFile, plistFile, restartService, type Run, serviceEnvironment, type ServiceContext,
+  askedBySystemd, cannotInstall, installService, LABEL, launchdPlist, logFile, plistFile, restartService, type Run, serviceEnvironment, type ServiceContext,
   serviceState, stableNode, systemdUnit, uninstallService, unitFile,
 } from '../src/server/service';
 
@@ -186,6 +186,20 @@ describe('on Linux', () => {
     const ctx = await context('linux');
     answers['systemctl --user show-environment'] = { code: 1 };
     expect(await cannotInstall(ctx)).toMatch(/systemd is not running/);
+  });
+});
+
+describe('a stop from systemd', () => {
+  it('is a SIGTERM to Pelican started by systemd as a service, which asked its ! commands too', async () => {
+    const ctx = await context('linux');
+    const service = { INVOCATION_ID: '8d2e3c' };
+    expect(askedBySystemd('SIGTERM', service, () => 'systemd')).toBe(true);
+    // Ctrl+C, a terminal's Pelican (which may have the variable from a terminal that is a service), kill by hand.
+    expect(askedBySystemd('SIGINT', service, () => 'systemd')).toBe(false);
+    expect(askedBySystemd('SIGTERM', service, () => 'zsh')).toBe(false);
+    expect(askedBySystemd('SIGTERM', {}, () => 'systemd')).toBe(false);
+    // The unit Pelican writes keeps systemd's default, which signals every process of the service.
+    expect(systemdUnit(ctx)).not.toMatch(/KillMode/);
   });
 });
 
