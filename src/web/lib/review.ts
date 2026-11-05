@@ -174,10 +174,21 @@ export function setComments(chat: string, comments: LineComment[]): void {
   for (const listener of listeners) listener();
 }
 
-/** Takes away comments that went with a message (others may have been added meanwhile). */
-export function dropComments(chat: string, sent: readonly LineComment[]): void {
-  const gone = new Set(sent.map((c) => c.id));
-  setComments(chat, commentsOf(chat).filter((c) => !gone.has(c.id)));
+/**
+ * Takes the chat's comments for a message on its way: they are its own from then on, so a second
+ * message, or a second tap on Send now, sent before it went through carries none of them again.
+ */
+export function takeComments(chat: string): LineComment[] {
+  const taken = commentsOf(chat);
+  if (taken.length > 0) setComments(chat, []);
+  return taken;
+}
+
+/** A message that did not go gives its comments back, before any written meanwhile. */
+export function putBackComments(chat: string, comments: readonly LineComment[]): void {
+  if (comments.length === 0) return;
+  const back = new Set(comments.map((c) => c.id));
+  setComments(chat, [...comments, ...commentsOf(chat).filter((c) => !back.has(c.id))]);
 }
 
 /** Signing out leaves no comments behind in this browser. */

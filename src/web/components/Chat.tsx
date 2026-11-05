@@ -16,7 +16,7 @@ import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { addQuote } from '../lib/quote';
-import { CommentsChat, commentsOf, dropComments, useComments, withComments } from '../lib/review';
+import { CommentsChat, commentsOf, putBackComments, takeComments, useComments, withComments } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
@@ -493,8 +493,9 @@ export function Chat({
       return;
     }
     const uuid = newId();
-    // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command takes none.
-    const notes = !text.trimStart().startsWith('/') ? commentsOf(viewId) : [];
+    // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command
+    // takes none. Taken now, they go with this message only; they come back if it does not go.
+    const notes = !text.trimStart().startsWith('/') ? takeComments(viewId) : [];
     const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
@@ -509,19 +510,18 @@ export function Chat({
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
         clearDraft(viewId, text);
-        dropComments(viewId, notes);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
         clearDraft(viewId, text);
-        dropComments(viewId, notes);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back and give it back to edit, files and all.
+      // Nothing reached Claude: take the message back and give it back to edit, files, quotes and comments all.
       removeLocalMessage(viewId, uuid);
+      putBackComments(viewId, notes);
       if (error instanceof ApiError && error.trust) {
         // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
         // the first answer counts: a double tap on the sheet must not start two Claudes.
@@ -970,6 +970,7 @@ export function Chat({
             else setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
           onSendComments={() => {
+            // None waiting: there were none, or they are on their way (a second tap of Send now).
             if (commentsOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
             void send('', [], prefs.sendWhileBusy);

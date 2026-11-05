@@ -16,6 +16,8 @@ const FILE = 'const a = 1;\nconst b = 2;\nconst c = 3;\n';
 const server = vi.hoisted(() => ({
   /** Each send's answer in turn: an error it fails with, or nothing for one that goes through. */
   answers: [] as Array<Error | undefined>,
+  /** Holds the next send's answer until it settles: a slow link, or a Claude still starting. */
+  hold: undefined as Promise<void> | undefined,
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
@@ -29,6 +31,9 @@ vi.mock('../src/web/lib/api', async (original) => {
   const answer = async (body: { text: string; attachments: string[]; trust?: string }) => {
     server.sent.push(body);
     const failure = server.answers.shift();
+    const held = server.hold;
+    server.hold = undefined;
+    await held;
     if (failure) throw failure;
   };
   return {
@@ -105,7 +110,7 @@ afterEach(() => {
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
-  Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
+  Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address.
   history.replaceState(null, '', '/');
 });
@@ -116,6 +121,15 @@ const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wid
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
 const loaded = () => screen.findAllByText('Clean up the build');
 const untrusted = () => new ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: PreToolUse (.claude/settings.json)'] });
+
+/** Holds the next send's answer: what it returns lets it go. */
+function holdNextSend(): () => void {
+  let release = () => {};
+  server.hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => act(release);
+}
 
 function sendText(text: string) {
   fireEvent.change(box(), { target: { value: text } });
@@ -279,6 +293,54 @@ describe('line comments, as in Claude Desktop', () => {
     } finally {
       setPrefs({ workspacePane: false });
     }
+  });
+
+  it('go with one message only: one sent while the first is on its way carries none of them', async () => {
+    setComments(SESSION, [comment]);
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Looks good otherwise');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    // On their way with it: no longer waiting for the next message.
+    expect(screen.queryByText('1 comment goes with your next message')).toBeNull();
+    sendText('Also run the tests');
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    release();
+    expect(server.sent.map((body) => body.text)).toEqual([`${said}\n\nLooks good otherwise`, 'Also run the tests']);
+  });
+
+  it('go once however often Send now is tapped while they are on their way', async () => {
+    media['(min-width: 1024px)'] = true;
+    setComments(SESSION, [comment]);
+    session();
+    await loaded();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    const release = holdNextSend();
+    const sendNow = await screen.findByText('Send now');
+    fireEvent.click(sendNow);
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    if (sendNow.isConnected) fireEvent.click(sendNow);
+    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Changes and files' }), { key: 'Enter', metaKey: true });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    release();
+    expect(server.sent.map((body) => body.text)).toEqual([said]);
+  });
+
+  it('come back when the message they went with does not go, before any written meanwhile', async () => {
+    const later = { ...comment, id: 'c2', line: 9, note: 'And here' };
+    setComments(SESSION, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Looks good');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    act(() => setComments(SESSION, [later]));
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(commentsOf(SESSION).map((c) => c.id)).toEqual(['c1', 'c2']);
+    expect(screen.getByText('2 comments go with your next message')).toBeTruthy();
   });
 
   it('stay when the message does not go through, and never go with a command', async () => {
