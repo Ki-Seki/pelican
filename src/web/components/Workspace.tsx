@@ -144,7 +144,7 @@ export function Workspace({ open, onClose, cwd, onMention }: { open: boolean; on
           {status.isLoading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
           {status.data && !status.data.repo && (
             <div className="px-3 py-10 text-center text-[13px] text-faint">
-              {status.data.untrusted ? 'Changes show once Claude has worked in this folder: until then Pelican runs nothing of the folder’s own, git included.' : 'This folder is not a git repository'}
+              {status.data.untrusted ? 'Changes show once this folder is trusted: until then Pelican runs nothing of the folder’s own, git included.' : 'This folder is not a git repository'}
             </div>
           )}
           {git && (
