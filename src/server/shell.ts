@@ -304,46 +304,242 @@ const inlineBytes = (setting: unknown) => (typeof setting === 'number' && Number
 
 /** Commands whose exit code 1 is an answer, not a failure, as Claude Code reads them: no match, files differ, false. */
 const ANSWERS = new Set(['grep', 'rg', 'egrep', 'fgrep', 'find', 'diff', 'test', '[']);
+/** A command line longer than this Claude Code reads whole, without taking it apart. */
+const PARSED_MAX = 10_000;
 
-/** The last simple command of a command line, as Claude Code reads one for what its exit code means. */
-function lastCommand(line: string): string {
-  let last = '';
-  let part = '';
-  let quote: string | undefined;
-  for (let i = 0; i < line.length; i += 1) {
+/** Whether a word starts at `i`: the line's start, or after a blank or a character that ends a word. */
+const startsWord = (line: string, i: number) => i === 0 || /[ \t\r\n;&|()<>]/.test(line[i - 1]!);
+/** Whether a word ends at `i`: the line's end, a blank or a character that ends a word. */
+const endsWord = (line: string, i: number) => i >= line.length || /[ \t\r\n;&|()<>]/.test(line[i]!);
+
+/**
+ * Where a here-document whose `<<` ends at `from` stops: past the line that is its word alone (with
+ * `<<-`, after tabs), or at the end. Undefined when no word follows, which makes it none.
+ */
+function hereDocumentEnd(line: string, from: number): number | undefined {
+  let i = from;
+  const tabs = line[i] === '-';
+  if (tabs) i += 1;
+  while (line[i] === ' ' || line[i] === '\t') i += 1;
+  let word = '';
+  while (i < line.length && !endsWord(line, i)) {
     const c = line[i]!;
-    if (quote) {
-      if (c === quote) quote = undefined;
-      else if (c === '\\' && quote === '"') {
-        part += c + (line[i + 1] ?? '');
-        i += 1;
-        continue;
-      }
-      part += c;
+    if (c === '\'' || c === '"') {
+      const close = line.indexOf(c, i + 1);
+      const stop = close < 0 ? line.length : close;
+      word += line.slice(i + 1, stop);
+      i = stop + 1;
     } else if (c === '\\') {
-      part += c + (line[i + 1] ?? '');
-      i += 1;
-    } else if (c === '\'' || c === '"') {
-      quote = c;
-      part += c;
-    } else if (c === ';' || c === '\n' || c === '|' || (c === '&' && line[i - 1] !== '>' && line[i - 1] !== '<' && line[i + 1] !== '>')) {
-      if (part.trim()) last = part;
-      part = '';
+      word += line[i + 1] ?? '';
+      i += 2;
     } else {
-      part += c;
+      word += c;
+      i += 1;
     }
   }
-  if (part.trim()) last = part;
-  return last.trim().replace(/^[({]\s*/, '');
+  if (!word) return undefined;
+  // The rest of its line goes with it, then its body.
+  for (let at = line.indexOf('\n', i); at >= 0;) {
+    const next = line.indexOf('\n', at + 1);
+    const text = line.slice(at + 1, next < 0 ? line.length : next);
+    if ((tabs ? text.replace(/^\t+/, '') : text) === word) return next < 0 ? line.length : next;
+    at = next;
+  }
+  return line.length;
+}
+
+/**
+ * The statements of a command line, as Claude Code's bash mode takes one apart to read what its
+ * exit code means (its own parser: the line's lists and pipelines taken apart, each statement in
+ * them whole). They end at `;`, `&`, `&&`, `||`, `|`, `|&` and line ends, never inside quotes,
+ * `(…)`, `$(…)`, `${…}`, backquotes or `[[ … ]]`, so a subshell or a group is one statement, its
+ * first word `(grep` or `{`. A comment, from a `#` that starts a word, is none, whatever it holds;
+ * a here-document's line from its `<<` on, and its body, are part of the statement before them.
+ * Some lines no shell takes come apart as that parser takes them: a `)` or a `}` with nothing open,
+ * or a `;` with nothing before it, is a statement of its own, and words after a subshell or a
+ * `[[ … ]]` that starts a statement start another.
+ */
+function statements(line: string): string[] {
+  if (line.length > PARSED_MAX) return [line];
+  const out: string[] = [];
+  /** What is open, by what closes it: `)`, `}` (of `${`), a backquote, `"`, `]]`. */
+  const open: string[] = [];
+  let start = 0;
+  /** Where the statement under way began a subshell or a `[[`, which ends it once closed. */
+  let leads: number | undefined;
+  /** The last separator was one after which a statement may start: not a pipe, not `&&` or `||`. */
+  let free = true;
+  /** A statement ended with no separator after it yet (a subshell that led it, a `}` of its own). */
+  let ended = false;
+  /** The statement under way has a redirection after its words, which the rest of it then belongs to, a `#` too. */
+  let redirected = false;
+  const end = (at: number, next: number) => {
+    const text = line.slice(start, at).trim();
+    if (text) out.push(text);
+    start = next;
+    leads = undefined;
+    redirected = false;
+  };
+  const alone = (at: number, text: string) => {
+    end(at, at + text.length);
+    out.push(text);
+    ended = true;
+  };
+  const blank = (at: number) => line.slice(start, at).trim() === '';
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i]!;
+    const top = open.at(-1);
+    if (top === '"') {
+      if (c === '\\') i += 1;
+      else if (c === '"') open.pop();
+      else if (c === '`') open.push('`');
+      else if (c === '$' && (line[i + 1] === '(' || line[i + 1] === '{')) {
+        open.push(line[i + 1] === '(' ? ')' : '}');
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (c === '\'') {
+      const close = line.indexOf('\'', i + 1);
+      i = close < 0 ? line.length : close;
+      continue;
+    }
+    if (c === '$' && line[i + 1] === '\'') {
+      // $'…' takes backslashes.
+      let j = i + 2;
+      while (j < line.length && line[j] !== '\'') j += line[j] === '\\' ? 2 : 1;
+      i = j;
+      continue;
+    }
+    if (c === '"') {
+      open.push('"');
+      continue;
+    }
+    if (c === '`') {
+      if (top === '`') open.pop();
+      else open.push('`');
+      continue;
+    }
+    if (c === '$' && line[i + 1] === '{') {
+      open.push('}');
+      i += 1;
+      continue;
+    }
+    if (c === '(') {
+      if (open.length === 0 && blank(i)) leads = i;
+      open.push(')');
+      continue;
+    }
+    if (c === ')') {
+      if (top === ')') {
+        open.pop();
+        if (open.length === 0 && leads !== undefined) {
+          end(i + 1, i + 1);
+          ended = true;
+        }
+      } else if (open.length === 0) {
+        alone(i, ')');
+      }
+      continue;
+    }
+    if (c === '}' && top === '}') {
+      open.pop();
+      continue;
+    }
+    if (c === '#' && top !== '}' && !(redirected && open.length === 0) && startsWord(line, i)) {
+      const eol = line.indexOf('\n', i);
+      const stop = eol < 0 ? line.length : eol;
+      if (open.length === 0) end(i, stop);
+      i = stop - 1;
+      continue;
+    }
+    if (top === ']]') {
+      if (c === ']' && line[i + 1] === ']' && startsWord(line, i) && endsWord(line, i + 2)) {
+        open.pop();
+        i += 1;
+        if (leads !== undefined) {
+          end(i + 1, i + 1);
+          ended = true;
+        }
+      }
+      continue;
+    }
+    if (open.length > 0) continue;
+    if (c === '[' && line[i + 1] === '[' && startsWord(line, i) && endsWord(line, i + 2)) {
+      if (blank(i)) leads = i;
+      open.push(']]');
+      i += 1;
+      continue;
+    }
+    if (c === '}' && blank(i) && endsWord(line, i + 1)) {
+      alone(i, '}');
+      continue;
+    }
+    // A redirection after a command's words (not a `[ … ]`'s) takes the words after it, `#` among them.
+    if ((c === '>' || (c === '<' && line[i + 1] !== '<')) && line[i + 1] !== '(' && !blank(i) && !/^\[\s/.test(line.slice(start, i).trimStart())) redirected = true;
+    if (c === '<' && line[i + 1] === '<') {
+      // `<<<` gives a string: no here-document, and what follows it is the command's again.
+      const string = line[i + 2] === '<';
+      const stop = string ? undefined : hereDocumentEnd(line, i + 2);
+      if (string) redirected = false;
+      if (stop === undefined) {
+        i += string ? 2 : 1;
+      } else {
+        end(i, stop);
+        i = stop - 1;
+      }
+      continue;
+    }
+    if (c === ';' || c === '\n') {
+      const both = c === ';' && line[i + 1] === ';';
+      if (c === ';' && blank(i) && free && !ended) out.push(both ? ';;' : ';');
+      end(i, i + (both ? 2 : 1));
+      if (both) i += 1;
+      free = true;
+      ended = false;
+      continue;
+    }
+    if (c === '|') {
+      // `>|` writes over a file.
+      if (line[i - 1] === '>') continue;
+      const two = line[i + 1] === '|' || line[i + 1] === '&';
+      end(i, i + (two ? 2 : 1));
+      if (two) i += 1;
+      free = false;
+      ended = false;
+      continue;
+    }
+    if (c === '&') {
+      if (line[i + 1] === '&') {
+        end(i, i + 2);
+        i += 1;
+        free = false;
+        ended = false;
+        continue;
+      }
+      // `2>&1`, `<&0`, `&>file`: redirections.
+      if (line[i - 1] === '>' || line[i - 1] === '<' || line[i + 1] === '>') continue;
+      end(i, i + 1);
+      free = true;
+      ended = false;
+    }
+  }
+  end(line.length, line.length);
+  return out;
 }
 
 /**
  * Whether a command that ended on its own failed, as Claude Code's bash mode decides it: a code
  * other than 0, except 1 from a command for which 1 is an answer (grep finding nothing, diff
- * finding files differ, test being false, also `git diff` and `git grep`), which went well.
+ * finding files differ, test being false, also `git diff` and `git grep`), which went well. The
+ * command is the first word of the line's last statement (see statements), as Claude Code reads it.
  */
 function failed(command: string, code: number): boolean {
-  const words = lastCommand(command).split(/\s+/);
+  const words = (statements(command).at(-1) || command).trim().split(/\s+/);
   const answers = words[0] === 'git' ? ['diff', 'grep'].includes(gitCommand(words) ?? '') : ANSWERS.has(words[0] ?? '');
   return answers ? code >= 2 : code !== 0;
 }

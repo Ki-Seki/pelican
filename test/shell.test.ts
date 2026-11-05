@@ -186,6 +186,30 @@ describe('the record of a ! command', () => {
     }
   });
 
+  it('reads exit code 1 by the last statement of the line, as Claude Code’s parse takes it apart: a subshell or a group is one, a comment none', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    // The CLI's own rows for these, from its bash mode in a terminal: its statement is `(grep`, `(cd` or `{`.
+    for (const command of ['(grep nothing /dev/null)', '(cd . && grep nothing /dev/null)', '{ grep nothing /dev/null; }']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    expect(text({ command: 'echo a && (grep nothing /dev/null)', printed: 'a\n', code: 1 })).toBe('<bash-stdout></bash-stdout><bash-stderr>a\n</bash-stderr>');
+    for (const command of ['grep nothing /dev/null # a;b', 'grep nothing /dev/null # trailing comment', 'echo x | grep nothing', 'grep "a;b" /dev/null']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    // As its parser takes these apart: quotes, substitutions, here-documents and [[ … ]] hold no
+    // statement's end; a here-document's line after its << is part of the statement before it.
+    for (const command of ['echo $(a; b) `c; d` ${x:-e;f} && grep x f', "grep x <<'EOF'\nbody; x)\nEOF", 'grep x <<<"a;b"', '[[ -n $a && $b ]] || grep x f', 'grep x f # (a | b) ; c']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    for (const command of ['x=$(grep a b)', 'cat <<EOF | grep x\nbody\nEOF', '! grep x f', '[[ -f x ]]', 'grep x f && echo done']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    // After a redirection, its parser takes a comment for more words, and its `;` ends the statement.
+    expect(text({ command: 'grep x 2>/dev/null # note; more', printed: '', code: 1 })).toBe(failure);
+    expect(text({ command: 'grep x 2>/dev/null # note', printed: '', code: 1 })).toBe(answer);
+  });
+
   it('gives Claude the start of a long output and where all of it was saved, in Claude Code’s words', () => {
     const file = '/home/me/.claude/projects/-work/5e25f65d-1b8b-4490-a3d3-43540da07ef3/tool-results/b1b2gp6fw.txt';
     expect(text({ printed: `${'z'.repeat(30_000)}\n`, savedTo: file })).toBe(
