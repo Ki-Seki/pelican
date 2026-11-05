@@ -5,7 +5,8 @@ import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
 import { api, isDemoNote, isUnreachable } from '../lib/api';
 import { clearDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
-import { composing, hasKeyboard, isApple } from '../lib/keyboard';
+import { closesPane, composing, hasKeyboard, isApple } from '../lib/keyboard';
+import { useMedia } from '../lib/media';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
 import { Composer, type ComposerDraft } from './Composer';
@@ -25,18 +26,6 @@ export const SIDE_CHAT_KEYS = isApple ? '⌘;' : 'Ctrl+;';
 
 /** What the side chat says it does, under its title. */
 const READS = 'Reads this session · changes nothing';
-
-function useMedia(query: string): boolean {
-  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const onChange = () => setMatches(media.matches);
-    onChange();
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, [query]);
-  return matches;
-}
 
 /**
  * The side chat of each session in this visit (this tab, reloads included): opened again, it goes
@@ -346,8 +335,7 @@ export function SideChat({
         onKeyDown={(e: KeyboardEvent) => {
           if (e.defaultPrevented || composing(e.nativeEvent)) return;
           // Esc stops the answer, or puts the side chat away; Cmd/Ctrl+\ closes it, as a pane in Desktop.
-          const closeKey = e.key === '\\' && (e.metaKey || e.ctrlKey);
-          if (e.key !== 'Escape' && !closeKey) return;
+          if (e.key !== 'Escape' && !closesPane(e)) return;
           e.preventDefault();
           if (e.key === 'Escape' && busy) stop();
           else state.close();

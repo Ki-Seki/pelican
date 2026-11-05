@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../lib/api';
 import { baseName } from '../lib/format';
 import { closesPane, composing, isApple } from '../lib/keyboard';
+import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments, useCommentsChat } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
@@ -21,18 +22,6 @@ import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
  */
 const DOCKS = '(min-width: 1024px)';
 const ROOMY = '(min-width: 1280px)';
-
-function useMedia(query: string): boolean {
-  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const onChange = () => setMatches(media.matches);
-    onChange();
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, [query]);
-  return matches;
-}
 
 /** The keys that show and hide the pane, and that send line comments, as this computer writes them. */
 export const PANE_KEYS = isApple ? '⌘⇧D' : 'Ctrl+Shift+D';

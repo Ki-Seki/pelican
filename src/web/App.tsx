@@ -17,6 +17,7 @@ import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
 import { forgetDrafts } from './lib/drafts';
 import { withMod } from './lib/keyboard';
+import { useMedia } from './lib/media';
 import {
   disableNotifications,
   enableNotifications,
@@ -113,18 +114,6 @@ function useRoute() {
   };
 }
 
-function useWide() {
-  const query = '(min-width: 1024px)';
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const onChange = () => setWide(media.matches);
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, []);
-  return wide;
-}
-
 /** The sign-in gate: shown until this browser signs in, unless the server asks no one to (--no-auth, the demo). */
 export function App() {
   const queryClient = useQueryClient();
@@ -164,7 +153,8 @@ export function App() {
 
 function Main() {
   const { sessionId, isNew, newCwd, scratch, navigate } = useRoute();
-  const wide = useWide();
+  // The session list beside the conversation.
+  const wide = useMedia('(min-width: 1024px)');
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
   const [connected, setConnected] = useState(socket.connected);

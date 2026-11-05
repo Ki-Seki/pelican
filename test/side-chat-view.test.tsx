@@ -183,6 +183,26 @@ describe('the side chat', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('Message Claude'));
   });
 
+  it('beside the conversation, closes with Cmd/Ctrl+\\ pressed in it, as Changes and files does; pressed in the conversation, it stays', async () => {
+    computer(1280);
+    session();
+    await loaded();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    fireEvent.keyDown(screen.getByLabelText('Message Claude'), { key: '\\', ctrlKey: true });
+    expect(pane()).not.toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Side question'), { key: '\\', metaKey: true });
+    expect(pane()).toBeNull();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    fireEvent.keyDown(screen.getByLabelText('Side question'), { key: '\\' });
+    expect(pane()).not.toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Side question'), { key: '\\', ctrlKey: true });
+    expect(pane()).toBeNull();
+  });
+
   it('takes the place of Changes and files beside the conversation, which comes back when it closes or is asked for', async () => {
     computer(1440);
     setPrefs({ workspacePane: true });
