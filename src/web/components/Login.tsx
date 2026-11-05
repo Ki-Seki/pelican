@@ -15,11 +15,9 @@ export function tokenFrom(text: string): string {
 
 /** Why the link or code that brought this browser here did not sign it in (the server says which). */
 export function signInProblem(reason: string | null, mode: AuthMode): string | undefined {
-  if (reason === 'code') return 'That code has expired or was used already. `pelican phone` shows a new one, and so does Settings on a signed-in device.';
+  if (reason === 'code') return 'That code has expired or was used already.';
   if (reason !== 'link') return undefined;
-  return mode === 'password'
-    ? 'A password is set, so links do not sign in. Enter the password.'
-    : 'That link no longer works: the access token was reset. `pelican token` prints the current one.';
+  return mode === 'password' ? 'A password is set, so links do not sign in.' : 'That link no longer works: the access token was reset.';
 }
 
 /** Takes the reason out of the address once read, so a reload does not show it again. */

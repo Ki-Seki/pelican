@@ -80,7 +80,7 @@ const ranCache = new Map<string, { at: number; value: boolean }>();
  */
 export async function claudeRanIn(folder: string): Promise<boolean> {
   const dir = await realpath(folder).catch(() => folder);
-  if (dir === os.homedir()) return true;
+  if (dir === os.homedir() || dir === (await real(os.homedir()))) return true;
   const cached = ranCache.get(dir);
   if (cached && Date.now() - cached.at < (cached.value ? YES_MS : NO_MS)) return cached.value;
   let value = false;
