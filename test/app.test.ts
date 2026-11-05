@@ -230,3 +230,19 @@ describe('push subscriptions', () => {
     expect((await subscribe(null)).status).toBe(400);
   });
 });
+
+describe('making a folder for a new session', () => {
+  it('makes it where asked, refuses a bad request, and changes nothing in the demo', async () => {
+    const parent = await mkdtemp(path.join(dir, 'browse-'));
+    const made = await ask('/api/dirs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent, name: 'fresh' }) });
+    expect(made.status).toBe(200);
+    expect(((await made.json()) as { path: string }).path.endsWith(`${path.sep}fresh`)).toBe(true);
+    const again = await ask('/api/dirs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent, name: 'fresh' }) });
+    expect(again.status).toBe(409);
+    const relative = await ask('/api/dirs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent: 'code', name: 'x' }) });
+    expect(relative.status).toBe(400);
+    config.demo = true;
+    const demo = await ask('/api/dirs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent, name: 'demo' }) });
+    expect(demo.ok).toBe(false);
+  });
+});

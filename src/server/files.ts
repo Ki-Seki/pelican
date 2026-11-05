@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Attachment } from '../shared/protocol.js';
@@ -61,6 +61,41 @@ export async function listDirs(dir: string | undefined, showHidden: boolean): Pr
     .sort((a, b) => a.name.localeCompare(b.name));
   const parent = path.dirname(target);
   return { path: target, ...(parent !== target ? { parent } : {}), dirs };
+}
+
+/** Why a folder could not be made, said to the person who asked, with the HTTP status that fits. */
+export class FolderError extends Error {
+  constructor(message: string, readonly status: 400 | 403 | 404 | 409) {
+    super(message);
+  }
+}
+
+/**
+ * Makes a folder for a new session inside the one being browsed, as a system folder picker's New
+ * Folder does: one level, a plain name, never an existing folder. It runs nothing in it.
+ */
+export async function makeDir(parent: string, name: string): Promise<string> {
+  const clean = name.trim();
+  if (!clean || clean === '.' || clean === '..' || clean.length > 255 || /[/\\]/.test(clean) || /[\u0000-\u001f\u007f]/.test(clean)) {
+    throw new FolderError('Use a folder name without slashes', 400);
+  }
+  let base: string;
+  try {
+    base = await realpath(path.resolve(parent));
+    if (!(await stat(base)).isDirectory()) throw new Error('not a folder');
+  } catch {
+    throw new FolderError('That folder is gone', 404);
+  }
+  const target = path.join(base, clean);
+  try {
+    await mkdir(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') throw new FolderError(`There is already a ${clean} here`, 409);
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') throw new FolderError('You cannot make a folder here', 403);
+    throw error;
+  }
+  return target;
 }
 
 /** Removes an upload (made for a message that was never sent). */

@@ -17,7 +17,7 @@ import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
-import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
+import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { defaultMode, knownModels, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
@@ -702,6 +702,18 @@ app.get('/api/dirs', async (c) => {
     return c.json(await listDirs(asked, c.req.query('hidden') === '1'));
   } catch (error) {
     return c.json({ error: (error as Error).message }, 400);
+  }
+});
+
+// A new folder to start a session in (the folder browser's New folder). The demo changes nothing.
+app.post('/api/dirs', async (c) => {
+  const body = await c.req.json<{ parent?: unknown; name?: unknown }>().catch(() => ({}) as { parent?: unknown; name?: unknown });
+  if (typeof body.parent !== 'string' || !path.isAbsolute(body.parent) || typeof body.name !== 'string') return c.json({ error: 'Say where, and the name' }, 400);
+  try {
+    return c.json({ path: await makeDir(body.parent, body.name) });
+  } catch (error) {
+    if (error instanceof FolderError) return c.json({ error: error.message }, error.status);
+    throw error;
   }
 });
 
