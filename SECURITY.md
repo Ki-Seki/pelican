@@ -98,7 +98,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
 
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them. It stores uploads, push notification keys and subscriptions, the folders you trusted
-or kept to your settings, and a note of the running server in `~/.local/state/pelican`.
+or kept to your settings, the usage figures it counted from the transcripts (token counts, times,
+models and folders, no conversation text) with the sessions it ran and how long they waited for
+you, and a note of the running server in `~/.local/state/pelican`.
 
 ## Reporting a vulnerability
 

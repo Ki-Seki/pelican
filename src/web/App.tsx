@@ -335,6 +335,10 @@ function Main() {
       notifications={notifications}
       onToggleNotifications={toggleNotifications}
       onSignOut={signOut}
+      onOpenSession={(id) => {
+        setSettingsOpen(false);
+        open(id);
+      }}
     />
   );
 

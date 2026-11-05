@@ -107,8 +107,11 @@ describe('the session menu', async () => {
   HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', ''); };
   HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open'); };
   const run = (extra: Partial<RunState>): RunState => ({ sessionId: 's', cwd: '/p', busy: false, settings: {}, permissions: [], partial: [], ...extra });
-  const menu = (props: { run?: RunState; servers?: McpServer[]; live?: boolean }) => {
+  const USAGE = { tokens: { input: 1200, output: 9800, cacheRead: 410_000, cacheWrite: 38_000 }, models: [{ model: 'claude-opus-5-5', name: 'Opus 5.5', tokens: 459_000 }], compactions: 0, cost: { usd: 1.8432 } };
+  const menu = (props: { run?: RunState; servers?: McpServer[]; live?: boolean; plan?: string }) => {
     vi.spyOn(api, 'mcp').mockResolvedValue({ servers: props.servers ?? [], live: props.live ?? false });
+    vi.spyOn(api, 'sessionUsage').mockResolvedValue(USAGE);
+    vi.spyOn(api, 'models').mockResolvedValue({ models: [], signedIn: true, ...(props.plan ? { account: { plan: props.plan } } : {}) });
     return render(
       <QueryClientProvider client={new QueryClient()}>
         <SessionMenu open onClose={() => {}} sessionId="s" machine="laptop" {...(props.run ? { run: props.run } : {})} onRenamed={() => {}} onForked={() => {}} onDeleted={() => {}} />
@@ -116,15 +119,16 @@ describe('the session menu', async () => {
     );
   };
 
-  it('says what the session has cost, as an estimate, where Claude Code counts it', () => {
-    menu({ run: run({ costUsd: 1.8432 }) });
-    expect(screen.getByText('Session cost')).toBeTruthy();
-    expect(screen.getByText('$1.84 (estimate)')).toBeTruthy();
+  it('says what the whole session has cost, as an estimate, where Claude Code counts it', async () => {
+    menu({ run: run({ lastTurn: { durationMs: 1000, costUsd: 0.5 } }) });
+    expect(await screen.findByText('$1.84, estimated at API prices')).toBeTruthy();
+    expect(screen.getByText('Cost')).toBeTruthy();
   });
 
-  it('says nothing of cost where a subscription pays', () => {
-    menu({ run: run({}) });
-    expect(screen.queryByText('Session cost')).toBeNull();
+  it('says nothing of cost where a subscription pays', async () => {
+    menu({ run: run({}), plan: 'max' });
+    expect(await screen.findByText(/459K tokens/)).toBeTruthy();
+    expect(screen.queryByText('Cost')).toBeNull();
   });
 
   it('says where to sign in to a server that needs it', async () => {

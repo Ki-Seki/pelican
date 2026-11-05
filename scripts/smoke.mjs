@@ -111,6 +111,10 @@ async function startElsewhere(page, where) {
 async function driveApp(browser, base, sessions) {
   // The list folds side chats away under their session.
   const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
+  // Sessions older than a day (the usage page's history) are all of one plain kind: the first size
+  // and theme open every session, the others today's, which hold all a conversation can show.
+  const today = sessions.filter((s) => Date.now() - (s.lastActivity ?? 0) < 24 * 60 * 60_000);
+  let all = true;
   for (const [size, options] of Object.entries(SIZES)) {
     for (const scheme of ['light', 'dark']) {
       const context = await browser.newContext({ ...options, colorScheme: scheme });
@@ -127,13 +131,14 @@ async function driveApp(browser, base, sessions) {
       }
       at = 'a new session in another folder';
       await startElsewhere(page, `app, ${size}`);
-      for (const session of sessions) {
+      for (const session of all ? sessions : today) {
         at = `session ${session.id}`;
         await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
         await page.waitForTimeout(300);
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
         for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
       }
+      all = false;
       await context.close();
     }
   }

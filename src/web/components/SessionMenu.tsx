@@ -3,10 +3,12 @@ import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, Messa
 import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
+import { cacheShare, costShown, costWords, tokenTotal } from '../../shared/usage';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
 import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
 import { DEMO_NOTE } from '../lib/static-demo';
+import { compactNumber, percent, span, times } from '../lib/usage';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 
 const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
@@ -93,6 +95,33 @@ function Detail({ label, children, mono }: { label: string; children: React.Reac
 }
 
 const when = (ms: number) => `${dayLabel(ms)}, ${clockTime(ms)}`;
+
+/**
+ * What the session used, from its transcript and its subagents': tokens and how much of the input
+ * the cache served, its models, how often it was compacted, how long Claude waited for you here,
+ * and for an API key or a cloud provider the cost Claude Code estimates.
+ */
+function UsageDetails({ sessionId, open }: { sessionId: string; open: boolean }) {
+  const { data: usage } = useQuery({ queryKey: ['session-usage', sessionId], queryFn: () => api.sessionUsage(sessionId), enabled: open, staleTime: 10_000 });
+  const { data: models } = useQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000, enabled: open });
+  const total = usage ? tokenTotal(usage.tokens) : 0;
+  if (!usage || total === 0) return null;
+  const share = cacheShare(usage.tokens);
+  const more = [
+    usage.models.map((m) => m.name).join(', '),
+    usage.compactions > 0 ? `compacted ${times(usage.compactions)}` : '',
+    usage.waits && usage.waits.ms >= 1000 ? `waited ${span(usage.waits.ms)} for you` : '',
+  ].filter(Boolean).join(' · ');
+  return (
+    <>
+      <Detail label="Usage">
+        {compactNumber(total)} tokens{share !== undefined ? `, ${percent(share)} from the cache` : ''}
+        {more && <div className="text-faint">{more}</div>}
+      </Detail>
+      {usage.cost && costShown({ signedIn: models?.signedIn ?? null, plan: models?.account?.plan }) && <Detail label="Cost">{costWords(usage.cost.usd)}</Detail>}
+    </>
+  );
+}
 
 /** Everything you can do with one session, and what is known about it. */
 export function SessionMenu({
@@ -311,8 +340,7 @@ export function SessionMenu({
           {run.lastTurn.costUsd ? ` · $${run.lastTurn.costUsd.toFixed(2)}` : ''}
         </Detail>
       )}
-      {/* Claude Code's own count, as its /cost gives it; none where a subscription pays. */}
-      {run?.costUsd ? <Detail label="Session cost">{run.costUsd < 0.01 ? 'Under $0.01' : `$${run.costUsd.toFixed(2)}`} (estimate)</Detail> : null}
+      <UsageDetails sessionId={sessionId} open={open} />
       <Detail label="ID" mono>
         <button type="button" className="-my-2 inline-flex items-center gap-1.5 py-2 text-left hover:text-fg" onClick={() => copy('id', sessionId)}>
           {sessionId}

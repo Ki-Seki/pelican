@@ -217,14 +217,13 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
   });
 });
 
-describe('what a session has cost', () => {
-  it('is Claude Code’s running total, for the session menu, on an API key or a provider', async () => {
+describe('what a turn has cost', () => {
+  it('is its share of Claude Code’s running total, on an API key or a provider', async () => {
     const { sessionId, claude } = await idleSession();
-    expect(getRun(sessionId)!.state().costUsd).toBe(0.01);
     await sendMessage({ sessionId }, { text: 'More', attachments: [], settings: {} });
     claude.say({ ...result(), total_cost_usd: 0.25 });
     await until(() => !getRun(sessionId)!.busy);
-    expect(getRun(sessionId)!.state().costUsd).toBe(0.25);
+    expect(getRun(sessionId)!.state().lastTurn?.costUsd).toBeCloseTo(0.24);
   });
 
   it('is not said where a subscription pays', async () => {
@@ -236,7 +235,7 @@ describe('what a session has cost', () => {
       await listModels();
       vi.useRealTimers();
       const { sessionId } = await idleSession();
-      expect(getRun(sessionId)!.state()).not.toHaveProperty('costUsd');
+      expect(getRun(sessionId)!.state().lastTurn).not.toHaveProperty('costUsd');
     } finally {
       FakeClaude.account = {};
       vi.useRealTimers();

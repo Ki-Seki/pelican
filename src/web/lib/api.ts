@@ -28,6 +28,7 @@ import type {
 import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
+import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
 import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
 
 /**
@@ -240,6 +241,10 @@ export const api = {
   usage: () => request<{ limits: UsageLimit[] }>('usage').then((r) => r.limits),
   /** The plan's usage as Claude Code's /usage shows it, or null where plan limits do not apply. */
   planUsage: () => request<{ plan: PlanUsage | null }>('usage/plan').then((r) => r.plan),
+  /** Usage and activity of every session on the computer, for a period: what is read so far, and how far reading got. */
+  usageStats: (range: UsageRange) => request<{ summary: UsageSummary }>(`usage/stats?range=${range}`).then((r) => r.summary),
+  /** One session's usage, for its menu (null: no transcript yet). */
+  sessionUsage: (id: string) => request<{ usage: SessionUsage | null }>(`sessions/${encodeURIComponent(id)}/usage`).then((r) => r.usage),
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
   /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
   git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),

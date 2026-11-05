@@ -9,6 +9,7 @@ import type { ModelOption, RunState, SessionStatus, TaskOutput } from '../shared
 import { config } from './config.js';
 import type { LiveProcess } from './live.js';
 import { SETTINGS_SCREENSHOT } from './demo-image.js';
+import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 
 /**
@@ -549,7 +550,7 @@ export async function prepareDemo(): Promise<void> {
     }
   }
   await demoRepository(path.join(root, 'code', 'acme-web'));
-  const written = new Map<string, Array<{ row: Row; uuid: string }>>();
+  const written = new Map<string, Array<{ row: Row; uuid: string; message: Record<string, unknown>; meta: Record<string, unknown> }>>();
   for (const session of SESSIONS) {
     const cwd = session.scratch ? path.join(root, 'scratch', '2026-11-04-7c2e') : path.join(root, 'code', session.project);
     await mkdir(cwd, { recursive: true });
@@ -558,17 +559,22 @@ export async function prepareDemo(): Promise<void> {
     let parent: string | null = null;
     const lines: string[] = [JSON.stringify({ type: 'custom-title', customTitle: session.title, sessionId: session.id })];
     // A side chat starts with the conversation it is about, as the Agent SDK's forkSession leaves
-    // one: each row under the copy's id, saying which row of which session it came from.
-    const copied = (session.copies ? written.get(session.copies) ?? [] : []).map((entry) => ({ row: entry.row, uuid: randomUUID(), from: entry.uuid }));
-    const own = session.rows(cwd).map((row) => ({ row, uuid: randomUUID(), from: undefined as string | undefined }));
-    written.set(session.id, own);
-    for (const { row, uuid, from } of [...copied, ...own]) {
+    // one: each row under the copy's id, as it was written there, saying which row it came from.
+    const copied = (session.copies ? written.get(session.copies) ?? [] : []).map((entry) => ({ ...entry, uuid: randomUUID(), from: entry.uuid as string | undefined }));
+    const own = session.rows(cwd).map((row) => {
+      const uuid = randomUUID();
+      // A row the model did not write (an API error) used no tokens.
+      const { usage, ...meta } = demoRowUsage(session.id, row.role === 'assistant' && !row.model ? 'assistant' : 'user');
       const message = row.role === 'assistant'
-        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: row.model ?? 'claude-opus-5-5', content: row.content }
+        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: row.model ?? 'claude-opus-5-5', content: row.content, ...(usage ? { usage } : {}) }
         : { role: 'user', content: row.content };
+      return { row, uuid, message, meta, from: undefined as string | undefined };
+    });
+    written.set(session.id, own);
+    for (const { row, uuid, message, meta, from } of [...copied, ...own]) {
       lines.push(JSON.stringify({
         parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId: session.id, version: '2.1.318',
-        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...row.extra,
+        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...meta, ...row.extra,
         ...(row.result ? { toolUseResult: row.result } : {}),
         ...(from && session.copies ? { forkedFrom: { sessionId: session.copies, messageUuid: from } } : {}),
       }));
@@ -580,6 +586,7 @@ export async function prepareDemo(): Promise<void> {
     }
     await writeFile(path.join(dir, `${session.id}.jsonl`), `${lines.join('\n')}\n`);
   }
+  await writeDemoUsage(root, claudeHome);
   config.home = root;
   config.claudeHome = claudeHome;
   // Its own config and state too: the demo never reads or writes your password, token or push keys.

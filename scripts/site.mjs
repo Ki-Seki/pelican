@@ -89,8 +89,16 @@ for (const session of sessions) {
   for (const turn of changes?.turns ?? []) {
     for (const file of turn.files) await save(`sessions/${q(session.id)}/changes?turn=${q(turn.uuid)}&path=${q(file.path)}`);
   }
+  await save(`sessions/${q(session.id)}/usage`);
   if (session.cwd) folders.add(session.cwd);
 }
+// The usage page, once the demo has read its transcripts (a saved answer never fills in).
+for (let i = 0; i < 50; i += 1) {
+  const { summary } = await (await fetch(`${BASE}usage/stats`, { headers: MARK })).json();
+  if (summary?.progress?.ready) break;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
+for (const range of ['7d', '30d', 'all']) await save(`usage/stats?range=${range}`);
 for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
   await save(`defaults?cwd=${q(cwd)}`);

@@ -188,11 +188,6 @@ export type RunState = {
    * an estimate, and absent where it is not known or a subscription pays.
    */
   lastTurn?: { durationMs: number; costUsd?: number; outputTokens?: number };
-  /**
-   * What the session has cost so far, as Claude Code counts it (its /cost): an estimate, absent
-   * where a subscription pays, and until Claude Code has said.
-   */
-  costUsd?: number;
   /** How full the context window is, when Claude Code reported it. */
   context?: { percent: number; tokens: number; max: number };
   /** What Claude is doing besides writing: condensing the conversation, or waiting to retry the API. */

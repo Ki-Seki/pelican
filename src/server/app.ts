@@ -12,6 +12,7 @@ import { compress } from 'hono/compress';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
+import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
@@ -36,6 +37,7 @@ import { usageLimits } from './usage.js';
 import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, readProjectFile } from './workspace.js';
 import { searchText } from './search.js';
 import { sessionChanges, turnDiff } from './changes.js';
+import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { transcriptImage } from './history.js';
@@ -566,6 +568,40 @@ app.get('/api/usage', (c) => c.json({
     ]
     : usageLimits(),
 }));
+
+/** Titles and folders of sessions, from the session list, for the usage page's lists. */
+async function sessionTitles(ids: string[]): Promise<Map<string, { title: string; project: string }>> {
+  const wanted = new Set(ids);
+  const found = new Map<string, { title: string; project: string }>();
+  if (wanted.size === 0) return found;
+  for (const s of await listSummaries(runStatus)) if (wanted.has(s.id)) found.set(s.id, { title: s.title, project: s.project });
+  return found;
+}
+
+/**
+ * Usage and activity across every Claude Code session on this computer, whichever app ran it: what
+ * has been read so far, and how far reading got. A small home is read before the first answer; a
+ * large one fills in as the page asks again.
+ */
+app.get('/api/usage/stats', async (c) => {
+  const asked = c.req.query('range');
+  const range: UsageRange = USAGE_RANGES.find((r) => r === asked) ?? '7d';
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([refreshUsage(), new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, 1200);
+  })]);
+  clearTimeout(timer);
+  const statsCache = range === 'all' ? await readStatsCache() : undefined;
+  return c.json({ summary: await summarize({ range, now: Date.now(), titles: sessionTitles, statsCache }) });
+});
+
+/** One session's usage, for its menu: its transcript and its subagents', read now if they changed. */
+app.get('/api/sessions/:id/usage', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const file = id ? await transcriptPath(id) : undefined;
+  if (!id || !file) return c.json({ usage: null });
+  return c.json({ usage: (await sessionUsage(id, await sessionFiles(id, file))) ?? null });
+});
 
 /** The folder a workspace request is about: the session's own, which must exist. */
 /** Whether a path is inside the demo's own folder (the demo never shows anything else). */
