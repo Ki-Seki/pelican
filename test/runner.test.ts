@@ -1052,6 +1052,20 @@ describe('workflows', () => {
     usage: { total_tokens: 9000, tool_uses: 4, duration_ms: 20_000 }, last_tool_name: 'review:1', ...extra,
   });
 
+  it('send the prompt of an agent still queued, which has no files to read it from, as Claude Code previews it', async () => {
+    const { claude, state } = await start();
+    claude.say(system('task_started', { task_id: 'w1', tool_use_id: 'toolu_w', description: 'Review', task_type: 'local_workflow', workflow_name: 'demo-review', prompt: SCRIPT }));
+    const preview = `${`Review ${'the server '.repeat(60)}`.slice(0, 400)}\u2026`;
+    claude.say(frame({ workflow_progress: [item(1, { state: 'progress', agentId: 'a1', startedAt: 5, promptPreview: 'Review the client.' }), item(2, { state: 'start', queuedAt: 7, promptPreview: preview, lastProgressAt: 7 })] }));
+    await vi.waitFor(() => expect(state().workflows?.toolu_w?.agents).toHaveLength(2));
+    const [running, queued] = state().workflows!.toolu_w!.agents;
+    expect(running).not.toHaveProperty('promptPreview');
+    expect(queued!.promptPreview).toBe(preview);
+    // However long a preview another program sends, the frame carries Claude Code's 400 and an ellipsis at most.
+    claude.say(frame({ workflow_progress: [item(2, { state: 'start', queuedAt: 7, promptPreview: 'x'.repeat(100_000) })] }));
+    await vi.waitFor(() => expect(state().workflows!.toolu_w!.agents[1]!.promptPreview).toHaveLength(401));
+  });
+
   it('follow Claude Code’s task events: the whole list from the frames that carry it, the status, the end', async () => {
     const { claude, state, runs } = await start();
     claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'w1', task_type: 'local_workflow', description: 'Review the demo app, then check each finding' }] }));
