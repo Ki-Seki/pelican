@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -30,26 +31,51 @@ function clientEvent(text: string): ClientEvent | undefined {
   return { type, sessionId };
 }
 
-/** Starts the HTTP server and the WebSocket that streams sessions. Resolves once it listens. */
-export async function startServer(): Promise<{ url: string }> {
+let guarded = false;
+
+/**
+ * Work nobody waits for (a poll, a notification) must not take the server down when it fails:
+ * Node would exit, and every turn Claude is running with it. It is said in the log instead.
+ * A thrown exception stays fatal: state may be broken then.
+ */
+function guardRejections(): void {
+  if (guarded) return;
+  guarded = true;
+  process.on('unhandledRejection', (error) => {
+    console.warn('[pelican] unexpected error:', error instanceof Error ? (error.stack ?? error.message) : error);
+  });
+}
+
+/** The path of a request target, without parsing it: a malformed target must not throw. */
+const pathOf = (url: string | undefined) => (url ?? '/').split('?')[0] ?? '/';
+
+/**
+ * Starts the HTTP server and the WebSocket that streams sessions. Resolves once it listens.
+ * Port 0 takes any free port; `url` says which.
+ */
+export async function startServer(): Promise<{ url: string; close: () => Promise<void> }> {
+  guardRejections();
   await loadAuth();
   await initPush();
 
-  const url = await new Promise<string>((resolve, reject) => {
-    const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info) => {
+  // Client events are a few hundred bytes; nothing bigger is read.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+
+  const { url, server } = await new Promise<{ url: string; server: ReturnType<typeof serve> }>((resolve, reject) => {
+    const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info: AddressInfo) => {
       const host = info.family === 'IPv6' ? `[${info.address}]` : info.address;
-      resolve(`http://${host}:${info.port}/`);
+      resolve({ url: `http://${host}:${info.port}/`, server });
     });
     server.on('error', reject);
+  });
 
-    // Client events are a few hundred bytes; nothing bigger is read.
-    const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
-
-    server.on('upgrade', (req: IncomingMessage, socket, head) => {
-      const pathname = new URL(req.url ?? '/', 'http://x').pathname;
+  server.on('upgrade', (req: IncomingMessage, socket, head) => {
+    // A connection that breaks before the handshake ends here, not in an unheard 'error'.
+    socket.on('error', () => socket.destroy());
+    try {
       const forwarded = req.headers['x-forwarded-host'];
       // The same checks as every request: a known Host, a page of Pelican's own, a signed-in browser.
-      const ok = pathname.endsWith('/api/ws')
+      const ok = pathOf(req.url).endsWith('/api/ws')
         && hostAllowed(req.headers.host)
         && originAllowed(req.headers.origin, req.headers.host, Array.isArray(forwarded) ? forwarded[0] : forwarded)
         && signedIn(req.headers.cookie, req.headers.authorization);
@@ -58,47 +84,57 @@ export async function startServer(): Promise<{ url: string }> {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-    });
-
-    wss.on('connection', (ws: WebSocket) => {
-      const send = (event: ServerEvent) => {
-        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
-      };
-      const disconnect = connect(send);
-      const subscriptions = new Map<string, () => void>();
-      // Proxies close idle sockets (Cloudflare after 100 s); a ping every 25 s keeps it open.
-      const ping = setInterval(() => ws.ping(), 25_000);
-      // A frame too large or malformed closes this socket; unheard, the error would stop the server.
-      ws.on('error', () => ws.terminate());
-
-      ws.on('message', (data) => {
-        const event = clientEvent(String(data));
-        if (!event) return;
-        if (event.type === 'subscribe' && !subscriptions.has(event.sessionId)) {
-          if (subscriptions.size >= MAX_SUBSCRIPTIONS) return;
-          subscriptions.set(event.sessionId, subscribe(event.sessionId, send));
-          const state = runState(event.sessionId);
-          if (state) send({ type: 'run', state });
-        } else if (event.type === 'unsubscribe') {
-          subscriptions.get(event.sessionId)?.();
-          subscriptions.delete(event.sessionId);
-        }
-      });
-
-      ws.on('close', () => {
-        clearInterval(ping);
-        disconnect();
-        for (const unsubscribe of subscriptions.values()) unsubscribe();
-      });
-    });
-
-    const shutdown = () => {
-      closeAll();
-      server.close();
-      setTimeout(() => process.exit(0), 500).unref();
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    } catch {
+      socket.destroy();
+    }
   });
-  return { url };
+
+  wss.on('connection', (ws: WebSocket) => {
+    const send = (event: ServerEvent) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
+    };
+    const disconnect = connect(send);
+    const subscriptions = new Map<string, () => void>();
+    // Proxies close idle sockets (Cloudflare after 100 s); a ping every 25 s keeps it open.
+    const ping = setInterval(() => ws.ping(), 25_000);
+    // A frame too large or malformed closes this socket; unheard, the error would stop the server.
+    ws.on('error', () => ws.terminate());
+
+    ws.on('message', (data) => {
+      const event = clientEvent(String(data));
+      if (!event) return;
+      if (event.type === 'subscribe' && !subscriptions.has(event.sessionId)) {
+        if (subscriptions.size >= MAX_SUBSCRIPTIONS) return;
+        subscriptions.set(event.sessionId, subscribe(event.sessionId, send));
+        const state = runState(event.sessionId);
+        if (state) send({ type: 'run', state });
+      } else if (event.type === 'unsubscribe') {
+        subscriptions.get(event.sessionId)?.();
+        subscriptions.delete(event.sessionId);
+      }
+    });
+
+    ws.on('close', () => {
+      clearInterval(ping);
+      disconnect();
+      for (const unsubscribe of subscriptions.values()) unsubscribe();
+    });
+  });
+
+  const shutdown = () => {
+    closeAll();
+    server.close();
+    setTimeout(() => process.exit(0), 500).unref();
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+
+  const close = async () => {
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
+    for (const client of wss.clients) client.terminate();
+    wss.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  return { url, close };
 }

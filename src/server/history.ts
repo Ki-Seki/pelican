@@ -138,14 +138,15 @@ function addLine(t: Transcript, line: string): void {
 async function readNew(file: string, t: Transcript, size: number): Promise<void> {
   const handle = await open(file, 'r');
   try {
-    let position = t.offset;
-    while (position < size) {
-      const buffer = Buffer.allocUnsafe(Math.min(CHUNK, size - position));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    // The offset moves with each chunk, together with the line it may leave unfinished: a read
+    // that fails part way carries on from there next time, without reading a line twice.
+    while (t.offset < size) {
+      const buffer = Buffer.allocUnsafe(Math.min(CHUNK, size - t.offset));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, t.offset);
       if (bytesRead <= 0) break;
-      position += bytesRead;
       const data = t.carry.length > 0 ? Buffer.concat([t.carry, buffer.subarray(0, bytesRead)]) : buffer.subarray(0, bytesRead);
       const lastBreak = data.lastIndexOf(0x0a);
+      t.offset += bytesRead;
       if (lastBreak < 0) {
         t.carry = Buffer.from(data);
         continue;
@@ -153,7 +154,6 @@ async function readNew(file: string, t: Transcript, size: number): Promise<void>
       t.carry = Buffer.from(data.subarray(lastBreak + 1));
       for (const line of data.subarray(0, lastBreak).toString('utf8').split('\n')) addLine(t, line);
     }
-    t.offset = position;
     // A last row without its newline yet: use it if it is whole; it is read again with the rest later.
     if (t.carry.length > 0) addLine(t, t.carry.toString('utf8'));
   } finally {

@@ -46,8 +46,27 @@ class Feed {
         this.delivered.add(message.uuid);
         this.fromFile.add(message.uuid);
       }
-    })();
+      // Clients could not load it either while it failed: they read it whole now.
+      if (this.unprimed) this.broadcast({ type: 'reload', sessionId: this.sessionId });
+      this.unprimed = false;
+    })().catch((error: unknown) => {
+      // Tried again at the next poll: the file may be readable by then (a write finished, its owner changed).
+      this.primed = undefined;
+      this.unprimed = true;
+      throw error;
+    });
     return this.primed;
+  }
+
+  private unprimed = false;
+
+  /** Said once until reading works again, not once a second. */
+  private failing = false;
+
+  private failed(error: unknown): void {
+    if (this.failing) return;
+    this.failing = true;
+    console.warn(`[pelican] cannot read the transcript of ${this.sessionId.slice(0, 8)}: ${(error as Error).message ?? error}`);
   }
 
   broadcast(event: ServerEvent): void {
@@ -66,7 +85,8 @@ class Feed {
   async publish(message: ChatMessage): Promise<void> {
     this.publishing += 1;
     try {
-      await this.prime();
+      // A transcript that cannot be read must not stop the run publishing: the message goes out anyway.
+      await this.prime().catch((error: unknown) => this.failed(error));
       if (this.delivered.has(message.uuid)) return;
       this.delivered.add(message.uuid);
       this.recent.push(message);
@@ -87,7 +107,7 @@ class Feed {
 
   watch(): void {
     if (this.timer) return;
-    void this.prime();
+    void this.prime().catch((error: unknown) => this.failed(error));
     this.timer = setInterval(() => {
       void this.check().then((changed) => {
         if (changed) sessionsChanged();
@@ -104,37 +124,47 @@ class Feed {
     return Boolean(this.timer);
   }
 
+  /** Delivers what the transcript gained since the last look; never fails (a poll nobody awaits). */
   async check(): Promise<boolean> {
     if (this.checking) return false;
     this.checking = true;
     try {
-      await this.prime();
-      const file = await transcriptPath(this.sessionId);
-      if (!file) return false;
-      const info = await stat(file).catch(() => undefined);
-      if (!info || (info.size === this.size && info.mtimeMs === this.mtimeMs)) return false;
-      this.size = info.size;
-      this.mtimeMs = info.mtimeMs;
-      const messages = await loadMessages(this.sessionId);
-      const present = new Set(messages.map((m) => m.uuid));
-      for (const uuid of this.fromFile) {
-        if (!present.has(uuid)) {
-          this.fromFile = present;
-          this.delivered = new Set(present);
-          this.broadcast({ type: 'reload', sessionId: this.sessionId });
-          return true;
-        }
-      }
-      this.fromFile = present;
-      for (const message of messages) {
-        if (this.delivered.has(message.uuid)) continue;
-        this.delivered.add(message.uuid);
-        this.broadcast({ type: 'message', sessionId: this.sessionId, message });
-      }
-      return true;
+      return await this.read();
+    } catch (error) {
+      this.failed(error);
+      return false;
     } finally {
       this.checking = false;
     }
+  }
+
+  private async read(): Promise<boolean> {
+    await this.prime();
+    const file = await transcriptPath(this.sessionId);
+    if (!file) return false;
+    const info = await stat(file).catch(() => undefined);
+    if (!info || (info.size === this.size && info.mtimeMs === this.mtimeMs)) return false;
+    const messages = await loadMessages(this.sessionId);
+    // Only once it was read: a file that could not be is tried again at the next poll.
+    this.size = info.size;
+    this.mtimeMs = info.mtimeMs;
+    this.failing = false;
+    const present = new Set(messages.map((m) => m.uuid));
+    for (const uuid of this.fromFile) {
+      if (!present.has(uuid)) {
+        this.fromFile = present;
+        this.delivered = new Set(present);
+        this.broadcast({ type: 'reload', sessionId: this.sessionId });
+        return true;
+      }
+    }
+    this.fromFile = present;
+    for (const message of messages) {
+      if (this.delivered.has(message.uuid)) continue;
+      this.delivered.add(message.uuid);
+      this.broadcast({ type: 'message', sessionId: this.sessionId, message });
+    }
+    return true;
   }
 }
 
