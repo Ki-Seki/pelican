@@ -16,6 +16,8 @@ import {
   Wrench,
 } from 'lucide-react';
 
+import { todosOf } from '../../shared/tasks';
+
 export type ToolSummary = {
   icon: LucideIcon;
   /** Short verb shown first, e.g. "Read", "Edit". */
@@ -76,8 +78,15 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'Agent':
     case 'Task':
       return { icon: Bot, verb: str(input.subagent_type) ? `Agent · ${str(input.subagent_type)}` : 'Agent', target: str(input.description) };
-    case 'TodoWrite':
-      return { icon: ListChecks, verb: 'Update tasks' };
+    case 'TodoWrite': {
+      // Where the list stands: "2/4 · Remembering the choice", as the bar above the composer says it.
+      const todos = todosOf(input);
+      if (todos.length === 0) return { icon: ListChecks, verb: 'Update tasks' };
+      const done = todos.filter((t) => t.status === 'completed').length;
+      const current = todos.find((t) => t.status === 'in_progress');
+      const what = current ? current.activeForm || current.content : done === todos.length ? 'All done' : undefined;
+      return { icon: ListChecks, verb: 'Update tasks', target: [`${done}/${todos.length}`, what].filter(Boolean).join(' · '), prose: true };
+    }
     case 'TaskCreate':
       return { icon: ListChecks, verb: 'Add task', target: str(input.subject) ?? str(input.title), prose: true };
     case 'TaskUpdate': {

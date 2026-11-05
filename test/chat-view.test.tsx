@@ -210,6 +210,21 @@ describe('what you decided stays visible', () => {
   });
 });
 
+describe('task lists', () => {
+  const todos = { todos: [{ content: 'Read', status: 'completed' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] };
+
+  it('show as a card when new, and as a line that opens to the list when they only move along', () => {
+    render(<ToolCallView call={tool('TodoWrite', todos, 'ok')} running={false} />);
+    expect(screen.getByText('Tasks · 1/2')).toBeTruthy();
+    cleanup();
+    render(<ToolCallView call={tool('TodoWrite', todos, 'ok', false, { sameTasks: true })} running={false} />);
+    expect(screen.queryByText('Tasks · 1/2')).toBeNull();
+    expect(screen.getByText('1/2 · Writing')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Update tasks/ }));
+    expect(screen.getByText('Tasks · 1/2')).toBeTruthy();
+  });
+});
+
 describe('tool output', () => {
   it('shows without escape codes', () => {
     const { container } = render(<ToolCallView call={tool('Bash', { command: 'npm test' }, '\u001b[32m✓\u001b[39m passed\rdone')} running={false} defaultOpen />);

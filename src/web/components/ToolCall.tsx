@@ -174,6 +174,8 @@ function Detail({ call, cwd, outcome }: { call: ToolCall; cwd?: string; outcome:
     );
   }
   switch (call.name) {
+    case 'TodoWrite':
+      return <TodoList input={call.input} />;
     case 'Bash':
     case 'PowerShell':
       return (
@@ -327,7 +329,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
     }, { added: 0, removed: 0 });
   }, [call]);
 
-  if (call.name === 'TodoWrite') return <TodoList input={call.input} />;
+  if (call.name === 'TodoWrite' && !call.sameTasks) return <div className="my-1.5"><TodoList input={call.input} /></div>;
   if (call.name === 'SendUserFile' || (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish'))) return <SentFiles call={call} />;
   // Claude Desktop's visuals (diagrams, charts, small tools): drawn in place, as Desktop shows them.
   if (/(^|__)show_widget$/.test(call.name) && str(call.input.widget_code)) {

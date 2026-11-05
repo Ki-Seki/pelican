@@ -1,10 +1,13 @@
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
+import { todosOf } from '../../shared/tasks';
 
 export type ToolCall = {
   id: string;
   name: string;
   input: Record<string, unknown>;
   result?: ToolResultBlock;
+  /** A TodoWrite that only moves the same tasks along, which a line says better than the whole list again. */
+  sameTasks?: true;
 };
 
 export type Part =
@@ -141,6 +144,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
   const items: Item[] = [];
   let turn: Extract<Item, { kind: 'assistant' }> | undefined;
   let lastDay: string | undefined;
+  let tasks: { names: string; done: boolean } | undefined;
 
   const push = (item: Item, timestamp?: number) => {
     if (timestamp && item.kind === 'user') {
@@ -207,7 +211,16 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       else if (block.type === 'image') turn!.parts.push({ kind: 'image', key, image: block });
       else if (block.type === 'tool_use') {
         const result = results.get(block.id);
-        turn!.parts.push({ kind: 'tool', key, call: { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}) } });
+        let sameTasks = false;
+        if (block.name === 'TodoWrite') {
+          // The list shows in full when it is new, its tasks change, or the last one is done;
+          // an update that only moves along the same tasks shows as one line.
+          const todos = todosOf(block.input);
+          const next = { names: JSON.stringify(todos.map((t) => t.content)), done: todos.length > 0 && todos.every((t) => t.status === 'completed') };
+          sameTasks = next.names === tasks?.names && !(next.done && !tasks.done);
+          tasks = next;
+        }
+        turn!.parts.push({ kind: 'tool', key, call: { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}), ...(sameTasks ? { sameTasks: true } : {}) } });
       }
     });
   }

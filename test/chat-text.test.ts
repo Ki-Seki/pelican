@@ -138,3 +138,31 @@ describe('answersOf', () => {
   });
 });
 
+describe('task lists in the conversation', () => {
+  const todo = (id: string, states: string[], names = ['Read', 'Write', 'Test']): ChatMessage => ({
+    uuid: `a-${id}`, role: 'assistant',
+    blocks: [{ type: 'tool_use', id, name: 'TodoWrite', input: { todos: names.map((content, i) => ({ content, status: states[i], activeForm: `${content}ing` })) } }],
+  });
+  const quiet = (messages: ChatMessage[]) => {
+    const turn = buildItems(messages).find((i) => i.kind === 'assistant');
+    return turn?.kind === 'assistant' ? turn.parts.map((p) => (p.kind === 'tool' ? Boolean(p.call.sameTasks) : undefined)) : [];
+  };
+
+  it('are shown whole when new, changed or finished, and as a line when the same tasks move along', () => {
+    expect(quiet([
+      todo('1', ['in_progress', 'pending', 'pending']),
+      todo('2', ['completed', 'in_progress', 'pending']),
+      todo('3', ['completed', 'in_progress', 'pending'], ['Read', 'Write', 'Test', 'Ship']),
+      todo('4', ['completed', 'completed', 'in_progress', 'pending'], ['Read', 'Write', 'Test', 'Ship']),
+      todo('5', ['completed', 'completed', 'completed', 'completed'], ['Read', 'Write', 'Test', 'Ship']),
+      todo('6', ['completed', 'completed', 'completed', 'completed'], ['Read', 'Write', 'Test', 'Ship']),
+    ])).toEqual([false, true, false, true, false, true]);
+  });
+
+  it('say where they stand on that line', () => {
+    const input = { todos: [{ content: 'Read', status: 'completed' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }, { content: 'Test', status: 'pending' }] };
+    expect(describeTool('TodoWrite', input)).toMatchObject({ verb: 'Update tasks', target: '1/3 · Writing' });
+    expect(describeTool('TodoWrite', { todos: [{ content: 'Read', status: 'completed' }] })).toMatchObject({ target: '1/1 · All done' });
+    expect(describeTool('TodoWrite', {}).target).toBeUndefined();
+  });
+});
