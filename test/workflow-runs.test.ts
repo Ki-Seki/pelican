@@ -387,6 +387,38 @@ describe('an agent’s steps, asked for while it works', () => {
     expect(String(input.findings).startsWith('[{"title":"finding 0"')).toBe(true);
     expect(String(input.summary).length).toBeLessThan(10_000);
   });
+
+  it('stay bounded whatever shape a large message has, and say what was left out', async () => {
+    let n = 0;
+    /** The page of an agent whose transcript is these rows after its prompt, in bytes as sent, and as read. */
+    async function pageOf(rows: Row[]) {
+      const id = newSession();
+      const runId = `wf_6b6b6b6b-${String((n += 1)).padStart(3, '0')}`;
+      await transcript(id, [call('toolu_s'), launched('toolu_s', runId, 'w8')]);
+      await put(id, `subagents/workflows/${runId}/journal.jsonl`, `${started('v2:a', 'a1', 'big')}\n`);
+      const all = [{ type: 'user', message: { role: 'user', content: 'Review it.' } }, ...rows];
+      await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, `${all.map((r, i) => JSON.stringify({ parentUuid: i ? `b${i - 1}` : null, isSidechain: true, agentId: 'a1', uuid: `b${i}`, timestamp: new Date(Date.now() - 1000 + i).toISOString(), ...r })).join('\n')}\n`);
+      const text = await (await ask(`/api/sessions/${id}/workflows/toolu_s/agents/a1`)).text();
+      return { bytes: Buffer.byteLength(text), page: JSON.parse(text) as WorkflowAgentPage };
+    }
+    const use = (input: Record<string, unknown>, name = 'StructuredOutput') => ({ type: 'assistant', message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name, input }] } });
+    // A call whose input has very many small keys.
+    const keys = await pageOf([use(Object.fromEntries(Array.from({ length: 200_000 }, (_, i) => [`file-${i}.ts`, 'ok'])))]);
+    expect(keys.bytes).toBeLessThan(140_000);
+    const input = (keys.page.messages[1]!.blocks[0] as { input: Record<string, unknown> }).input;
+    expect(input['file-0.ts']).toBe('ok');
+    expect(input['…']).toMatch(/^1\d\d,\d{3} more keys of its input left out$/);
+    // One result made of many parts, each under what a part is cut to.
+    const parts = await pageOf([use({}, 'mcp__docs__read'), { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: Array.from({ length: 600 }, (_, i) => ({ type: 'text', text: `${i} ${'r'.repeat(7000)}` })) }] } }]);
+    expect(parts.bytes).toBeLessThan(140_000);
+    const result = parts.page.messages[2]!.blocks[0] as { content: Array<{ text: string }> };
+    expect(result.content[0]!.text.startsWith('0 rrr')).toBe(true);
+    expect(result.content.at(-1)!.text).toMatch(/^… \(5\d\d more parts of this result left out\)$/);
+    // Many blocks of text in characters of three bytes each, 60,000 of them: bounded in bytes, not characters.
+    const blocks = await pageOf([{ type: 'assistant', message: { id: 'm1', role: 'assistant', content: Array.from({ length: 60 }, () => ({ type: 'text', text: '审'.repeat(1000) })) } }]);
+    expect(blocks.bytes).toBeLessThan(140_000);
+    expect((blocks.page.messages[1]!.blocks.at(-1) as { text: string }).text).toMatch(/^… \(\d+ more parts of this message left out\)$/);
+  });
 });
 
 describe('a session with a Workflow call whose meta no string could hold', () => {
