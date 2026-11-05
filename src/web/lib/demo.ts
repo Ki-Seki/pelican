@@ -5,7 +5,7 @@ import type {
 } from '../../shared/protocol';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { shortTitle } from '../../shared/titles';
-import { answerLocally } from './api';
+import { answerLocally, ApiError } from './api';
 import { newId } from './ids';
 import { DEMO_NOTE, DemoRefusal, INSTALL_URL, STATIC_DEMO } from './static-demo';
 import { addLocalMessage, getView, setRun } from './store';
@@ -24,8 +24,6 @@ type Story = {
   /** What the demo added to the conversation, oldest first. */
   added: ChatMessage[];
   timers: ReturnType<typeof setTimeout>[];
-  /** Messages sent with Queue while a turn ran, taken when it ends. */
-  queued: ChatMessage[];
   /** A session the demo started itself. */
   summary?: SessionSummary;
 };
@@ -37,7 +35,7 @@ let home = '';
 const storyOf = (id: string): Story => {
   let story = stories.get(id);
   if (!story) {
-    story = { added: [], timers: [], queued: [] };
+    story = { added: [], timers: [] };
     stories.set(id, story);
   }
   return story;
@@ -111,13 +109,22 @@ export function advance(tasks: Todo[]): Todo[] | undefined {
   return tasks.map((t, i) => (i === at ? { ...t, status: 'completed' } : i === next ? { ...t, status: 'in_progress' } : t));
 }
 
-/** The turn ends: idle, with what it took; a message queued meanwhile goes next. */
+/** The turn ends, with what it took. */
 function finish(sessionId: string, durationMs: number): void {
-  const story = storyOf(sessionId);
   const run = currentRun(sessionId) ?? idleRun(sessionId);
-  runAs(sessionId, { ...run, busy: false, permissions: [], partial: [], lastTurn: { durationMs, outputTokens: 180 + Math.round(durationMs / 20) } });
-  const next = story.queued.shift();
-  if (next) later(sessionId, 400, () => reply(sessionId, next));
+  end(sessionId, { ...run, lastTurn: { durationMs, outputTokens: 180 + Math.round(durationMs / 20) } });
+}
+
+/**
+ * Claude is done with the turn, stopped or not: idle, unless messages were queued meanwhile. Those
+ * go next, at once and in one message, as your own Pelican sends them (also after Stop).
+ */
+function end(sessionId: string, run: RunState): void {
+  const { queued = [], ...rest } = run;
+  runAs(sessionId, { ...rest, busy: false, permissions: [], partial: [] });
+  if (queued.length === 0) return;
+  const text = queued.map((p) => p.text).filter(Boolean).join('\n\n');
+  reply(sessionId, user(text ? [{ type: 'text', text }] : [], { uuid: queued[0]!.uuid }));
 }
 
 /** A message taken by Claude, answered with what Claude would do. */
@@ -183,7 +190,8 @@ function send(sessionId: string, body: SendBody): { sessionId: string } {
   const run = currentRun(sessionId);
   if (run?.busy) {
     if (body.mode === 'queue') {
-      storyOf(sessionId).queued.push(message);
+      // Above the composer until the turn ends, as your own Pelican shows it: not in the conversation yet.
+      runAs(sessionId, { ...run, queued: [...(run.queued ?? []), { uuid: body.uuid, text: body.text }] });
     } else {
       say(sessionId, { ...message, steered: true });
       later(sessionId, 600, () => setNote(sessionId, DEMO_STEER));
@@ -220,12 +228,21 @@ function interrupt(sessionId: string): { ok: boolean } {
   const story = storyOf(sessionId);
   for (const timer of story.timers) clearTimeout(timer);
   story.timers = [];
-  story.queued = [];
   const run = currentRun(sessionId);
   if (run?.busy) {
     say(sessionId, user([{ type: 'text', text: '[Request interrupted by user]' }]));
-    runAs(sessionId, { ...run, busy: false, permissions: [], partial: [] });
+    end(sessionId, run);
   }
+  return { ok: true };
+}
+
+/** A queued message taken back before Claude gets it: dropped, or put back in the box to edit. */
+function unqueue(sessionId: string, uuid: string): { ok: boolean } {
+  const run = currentRun(sessionId);
+  if (!run?.queued?.some((p) => p.uuid === uuid)) throw new ApiError('That message is no longer waiting', 409);
+  const left = run.queued.filter((p) => p.uuid !== uuid);
+  const { queued: _taken, ...rest } = run;
+  runAs(sessionId, left.length > 0 ? { ...rest, queued: left } : rest);
   return { ok: true };
 }
 
@@ -326,6 +343,7 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
   if (id && rest === '/messages') return send(id, body as SendBody);
   if (id && rest.startsWith('/permissions/')) return decide(id, decodeURIComponent(rest.slice('/permissions/'.length)), body as PermissionDecision);
   if (id && rest === '/interrupt') return interrupt(id);
+  if (id && rest.startsWith('/queued/')) return unqueue(id, decodeURIComponent(rest.slice('/queued/'.length)));
   if (id && rest === '/rewind' && body.dryRun === true) return rewindPreview(getView(id).messages, str(body.uuid));
   if (id && (rest === '/settings' || rest === '/mode')) {
     const run = currentRun(id);
