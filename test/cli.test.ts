@@ -225,6 +225,8 @@ exit 0
     const restart = await run(c, ['service', 'restart'], { PELICAN_PORT: String(shellPort) });
     expect(restart.out).toContain('Pelican is starting again.');
     expect(restart.out).toContain(`http://localhost:${port}/`);
+    // The old code looked on the shell's port and reported the restarted service as not answering.
+    expect(restart.out).not.toContain('has not answered');
     expect(restart.out).not.toMatch(/has not answered yet/);
   }, 60_000);
 });

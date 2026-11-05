@@ -75,7 +75,11 @@ function withoutLoaders(code: string, page: boolean): string {
   const doc = new DOMParser().parseFromString(page ? code : `<!doctype html><body>${code}`, 'text/html');
   const clean = (root: ParentNode) => {
     for (const element of root.querySelectorAll(LOADERS)) element.remove();
-    for (const template of root.querySelectorAll('template')) clean(template.content);
+    // Only an HTML <template> has content; one inside SVG or MathML is a plain element.
+    for (const template of root.querySelectorAll('template')) {
+      const content = (template as HTMLTemplateElement).content as DocumentFragment | undefined;
+      if (content) clean(content);
+    }
   };
   clean(doc);
   return page ? doc.documentElement.outerHTML : doc.body.innerHTML;
@@ -87,8 +91,13 @@ function withoutLoaders(code: string, page: boolean): string {
  */
 function stillCode(code: string, page: boolean): string {
   if (typeof DOMParser === 'undefined') return '';
-  const once = withoutLoaders(code, page);
-  return withoutLoaders(once, page) === once ? once : '';
+  try {
+    const once = withoutLoaders(code, page);
+    return withoutLoaders(once, page) === once ? once : '';
+  } catch {
+    // Markup the cleaner cannot walk is not shown, rather than taking the page down.
+    return '';
+  }
 }
 
 /** The document a preview shows; a still one carries no script of Pelican's (none could run), and nothing that loads. */

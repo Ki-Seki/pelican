@@ -80,10 +80,16 @@ const readJson = async (file: string): Promise<unknown> => (await readJsonFile(f
 
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-/** The top of the git repository a folder is in, by its `.git` (this runs nothing). */
+/** Whether a folder is itself a git directory (HEAD, objects, refs), which git takes as a repository. */
+async function isGitDirectory(dir: string): Promise<boolean> {
+  const [head, objects, refs] = await Promise.all(['HEAD', 'objects', 'refs'].map((name) => stat(path.join(dir, name)).catch(() => undefined)));
+  return Boolean(head?.isFile() && objects?.isDirectory() && refs?.isDirectory());
+}
+
+/** The top of the git repository a folder is in, by its `.git`, or a git directory git would use (this runs nothing). */
 async function gitRoot(dir: string): Promise<string | undefined> {
   for (let d = dir; ; d = path.dirname(d)) {
-    if (await exists(path.join(d, '.git'))) return d;
+    if ((await exists(path.join(d, '.git'))) || (await isGitDirectory(d))) return d;
     if (path.dirname(d) === d) return undefined;
   }
 }
@@ -297,7 +303,8 @@ const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|pe
  */
 function fromMarkdown(what: string, text: string, shell: boolean): string[] {
   const found: string[] = [];
-  const front = /^\uFEFF?\s*---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  // Found as Claude Code finds it: the closing --- may end a line rather than stand on its own.
+  const front = /^\uFEFF?---\s*\n([\s\S]*?)---\s*\n?/.exec(text.replace(/\r\n/g, '\n'))?.[1];
   const lines = front?.split(/\r?\n/) ?? [];
   const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
   // Keys of the frontmatter itself, not of a map inside it.
@@ -313,6 +320,11 @@ function fromMarkdown(what: string, text: string, shell: boolean): string[] {
     if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
     found.push(`${what}: ${line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`}`);
   });
+  // YAML says the same thing in more ways than a line scan reads (escapes, ? keys, tags, flow maps):
+  // frontmatter that uses them and names a power anywhere is asked about.
+  if (front && found.length === 0 && /allowed|hook|mcp|permission/i.test(front) && /\\|^[ \t]*\?|!!|\{/m.test(front)) {
+    found.push(`${what}: settings Pelican cannot read in full`);
+  }
   if (shell) {
     for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(`${what} runs: ${block[1]!.trim()}`);
     for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(`${what} runs: ${inline[1]!}`);
@@ -387,7 +399,6 @@ function nameParts(name: string): { section: string; subsection?: string; key: s
 }
 
 const isInclude = (entry: GitEntry) => entry.name === 'include.path' || /^includeif\..+\.path$/.test(entry.name);
-const gitTrue = (value: string) => ['', 'true', 'yes', 'on', '1'].includes(value.toLowerCase());
 
 /** git found no repository there: nothing of a repository's config can run. */
 class NoRepository extends Error {}
@@ -447,7 +458,15 @@ async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
   let entries: GitEntry[];
   try {
     entries = await gitConfig(top, ['--local']);
-    if (entries.some((e) => e.name === 'extensions.worktreeconfig' && gitTrue(e.value))) entries.push(...(await gitConfig(top, ['--worktree'])));
+    // config.worktree counts whenever git reads extensions.worktreeConfig as true, however it is
+    // spelled (2, 1k, 0x1 and -1 are true too): ask git rather than parse it. With the extension
+    // off, --worktree reads the same file as --local, or refuses where there are several worktrees.
+    const seen = new Set(entries.map((e) => e.file));
+    try {
+      entries.push(...(await gitConfig(top, ['--worktree'])).filter((e) => !seen.has(e.file)));
+    } catch (error) {
+      if (!/worktreeConfig is enabled|extension worktreeConfig/i.test(String((error as Error).message))) throw error;
+    }
   } catch (error) {
     if (error instanceof NoRepository || !(await gitRuns())) return undefined;
     throw error;
