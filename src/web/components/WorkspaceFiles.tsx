@@ -27,7 +27,8 @@ export function WorkspaceFiles({ cwd, step, open, go, up, onAddToMessage }: {
   open: boolean;
   go: (step: WorkspaceStep) => void;
   up: (step: WorkspaceStep) => void;
-  onAddToMessage: (text: string, block?: boolean) => void;
+  /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
+  onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
 }) {
   const [query, setQuery] = useState('');
   const [inText, setInText] = useState('');

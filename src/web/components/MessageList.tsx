@@ -16,6 +16,7 @@ import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
+import { PromptBody, QuoteAction } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 
@@ -96,7 +97,7 @@ function Steps({ parts, cwd, running, view }: { parts: Part[]; cwd?: string; run
 
 function TurnFooter({ text, timestamp, stats }: { text?: string; timestamp?: number; stats?: RunState['lastTurn'] }) {
   return (
-    <div className="-ml-1.5 flex h-7 items-center gap-1 text-[11px] text-faint opacity-0 transition-opacity group-focus-within/turn:opacity-100 group-hover/turn:opacity-100 [@media(hover:none)]:opacity-100">
+    <div className="-ml-1.5 flex h-7 items-center gap-1 text-[11px] text-faint opacity-0 transition-opacity select-none group-focus-within/turn:opacity-100 group-hover/turn:opacity-100 [@media(hover:none)]:opacity-100">
       {text && <CopyButton text={text} />}
       {timestamp && <span>{clockTime(timestamp)}</span>}
       {stats && (
@@ -141,7 +142,7 @@ const AssistantTurn = memo(function AssistantTurn({
   const lastText = texts.at(-1);
 
   return (
-    <div className="group/turn">
+    <div className="group/turn" data-quotable>
       <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
@@ -202,7 +203,7 @@ function PromptText({ text, command, onTap }: { text: string; command: boolean; 
         ref={body}
         className={`whitespace-pre-wrap ${foldable && !all ? 'max-h-[19.5em] overflow-hidden' : ''} ${long && !all ? '[mask-image:linear-gradient(to_bottom,black_70%,transparent)]' : ''}`}
       >
-        {text}
+        {command ? text : <PromptBody text={text} />}
       </div>
       {long && (
         <button
@@ -456,7 +457,7 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
   const long = output.split('\n').length > 14 || output.length > 1600;
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-panel">
+    <div data-quotable className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 break-all">{item.command}</span>
@@ -613,10 +614,12 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact, quoteKey,
 }: {
   sessionId: string;
   view: SessionView;
+  /** Whose message box a quote of a reply goes to (lib/quote); the conversation's own by default. */
+  quoteKey?: string;
   cwd?: string;
   /** The computer Claude Code runs on, for error lines that say what to do there. */
   machine?: string;
@@ -792,7 +795,8 @@ export function MessageList({
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
-        <div ref={content} className="mx-auto max-w-3xl px-4 pt-3 pb-6">
+        <div ref={content} className="relative mx-auto max-w-3xl px-4 pt-3 pb-6">
+          <QuoteAction within={content} quoteKey={quoteKey ?? sessionId} />
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
               {view.loadingOlder ? (

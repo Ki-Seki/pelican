@@ -62,6 +62,32 @@ describe('drafts', () => {
     expect(kept).not.toContain('s0');
   });
 
+  it('keep the quotes waiting above the box, until the message they went into was sent', () => {
+    saveDraft('s1', 'And not a context?', [], ['> Why CSS variables?']);
+    expect(loadDraft('s1')).toMatchObject({ text: 'And not a context?', quotes: ['> Why CSS variables?'] });
+    // Quotes alone are a draft too.
+    saveDraft('s2', '', [], ['a.ts:3\n> x']);
+    expect(loadDraft('s2')?.quotes).toEqual(['a.ts:3\n> x']);
+    clearDraft('s1', 'another message');
+    expect(loadDraft('s1')?.quotes).toEqual(['> Why CSS variables?']);
+    clearDraft('s1', '> Why CSS variables?\n\nAnd not a context?');
+    expect(loadDraft('s1')).toBeUndefined();
+  });
+
+  it('keep the quotes when a ! command goes instead: they wait for a message', () => {
+    saveDraft('s1', '!npm test', [], ['> the failing line']);
+    clearDraft('s1', '!npm test');
+    expect(loadDraft('s1')).toMatchObject({ text: '', quotes: ['> the failing line'] });
+  });
+
+  it('take their quotes along to another folder, and drop what is not a quote', () => {
+    saveDraft('new:/code/acme', 'about this', [], ['> a line']);
+    moveDraft('new:/code/acme', 'new:/code/site');
+    expect(loadDraft('new:/code/site')?.quotes).toEqual(['> a line']);
+    store.set('pelican:drafts', JSON.stringify({ s1: { text: 'x', quotes: ['> kept', 3, null, ' '], at: 1 } }));
+    expect(loadDraft('s1')?.quotes).toEqual(['> kept']);
+  });
+
   it('all go when this browser signs out', () => {
     saveDraft('s1', 'a prompt');
     saveDraft('s2', 'another');

@@ -15,6 +15,7 @@ import { composing, hasKeyboard } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { addQuote } from '../lib/quote';
 import { commentsOf, dropComments, useComments, withComments } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
@@ -45,6 +46,7 @@ import { QueuedStrip } from './QueuedStrip';
 import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
+import { SideChat, useSideChat } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
@@ -547,6 +549,8 @@ export function Chat({
   const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
+  // A side chat has none of its own; Changes and files and it take turns beside the conversation.
+  const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace);
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
@@ -785,7 +789,7 @@ export function Chat({
 
   return (
     <PathLinksContext.Provider value={links}>
-    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {/* Also while Changes and files has folded the list away, beside the conversation. */}
         {(!wide || workspace.folded) && (
@@ -817,10 +821,10 @@ export function Chat({
           <button
             type="button"
             aria-label="Changes and files"
-            aria-pressed={workspace.dockable ? workspace.open : undefined}
+            aria-pressed={workspace.dockable ? workspace.open && !side.docked : undefined}
             title={`Changes and files (${PANE_KEYS})`}
             onClick={() => workspace.setOpen(!workspace.open)}
-            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.docked ? 'bg-hover text-fg' : 'text-muted'}`}
+            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.docked && !side.docked ? 'bg-hover text-fg' : 'text-muted'}`}
           >
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
@@ -929,6 +933,7 @@ export function Chat({
         models={modelList?.models}
         onSend={(text, attachments, mode) => void send(text, attachments, mode)}
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
+        {...(sessionId && !session?.sideChatOf ? { onSideChat: side.show } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
         // On a computer the box takes the keys as soon as a chat opens. On a phone only a new
@@ -950,16 +955,18 @@ export function Chat({
 
       {cwd && (
         <Workspace
-          open={workspace.open}
+          open={workspace.open && !(side.docked && workspace.dockable)}
           docked={workspace.docked}
           busy={busy && permissions.length === 0}
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
-          onAddToMessage={(text, block) => {
+          onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
-            setDraftText({ text, key: Date.now(), append: true, ...(block ? { block } : {}) });
+            // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.
+            if (how === 'quote') addQuote(viewId, text);
+            else setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
           onSendComments={() => {
             if (commentsOf(cwd).length === 0) return;
@@ -968,6 +975,7 @@ export function Chat({
           }}
         />
       )}
+      {sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}
       <TrustSheet ask={trustAsk} {...(cwd ? { folder: cwd } : {})} {...(home ? { home } : {})} onDone={() => setTrustAsk(undefined)} />
       {sessionId && (
         <RewindSheet
@@ -995,6 +1003,12 @@ export function Chat({
           {...(machine ? { machine } : {})}
           thinking={thought}
           onRenamed={refresh}
+          {...(!session?.sideChatOf ? {
+            onSideChat: () => {
+              setMenuOpen(false);
+              side.show();
+            },
+          } : {})}
           onForked={(id) => void branchSettings().then((next) => {
             // A branch is new work: it carries this session's settings, except Bypass.
             saveSessionChoice(id, next);

@@ -49,7 +49,8 @@ function edited(file: string, before: string, oldString: string, newString: stri
 /** What Claude Code records of a Write that made a file. */
 const created = (file: string, content: string) => ({ type: 'create', filePath: file, content, structuredPatch: [], originalFile: null });
 
-type DemoSession = { id: string; title: string; project: string; branch: string; rows: (cwd: string) => Row[]; scratch?: boolean };
+/** `copies`: a side chat's session, whose conversation it starts with (as forkSession copies one). */
+type DemoSession = { id: string; title: string; project: string; branch: string; rows: (cwd: string) => Row[]; scratch?: boolean; copies?: string };
 
 const THEME_CSS = `:root {
   --bg: #ffffff;
@@ -301,6 +302,25 @@ const SESSIONS: DemoSession[] = [
       ];
     },
   })),
+  // A side question asked while Claude waited on the toggle's edit: listed under that session.
+  {
+    id: 'a3f1c2d4-1111-4a1b-8c3d-0000000000a1',
+    title: 'Side chat',
+    project: 'acme-web',
+    branch: 'feat/dark-theme',
+    copies: 'a3f1c2d4-1111-4a1b-8c3d-000000000001',
+    rows: () => {
+      const t = Date.now() - 2 * MIN;
+      return [
+        { role: 'user', at: t, content: 'Why CSS variables, and not a theme context in React?' },
+        {
+          role: 'assistant',
+          at: t + 7000,
+          content: [text('The colors already live in `theme.css` as variables, so switching `data-theme` on the root changes them everywhere at once, plain CSS included, without rendering any component again. A context reaches only React components, and each one that reads it renders again on every switch.')],
+        },
+      ];
+    },
+  },
   {
     id: 'e2f5d8a4-5555-4e5f-8071-000000000005',
     title: 'Turn this CSV into JSON',
@@ -529,6 +549,7 @@ export async function prepareDemo(): Promise<void> {
     }
   }
   await demoRepository(path.join(root, 'code', 'acme-web'));
+  const written = new Map<string, Array<{ row: Row; uuid: string }>>();
   for (const session of SESSIONS) {
     const cwd = session.scratch ? path.join(root, 'scratch', '2026-11-04-7c2e') : path.join(root, 'code', session.project);
     await mkdir(cwd, { recursive: true });
@@ -536,8 +557,12 @@ export async function prepareDemo(): Promise<void> {
     await mkdir(dir, { recursive: true });
     let parent: string | null = null;
     const lines: string[] = [JSON.stringify({ type: 'custom-title', customTitle: session.title, sessionId: session.id })];
-    for (const row of session.rows(cwd)) {
-      const uuid = randomUUID();
+    // A side chat starts with the conversation it is about, as the Agent SDK's forkSession leaves
+    // one: each row under the copy's id, saying which row of which session it came from.
+    const copied = (session.copies ? written.get(session.copies) ?? [] : []).map((entry) => ({ row: entry.row, uuid: randomUUID(), from: entry.uuid }));
+    const own = session.rows(cwd).map((row) => ({ row, uuid: randomUUID(), from: undefined as string | undefined }));
+    written.set(session.id, own);
+    for (const { row, uuid, from } of [...copied, ...own]) {
       const message = row.role === 'assistant'
         ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: row.model ?? 'claude-opus-5-5', content: row.content }
         : { role: 'user', content: row.content };
@@ -545,6 +570,7 @@ export async function prepareDemo(): Promise<void> {
         parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId: session.id, version: '2.1.318',
         gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...row.extra,
         ...(row.result ? { toolUseResult: row.result } : {}),
+        ...(from && session.copies ? { forkedFrom: { sessionId: session.copies, messageUuid: from } } : {}),
       }));
       if (row.checkpoint) {
         const at = new Date(row.at).toISOString();

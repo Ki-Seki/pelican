@@ -85,7 +85,7 @@ const components: Components = {
     // line of every block that scrolls sideways.
     return (
       <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
-        <div className="flex h-8 items-center gap-2 border-b border-line pr-1 pl-3 text-[11.5px] text-faint">
+        <div className="flex h-8 items-center gap-2 border-b border-line pr-1 pl-3 text-[11.5px] text-faint select-none">
           <span className="min-w-0 flex-1 truncate">{language}</span>
           <CopyButton text={textOf(children)} />
         </div>

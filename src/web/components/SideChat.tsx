@@ -1,0 +1,350 @@
+import { SquarePen, X } from 'lucide-react';
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
+import { api, isDemoNote, isUnreachable } from '../lib/api';
+import { clearDraft } from '../lib/drafts';
+import { newId } from '../lib/ids';
+import { composing, hasKeyboard, isApple } from '../lib/keyboard';
+import { socket } from '../lib/socket';
+import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
+import { Composer } from './Composer';
+import { MessageList } from './MessageList';
+import { Sheet } from './Sheet';
+
+/** From this width the side chat sits beside the conversation; on narrower screens, a sheet over it. */
+const BESIDE = '(min-width: 1280px)';
+
+/** The keys that open and close it, as in Claude Desktop. */
+export const SIDE_CHAT_KEYS = isApple ? '⌘;' : 'Ctrl+;';
+
+/** What the side chat says it does, under its title. */
+const READS = 'Reads this session · changes nothing';
+
+function useMedia(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const onChange = () => setMatches(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
+/**
+ * The side chat of each session in this visit (this tab, reloads included): opened again, it goes
+ * on where it was. Its first question marks where its own conversation starts, after the copy of
+ * the session's.
+ */
+type Remembered = { id: string; first: string };
+const KEY = 'pelican:side-chats';
+const inMemory = new Map<string, Remembered>();
+
+function rememberedAll(): Record<string, Remembered> | undefined {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(KEY) ?? '{}') as unknown;
+    return all && typeof all === 'object' ? (all as Record<string, Remembered>) : {};
+  } catch {
+    // No storage for this page (or it is broken): memory keeps them while the page is open.
+    return undefined;
+  }
+}
+
+function remembered(sessionId: string): Remembered | undefined {
+  const all = rememberedAll();
+  const found = all ? all[sessionId] : inMemory.get(sessionId);
+  return found && typeof found.id === 'string' && typeof found.first === 'string' ? found : undefined;
+}
+
+function remember(sessionId: string, side: Remembered | undefined): void {
+  const all = rememberedAll();
+  try {
+    if (!all) throw new Error('no storage');
+    if (side) all[sessionId] = side;
+    else delete all[sessionId];
+    sessionStorage.setItem(KEY, JSON.stringify(all));
+  } catch {
+    if (side) inMemory.set(sessionId, side);
+    else inMemory.delete(sessionId);
+  }
+}
+
+/** Changes and files, as Chat has it (Workspace's useWorkspacePane): where the side chat takes turns with it. */
+type Pane = { open: boolean; setOpen: (open: boolean) => void; dockable: boolean };
+
+export type SideChatState = {
+  open: boolean;
+  /** Beside the conversation, where Changes and files sits when it is docked. */
+  docked: boolean;
+  /** Opens it; a question is asked there at once. */
+  show: (question?: string) => void;
+  close: () => void;
+  /** A question to ask as it opens, new each time (`key`). */
+  question?: { text: string; key: number };
+};
+
+/**
+ * Whether the session's side chat is open, and where. Cmd/Ctrl+; opens and closes it, as in
+ * Claude Desktop. On a computer it takes the place of Changes and files beside the conversation,
+ * one at a time: opening it puts that pane aside, closing it brings the pane back, and asking for
+ * the pane (its button, Cmd/Ctrl+Shift+D) closes the side chat.
+ */
+export function useSideChat(available: boolean, pane: Pane): SideChatState {
+  const beside = useMedia(BESIDE);
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState<{ text: string; key: number }>();
+  // What had the keys when it opened, to have them again when it closes (a sheet does this itself).
+  const opener = useRef<Element | null>(null);
+  const toggle = useCallback((next: boolean) => {
+    setOpen((was) => {
+      if (next && !was) opener.current = document.activeElement;
+      return next;
+    });
+  }, []);
+  const show = useCallback((text?: string) => {
+    toggle(true);
+    if (text?.trim()) setQuestion({ text: text.trim(), key: Date.now() });
+  }, [toggle]);
+  const close = useCallback(() => toggle(false), [toggle]);
+  const isOpen = available && open;
+  const docked = isOpen && beside;
+
+  useEffect(() => {
+    if (open) return;
+    const back = opener.current;
+    opener.current = null;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (lost && back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
+  }, [open]);
+
+  useEffect(() => {
+    if (!available) return undefined;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const mod = isApple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+      if (!mod || e.altKey || e.key !== ';' || e.repeat) return;
+      // A sheet that is open keeps the keys, unless it is the side chat's own.
+      if (!open && document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      toggle(!open);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [available, open, toggle]);
+
+  // Asked for while the side chat is beside the conversation, Changes and files takes its place.
+  const { open: paneIsOpen, setOpen: setPaneOpen, dockable } = pane;
+  const paneWasOpen = useRef(paneIsOpen);
+  useEffect(() => {
+    const changed = paneWasOpen.current !== paneIsOpen;
+    paneWasOpen.current = paneIsOpen;
+    if (!changed || !docked || !dockable) return;
+    toggle(false);
+    if (!paneIsOpen) setPaneOpen(true);
+  }, [paneIsOpen, setPaneOpen, dockable, docked, toggle]);
+
+  return { open: isOpen, docked, show, close, ...(question ? { question } : {}) };
+}
+
+const pendingMessage = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now(), pending: true });
+
+/**
+ * The side chat itself: questions about the session, answered by a Claude that reads the copy of
+ * it made for the first question (server: side-chat.ts), with only that exchange shown. The
+ * session goes on as it was, also while Claude works in it.
+ */
+export function SideChat({
+  state, sessionId, settings, cwd, machine, demo,
+}: {
+  state: SideChatState;
+  sessionId: string;
+  /** The session's model, effort and speed, which the side chat takes; its mode is its own. */
+  settings: RunSettings;
+  cwd?: string;
+  machine?: string;
+  demo?: boolean;
+}) {
+  const [side, setSide] = useState(() => remembered(sessionId));
+  // Before the first answer has a side chat to go to, its question waits in a view of its own.
+  const waitingView = `side-new:${sessionId}`;
+  const viewId = side?.id ?? waitingView;
+  // Watched only while open: closed, it keeps no place among the views the page holds on to.
+  const view = useSessionView(state.open ? viewId : undefined);
+  const busy = Boolean(side && view.run?.busy);
+  const draftKey = `side:${sessionId}`;
+  const [error, setError] = useState<{ text: string; note: boolean }>();
+  const [giveBack, setGiveBack] = useState<{ text: string; key: number }>();
+  const asking = useRef(false);
+
+  // Only the side chat's own conversation: the copy of the session's comes before its first
+  // question. Not loaded yet (a long side chat), the older pages load until it is.
+  const at = side ? view.messages.findIndex((m) => m.uuid === side.first || m.sourceUuid === side.first) : -1;
+  const own = useMemo(() => {
+    if (!side) return { ...view, offset: 0 };
+    if (at < 0) return { ...view, messages: [], offset: view.loaded ? view.offset : 0 };
+    return { ...view, messages: view.messages.slice(at), offset: 0 };
+  }, [view, side, at]);
+
+  useEffect(() => {
+    if (!state.open || !side) return undefined;
+    // The demo's server changes nothing; the page plays it out (lib/demo).
+    if (!demo) socket.subscribe(side.id);
+    void loadLatest(side.id);
+    return () => {
+      if (!demo) socket.unsubscribe(side.id);
+    };
+  }, [state.open, side, demo]);
+
+  const ask = async (text: string, mode: SendMode = 'steer') => {
+    // The first question is still making the side chat: this one waits in the box.
+    if (asking.current) {
+      setGiveBack({ text, key: Date.now() });
+      return;
+    }
+    setError(undefined);
+    const uuid = newId();
+    const giveItBack = (failure: unknown) => {
+      setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
+      setGiveBack({ text, key: Date.now() });
+    };
+    if (side) {
+      // Its first question never reached the side chat (its Claude did not start): this one starts its conversation.
+      if (at < 0 && view.loaded && view.offset === 0) {
+        const moved = { id: side.id, first: uuid };
+        remember(sessionId, moved);
+        setSide(moved);
+      }
+      addLocalMessage(side.id, pendingMessage(uuid, text));
+      try {
+        await api.send(side.id, { text, attachments: [], settings, uuid, ...(busy ? { mode } : {}) });
+        clearDraft(draftKey, text);
+      } catch (failure) {
+        removeLocalMessage(side.id, uuid);
+        giveItBack(failure);
+      }
+      return;
+    }
+    asking.current = true;
+    addLocalMessage(waitingView, pendingMessage(uuid, text));
+    try {
+      const { sessionId: id } = await api.side(sessionId, { question: text, settings, uuid });
+      const made = { id, first: uuid };
+      remember(sessionId, made);
+      adoptView(waitingView, id);
+      setSide(made);
+      clearDraft(draftKey, text);
+    } catch (failure) {
+      removeLocalMessage(waitingView, uuid);
+      giveItBack(failure);
+    } finally {
+      asking.current = false;
+    }
+  };
+
+  // A question it was opened with (/btw and a question) is asked at once.
+  const asked = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!state.open || !state.question || asked.current === state.question.key) return;
+    asked.current = state.question.key;
+    void ask(state.question.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.open, state.question?.key]);
+
+  /** A new side chat, from the session as it is now; the one before stays in the list, under the session. */
+  const startAgain = () => {
+    remember(sessionId, undefined);
+    setSide(undefined);
+    setError(undefined);
+  };
+
+  const stop = () => side && void api.interrupt(side.id);
+  const body = (
+    <>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {own.messages.length > 0 || busy || own.offset > 0 ? (
+          <MessageList sessionId={viewId} view={own} cwd={cwd} {...(machine ? { machine } : {})} mode="normal" quoteKey={draftKey} />
+        ) : (
+          <div className="flex-1" />
+        )}
+      </div>
+      {error && (
+        <div role="status" className={`mx-3 mb-1.5 rounded-xl px-3 py-2 text-[12.5px] leading-snug ${error.note ? 'text-muted' : 'border border-line bg-panel text-danger'}`}>{error.text}</div>
+      )}
+      <Composer
+        side
+        busy={busy}
+        settings={settings}
+        onSettings={() => {}}
+        models={undefined}
+        onSend={(text, _attachments, mode) => void ask(text, mode)}
+        onStop={stop}
+        stopping={Boolean(view.run?.stopping)}
+        autoFocus={hasKeyboard()}
+        placeholder="Ask a side question"
+        draftKey={draftKey}
+        {...(cwd ? { cwd } : {})}
+        {...(giveBack ? { draft: giveBack } : {})}
+      />
+    </>
+  );
+
+  if (state.docked) {
+    return (
+      <aside
+        aria-label="Side chat"
+        className="absolute inset-y-0 right-0 flex w-(--pane-w) flex-col border-l border-line bg-bg"
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.defaultPrevented || composing(e.nativeEvent)) return;
+          // Esc stops the answer, or puts the side chat away; Cmd/Ctrl+\ closes it, as a pane in Desktop.
+          const closeKey = e.key === '\\' && (e.metaKey || e.ctrlKey);
+          if (e.key !== 'Escape' && !closeKey) return;
+          e.preventDefault();
+          if (e.key === 'Escape' && busy) stop();
+          else state.close();
+        }}
+        // Files dropped here are not for the conversation's message box beside it.
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'none';
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
+          <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">Side chat</h2>
+          {side && (
+            <button type="button" aria-label="New side chat" title="New side chat, from the session as it is now" onClick={startAgain} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+              <SquarePen className="size-[17px]" />
+            </button>
+          )}
+          <button type="button" aria-label="Close" title={`Close (${SIDE_CHAT_KEYS})`} onClick={state.close} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+            <X className="size-[18px]" />
+          </button>
+        </div>
+        <p className="shrink-0 px-5 pb-1 text-[12px] text-faint">{READS}</p>
+        {body}
+      </aside>
+    );
+  }
+  return (
+    <Sheet
+      open={state.open}
+      onClose={state.close}
+      title="Side chat"
+      done
+      size="large"
+      header={(
+        <div className="flex min-h-7 items-center gap-2 pb-1">
+          <p className="min-w-0 flex-1 truncate text-[12px] text-faint">{READS}</p>
+          {side && <button type="button" onClick={startAgain} className="-my-1 h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg">New</button>}
+        </div>
+      )}
+    >
+      <div className="-mx-2 -mb-2 flex h-full min-h-0 flex-col">{body}</div>
+    </Sheet>
+  );
+}

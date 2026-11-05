@@ -186,7 +186,8 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
   cwd: string;
   path: string;
   line?: number;
-  onAddToMessage: (text: string, block?: boolean) => void;
+  /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
+  onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
 }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['file', cwd, path], queryFn: () => api.file(cwd, path), staleTime: 5_000 });
   const name = path.split('/').pop() ?? path;
@@ -260,7 +261,7 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
 
   const quote = () => {
     if (!selection) return;
-    onAddToMessage(quoteLines(path, selection.from, selection.to, texts.slice(selection.from - 1, selection.to)), true);
+    onAddToMessage(quoteLines(path, selection.from, selection.to, texts.slice(selection.from - 1, selection.to)), 'quote');
     window.getSelection()?.removeAllRanges();
   };
 

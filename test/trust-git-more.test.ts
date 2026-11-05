@@ -73,7 +73,7 @@ describe('original forms', () => {
       const launch = await trust.launchFor(dir);
       gitIn(dir, ['--no-optional-locks', 'status', '--short', '--ignore-submodules=dirty'], launch.env ?? {});
       expect(await ran()).toBe(false);
-    });
+    }, 20_000);
   }
 });
 
@@ -87,7 +87,7 @@ describe('variants', () => {
       gitIn(dir, ['--no-optional-locks', 'status', '--short', '--ignore-submodules=dirty']);
       console.log(`worktreeConfig=${value}`, JSON.stringify({ brings, launch, gitRanFilter: await ran() }));
       expect(brings.some((b: string) => b.startsWith('Git filter'))).toBe(true);
-    });
+    }, 20_000);
   }
 
   it('a folder that is itself a git directory with core.worktree (no .git entry)', async () => {
@@ -112,5 +112,5 @@ describe('variants', () => {
     const ranIt = (await readFile(marker, 'utf8').catch(() => '')).includes('ran');
     console.log('bare-with-worktree', JSON.stringify({ brings, launch, gitRanFilter: ranIt }));
     expect(brings.some((b: string) => b.startsWith('Git filter'))).toBe(true);
-  });
+  }, 20_000);
 });

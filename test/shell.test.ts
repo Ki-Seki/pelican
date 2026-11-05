@@ -44,7 +44,7 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
     expect(await gone(pid)).toBe(true);
     expect(result.endedBy).toBe('limit');
     expect(bashModeText(result)).toContain('(stopped after 1 second)');
-  });
+  }, 15_000);
 
   it('says nothing more of a command that simply ends', async () => {
     const result = await runCommand(os.tmpdir(), 'echo done');

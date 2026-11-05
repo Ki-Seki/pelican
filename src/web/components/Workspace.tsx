@@ -130,7 +130,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** Rewind code: puts the files back as they were before a prompt (the chat asks first). */
   onRewind?: (uuid: string) => void;
   /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */
-  onAddToMessage: (text: string, block?: boolean) => void;
+  /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
+  onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
 }) {
@@ -213,7 +214,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           go={go}
           setScope={(to) => goTo(to, false)}
           {...(onRewind ? { onRewind } : {})}
-          onRequest={(text) => onAddToMessage(text, true)}
+          onRequest={(text) => onAddToMessage(text, 'block')}
         />
       )}
       {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}

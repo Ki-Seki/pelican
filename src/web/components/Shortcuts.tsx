@@ -53,6 +53,7 @@ export function ShortcutsSheet() {
       <Row label="Stop Claude" keys={['Esc']} />
       <Row label="Search sessions" keys={[MOD, 'K']} />
       <Row label="Cycle view modes" keys={['Ctrl', 'O']} />
+      <Row label="Side chat" keys={[MOD, ';']} />
       <Row label="Close a sheet" keys={['Esc']} />
       <Row label="Keyboard shortcuts" keys={[MOD, '/']} />
       <SheetHeading>In the message box</SheetHeading>

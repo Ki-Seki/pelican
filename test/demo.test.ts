@@ -4,7 +4,7 @@ import type { ChatMessage, RunState, ServerInfo } from '../src/shared/protocol';
 
 // The page's own address, as in a browser.
 Object.assign(globalThis, { location: new URL('http://localhost:7860/') });
-const { advance, DEMO_REPLY, rewindPreview, startDemo } = await import('../src/web/lib/demo');
+const { advance, DEMO_REPLY, DEMO_SIDE_REPLY, rewindPreview, startDemo } = await import('../src/web/lib/demo');
 const { api, isDemoNote } = await import('../src/web/lib/api');
 const { addLocalMessage, getView, setRun } = await import('../src/web/lib/store');
 const { DEMO_NOTE } = await import('../src/web/lib/static-demo');
@@ -82,6 +82,21 @@ describe('the demo', () => {
     expect(detail.session).toMatchObject({ title: 'Add a footer', cwd: CWD, project: 'acme-web', status: 'idle' });
     const page = await api.messages(sessionId);
     expect(page.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('asks a side question in a side chat of the session’s, listed under it, and says what Claude would do there', async () => {
+    const { sessionId } = await api.side(SESSION, { question: 'Why CSS variables?', settings: { permissionMode: 'bypassPermissions' }, uuid: 'side-q' });
+    expect(sessionId).not.toBe(SESSION);
+    vi.runAllTimers();
+    const messages = getView(sessionId).messages;
+    expect(messages.map((m) => m.uuid)[0]).toBe('side-q');
+    expect(messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_SIDE_REPLY });
+    expect(getView(sessionId).run?.settings.permissionMode).toBe('dontAsk');
+    expect((await api.session(sessionId)).session).toMatchObject({ title: 'Side chat', sideChatOf: SESSION });
+    // A later question goes to the same side chat.
+    await api.send(sessionId, { text: 'And the toggle?', attachments: [], settings: {}, uuid: 'side-q2' });
+    vi.runAllTimers();
+    expect(getView(sessionId).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_SIDE_REPLY });
   });
 
   it('stops when asked, as Claude would', async () => {

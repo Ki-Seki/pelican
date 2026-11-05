@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Quote, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api, apiUrl, isDemoNote } from '../lib/api';
 import { loadDraft, useDraftSaver } from '../lib/drafts';
-import { withQuote } from '../lib/quote';
 import { formatBytes } from '../lib/format';
-import { composing, sendsMessage } from '../lib/keyboard';
+import { composing, hasKeyboard, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
+import { messageWithQuotes, quoteLabel, receiveQuotes, splitQuotes, withQuote } from '../lib/quote';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
@@ -129,7 +129,11 @@ function findTrigger(text: string, caret: number): Trigger | undefined {
 
 type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' | 'agent' };
 
-function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): { items: Suggestion[]; loading: boolean } {
+/** `/btw`: a side question, which Pelican opens as Claude Desktop does (a side chat), not a command Claude Code runs. */
+const BTW: Command = { name: 'btw', description: 'Ask a side question; this session stays as it is', argumentHint: '<question>' };
+const ASKS_BTW = /^\/btw(?:\s|$)/;
+
+function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, own: Command[]): { items: Suggestion[]; loading: boolean } {
   const [fileQuery, setFileQuery] = useState('');
   useEffect(() => {
     if (trigger?.kind !== 'file') return;
@@ -155,7 +159,7 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
     if (!trigger) return { items: [], loading: false };
     if (trigger.kind === 'command') {
       const q = trigger.query.toLowerCase();
-      const list = (completions.data?.commands ?? [])
+      const list = [...own, ...(completions.data?.commands ?? []).filter((c: Command) => !own.some((o) => o.name === c.name))]
         .filter((c: Command) => !q || c.name.toLowerCase().includes(q))
         .sort((a: Command, b: Command) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
         .slice(0, 8)
@@ -176,7 +180,7 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
       icon: path.endsWith('/') ? ('folder' as const) : ('file' as const),
     }));
     return { items: [...agents, ...list], loading: files.isLoading };
-  }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading]);
+  }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading, own]);
 }
 
 /**
@@ -208,6 +212,8 @@ export function Composer({
   draftKey,
   trailing,
   disabled,
+  onSideChat,
+  side = false,
   ref,
 }: {
   busy: boolean;
@@ -230,18 +236,25 @@ export function Composer({
    * files); a new `key` puts it in again. `append` adds it after what is there; `block` too, on
    * lines of its own (a quote, line comments, a request).
    */
+  /** `block`: text that goes on lines of its own after what is written (a request to Claude). */
   draft?: { text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] };
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
   trailing?: ReactNode;
   disabled?: boolean;
+  /** `/btw`, with a question or without: opens the session's side chat instead of sending. */
+  onSideChat?: (question: string) => void;
+  /** A side chat's own box: questions only, without files, settings, `!` or `/` commands. */
+  side?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {
   const [saved] = useState(() => (draftKey && !draft ? loadDraft(draftKey) : undefined));
   const [text, setText] = useState(draft?.text ?? saved?.text ?? '');
   const [caret, setCaret] = useState(0);
   const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
+  // Quotes of what was selected (lib/quote), above the box until they go above the words.
+  const [quotes, setQuotes] = useState<string[]>(() => saved?.quotes ?? []);
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
   const [highlight, setHighlight] = useState(0);
   const [dismissed, setDismissed] = useState<string>();
@@ -252,7 +265,7 @@ export function Composer({
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
   const uploading = uploads.some((u) => !u.attachment && !u.error);
-  const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
+  const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment) || quotes.length > 0) && !uploading;
 
   // What is typed is kept per chat until it is sent; a send that fails gives it back as it was.
   const draftSaver = useDraftSaver(draftKey);
@@ -262,25 +275,41 @@ export function Composer({
       justSent.current = false;
       return;
     }
-    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])));
-  }, [text, uploads, draftSaver]);
+    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes);
+  }, [text, uploads, quotes, draftSaver]);
+
+  // A quote made anywhere in this chat (a reply, a file) comes here. On a computer the box takes
+  // the keys, to say what about it; a phone keeps its keyboard down, so more can be quoted first.
+  useEffect(() => {
+    if (!draftKey) return undefined;
+    return receiveQuotes(draftKey, (quote) => {
+      setQuotes((list) => (list.includes(quote) ? list : [...list, quote]));
+      if (hasKeyboard()) requestAnimationFrame(() => area.current?.focus({ preventScroll: true }));
+    });
+  }, [draftKey]);
 
   const trigger = useMemo(() => {
     const found = findTrigger(text, caret);
+    // A side chat takes questions: no / commands there.
+    if (side && found?.kind === 'command') return undefined;
     return found && `${found.kind}:${found.start}` !== dismissed ? found : undefined;
-  }, [text, caret, dismissed]);
-  const { items: suggestions, loading: suggesting } = useSuggestions(trigger, cwd);
+  }, [text, caret, dismissed, side]);
+  const own = useMemo(() => (onSideChat ? [BTW] : []), [onSideChat]);
+  const { items: suggestions, loading: suggesting } = useSuggestions(trigger, cwd, own);
   const showSuggestions = Boolean(trigger) && (suggestions.length > 0 || suggesting);
 
   useEffect(() => setHighlight(0), [trigger?.kind, trigger?.query]);
 
   useEffect(() => {
     if (!draft) return;
-    const next = draft.block ? withQuote(text, draft.text) : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
+    // A message given back (its send failed) brings its quotes back above the box, before any added since.
+    const back = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
+    if (back.quotes.length > 0) setQuotes((list) => [...back.quotes, ...list.filter((q) => !back.quotes.includes(q))]);
+    const next = draft.block ? withQuote(text, draft.text) : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : back.text;
     setText(next);
-    // A message given back (its send failed) brings its files back too, beside any added since.
-    const back = draft.attachments;
-    if (back?.length) setUploads((list) => [...back.map(restored), ...list.filter((u) => !back.some((a) => a.id === u.attachment?.id))]);
+    // Its files come back too, beside any added since.
+    const files = draft.attachments;
+    if (files?.length) setUploads((list) => [...files.map(restored), ...list.filter((u) => !files.some((a) => a.id === u.attachment?.id))]);
     const put = () => {
       const el = area.current;
       if (!el) return;
@@ -310,7 +339,7 @@ export function Composer({
     const timer = setTimeout(() => setModeHint(false), 4000);
     return () => clearTimeout(timer);
   }, [modeHint, mode]);
-  const shell = Boolean(onShell) && text.startsWith('!');
+  const shell = Boolean(onShell) && !side && text.startsWith('!');
 
   // Dictation: what you say goes into the box, to read over before sending.
   const [listening, setListening] = useState(false);
@@ -359,7 +388,8 @@ export function Composer({
   };
   useEffect(() => () => recognition.current?.stop(), []);
 
-  const hint = busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
+  // A side chat's box asks for a question whatever its Claude is doing.
+  const hint = busy && !shell && !side ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
@@ -393,7 +423,7 @@ export function Composer({
   };
   useImperativeHandle(ref, () => ({
     addFiles,
-    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : []))),
+    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes),
   }));
 
   const forget = (u: Upload) => {
@@ -405,7 +435,8 @@ export function Composer({
     if (shell) {
       const command = text.slice(1).trim();
       if (!command) return;
-      draftSaver.now(`!${command}`, []);
+      // The quotes stay for the next message: a command is not about them.
+      draftSaver.now(`!${command}`, [], quotes);
       onShell!(command);
       justSent.current = true;
       setText('');
@@ -413,12 +444,26 @@ export function Composer({
       return;
     }
     recognition.current?.stop();
+    // /btw asks in the side chat, with the quotes; what goes with this session stays here.
+    if (onSideChat && ASKS_BTW.test(text.trim())) {
+      onSideChat(messageWithQuotes(quotes, text.trim().replace(ASKS_BTW, '')));
+      setText('');
+      setCaret(0);
+      setQuotes([]);
+      return;
+    }
+    // Typed out of habit in a side chat, /btw only says what the rest is.
+    const words = side ? text.trim().replace(ASKS_BTW, '').trim() : text.trim();
+    if (!words && quotes.length === 0 && !uploads.some((u) => u.attachment)) return;
+    // A / command has to start its message: the quotes wait for the next one, as with a ! command.
+    const command = words.startsWith('/');
     const attachments = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
-    draftSaver.now(text.trim(), attachments);
-    onSend(text.trim(), attachments, mode);
+    draftSaver.now(words, attachments, quotes);
+    onSend(command ? words : messageWithQuotes(quotes, words), attachments, mode);
     justSent.current = true;
     setText('');
     setCaret(0);
+    if (!command) setQuotes([]);
     for (const u of uploads) forget(u);
     setUploads([]);
   };
@@ -469,6 +514,8 @@ export function Composer({
   };
 
   const onPaste = (e: ClipboardEvent) => {
+    // A side question goes without files; a pasted one stays out of it.
+    if (side) return;
     const files = Array.from(e.clipboardData.files);
     if (files.length > 0) {
       e.preventDefault();
@@ -484,7 +531,8 @@ export function Composer({
 
   return (
     // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
-    <div className="pb-safe relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg">
+    // A side chat's box sits in a pane or a sheet, which keeps clear of the phone's edge itself.
+    <div className={`${side ? 'pb-2' : 'pb-safe'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
       {showSuggestions && (
         <div
           id={listId}
@@ -516,6 +564,28 @@ export function Composer({
         </div>
       )}
       <div className="mx-auto max-w-3xl rounded-[22px] border border-line bg-panel shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
+        {quotes.length > 0 && (
+          <ul aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3">
+            {quotes.map((quote, i) => {
+              const label = quoteLabel(quote);
+              return (
+                <li key={`${i}:${quote}`} title={quote} className="flex h-8 max-w-[15rem] shrink-0 items-center gap-1.5 rounded-full border border-line bg-bg pr-0.5 pl-2.5 text-[12.5px] text-muted">
+                  <Quote aria-hidden className="size-3 shrink-0 text-faint" />
+                  {/* A file's lines go by where they are; other quotes by how they begin. */}
+                  <span className={`min-w-0 truncate ${quote.startsWith('>') ? '' : 'font-mono text-[12px]'}`}>{label}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove the quote ${label}`}
+                    onClick={() => setQuotes((list) => list.filter((_, j) => j !== i))}
+                    className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-1.5 hover:bg-hover hover:text-fg"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
         {uploads.length > 0 && (
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pt-3">
             {uploads.map((u) => (
@@ -557,7 +627,7 @@ export function Composer({
           rows={1}
           disabled={disabled}
           placeholder={hint}
-          aria-label="Message Claude"
+          aria-label={side ? 'Side question' : 'Message Claude'}
           aria-autocomplete={showSuggestions ? 'list' : undefined}
           aria-controls={showSuggestions ? listId : undefined}
           aria-activedescendant={listOpen ? `${listId}-${Math.min(highlight, suggestions.length - 1)}` : undefined}
@@ -573,21 +643,26 @@ export function Composer({
           className={`block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50 ${shell ? 'font-mono' : ''}`}
         />
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
-          <button
-            type="button"
-            aria-label="Attach files"
-            className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg`}
-            onClick={() => picker.current?.click()}
-          >
-            <Paperclip className="size-[18px]" />
-          </button>
-          <input ref={picker} type="file" multiple hidden onChange={(e) => {
-            if (e.target.files) addFiles(e.target.files);
-            e.target.value = '';
-          }} />
+          {!side && (
+            <>
+              <button
+                type="button"
+                aria-label="Attach files"
+                className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg`}
+                onClick={() => picker.current?.click()}
+              >
+                <Paperclip className="size-[18px]" />
+              </button>
+              <input ref={picker} type="file" multiple hidden onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = '';
+              }} />
+            </>
+          )}
           {/* Model, effort and speed share one chip, so the row fits a phone; it scrolls with a fade if not,
-              with room above and below for the chips' touch area, which the scrolling would clip. */}
-          {shell ? (
+              with room above and below for the chips' touch area, which the scrolling would clip. A
+              side chat runs with the session's, and changes nothing, in a mode of its own. */}
+          {side ? <div className="min-w-0 flex-1" /> : shell ? (
             <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-[12.5px] text-muted">
               <SquareTerminal className="size-3.5 shrink-0" />
               <span className="truncate">Shell command</span>
@@ -644,9 +719,12 @@ export function Composer({
         </div>
       </div>
 
-      <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
-
-      <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} />
+      {!side && (
+        <>
+          <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
+          <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} />
+        </>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, MessagesSquare, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
@@ -106,6 +106,7 @@ export function SessionMenu({
   machine,
   thinking = false,
   onRenamed,
+  onSideChat,
   onForked,
   onDeleted,
 }: {
@@ -121,6 +122,8 @@ export function SessionMenu({
   /** Claude has thought in this session: the Thinking view is offered. */
   thinking?: boolean;
   onRenamed: () => void;
+  /** Opens the session's side chat (Claude Desktop's); none for a side chat itself. */
+  onSideChat?: () => void;
   onForked: (id: string) => void;
   onDeleted: () => void;
 }) {
@@ -211,6 +214,14 @@ export function SessionMenu({
             setTitle(session?.title ?? '');
             setRenaming(true);
           }}
+        />
+      )}
+      {onSideChat && (
+        <SheetOption
+          icon={<MessagesSquare className="size-4" />}
+          label="Side chat"
+          description="Ask about this session without adding to it"
+          onSelect={onSideChat}
         />
       )}
       <SheetOption

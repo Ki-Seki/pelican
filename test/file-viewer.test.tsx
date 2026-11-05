@@ -71,7 +71,7 @@ describe('a file', () => {
       document.dispatchEvent(new Event('selectionchange'));
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Quote' }));
-    expect(add).toHaveBeenCalledWith('src/a.ts:1-2\n> const a = 1;\n> const b = 2;', true);
+    expect(add).toHaveBeenCalledWith('src/a.ts:1-2\n> const a = 1;\n> const b = 2;', 'quote');
   });
 });
 

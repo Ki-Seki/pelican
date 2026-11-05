@@ -109,7 +109,8 @@ async function startElsewhere(page, where) {
 
 /** The list, its sheets, a new session in another folder, and every session with its sheets. */
 async function driveApp(browser, base, sessions) {
-  const titles = [...new Set(sessions.map((s) => s.title).filter(Boolean))].slice(0, 3);
+  // The list folds side chats away under their session.
+  const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
   for (const [size, options] of Object.entries(SIZES)) {
     for (const scheme of ['light', 'dark']) {
       const context = await browser.newContext({ ...options, colorScheme: scheme });
@@ -204,6 +205,35 @@ async function checkDocked(browser, base, sessions) {
   }
 }
 
+/**
+ * The side chat, at the narrowest width it sits beside the conversation at: it opens with
+ * Cmd/Ctrl+; and stays inside the window when the conversation holds a long line.
+ */
+async function checkSideChat(browser, base, sessions) {
+  const session = sessions.find((s) => !s.sideChatOf);
+  if (!session) return;
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  watch(page, () => 'app, side chat');
+  await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  await page.keyboard.press('ControlOrMeta+;');
+  await page.waitForTimeout(300);
+  const out = await page.evaluate(() => {
+    const pane = document.querySelector('aside[aria-label="Side chat"]');
+    if (!pane) return 'does not open with Cmd/Ctrl+;';
+    const column = document.querySelector('main .max-w-3xl');
+    const probe = document.createElement('div');
+    probe.className = 'truncate';
+    probe.textContent = 'A very long line '.repeat(80);
+    column?.append(probe);
+    const r = pane.getBoundingClientRect();
+    return r.right > innerWidth + 1 ? `ends ${Math.round(r.right - innerWidth)}px past the window` : '';
+  });
+  if (out) problems.push(`app, side chat: ${out}`);
+  await context.close();
+}
+
 /** The site's own pages: the pictures fit their phones, the demo frame lays out as a phone does. */
 async function checkSite(browser, base) {
   for (const [size, options] of Object.entries(SIZES)) {
@@ -278,6 +308,7 @@ try {
     if (!sessions?.length) problems.push('the demo has no sessions');
     await driveApp(browser, demo.base, sessions ?? []);
     await checkDocked(browser, demo.base, sessions ?? []);
+    await checkSideChat(browser, demo.base, sessions ?? []);
   }
 } finally {
   await browser.close();
