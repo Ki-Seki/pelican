@@ -222,8 +222,9 @@ describe('a message while Claude works', () => {
     expect(messages().map((m) => m.uuid)).toContain('00000000-0000-4000-8000-000000000001');
   });
 
-  it('queues: Pelican holds it, out of the conversation, and Claude gets the queue together when the turn ends', async () => {
+  it('queues: Pelican holds it, out of the conversation, and Claude gets each prompt as typed when the turn ends', async () => {
     const { run, claude, messages, state, runs } = await start();
+    const firstTurn = state().startedAt!;
     await run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000002' });
     await run.send({ text: 'And update the changelog', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000003' });
     await settle();
@@ -234,20 +235,48 @@ describe('a message while Claude works', () => {
       { uuid: '00000000-0000-4000-8000-000000000003', text: 'And update the changelog' },
     ]);
 
+    await new Promise((resolve) => setTimeout(resolve, 20));
     claude.say(reply('Fixed.'));
     claude.say(result());
-    // Claude Code says the turn is over after the result; the queued prompt is already on its way.
+    // Claude Code says the turn is over after the result; the queued prompts are already on their way.
     claude.say(system('session_state_changed', { state: 'idle' }));
-    await vi.waitFor(() => expect(claude.prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(claude.prompts).toHaveLength(3));
     await settle();
-    expect(textOf(claude.prompts[1]!)).toBe('Then run the tests\n\nAnd update the changelog');
-    expect(claude.prompts[1]!.priority).toBeUndefined();
+    // Each as it was typed, with its own id: Claude Code takes plain prompts together itself.
+    expect(claude.prompts.slice(1).map((p) => [p.uuid, textOf(p), p.priority])).toEqual([
+      ['00000000-0000-4000-8000-000000000002', 'Then run the tests', undefined],
+      ['00000000-0000-4000-8000-000000000003', 'And update the changelog', undefined],
+    ]);
     expect(state().queued).toBeUndefined();
-    expect(messages().map((m) => m.uuid)).toContain('00000000-0000-4000-8000-000000000002');
+    expect(messages().filter((m) => m.role === 'user').map((m) => m.uuid)).toEqual(['00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003']);
     // Claude carries on: never idle in between, and no "Finished" for a turn that is not the last.
     expect(runs().filter((s) => !s.busy)).toHaveLength(0);
     expect(run.busy).toBe(true);
     expect(notices).toHaveLength(0);
+    // It is a turn of its own: its time counts from when Claude got the prompts.
+    expect(state().startedAt).toBeGreaterThan(firstTurn);
+    expect(runs().at(-1)!.startedAt).toBe(state().startedAt);
+  });
+
+  it('a queued command runs as a command, not with the prompt after it, and the turn goes on until Claude answered both', async () => {
+    const { run, claude, state, runs } = await start();
+    await run.send({ text: '/compact', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000005' });
+    await run.send({ text: 'Then carry on with step 2', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-000000000006' });
+    claude.say(reply('Step 1 done.'));
+    claude.say(result());
+    await vi.waitFor(() => expect(claude.prompts).toHaveLength(3));
+    expect(claude.prompts.slice(1).map(textOf)).toEqual(['/compact', 'Then carry on with step 2']);
+    // Claude Code answers a command on its own: that is not the end of what it was given.
+    claude.say(result({ local_command: '/compact', user_message_uuid: '00000000-0000-4000-8000-000000000005', user_message_uuids: ['00000000-0000-4000-8000-000000000005'] }));
+    await settle();
+    expect(run.busy).toBe(true);
+    expect(runs().filter((s) => !s.busy)).toHaveLength(0);
+    expect(notices).toHaveLength(0);
+    claude.say(reply('Step 2 done.'));
+    claude.say(result({ user_message_uuid: '00000000-0000-4000-8000-000000000006', user_message_uuids: ['00000000-0000-4000-8000-000000000006'] }));
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(state().startedAt).toBeUndefined();
+    expect(notices.map((n) => n.body)).toEqual(['Step 2 done.']);
   });
 
   it('a queued prompt taken back is never sent', async () => {

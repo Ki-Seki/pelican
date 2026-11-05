@@ -246,6 +246,8 @@ export class SessionRun {
   private queued: Prompt[] = [];
   /** The turn ended with prompts waiting, which went out at once: the idle that follows is not the end. */
   private continuing = false;
+  /** Of the prompts that went out when a turn ended, those no result has answered yet: Claude goes on with them. */
+  private unanswered = new Set<string>();
   /** The session's total cost after the last turn; unknown for a resumed session until its first turn. */
   private costSoFar?: number;
   /** While settings picked here are being applied, Claude Code's reports of the old ones are stale. */
@@ -992,21 +994,31 @@ export class SessionRun {
             // A turn Claude starts on its own (a scheduled check) may say nothing: it must not repeat the last reply.
             const reply = this.lastReply;
             this.lastReply = '';
-            // What waited for this turn goes out now, together, as Claude Code sends what was queued.
+            // Claude Code says which prompts a result answers. One that answers none of those still
+            // waiting is about something else, or from a Claude Code that does not say: the turn ends.
+            const answered = message.user_message_uuids ?? (message.user_message_uuid ? [message.user_message_uuid] : []);
+            const before = this.unanswered.size;
+            for (const uuid of answered) this.unanswered.delete(uuid);
+            if (this.unanswered.size === before) this.unanswered.clear();
+            // What waited for this turn goes out now, each prompt as it was typed, as Claude Code takes
+            // what is typed while it works: plain prompts together, a command as a command. Joined
+            // into one text, a command would take the prompts after it as its arguments.
             const waiting = this.queued.splice(0);
             if (waiting.length > 0) {
               this.continuing = true;
-              await this.deliver({
-                uuid: waiting[0]!.uuid,
-                text: waiting.map((p) => p.text).filter(Boolean).join('\n\n'),
-                attachments: waiting.flatMap((p) => p.attachments),
-              }, false);
-            } else {
-              this.setBusy(false);
+              // A turn of its own: its time counts from now, not from the turn that just ended.
+              this.startedAt = Date.now();
+              for (const prompt of waiting) {
+                this.unanswered.add(prompt.uuid);
+                await this.deliver(prompt, false);
+              }
             }
+            // A command is answered on its own, before the prompts that went with it.
+            const goesOn = this.unanswered.size > 0;
+            if (!goesOn) this.setBusy(false);
             this.emit();
             void this.readContext();
-            if (!stopped && waiting.length === 0) {
+            if (!stopped && !goesOn) {
               void notify({
                 title: this.title || 'Claude Code',
                 body: failed ? oneLine(`Stopped: ${this.error ?? 'error'}`, 180) : oneLine(reply.split('\n').find((line) => line.trim()) ?? '') || 'Finished',
