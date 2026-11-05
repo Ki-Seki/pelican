@@ -161,7 +161,7 @@ export async function claudeCodeTrusts(folder: string): Promise<boolean> {
 }
 
 // What the user answered in Pelican, by the folder the answer was for (the repository's top, as
-// Claude Code keeps its own), oldest first.
+// Claude Code keeps its own), oldest first; at most this many answers to trust.
 const MAX_CHOICES = 1000;
 const choicesFile = () => path.join(config.stateDir, 'trust.json');
 let choices: { file: string; folders: Map<string, TrustChoice> } | undefined;
@@ -214,7 +214,16 @@ export async function rememberChoice(folder: string, choice: TrustChoice): Promi
   const folders = await loadChoices();
   folders.delete(key);
   folders.set(key, choice);
-  while (folders.size > MAX_CHOICES) folders.delete(folders.keys().next().value!);
+  // Answers to trust are kept up to a number, the oldest going first (each scratch session gives
+  // one). "Use my settings only" is never let go of: the folder would count as trusted again,
+  // through the very sessions started that way.
+  let trusted = [...folders.values()].filter((kept) => kept === 'trusted').length;
+  for (const [folder, kept] of folders) {
+    if (trusted <= MAX_CHOICES) break;
+    if (kept !== 'trusted') continue;
+    folders.delete(folder);
+    trusted -= 1;
+  }
   await saveChoices(folders);
 }
 
