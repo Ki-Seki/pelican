@@ -47,11 +47,20 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/auth.ts` | The access token, the password and the sign-in cookie |
 | `src/server/app.ts` | The HTTP API, and the host, origin, request and sign-in checks in front of it |
 | `src/server/runner.ts` | Runs Claude Code through the Agent SDK, one process per active session |
+| `src/server/claude-code.ts` | Which Claude Code runs, its version, and whether it is signed in |
 | `src/server/history.ts` | Reads a transcript, across compactions, incrementally |
 | `src/server/feed.ts` | Delivers a session's new messages to the pages watching it |
+| `src/server/live.ts`, `waiting.ts` | Sessions other apps are running, from Claude Code's own registry, and when one waits for you |
+| `src/server/trust.ts` | Folder trust: what a folder would run, and whether it is trusted |
+| `src/server/phone.ts` | `pelican phone`: the phone's address and its one-time QR code |
+| `src/server/service.ts` | `pelican service`: the launchd agent or systemd unit |
+| `src/server/awake.ts` | Keeping the computer awake while Claude works |
+| `src/server/running.ts` | The note a running Pelican leaves, so `pelican token` and `pelican phone` find it |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
+| `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
+| `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `scripts/` | Build, development, the browser smoke test, the site, screenshots and icons |
 
 ## Releasing
@@ -63,6 +72,12 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 3. `gh release create v<x.y.z> --verify-tag --title v<x.y.z> --notes-file <the changelog section>`,
    with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
+Before the bump, move to the newest Agent SDK, which brings the newest Claude Code, once it passes
+the tests, the typecheck and the browser smoke test; read what changed in its `sdk.d.ts` and in
+Claude Code's changelog since the version before. Then bring the docs' Claude Code coverage table
+(`site/docs.html#coverage`) up to date, and the "checked on" dates of the comparison in
+`README.md`, `site/index.html` and `site/docs.html`.
+
 The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
 publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the
 `npm` environment, for a `v*` tag, may publish `pelican-cc`. The package is attached to the
@@ -72,8 +87,19 @@ release too. A release candidate goes to npm under the `next` tag, and a fix for
 
 ## Style
 
-Keep the interface calm: few colors, no decoration that does not carry meaning, and text that says
-what happens in plain words. In code, prefer a clear name to a comment, and write a comment for why,
-not what. The pictures in `docs/` come from `npm run screenshots`, `node scripts/video.mjs` (needs
-ffmpeg) and `node scripts/icons.mjs`; redraw them rather than editing the files. The site and its
-live demo build with `node scripts/site.mjs <dir>`.
+- Keep the interface calm: few colors, no decoration that does not carry meaning, plain words and
+  little text. Phone first, and good on a computer too.
+- Where Claude Code, in the terminal or in Claude Desktop, already has a way of doing something,
+  Pelican does it the same way and calls it the same name.
+- A setting lives where it takes effect: what belongs to one session in that session, what shapes
+  a list next to that list, and only what applies everywhere in Settings. Never the same option in
+  two places, and no sheet or menu explains what is plain to see.
+- The security model in [SECURITY.md](SECURITY.md) stays as strong, or gets stronger, with every
+  change.
+- Pelican is built for Claude Code alone: no code written for another tool that runs next to it.
+- English in code, interface and docs. Prefer a clear name to a comment, and write a comment for
+  why, not what.
+
+The pictures in `docs/` come from `npm run screenshots`, `node scripts/video.mjs` (needs ffmpeg)
+and `node scripts/icons.mjs`; redraw them rather than editing the files. The site and its live demo
+build with `node scripts/site.mjs <dir>`.
