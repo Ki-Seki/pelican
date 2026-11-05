@@ -231,16 +231,18 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     </>
   );
 
-  // On a phone the view's lowest row keeps clear of the home indicator: the bar saying Claude
-  // waits, else the comments, else a selection's Quote and Copy; the end of what scrolls, too.
-  const phone = !docked;
+  // The view's lowest row keeps clear of a phone's or a tablet's home indicator, also beside the
+  // conversation: the bar saying Claude waits (a phone's view has it), else the comments, else a
+  // selection's Quote and Copy; the end of what scrolls, too. A computer has no such edge (the
+  // inset is 0 there), so nothing moves.
+  const waits = !docked && Boolean(needsYou);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
-  const selectionFoot = useMemo(() => (foot ? { at: foot, safe: phone && comments.length === 0 && !needsYou } : undefined), [foot, phone, comments.length, needsYou]);
+  const selectionFoot = useMemo(() => (foot ? { at: foot, safe: comments.length === 0 && !waits } : undefined), [foot, comments.length, waits]);
 
   // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
   // now (⌘↵) sends them on their own.
   const footer = comments.length > 0 && (
-    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${phone && !needsYou ? 'pb-safe' : ''}`}>
+    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits ? '' : 'pb-safe'}`}>
       <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
         {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> {comments.length === 1 ? 'goes' : 'go'} with your next message</span>
       </span>
@@ -290,7 +292,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           </button>
         </div>
         <div className="shrink-0 px-4">{header}</div>
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-4">{body}</div>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
         <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>

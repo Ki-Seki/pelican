@@ -149,8 +149,8 @@ function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: num
 
 /**
  * Where Changes and files puts a file's selection bar: a row of its own under what scrolls, so
- * the file never scrolls under it; `safe`: the lowest row of a phone's view, clear of the home
- * indicator. A viewer with none keeps the bar at the foot of the file as it scrolls.
+ * the file never scrolls under it; `safe`: the lowest row of the view, clear of a phone's or a
+ * tablet's home indicator. A viewer with none keeps the bar at the foot of the file as it scrolls.
  */
 export const SelectionFoot = createContext<{ at: HTMLElement; safe: boolean } | undefined>(undefined);
 
@@ -349,7 +349,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>
           </LinesContext.Provider>
-          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
+          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-[max(0.375rem,env(safe-area-inset-bottom))]' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
         </>
       )}
       {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}

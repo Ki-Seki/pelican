@@ -99,9 +99,9 @@ from every app.
   marked in amber.
 - A file's Quote and Copy sit in a row of their own under the file, so nothing scrolls beneath
   them.
-- On a touch screen, search results and a step's file name are a finger tall; on a phone the
-  view's lowest row (Quote and Copy, Send now, or the bar saying Claude needs you) keeps clear of
-  the home indicator.
+- On a touch screen, search results and a step's file name are a finger tall, and the lowest row
+  of Changes and files (Quote and Copy, Send now, or the bar saying Claude needs you) keeps clear
+  of the home indicator, on a phone and beside the conversation on a tablet.
 - Esc in a comment on a file gives the keys back to the file, as on a diff, so the next Esc closes
   the view.
 

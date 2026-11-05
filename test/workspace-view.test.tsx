@@ -56,9 +56,11 @@ beforeAll(() => {
 const { Workspace } = await import('../src/web/components/Workspace');
 const { UnifiedDiff } = await import('../src/web/components/UnifiedDiff');
 const { WorkspaceChanges } = await import('../src/web/components/WorkspaceChanges');
+const { setComments } = await import('../src/web/lib/review');
 
 afterEach(() => {
   cleanup();
+  setComments(CWD, []);
   server.asked = [];
   server.diff = '';
   server.plain = false;
@@ -66,6 +68,8 @@ afterEach(() => {
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 
 describe('what Changes shows', () => {
   it('offers Uncommitted, since the branch split and each turn, and a turn ends with Rewind code', async () => {
@@ -184,6 +188,8 @@ describe('a diff read again while it is open', () => {
 });
 
 describe('a file’s Quote and Copy', () => {
+  /** Padded at least as deep as the home indicator, where there is one: 0 on a computer. */
+  const clear = (row: Element) => /\bpb-safe\b|env\(safe-area-inset-bottom\)/.test(row.className);
   function select(from: number, to: number) {
     const first = document.querySelector(`[data-line="${from}"]`)!;
     const last = document.querySelector(`[data-line="${to}"]`)!;
@@ -206,13 +212,34 @@ describe('a file’s Quote and Copy', () => {
     expect(bar.textContent).toContain('Lines 1–2');
     expect(bar.closest('.overflow-y-auto')).toBeNull();
     expect(bar.closest('[role="region"]')).toBe(screen.getByRole('region', { name: 'Changes and files' }));
-    expect(bar.classList.contains('pb-safe')).toBe(true);
+    expect(clear(bar)).toBe(true);
     // Below it, the bar saying Claude waits is the lowest row, and keeps clear itself.
     view.rerender(<QueryClientProvider client={new QueryClient()}><Workspace open cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} /></QueryClientProvider>);
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
     select(1, 2);
     const under = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
-    expect(under.classList.contains('pb-safe')).toBe(false);
-    expect(screen.getByText('Claude wants to run npm test').closest('button')!.classList.contains('pb-safe')).toBe(true);
+    expect(clear(under)).toBe(false);
+    expect(clear(screen.getByText('Claude wants to run npm test').closest('button')!)).toBe(true);
+  });
+
+  it('beside the conversation, on a tablet, keep clear of the home indicator as on a phone, as do Send now and the end of what scrolls', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const at = (node: React.ReactNode) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+    const client = new QueryClient();
+    const view = render(at(<Workspace open docked cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+    const pane = screen.getByRole('complementary', { name: 'Changes and files' });
+    expect(clear(pane.querySelector('.overflow-y-auto')!)).toBe(true);
+    // The conversation beside it says Claude waits: the selection's row is the pane's lowest.
+    select(1, 2);
+    const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    expect(bar.closest('aside')).toBe(pane);
+    expect(clear(bar)).toBe(true);
+    // Comments waiting: their row, with Send now, is the lowest.
+    act(() => setComments(CWD, [{ id: 'c1', path: 'src/a.ts', kind: 'same', line: 2, code: 'const b = 2;', note: 'Rename b' }]));
+    view.rerender(at(<Workspace open docked cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
+    expect(clear(screen.getByRole('button', { name: 'Send now' }).parentElement!)).toBe(true);
+    select(1, 2);
+    expect(clear((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe(false);
   });
 });
