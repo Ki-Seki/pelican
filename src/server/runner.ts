@@ -154,7 +154,7 @@ export function readableError(text: string): string {
 /** Text for a lock screen: one line, short, without control or direction-changing characters. */
 export function oneLine(text: string, max = 120): string {
   // eslint-disable-next-line no-control-regex
-  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 

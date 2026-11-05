@@ -2,7 +2,7 @@
  * Characters that change how text reads without being seen: zero-width ones, and direction
  * overrides and isolates. A command can read as an echo while the shell runs something else.
  */
-const HIDDEN = /[؜​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+const HIDDEN = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 
 /** The text with each such character shown as a token (⟨U+202E⟩), and whether there were any. */
 export function revealHidden(text: string): { text: string; hidden: boolean } {

@@ -599,7 +599,7 @@ describe('notifications', () => {
     expect(askedFor({ ...base, toolName: 'WebFetch', input: { url: 'https://docs.example.com/a?b' } }, '/w')).toBe('Fetch docs.example.com');
     expect(askedFor({ ...base, toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which database?' }] } }, '/w')).toBe('Which database?');
     expect(askedFor({ ...base, toolName: 'mcp__github__create_issue', input: {} }, '/w')).toBe('Use github · create_issue');
-    expect(oneLine('echo "‮⁦hidden⁩"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
+    expect(oneLine('echo "\u202e\u2066hidden\u2069"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
     expect(oneLine('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`);
   });
 });
