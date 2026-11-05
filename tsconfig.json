@@ -12,6 +12,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
+    "allowJs": true,
     "noEmit": true,
     "types": ["node", "vite/client"]
   },
