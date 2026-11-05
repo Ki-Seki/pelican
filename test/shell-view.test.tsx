@@ -72,15 +72,27 @@ describe('the commands a page knows of', () => {
 describe('a running command', () => {
   const view = (messages: ChatMessage[]): SessionView => ({ messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false });
 
-  it('shows its output and Stop, which stops it', () => {
+  it('shows its output and Stop, named for the command, which stops it', () => {
     const stop = vi.spyOn(api, 'stopShell').mockResolvedValue({ ok: true });
     act(() => handleShellEvent({ type: 'shells', sessionId: 's4', shells: [live({ output: 'Running 12 tests\n' })] }));
     render(<MessageList sessionId="s4" view={view([])} mode="normal" />);
     expect(screen.getByText('npm test')).toBeTruthy();
     expect(screen.getByText(/Running 12 tests/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    // Not the turn's own Stop, by the message box: this one ends the command.
+    fireEvent.click(screen.getByRole('button', { name: 'Stop npm test' }));
     expect(stop).toHaveBeenCalledWith('s4', 'run-1');
-    expect(screen.getByRole('button', { name: 'Stopping' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stopping npm test' })).toBeTruthy();
+  });
+
+  it('names a long or many-line command by its first line, cut short', () => {
+    const command = `cat <<'EOF' > notes.txt\n${'x'.repeat(200)}\nEOF`;
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's7', shells: [live({ id: 'r7', command })] }));
+    render(<MessageList sessionId="s7" view={view([])} mode="normal" />);
+    expect(screen.getByRole('button', { name: "Stop cat <<'EOF' > notes.txt" })).toBeTruthy();
+    cleanup();
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's8', shells: [live({ id: 'r8', command: `echo ${'y'.repeat(100)}` })] }));
+    render(<MessageList sessionId="s8" view={view([])} mode="normal" />);
+    expect(screen.getByRole('button', { name: `Stop echo ${'y'.repeat(54)}…` })).toBeTruthy();
   });
 
   it('gives way to its record, never both at once', () => {
@@ -92,6 +104,22 @@ describe('a running command', () => {
     rerender(<MessageList sessionId="s5" view={view(record)} mode="normal" />);
     expect(screen.getAllByText('npm test')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
+  it('once done and recorded, shows the end of a long output as it did while it ran, and Show all its start', () => {
+    const lines = Array.from({ length: 40 }, (_, i) => ` ✓ src/test-${i + 1}.test.ts (3 tests)`);
+    const output = `> vitest run\n${lines.join('\n')}\n\n Test Files  40 passed (40)\n      Tests  120 passed (120)`;
+    const record = [user('r9', '<bash-input>npm test</bash-input>'), user('o9', `<bash-stdout>${output}</bash-stdout><bash-stderr></bash-stderr>`)];
+    render(<MessageList sessionId="s9" view={view(record)} mode="normal" />);
+    const shown = () => screen.getByText(/Tests 120 passed/).textContent ?? '';
+    expect(shown()).toContain('src/test-40.test.ts');
+    expect(shown()).not.toContain('> vitest run');
+    expect(shown()).not.toContain('src/test-1.test.ts');
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(shown()).toContain('> vitest run');
+    expect(shown()).toContain('src/test-1.test.ts (3 tests)');
+    fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+    expect(shown()).not.toContain('> vitest run');
   });
 
   it('done while Claude works says it waits for the turn', () => {
