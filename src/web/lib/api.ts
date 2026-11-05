@@ -24,6 +24,8 @@ import type {
   TaskOutput,
   TreeEntry,
   UsageLimit,
+  Workflow,
+  WorkflowAgentPage,
 } from '../../shared/protocol';
 import { useSyncExternalStore } from 'react';
 
@@ -238,6 +240,12 @@ export const api = {
   defaults: (cwd?: string) => request<{ permissionMode: PermissionMode | null }>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   subagent: (id: string, agent: string) =>
     request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
+  /** A Workflow call's run, from the run's own files (or this Pelican's Claude, while it runs it). */
+  workflow: (id: string, call: string) =>
+    request<{ workflow: Workflow }>(`sessions/${encodeURIComponent(id)}/workflows/${encodeURIComponent(call)}`).then((r) => r.workflow),
+  /** The last messages of one workflow agent's transcript, or those before message `before`. */
+  workflowAgent: (id: string, call: string, agent: string, before?: number) =>
+    request<WorkflowAgentPage>(`sessions/${encodeURIComponent(id)}/workflows/${encodeURIComponent(call)}/agents/${encodeURIComponent(agent)}${before === undefined ? '' : `?before=${before}`}`),
   usage: () => request<{ limits: UsageLimit[] }>('usage').then((r) => r.limits),
   /** The plan's usage as Claude Code's /usage shows it, or null where plan limits do not apply. */
   planUsage: () => request<{ plan: PlanUsage | null }>('usage/plan').then((r) => r.plan),

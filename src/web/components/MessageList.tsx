@@ -19,6 +19,7 @@ import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PromptBody, QuoteAction } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
+import { WorkflowEnded } from './WorkflowCard';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
 
@@ -46,13 +47,18 @@ function Thinking({ text, live, defaultOpen = false }: { text: string; live?: bo
   );
 }
 
-type Segment = { kind: 'steps'; key: string; parts: Part[] } | Extract<Part, { kind: 'text' | 'image' }>;
+type Segment = { kind: 'steps'; key: string; parts: Part[] } | Extract<Part, { kind: 'text' | 'image' }> | { kind: 'workflow'; key: string; part: Extract<Part, { kind: 'tool' }> };
 
-/** Runs of tool calls and thinking become one block of steps between Claude's prose. */
+/**
+ * Runs of tool calls and thinking become one block of steps between Claude's prose. A workflow is
+ * a card of its own, never folded away among the steps.
+ */
 function segment(parts: Part[]): Segment[] {
   const out: Segment[] = [];
   for (const part of parts) {
-    if (part.kind === 'tool' || part.kind === 'thinking') {
+    if (part.kind === 'tool' && part.call.name === 'Workflow') {
+      out.push({ kind: 'workflow', key: part.key, part });
+    } else if (part.kind === 'tool' || part.kind === 'thinking') {
       const last = out.at(-1);
       if (last?.kind === 'steps') last.parts.push(part);
       else out.push({ kind: 'steps', key: part.key, parts: [part] });
@@ -147,6 +153,8 @@ const AssistantTurn = memo(function AssistantTurn({
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
           <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} view={view} />
+        ) : seg.kind === 'workflow' ? (
+          <ToolCallView key={seg.key} call={seg.part.call} cwd={cwd} running={running} defaultOpen={view === 'verbose'} />
         ) : seg.kind === 'text' ? (
           <Markdown key={seg.key} text={seg.text} className="my-2" />
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
@@ -411,6 +419,7 @@ function EditPrompt({ text, images, files, last, onCancel, onSend }: {
 /** `onNext`: the next step an error line offers, where it ends the conversation (Retry, or Compact). */
 function Notice({ item, onNext }: { item: Extract<Item, { kind: 'notice' }>; onNext?: () => void }) {
   const [open, setOpen] = useState(false);
+  if (item.workflow) return <WorkflowEnded {...item.workflow} />;
   if (item.tone === 'interrupt') {
     return <div className="flex items-center gap-2 text-[12px] text-faint"><span className="h-px flex-1 bg-line" />Interrupted<span className="h-px flex-1 bg-line" /></div>;
   }
@@ -557,10 +566,39 @@ function Compacted({ summary }: { summary: string }) {
   );
 }
 
+/** The start of a JSON string still streaming in, its escapes undone, up to where it has come. */
+function jsonStringStart(raw: string): string {
+  const escapes: Record<string, string> = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f' };
+  let out = '';
+  for (let i = 0; i < raw.length; i += 1) {
+    const c = raw[i]!;
+    if (c === '"') break;
+    if (c !== '\\') {
+      out += c;
+      continue;
+    }
+    const next = raw[i + 1];
+    if (next === undefined) break;
+    if (next === 'u') {
+      const hex = raw.slice(i + 2, i + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
+      out += String.fromCharCode(parseInt(hex, 16));
+      i += 5;
+    } else {
+      out += escapes[next] ?? next;
+      i += 1;
+    }
+  }
+  return out;
+}
+
 function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Record<string, unknown> {
   try {
     return JSON.parse(block.inputJson) as Record<string, unknown>;
   } catch {
+    // A workflow's script, as far as it came: its meta names it.
+    const script = block.name === 'Workflow' ? /"script"\s*:\s*"/.exec(block.inputJson) : null;
+    if (script) return { script: jsonStringStart(block.inputJson.slice(script.index + script[0].length)) };
     // Partial JSON: pull out the first string field so the row says what it is doing.
     const match = block.inputJson.match(/"(description|command|file_path|pattern|url|query)"\s*:\s*"((?:[^"\\]|\\.)*)/);
     return match ? { [match[1]!]: match[2]!.replace(/\\n/g, ' ') } : {};

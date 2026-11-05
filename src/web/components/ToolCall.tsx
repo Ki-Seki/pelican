@@ -14,6 +14,7 @@ import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
 import { loadsInPlace, Markdown } from './Markdown';
 import { STEP_LINK } from './PathLink';
+import { WorkflowCard } from './WorkflowCard';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
@@ -357,6 +358,8 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   }, [call]);
 
   if (call.name === 'TodoWrite' && !call.sameTasks) return <div className="my-1.5"><TodoList input={call.input} /></div>;
+  // A workflow, as Claude Code shows one: its phases and agents, never its script's first line.
+  if (call.name === 'Workflow') return <WorkflowCard call={call} {...(cwd ? { cwd } : {})} running={running} defaultOpen={defaultOpen} />;
   // Files and visuals only from calls that ran: a call Claude only wrote (one no app answered, or
   // one that failed) shows as a step, with its input as text.
   const ran = Boolean(call.result && !call.result.is_error);

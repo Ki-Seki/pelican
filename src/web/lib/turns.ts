@@ -1,6 +1,7 @@
 import { errorLine, nextStep } from '../../shared/errors';
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
 import { todosOf } from '../../shared/tasks';
+import { launchOf, parseTaskNotice, type TaskNotice, workflowOf } from '../../shared/workflows';
 
 export type ToolCall = {
   id: string;
@@ -9,7 +10,14 @@ export type ToolCall = {
   result?: ToolResultBlock;
   /** A TodoWrite that only moves the same tasks along, which a line says better than the whole list again. */
   sameTasks?: true;
+  /** A Workflow call: how Claude Code said its run ended, in the conversation. */
+  ended?: TaskNotice;
+  /** A Workflow call whose run a later call resumed (its id): that call's card shows the run. */
+  resumedBy?: string;
 };
+
+/** Where a notice about a workflow's end leads: its card, and what the line says of it. */
+export type WorkflowNotice = { toolUseId: string; name?: string; status?: TaskNotice['status']; durationMs?: number };
 
 export type Part =
   | { kind: 'text'; key: string; text: string }
@@ -38,6 +46,8 @@ export type Item =
     kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info' | 'error'; text: string; detail?: string;
     /** For an API error: what can be done about it from here. */
     next?: 'compact' | 'retry';
+    /** A workflow's end, shown in its card: the line leads there. */
+    workflow?: WorkflowNotice;
   }
   | { kind: 'compact'; key: string; summary: string }
   | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; timestamp?: number }
@@ -71,7 +81,7 @@ export function cleanOutput(text: string): string {
 
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
-  | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
+  | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string; task?: TaskNotice }
   | { kind: 'shell'; command: string; stdout: string; stderr: string }
   /** The output of the `!` command just before, in a message of its own, as Claude Code writes it. */
   | { kind: 'shell-output'; stdout: string; stderr: string };
@@ -132,11 +142,8 @@ function classifyUserText(raw: string): Classified | undefined {
     const clean = cleanOutput(stdout).trim();
     return clean ? { kind: 'notice', tone: 'output', text: clean } : undefined;
   }
-  if (text.startsWith('<task-notification>')) {
-    const summary = tag(text, 'summary') ?? 'Background task update';
-    const result = tag(text, 'result');
-    return { kind: 'notice', tone: 'task', text: summary, ...(result ? { detail: result } : {}) };
-  }
+  const task = parseTaskNotice(text);
+  if (task) return { kind: 'notice', tone: 'task', text: task.summary || 'Background task update', ...(task.result ? { detail: task.result } : {}), task };
   if (/^\[Request interrupted by user/.test(text)) return { kind: 'notice', tone: 'interrupt', text: 'Interrupted' };
   return { kind: 'user', text, images: [] };
 }
@@ -157,6 +164,9 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   let turn: Extract<Item, { kind: 'assistant' }> | undefined;
   let lastDay: string | undefined;
   let tasks: { names: string; done: boolean } | undefined;
+  /** Workflow calls so far, by id, for their ends to join them; and each run's calls, in order. */
+  const workflows = new Map<string, ToolCall>();
+  const runs = new Map<string, ToolCall[]>();
 
   const push = (item: Item, timestamp?: number) => {
     if (timestamp && item.kind === 'user') {
@@ -225,7 +235,24 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
           last.stderr = classified.stderr;
         }
       } else {
-        push({ ...classified, key: message.uuid });
+        // A workflow's end goes into its card; here a line names it and leads there. One from a
+        // Claude Code that found the run without its end gives way to the word of the one that ran it.
+        const { task, ...notice } = classified;
+        const call = task?.toolUseId ? workflows.get(task.toolUseId) : undefined;
+        if (call && task) {
+          if (!call.ended || call.ended.orphan || !task.orphan) call.ended = task;
+          const name = launchOf(call.result)?.name ?? workflowOf(call.input).name;
+          const { detail: _shownInTheCard, ...line } = notice;
+          push({
+            ...line,
+            key: message.uuid,
+            workflow: { toolUseId: call.id, ...(name ? { name } : {}), ...(task.status ? { status: task.status } : {}), ...(task.usage?.durationMs !== undefined ? { durationMs: task.usage.durationMs } : {}) },
+          });
+        } else {
+          push({ ...notice, key: message.uuid });
+        }
+        // Claude takes up a background task's end as a turn of its own.
+        if (task) turn = undefined;
       }
       continue;
     }
@@ -256,10 +283,18 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
           sameTasks = next.names === tasks?.names && !(next.done && !tasks.done);
           tasks = next;
         }
-        turn!.parts.push({ kind: 'tool', key, call: { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}), ...(sameTasks ? { sameTasks: true } : {}) } });
+        const call: ToolCall = { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}), ...(sameTasks ? { sameTasks: true } : {}) };
+        if (block.name === 'Workflow') {
+          workflows.set(block.id, call);
+          const runId = launchOf(result)?.runId;
+          if (runId) runs.set(runId, [...(runs.get(runId) ?? []), call]);
+        }
+        turn!.parts.push({ kind: 'tool', key, call });
       }
     });
   }
+  // A run resumed by a later call (the same run id) is that call's to show.
+  for (const calls of runs.values()) calls.slice(0, -1).forEach((call, i) => (call.resumedBy = calls[i + 1]!.id));
   return items;
 }
 

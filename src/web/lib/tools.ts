@@ -13,10 +13,12 @@ import {
   Plug,
   Search,
   SquareTerminal,
+  Workflow,
   Wrench,
 } from 'lucide-react';
 
 import { todosOf } from '../../shared/tasks';
+import { workflowOf } from '../../shared/workflows';
 
 export type ToolSummary = {
   icon: LucideIcon;
@@ -99,6 +101,11 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
       return { icon: ClipboardList, verb: 'Proposed a plan' };
     case 'Skill':
       return { icon: Wrench, verb: 'Skill', target: str(input.skill) ?? str(input.command) };
+    case 'Workflow': {
+      // As Claude Code names it: the script's description, else its name, never the script itself.
+      const { name, description } = workflowOf(input);
+      return { icon: Workflow, verb: 'Workflow', ...(description ?? name ? { target: description ?? name, prose: true } : {}) };
+    }
     default: {
       if (/(^|__)show_widget$/.test(name)) return { icon: ChartArea, verb: 'Drew', target: str(input.title)?.replace(/_/g, ' '), prose: true };
       if (name.startsWith('mcp__')) {

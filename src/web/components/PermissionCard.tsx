@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { revealHidden } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
+import { workflowOf } from '../../shared/workflows';
 import { api } from '../lib/api';
 import { describeTool } from '../lib/tools';
+import { fenced } from '../lib/workflows';
 import { Diff } from './Diff';
 import { Markdown } from './Markdown';
 
@@ -79,9 +81,48 @@ function useDecide(sessionId: string, request: PermissionRequest) {
 function headline(request: PermissionRequest, cwd: string | undefined): string {
   if (request.title) return request.title;
   if (request.toolName === 'EnterPlanMode') return 'Claude wants to plan before it changes anything';
+  if (request.toolName === 'Workflow') return 'Claude wants to run a dynamic workflow';
   const { verb } = describeTool(request.toolName, request.input, cwd);
   const plain = ['Read', 'Edit', 'Write', 'Run', 'Search', 'Find', 'Fetch', 'Search the web', 'Edit notebook'].includes(verb);
   return `Claude wants to ${plain ? verb.toLowerCase() : `use ${verb}`}`;
+}
+
+/**
+ * A workflow asked about as Claude Code asks: its phases, what running it costs, and its script a
+ * tap away.
+ */
+function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
+  const [raw, setRaw] = useState(false);
+  const { name, meta } = workflowOf(input);
+  const script = str(input.script);
+  const phases = meta?.phases ?? [];
+  return (
+    <div className="space-y-2 text-[13px]">
+      {name && <div className="font-mono text-[12px] text-muted">{revealHidden(name).text}</div>}
+      {phases.length > 0 && (
+        <div>
+          <div className="text-muted">This dynamic workflow will spin up multiple subagents across the following phases:</div>
+          <ol className="mt-1 space-y-0.5">
+            {phases.map((phase, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="w-3.5 shrink-0 text-right text-faint tabular-nums">{i + 1}.</span>
+                <span className="min-w-0">{revealHidden(phase.title).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail).text}</span>}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      <div className="text-[12.5px] leading-snug text-faint">
+        Dynamic workflows can use a lot of tokens quickly by running many subagents in parallel, which counts against your usage limit. Stop a running workflow at any time from its card.
+      </div>
+      {script && (
+        <div>
+          <button type="button" aria-expanded={raw} onClick={() => setRaw((v) => !v)} className="text-[12.5px] text-faint hover:text-fg">{raw ? 'Hide raw script' : 'View raw script'}</button>
+          {raw && <Markdown text={fenced(revealHidden(script).text, 'js')} className="mt-1 text-[13px]" />}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request: PermissionRequest; cwd?: string }) {
@@ -95,10 +136,13 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target) : undefined;
-  const raw = !edit && !command && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
+  const workflow = request.toolName === 'Workflow';
+  const raw = !edit && !command && !workflow && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
   const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
-  const hidden = [command, target, raw, head, about, server, always].some((text) => text?.hidden);
+  // A workflow's script shows apart, but what hides in it is warned of all the same.
+  const asked = workflow ? revealHidden(JSON.stringify(input)) : undefined;
+  const hidden = [command, target, raw, asked, head, about, server, always].some((text) => text?.hidden);
 
   const allow = <Button kind={request.defaultToNo ? 'secondary' : 'primary'} disabled={busy} onClick={() => decide({ behavior: 'allow' })}>Allow</Button>;
   const deny = <Button kind={request.defaultToNo ? 'primary' : 'quiet'} disabled={busy} onClick={() => setDenying(true)}>Deny</Button>;
@@ -117,6 +161,8 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
       <div className="mt-2 max-h-[34dvh] overflow-y-auto">
         {edit ? (
           <Diff before={edit.before} after={edit.after} maxLines={160} />
+        ) : workflow ? (
+          <WorkflowAsk input={input} />
         ) : command ? (
           <pre className="rounded-lg bg-chip px-3 py-2 font-mono text-[12.5px] whitespace-pre-wrap break-words">{command.text}</pre>
         ) : raw ? (
