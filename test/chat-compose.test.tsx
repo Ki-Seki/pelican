@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment, ChatMessage, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
 
@@ -109,14 +109,23 @@ const { loadDraft } = await import('../src/web/lib/drafts');
 const { setPrefs } = await import('../src/web/lib/prefs');
 const { commentsOf, setComments } = await import('../src/web/lib/review');
 const { setRun } = await import('../src/web/lib/store');
+const { goTo } = await import('../src/web/lib/workspace-route');
 
-afterEach(() => {
+/** The address with Changes and files at a file of the folder, as a path in the conversation opens it. */
+function atFile(id: string, path: string) {
+  history.replaceState(null, '', `/?s=${id}`);
+  goTo({ tab: 'files', path }, false);
+}
+
+afterEach(async () => {
   cleanup();
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
   Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
-  // A view of Changes and files left open keeps its step in the address.
+  // A view of Changes and files left open keeps its step in the address; one closed on a phone
+  // goes back through the history a moment later, which must land before the next test begins.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   history.replaceState(null, '', '/');
 });
 
@@ -360,7 +369,7 @@ describe('line comments, as in Claude Desktop', () => {
   it('belong to the session they were written in: another session in the folder neither shows nor sends them', async () => {
     media['(min-width: 1024px)'] = true;
     setPrefs({ workspacePane: true });
-    history.replaceState(null, '', `/?s=${SESSION}&w=files&p=src%2Fa.ts`);
+    atFile(SESSION, 'src/a.ts');
     try {
       session();
       await loaded();
@@ -480,6 +489,86 @@ describe('Commit, Push and Create PR', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }));
     await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
     expect(server.sent).toEqual([]);
+  });
+});
+
+describe('a file open in Changes and files', () => {
+  const open = async () => {
+    media['(min-width: 1024px)'] = true;
+    setPrefs({ workspacePane: true });
+    atFile(SESSION, 'src/a.ts');
+    session();
+    await loaded();
+    fireEvent.change(box(), { target: { value: 'First this.' } });
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    return screen.getByRole('complementary', { name: 'Changes and files' });
+  };
+  afterEach(() => setPrefs({ workspacePane: false }));
+
+  it('quotes the lines selected above the message box, as a quote waits, leaving what is typed', async () => {
+    const pane = await open();
+    const range = document.createRange();
+    range.setStart(document.querySelector('[data-line="1"]')!.lastChild!, 0);
+    range.setEnd(document.querySelector('[data-line="2"]')!.lastChild!, 1);
+    act(() => {
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    fireEvent.click(await within(pane).findByRole('button', { name: 'Quote' }));
+    const quotes = await screen.findByRole('list', { name: 'Quotes' });
+    expect(within(quotes).getByText('a.ts:1-2')).toBeTruthy();
+    expect(box().value).toBe('First this.');
+    getSelection()!.removeAllRanges();
+  });
+
+  it('mentions the file in the message box, after what is typed', async () => {
+    const pane = await open();
+    fireEvent.click(within(pane).getByRole('button', { name: 'Mention' }));
+    await waitFor(() => expect(box().value).toBe('First this. @src/a.ts '));
+    expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+  });
+});
+
+describe('Ctrl+O', () => {
+  // A session of its own, whose conversation ends on what Claude thought and ran.
+  const THOUGHT = '88888888-2222-4333-8444-555555555555';
+  const thinking = 'The owners lookup runs once per row.';
+  const output = 'def export_rows(batch):';
+  beforeEach(() => {
+    server.after = [
+      { uuid: 'a1', role: 'assistant', blocks: [{ type: 'thinking', thinking }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/code/app/export.py' } }], timestamp: Date.now() - 50_000 },
+      { uuid: 'r1', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 't1', content: output }], timestamp: Date.now() - 49_000 },
+      { uuid: 'a2', role: 'assistant', blocks: [{ type: 'text', text: 'Each row asks for its owner.' }], timestamp: Date.now() - 48_000 },
+    ];
+  });
+  const ctrlO = (extra: Partial<KeyboardEventInit> = {}) => act(() => {
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true, ...extra });
+  });
+
+  it('steps the conversation through Normal, Thinking and Verbose, as in Claude Desktop', async () => {
+    session(THOUGHT);
+    await screen.findByText('Each row asks for its owner.');
+    expect(screen.queryByText(thinking)).toBeNull();
+    ctrlO();
+    expect(screen.getByText(thinking)).toBeTruthy();
+    expect(screen.queryByText(output)).toBeNull();
+    ctrlO();
+    expect(screen.getByText(new RegExp(output.replace(/[()]/g, '\\$&')))).toBeTruthy();
+    ctrlO();
+    expect(screen.queryByText(thinking)).toBeNull();
+  });
+
+  it('leaves the view as it is with another key held, or with a sheet open', async () => {
+    session(THOUGHT);
+    await screen.findByText('Each row asks for its owner.');
+    ctrlO({ shiftKey: true });
+    ctrlO({ metaKey: true });
+    expect(screen.queryByText(thinking)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    await screen.findByRole('dialog');
+    ctrlO();
+    expect(screen.queryByText(thinking)).toBeNull();
   });
 });
 
