@@ -79,10 +79,11 @@ async function claudeWorkedIn(dir: string): Promise<void> {
   await writeFile(path.join(project, `${id}.jsonl`), `${JSON.stringify(line)}\n`);
 }
 
+/** The stand-in Claude's whole note: it writes line by line, and git= comes last. */
 const waitFor = async (file: string): Promise<string> => {
   for (let i = 0; i < 60; i += 1) {
     const text = await readFile(file, 'utf8').catch(() => '');
-    if (text) return text;
+    if (/^git=/m.test(text)) return text;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return '';
