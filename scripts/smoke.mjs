@@ -1,6 +1,7 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
-// HTTP error: the list, its sheets, and every session with its sheets, on a phone and wide, light
-// and dark. Runs in CI after the build, and before the site is published.
+// HTTP error: the list, its sheets, a new session in another folder, and every session with its
+// sheets, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
+// published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
 // CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken.
@@ -79,7 +80,34 @@ async function press(page, label, where) {
   await page.waitForTimeout(150);
 }
 
-/** The list, its sheets, and every session with its sheets. */
+/**
+ * + and then a folder of the new session's own, through its folder sheet: Browse folders…, a
+ * folder there, Start here. The empty chat then asks about a folder no session is in.
+ */
+async function startElsewhere(page, where) {
+  const sheet = () => page.getByRole('dialog').last();
+  const steps = [
+    ['New session', () => page.getByRole('button', { name: 'New session', exact: true }).first()],
+    ['Folder', () => page.locator('button[aria-label^="Folder: "]').first()],
+    ['Browse folders…', () => sheet().getByRole('button', { name: 'Browse folders…', exact: true })],
+    ['code', () => sheet().getByRole('button', { name: 'code', exact: true })],
+    ['Start here', () => sheet().getByRole('button', { name: 'Start here', exact: true })],
+  ];
+  for (const [label, find] of steps) {
+    const button = find();
+    // The chat loads on demand, and a folder's listing arrives after the tap that asks for it.
+    if (!(await button.waitFor({ timeout: 5000 }).then(() => true, () => false))) {
+      notes.push(`${where}: no "${label}" button`);
+      return;
+    }
+    await button.click();
+  }
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(300);
+  if (!(await page.locator('button[aria-label="Folder: ~/code"]').count())) problems.push(`${where}: the new session does not start in ~/code`);
+}
+
+/** The list, its sheets, a new session in another folder, and every session with its sheets. */
 async function driveApp(browser, base, sessions) {
   const titles = [...new Set(sessions.map((s) => s.title).filter(Boolean))].slice(0, 3);
   for (const [size, options] of Object.entries(SIZES)) {
@@ -96,6 +124,8 @@ async function driveApp(browser, base, sessions) {
         await press(page, label, `app, ${size}`);
         await page.goto(base, { waitUntil: 'networkidle' });
       }
+      at = 'a new session in another folder';
+      await startElsewhere(page, `app, ${size}`);
       for (const session of sessions) {
         at = `session ${session.id}`;
         await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
