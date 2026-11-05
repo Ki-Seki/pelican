@@ -107,9 +107,11 @@ from every app.
   session's. Their text is cut between characters as they show, and sooner where those hold many
   code points (one letter can carry any number of accents), so a notification stays within the
   4 KB a push service carries.
-- Export as Markdown has the conversation as it shows here: `!` commands with their output and
-  `/` commands as typed, without the tags, notes and summaries Claude Code and Pelican add for
-  Claude, such as a side chat's note with each question.
+- Export as Markdown has the conversation as it shows here: `!` and `/` commands as typed, as
+  code, with their output; the files and pictures sent with a prompt; Claude Code's own lines,
+  such as a background task's note, Interrupted, a failed request or a hook's word; and none of
+  the tags, notes and summaries Claude Code and Pelican add for Claude, such as a side chat's note
+  with each question.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
 - A finished `!` command shows the end of its output, as it did while it ran; Show all shows the
