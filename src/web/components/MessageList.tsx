@@ -435,7 +435,7 @@ function readableSummary(summary: string): string {
 /** A `!` command someone ran in the session, with its output. */
 function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const [all, setAll] = useState(false);
-  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').trimEnd(), [item.stdout, item.stderr]);
+  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
   const long = output.split('\n').length > 14 || output.length > 1600;
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
@@ -467,7 +467,7 @@ function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShe
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [shell.done]);
-  const output = useMemo(() => cleanOutput(shell.output).trimEnd(), [shell.output]);
+  const output = useMemo(() => cleanOutput(shell.output).replace(/^\s*\n/, '').trimEnd(), [shell.output]);
   const body = useRef<HTMLPreElement>(null);
   useLayoutEffect(() => {
     if (body.current) body.current.scrollTop = body.current.scrollHeight;

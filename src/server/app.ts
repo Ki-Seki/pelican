@@ -17,6 +17,7 @@ import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
+import { demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
@@ -658,6 +659,9 @@ app.post('/api/sessions/:id/tasks/:task/stop', async (c) => {
 
 /** The end of what a background command printed, read while it runs. */
 app.get('/api/sessions/:id/tasks/:task/output', async (c) => {
+  // The demo's command prints what it would have.
+  const demo = config.demo ? demoTaskOutput(c.req.param('id'), c.req.param('task')) : undefined;
+  if (demo) return c.json(demo);
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Claude is not running in this session' }, 409);
   return c.json(await run.taskOutput(c.req.param('task')));

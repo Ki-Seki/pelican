@@ -244,7 +244,7 @@ function BackgroundTasks({ sessionId, tasks, scheduled, onCancel }: {
       {open ? (
         <div className="rounded-2xl border border-line bg-panel py-1">
           <button type="button" onClick={() => setOpen(false)} className="flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted hover:text-fg">
-            <span className="min-w-0 flex-1 truncate">{tasks.length} background tasks</span>
+            <span className="min-w-0 flex-1 truncate">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}{scheduled.length > 0 ? ` · ${scheduled.length} scheduled` : ''}</span>
             <ChevronDown className="size-4 shrink-0" />
           </button>
           <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}{scheduled.map(check)}</div>

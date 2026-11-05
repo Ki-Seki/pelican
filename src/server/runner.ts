@@ -39,7 +39,7 @@ import type {
 } from '../shared/protocol.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
-import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
+import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
@@ -1201,13 +1201,13 @@ export function runIn(cwd: string): SessionRun | undefined {
 
 /** Status of a session this app runs; undefined when it has no Claude process here. */
 export function runStatus(sessionId: string): SessionStatus | undefined {
-  if (config.demo) return sessionId === DEMO_WAITING_SESSION ? 'waiting' : undefined;
+  if (config.demo) return demoRunStatus(sessionId);
   return getRun(sessionId)?.status();
 }
 
 /** Background work running in a session this app runs (see SessionRun.backgroundCount); 0 for none. */
 export function runTasks(sessionId: string): number {
-  if (config.demo) return 0;
+  if (config.demo) return demoRunTasks(sessionId);
   return getRun(sessionId)?.backgroundCount ?? 0;
 }
 

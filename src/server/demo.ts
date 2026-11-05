@@ -4,8 +4,9 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import type { ModelOption, RunState } from '../shared/protocol.js';
+import type { ModelOption, RunState, SessionStatus, TaskOutput } from '../shared/protocol.js';
 import { config } from './config.js';
+import type { LiveProcess } from './live.js';
 import { SETTINGS_SCREENSHOT } from './demo-image.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 
@@ -20,7 +21,8 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 
 type Block = Record<string, unknown>;
-type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number };
+/** `model` and `extra`: what Claude Code writes on rows that are not a reply of the model's own (an API error). */
+type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number; model?: string; extra?: Record<string, unknown> };
 
 const tool = (id: string, name: string, input: Record<string, unknown>): Block => ({ type: 'tool_use', id, name, input });
 const result = (id: string, content: string, isError = false): Block => ({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) });
@@ -309,6 +311,146 @@ const DEMO_FILES: Record<string, string[]> = {
   'docs-site': ['README.md', 'docs/releases.md'],
 };
 
+// ---- What runs on and what waits (0.4.0): a command still running after its turn, a turn that
+// ---- stopped on an API error, and a session waiting for an answer in the terminal.
+
+const DEV_SERVER: DemoSession = {
+  id: 'c4b7d2e9-8888-4c8d-9e1f-000000000010',
+  title: 'Try the dark theme on my phone',
+  project: 'acme-web',
+  branch: 'feat/dark-theme',
+  rows: () => {
+    const t = Date.now() - 41 * MIN;
+    return [
+      { role: 'user', at: t, content: 'Start the dev server so I can try the dark theme on my phone.' },
+      { role: 'assistant', at: t + 4000, content: [tool('d1', 'Bash', { command: 'npm run dev -- --host', description: 'Start the dev server', run_in_background: true })] },
+      { role: 'user', at: t + 6000, content: [result('d1', 'Command running in background with ID: bash_1')] },
+      {
+        role: 'assistant',
+        at: t + 11000,
+        content: [text('The dev server is up. On your phone, open **http://192.168.1.24:5173** and switch the theme under Settings › Display.\n\nIt keeps running after this; stop it when you are done.')],
+      },
+    ];
+  },
+};
+
+/** What the dev server printed, for its Output sheet. */
+const DEV_SERVER_OUTPUT = '> acme-web@1.4.0 dev\n> vite --host\n\n  VITE v7.1.4  ready in 412 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: http://192.168.1.24:5173/\n';
+
+const GETTING_STARTED = `# Getting started
+
+Install the CLI, then sign in:
+
+\`\`\`
+npm install -g acme-cli
+acme login
+\`\`\`
+
+Your first project is created for you. Open it with \`acme open\`, and invite your team from Settings.
+`;
+
+const STOPPED_ON_ERROR: DemoSession = {
+  id: 'e6f9a3b1-9999-4e9f-a0b2-000000000011',
+  title: 'Proofread the getting started guide',
+  project: 'docs-site',
+  branch: 'main',
+  rows: (cwd) => {
+    const t = Date.now() - 2 * HOUR - 12 * MIN;
+    return [
+      { role: 'user', at: t, content: 'Proofread docs/getting-started.md. Fix typos only, keep the wording.' },
+      {
+        role: 'assistant',
+        at: t + 3000,
+        content: [
+          { type: 'thinking', thinking: 'Typos only, so sentences stay as they are even where I would phrase them differently. I will read the whole guide before changing anything.', signature: 'demo' },
+          tool('e1', 'Read', { file_path: `${cwd}/docs/getting-started.md` }),
+        ],
+      },
+      { role: 'user', at: t + 4000, content: [result('e1', numbered(GETTING_STARTED.trimEnd()))] },
+      // Claude Code's note that the call failed, written in place of a reply.
+      {
+        role: 'assistant',
+        at: t + 70000,
+        model: '<synthetic>',
+        extra: { isApiErrorMessage: true, error: 'overloaded' },
+        content: [text('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')],
+      },
+    ];
+  },
+};
+
+const WAITING_IN_TERMINAL: DemoSession = {
+  id: 'f7a1b4c2-aaaa-4fa1-b2c3-000000000012',
+  title: 'Clean up old exports',
+  project: 'data-pipeline',
+  branch: 'main',
+  rows: () => {
+    const t = Date.now() - 7 * MIN;
+    return [
+      { role: 'user', at: t, content: 'Delete the exports older than 30 days, but tell me how many first.' },
+      { role: 'assistant', at: t + 4000, content: [tool('w1', 'Bash', { command: "find exports -name '*.csv' -mtime +30 | wc -l", description: 'Count exports older than 30 days' })] },
+      { role: 'user', at: t + 5000, content: [result('w1', '     214')] },
+      {
+        role: 'assistant',
+        at: t + 9000,
+        content: [
+          text('214 exports are older than 30 days. Deleting them now.'),
+          tool('w2', 'Bash', { command: "find exports -name '*.csv' -mtime +30 -delete", description: 'Delete exports older than 30 days' }),
+        ],
+      },
+    ];
+  },
+};
+
+SESSIONS.push(DEV_SERVER, STOPPED_ON_ERROR, WAITING_IN_TERMINAL);
+DEMO_FILES['docs-site']!.push('docs/getting-started.md');
+FILE_TEXT['docs-site/docs/getting-started.md'] = GETTING_STARTED;
+
+const DEV_TASK = { id: 'bash_1', description: 'Start the dev server', type: 'local_bash', output: true };
+
+/** The dev server Claude left running: its session is idle, with one task. */
+function devServerRun(sessionId: string): RunState | undefined {
+  if (sessionId !== DEV_SERVER.id) return undefined;
+  return {
+    sessionId,
+    cwd: path.join(config.home, 'code', DEV_SERVER.project),
+    busy: false,
+    settings: { model: 'default', effort: 'high', permissionMode: 'default' },
+    partial: [],
+    permissions: [],
+    tasks: [DEV_TASK],
+    lastTurn: { durationMs: 11_000, outputTokens: 184 },
+    context: { percent: 12, tokens: 24_000, max: 200_000 },
+  };
+}
+
+/** What a demo task printed, for its Output sheet. */
+export function demoTaskOutput(sessionId: string, taskId: string): TaskOutput | undefined {
+  return sessionId === DEV_SERVER.id && taskId === DEV_TASK.id ? { output: DEV_SERVER_OUTPUT, truncated: false } : undefined;
+}
+
+/** Sessions other apps have: one at work in Claude Desktop, one waiting in the terminal for a permission. */
+export function demoLiveProcesses(): Map<string, LiveProcess> {
+  return new Map<string, LiveProcess>([
+    [DEMO_LIVE_SESSION, { app: 'Claude Desktop', busy: true }],
+    [WAITING_IN_TERMINAL.id, { app: 'the terminal', busy: true, waiting: 'permission prompt', waitingSince: Date.now() - 6 * MIN }],
+  ]);
+}
+
+/** What the demo's own runs are doing, as runStatus says it for a real one. */
+export function demoRunStatus(sessionId: string): SessionStatus | undefined {
+  const run = demoRunState(sessionId);
+  return run && (run.permissions.length > 0 ? 'waiting' : run.busy ? 'running' : 'idle');
+}
+
+/** Work a demo run has going between turns, as runTasks counts it. */
+export function demoRunTasks(sessionId: string): number {
+  const run = demoRunState(sessionId);
+  return run && !run.busy ? (run.tasks?.length ?? 0) + (run.scheduled?.length ?? 0) : 0;
+}
+
+// ---- End of what runs on and what waits.
+
 /** Writes the demo home and points the config (and the Claude Agent SDK) at it. */
 export async function prepareDemo(): Promise<void> {
   const root = path.join(config.stateDir, 'demo');
@@ -332,11 +474,11 @@ export async function prepareDemo(): Promise<void> {
     for (const row of session.rows(cwd)) {
       const uuid = randomUUID();
       const message = row.role === 'assistant'
-        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: row.content }
+        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: row.model ?? 'claude-opus-5-5', content: row.content }
         : { role: 'user', content: row.content };
       lines.push(JSON.stringify({
         parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId: session.id, version: '2.1.318',
-        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(),
+        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...row.extra,
       }));
       parent = uuid;
     }
@@ -360,6 +502,8 @@ export const DEMO_MODELS: ModelOption[] = [
 
 /** The first demo session waits for an approval; another one is busy in Claude Desktop. */
 export function demoRunState(sessionId: string): RunState | undefined {
+  const devServer = devServerRun(sessionId);
+  if (devServer) return devServer;
   const first = SESSIONS[0]!;
   if (sessionId !== first.id) return undefined;
   const cwd = path.join(config.home, 'code', first.project);
@@ -386,5 +530,5 @@ export function demoRunState(sessionId: string): RunState | undefined {
   };
 }
 
-export const DEMO_LIVE_SESSION = SESSIONS[1]!.id;
-export const DEMO_WAITING_SESSION = SESSIONS[0]!.id;
+/** The session Claude Desktop is busy with. */
+const DEMO_LIVE_SESSION = SESSIONS[1]!.id;
