@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import type { LiveShell, ServerEvent, ShellResult } from '../shared/protocol.js';
+import type { LiveShell, ServerEvent } from '../shared/protocol.js';
 import { feedFor } from './feed.js';
 import { ensureRun, getRun } from './runner.js';
-import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, startCommand } from './shell.js';
+import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, type ShellResult, startCommand } from './shell.js';
 
 /**
  * The `!` commands running in each session, shown to its pages as their output comes, and added to
@@ -81,15 +81,20 @@ async function turnOver(sessionId: string): Promise<void> {
  * writes it, and Claude answers it then.
  */
 async function record(sessionId: string, cwd: string, id: string, result: ShellResult): Promise<void> {
-  await turnOver(sessionId);
-  // Pelican is closing its Claude processes: none is started again for this.
-  if (shuttingDown) return;
-  const settings = await bashModeSettings(cwd);
-  const respond = result.endedBy === undefined && settings.respond;
-  const toClaude = await forClaude(sessionId, result, settings.inlineMax);
-  const run = await ensureRun(sessionId);
-  // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
-  await run.appendShell(toClaude, respond && !run.busy, id);
+  try {
+    await turnOver(sessionId);
+    // Pelican is closing its Claude processes: none is started again for this.
+    if (shuttingDown) return;
+    const settings = await bashModeSettings(cwd);
+    const respond = result.endedBy === undefined && settings.respond;
+    const toClaude = await forClaude(sessionId, result, settings.inlineMax);
+    const run = await ensureRun(sessionId);
+    // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
+    await run.appendShell(toClaude, respond && !run.busy, id);
+  } finally {
+    // What was kept of its output past the start (a file with no name) goes once it is recorded.
+    result.output.release();
+  }
 }
 
 /**
