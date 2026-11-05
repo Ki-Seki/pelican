@@ -13,6 +13,7 @@ import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, use
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
+import { UsageSheet } from './Usage';
 
 const isLoopback = (host: string) => host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host.startsWith('127.');
 
@@ -35,6 +36,7 @@ export function SettingsSheet({
   notifications,
   onToggleNotifications,
   onSignOut,
+  onOpenSession,
 }: {
   open: boolean;
   onClose: () => void;
@@ -42,6 +44,8 @@ export function SettingsSheet({
   notifications: NotificationState;
   onToggleNotifications: () => void;
   onSignOut: () => void;
+  /** Opens a session from the usage page's list. */
+  onOpenSession?: (id: string) => void;
 }) {
   const prefs = usePrefs();
   const { data: models } = useQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000, enabled: open });
@@ -60,6 +64,10 @@ export function SettingsSheet({
   const [defaults, setDefaults] = useState(newSessionDefaults);
   const [modelOpen, setModelOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  useEffect(() => {
+    if (!open) setUsageOpen(false);
+  }, [open]);
   const keep = (next: RunSettings) => {
     setDefaults(next);
     saveDefaults(next);
@@ -72,6 +80,30 @@ export function SettingsSheet({
   // On this computer's own address, the phone needs another one: the server's, when it knows one.
   const onLoopback = isLoopback(location.hostname);
   const { data: phoneAddress } = useQuery({ queryKey: ['phone-address'], queryFn: api.phoneAddress, enabled: open && onLoopback && !info?.demo, staleTime: 60_000 });
+  // The plan's limits, here and at the top of the usage page, where on a plan they matter most.
+  const planBars = windows.length > 0 || plan?.extra ? (
+    <>
+      {windows.map((bar) => <UsageBar key={bar.key} bar={bar} />)}
+      {plan?.extra && (
+        plan.extra.enabled ? (
+          <UsageBar
+            bar={{
+              key: 'extra',
+              label: 'Extra usage this month',
+              ...(typeof plan.extra.utilization === 'number' ? { utilization: plan.extra.utilization } : {}),
+              ...(typeof plan.extra.usedCents === 'number' ? {
+                detail: typeof plan.extra.limitCents === 'number'
+                  ? `${money(plan.extra.usedCents, plan.extra.currency)} of ${money(plan.extra.limitCents, plan.extra.currency)}`
+                  : `${money(plan.extra.usedCents, plan.extra.currency)} spent`,
+              } : {}),
+            }}
+          />
+        ) : (
+          <div className="flex items-baseline justify-between px-3 py-1.5 text-[13px]"><span>Extra usage</span><span className="text-[12px] text-faint">Off</span></div>
+        )
+      )}
+    </>
+  ) : undefined;
   return (
     <Sheet open={open} onClose={onClose} title="Settings" done>
       <SheetHeading>Appearance</SheetHeading>
@@ -143,7 +175,7 @@ export function SettingsSheet({
         />
       ))}
 
-      {(account || windows.length > 0 || plan?.extra) && <SheetHeading>Account</SheetHeading>}
+      <SheetHeading>Account</SheetHeading>
       {account && (
         <div className="px-3 pb-1 text-[13px] leading-relaxed text-muted">
           {account.email && <span className="text-fg">{account.email}</span>}
@@ -151,28 +183,11 @@ export function SettingsSheet({
           {account.organization && <div className="text-faint">{account.organization}</div>}
         </div>
       )}
-      {windows.map((bar) => <UsageBar key={bar.key} bar={bar} />)}
-      {plan?.extra && (
-        plan.extra.enabled ? (
-          <UsageBar
-            bar={{
-              key: 'extra',
-              label: 'Extra usage this month',
-              ...(typeof plan.extra.utilization === 'number' ? { utilization: plan.extra.utilization } : {}),
-              ...(typeof plan.extra.usedCents === 'number' ? {
-                detail: typeof plan.extra.limitCents === 'number'
-                  ? `${money(plan.extra.usedCents, plan.extra.currency)} of ${money(plan.extra.limitCents, plan.extra.currency)}`
-                  : `${money(plan.extra.usedCents, plan.extra.currency)} spent`,
-              } : {}),
-            }}
-          />
-        ) : (
-          <div className="flex items-baseline justify-between px-3 py-1.5 text-[13px]"><span>Extra usage</span><span className="text-[12px] text-faint">Off</span></div>
-        )
-      )}
+      {planBars}
       {account && windows.length === 0 && !plan?.extra && (
         <p className="px-3 text-[12px] leading-snug text-faint">{plan === null ? 'No plan limits apply to this account (an API key, Bedrock or Vertex).' : 'Usage limits show up here after Claude has worked in Pelican.'}</p>
       )}
+      <SheetOption label="Usage and activity" trailing={<ChevronRight className="size-4 text-faint" />} onSelect={() => setUsageOpen(true)} />
 
       {!info?.demo && (
         <>
@@ -229,6 +244,7 @@ export function SettingsSheet({
         model={model}
         onPick={(permissionMode) => keep({ ...defaults, permissionMode })}
       />
+      <UsageSheet open={open && usageOpen} onClose={() => setUsageOpen(false)} limits={planBars} {...(onOpenSession ? { onOpenSession } : {})} />
     </Sheet>
   );
 }

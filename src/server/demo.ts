@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import type { ModelOption, RunState } from '../shared/protocol.js';
 import { config } from './config.js';
 import { SETTINGS_SCREENSHOT } from './demo-image.js';
+import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 
 /**
@@ -331,17 +332,19 @@ export async function prepareDemo(): Promise<void> {
     const lines: string[] = [JSON.stringify({ type: 'custom-title', customTitle: session.title, sessionId: session.id })];
     for (const row of session.rows(cwd)) {
       const uuid = randomUUID();
+      const { usage, ...meta } = demoRowUsage(session.id, row.role);
       const message = row.role === 'assistant'
-        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: row.content }
+        ? { id: `msg_demo_${uuid.slice(0, 8)}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: row.content, ...(usage ? { usage } : {}) }
         : { role: 'user', content: row.content };
       lines.push(JSON.stringify({
         parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId: session.id, version: '2.1.318',
-        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(),
+        gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...meta,
       }));
       parent = uuid;
     }
     await writeFile(path.join(dir, `${session.id}.jsonl`), `${lines.join('\n')}\n`);
   }
+  await writeDemoUsage(root, claudeHome);
   config.home = root;
   config.claudeHome = claudeHome;
   // Its own config and state too: the demo never reads or writes your password, token or push keys.

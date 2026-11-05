@@ -9,6 +9,7 @@ import {
 } from '../shared/usage.js';
 import { config } from './config.js';
 import { connect } from './feed.js';
+import { folderKind } from './folders.js';
 import { openRegular } from './open.js';
 import { limiter } from './transcripts.js';
 
@@ -795,6 +796,14 @@ export type Titles = (ids: string[]) => Promise<Map<string, SessionInfo>>;
 
 const projectName = (cwd: string) => path.basename(cwd) || cwd;
 
+/** Throwaway folders are one project each kind: the scratch folders, and the system's temp folders. */
+const SCRATCH = 'scratch:';
+const TEMP = 'temp:';
+const projectOfFolder = (cwd: string) => {
+  const kind = cwd.startsWith('/') ? folderKind(cwd) : 'project';
+  return kind === 'scratch' ? SCRATCH : kind === 'temp' ? TEMP : cwd;
+};
+
 /** The first and last UTC day of a period that ends today. */
 export function period(range: UsageRange, now: number, first: number | undefined): { from: number; to: number } {
   const to = utcDay(now);
@@ -869,7 +878,7 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
   for (const r of order) {
     const mask = skip.get(r);
     const pelican = r.session in mine.sessions;
-    const cwd = mainOf.get(r.session)?.cwd ?? r.cwd ?? r.dir;
+    const cwd = projectOfFolder(mainOf.get(r.session)?.cwd ?? r.cwd ?? r.dir);
     for (let j = 0; j < r.keys.length; j += 1) {
       if (mask?.[j]) continue;
       const at = r.minutes[j]! * MINUTE;
@@ -948,11 +957,14 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
   // Two folders with the same name are told apart by their parent, as the new-session picker does.
   const names = new Map<string, number>();
   for (const cwd of byProject.keys()) names.set(projectName(cwd), (names.get(projectName(cwd)) ?? 0) + 1);
-  const nameOf = (cwd: string) => ((names.get(projectName(cwd)) ?? 0) > 1 ? `${path.basename(path.dirname(cwd))}/${projectName(cwd)}` : projectName(cwd));
+  const nameOf = (cwd: string) => (cwd === SCRATCH ? 'Scratch' : cwd === TEMP ? 'Temporary folders'
+    : (names.get(projectName(cwd)) ?? 0) > 1 ? `${path.basename(path.dirname(cwd))}/${projectName(cwd)}` : projectName(cwd));
 
-  const long = to - from + 1 > 45;
+  // Everything: the chart starts where the transcripts do (Claude Code's own record has no tokens per kind).
+  const chartFrom = range === 'all' && firstTokens !== undefined ? Math.max(from, firstTokens) : from;
+  const long = to - chartFrom + 1 > 45;
   const points = new Map<number, number>();
-  for (let d = from; d <= to; d += 1) {
+  for (let d = chartFrom; d <= to; d += 1) {
     // Weeks start on Monday (day 0, 1 January 1970, was a Thursday).
     const key = long ? d - ((d + 3) % 7) : d;
     points.set(key, (points.get(key) ?? 0) + (byDay.get(d) ?? 0));
