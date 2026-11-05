@@ -169,7 +169,8 @@ export function SideChat({
   // Before the first answer has a side chat to go to, its question waits in a view of its own.
   const waitingView = `side-new:${sessionId}`;
   const viewId = side?.id ?? waitingView;
-  const view = useSessionView(viewId);
+  // Watched only while open: closed, it keeps no place among the views the page holds on to.
+  const view = useSessionView(state.open ? viewId : undefined);
   const busy = Boolean(side && view.run?.busy);
   const draftKey = `side:${sessionId}`;
   const [error, setError] = useState<{ text: string; note: boolean }>();
