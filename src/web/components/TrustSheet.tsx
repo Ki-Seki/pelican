@@ -1,5 +1,6 @@
-import { ShieldCheck, User } from 'lucide-react';
+import { ShieldCheck, TriangleAlert, User } from 'lucide-react';
 
+import { revealHidden } from '../../shared/hidden';
 import type { TrustChoice } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { Sheet, SheetOption } from './Sheet';
@@ -10,12 +11,15 @@ export type TrustAsk = { brings: string[]; answer: (choice: TrustChoice) => void
 /**
  * Asked before Claude Code first starts in a folder nobody has trusted, as the CLI's trust dialog
  * asks: what the folder would run, and whether to run it or to start with the user's settings only.
+ * Every item is shown whole, its lines kept, and with any character that changes how it reads
+ * shown as a token, as approvals show them: this is where the folder's programs are let in.
  */
 export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; folder?: string; home?: string; onDone: () => void }) {
   const choose = (choice: TrustChoice) => {
     onDone();
     ask?.answer(choice);
   };
+  const items = (ask?.brings ?? []).map((item) => revealHidden(item));
   return (
     <Sheet
       open={Boolean(ask)}
@@ -29,14 +33,20 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
         {folder && <div className="truncate font-mono text-[12.5px] text-muted" title={folder}>{shortPath(folder, home)}</div>}
         <p className="mt-1">Claude Code will run what it brings:</p>
         <ul className="mt-2 max-h-52 overflow-y-auto overscroll-contain rounded-lg border border-line px-3 py-1.5 font-mono text-[12px] leading-snug text-muted">
-          {(ask?.brings ?? []).map((item) => <li key={item} className="py-0.5 break-words">{item}</li>)}
+          {items.map((item, i) => <li key={i} className="py-0.5 whitespace-pre-wrap break-words">{item.text}</li>)}
         </ul>
+        {items.some((item) => item.hidden) && (
+          <div className="mt-2 flex items-start gap-1.5 text-[12.5px] leading-snug text-danger">
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            This contains invisible or direction-changing characters, shown as ⟨U+…⟩. It may not do what it seems to.
+          </div>
+        )}
       </div>
       <SheetOption icon={<ShieldCheck className="size-4" />} label="Trust and start" onSelect={() => choose('trusted')} />
       <SheetOption
         icon={<User className="size-4" />}
         label="Use my settings only"
-        description="Leaves out this folder’s settings, hooks, MCP servers and CLAUDE.md"
+        description="Leaves out this folder’s settings, hooks, commands, MCP servers and CLAUDE.md"
         onSelect={() => choose('user-only')}
       />
     </Sheet>

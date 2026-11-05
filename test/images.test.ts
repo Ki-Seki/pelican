@@ -64,7 +64,7 @@ describe('pictures in messages', () => {
     const response = await get(`/api/sessions/${id}/images/r1/0`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('image/png');
-    expect(response.headers.get('cache-control')).toBe('private, max-age=31536000, immutable');
+    expect(response.headers.get('cache-control')).toBe('private, no-cache');
     expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin');
     expect(response.headers.get('content-security-policy')).toMatch(/^sandbox/);
     expect(Buffer.from(await response.arrayBuffer())[4]).toBe(2);

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -39,8 +39,13 @@ export const runCommand: Run = (command, args) => new Promise((resolve) => {
 
 /** Variables the service carries over from the installing shell. */
 const KEEP = /^(PATH|SHELL|LANG|LC_[A-Z]+|TZ|PELICAN_.+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_.+|ANTHROPIC_.+|AWS_PROFILE|AWS_REGION|CLOUD_ML_REGION|NODE_EXTRA_CA_CERTS|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy)$/;
-/** Never written to a file: a service has no business holding them, and Claude Code keeps its own sign-in. */
-const SECRET = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH_HEADER/i;
+/**
+ * Never written to a file: a service has no business holding them, and Claude Code keeps its own
+ * sign-in. By name (a key, a token, headers such as ANTHROPIC_CUSTOM_HEADERS), or by value: an
+ * address with a user name or a password in it (a proxy's `http://user:pass@host`).
+ */
+const SECRET = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|HEADER/i;
+const WITH_LOGIN = /[a-z][a-z0-9+.-]*:\/\/[^\s]*@/i;
 
 /** The environment written into the service, and the names left out because they look like secrets. */
 export function serviceEnvironment(env: NodeJS.ProcessEnv): { kept: Record<string, string>; secrets: string[] } {
@@ -48,10 +53,16 @@ export function serviceEnvironment(env: NodeJS.ProcessEnv): { kept: Record<strin
   const secrets: string[] = [];
   for (const [name, value] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
     if (value === undefined || !KEEP.test(name)) continue;
-    if (SECRET.test(name)) secrets.push(name);
+    if (SECRET.test(name) || WITH_LOGIN.test(value)) secrets.push(name);
     else kept[name] = value;
   }
   return { kept, secrets };
+}
+
+/** Written readable only by you, also over a file that was there before: writeFile's mode is for a new one only. */
+async function writeOwn(file: string, text: string): Promise<void> {
+  await writeFile(file, text, { mode: 0o600 });
+  await chmod(file, 0o600);
 }
 
 export const plistFile = (home: string) => path.join(home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
@@ -148,7 +159,7 @@ export async function installService(ctx: ServiceContext, say: (line: string) =>
     const file = plistFile(ctx.home);
     await mkdir(path.dirname(file), { recursive: true });
     await mkdir(path.dirname(logFile(ctx.home)), { recursive: true });
-    await writeFile(file, launchdPlist(ctx), { mode: 0o600 });
+    await writeOwn(file, launchdPlist(ctx));
     // Loaded already (an earlier install): unload it first, so the new file applies.
     if ((await ctx.run('launchctl', ['print', target(ctx)])).code === 0) await ctx.run('launchctl', ['bootout', target(ctx)]);
     await ctx.run('launchctl', ['enable', target(ctx)]);
@@ -159,7 +170,7 @@ export async function installService(ctx: ServiceContext, say: (line: string) =>
   } else {
     const file = unitFile(ctx.home);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, systemdUnit(ctx), { mode: 0o600 });
+    await writeOwn(file, systemdUnit(ctx));
     for (const args of [['daemon-reload'], ['enable', UNIT], ['restart', UNIT]]) {
       const result = await ctx.run('systemctl', ['--user', ...args]);
       if (result.code !== 0) await failed(result, `systemctl --user ${args.join(' ')}`);

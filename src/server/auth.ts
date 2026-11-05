@@ -195,6 +195,40 @@ export function newSessionCookie(now = Date.now()): { name: string; value: strin
   return { name: cookieName(), value: `${expires}.${sign(expires)}`, maxAge };
 }
 
+/**
+ * How a command on this computer (`pelican phone`) proves it may ask the running Pelican for a
+ * phone code: with the sign-in secret it can read in the config folder, for one request to one
+ * server, good for a minute and once. Never a cookie: what it sends to the port grants nothing
+ * else, nowhere else and not for long, should something other than Pelican be listening there.
+ */
+const PROOF_MS = 60_000;
+const proofsUsed = new Map<string, number>();
+
+function proofMac(method: string, route: string, instance: string, at: number): string {
+  // Its own wording, so a proof is never a cookie's signature, nor one the other way round.
+  return createHmac('sha256', Buffer.from(secret() ?? '', 'base64')).update(`pelican command\n${method}\n${route}\n${instance}\n${at}`).digest('base64url');
+}
+
+/** The proof for one request (`X-Pelican-Proof`) to the server with this id. */
+export function commandProof(method: string, route: string, instance: string, now = Date.now()): string {
+  return `${now}.${proofMac(method, route, instance, now)}`;
+}
+
+/** Whether a request carries a proof made for it, for this server, within the minute, not used before. */
+export function proofValid(header: string | undefined, method: string, route: string, instance: string, now = Date.now()): boolean {
+  if (!header || !secret()) return false;
+  const [at, mac, ...rest] = header.split('.');
+  const when = Number(at);
+  if (!mac || rest.length > 0 || !Number.isSafeInteger(when) || Math.abs(now - when) > PROOF_MS) return false;
+  const expected = Buffer.from(proofMac(method, route, instance, when));
+  const given = Buffer.from(mac);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return false;
+  for (const [used, stamp] of proofsUsed) if (Math.abs(now - stamp) > PROOF_MS) proofsUsed.delete(used);
+  if (proofsUsed.has(mac)) return false;
+  proofsUsed.set(mac, when);
+  return true;
+}
+
 function cookieValue(header: string | undefined, name: string): string | undefined {
   for (const part of (header ?? '').split(';')) {
     const [key, ...rest] = part.trim().split('=');

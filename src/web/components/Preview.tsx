@@ -10,7 +10,8 @@ import { Modal } from './Modal';
  * and the visuals Claude Desktop draws with its show_widget tool.
  *
  * A preview first shows as a still picture, in a frame where nothing runs (a sandbox that allows
- * nothing), so seeing a conversation runs nothing Claude wrote. Its scripts run only once you tap
+ * nothing) and with nothing in it that loads by being there (frames, embeds, links and scripts are
+ * taken out), so seeing a conversation runs nothing Claude wrote. Its scripts run only once you tap
  * Run, in a document of its own (preview.html) in a sandbox apart from Pelican, with no access to
  * it, its cookies or its API, under a content policy that lets it load scripts, styles and fonts
  * from the public CDNs and nothing else. A page whose scripts run can still reach other servers in
@@ -60,14 +61,45 @@ export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string
 
 const fullPage = (code: string) => /^(<!doctype|<html)/i.test(code.replace(/^\uFEFF/, '').slice(LEADING.exec(code)?.[0].length ?? 0));
 
-/** The document a preview shows; a still one carries no script of Pelican's (none could run). */
+/**
+ * Elements that reach the network by being there, whatever the policy says: Chrome looks up a
+ * frame's host name (DNS, which carries whatever the name holds) before the policy blocks the
+ * frame, and a prerender fetches. A still preview has no use for any of them, nor for scripts.
+ */
+const LOADERS = 'iframe, frame, frameset, object, embed, portal, fencedframe, link, meta, base, script';
+
+/** The markup with every loader taken out, also inside SVG, `<noscript>` and `<template>` (a shadow root). */
+function withoutLoaders(code: string, page: boolean): string {
+  // A document that loads and runs nothing, read as the still frame reads it: with scripting off,
+  // so what is in a <noscript> is markup here as there.
+  const doc = new DOMParser().parseFromString(page ? code : `<!doctype html><body>${code}`, 'text/html');
+  const clean = (root: ParentNode) => {
+    for (const element of root.querySelectorAll(LOADERS)) element.remove();
+    for (const template of root.querySelectorAll('template')) clean(template.content);
+  };
+  clean(doc);
+  return page ? doc.documentElement.outerHTML : doc.body.innerHTML;
+}
+
+/**
+ * What a still preview shows of the code: no loaders. Read once more to be sure the frame reads
+ * the same (markup can read differently a second time); when it does not, nothing is shown.
+ */
+function stillCode(code: string, page: boolean): string {
+  if (typeof DOMParser === 'undefined') return '';
+  const once = withoutLoaders(code, page);
+  return withoutLoaders(once, page) === once ? once : '';
+}
+
+/** The document a preview shows; a still one carries no script of Pelican's (none could run), and nothing that loads. */
 export function documentFor(source: PreviewSource, dark: boolean, still = false): string {
   const theme = dark ? 'dark' : 'light';
   const preamble = still ? STILL_PREAMBLE : PREAMBLE;
   const resize = still ? '' : RESIZE;
-  const code = source.code.replace(/^\uFEFF/, '');
+  const raw = source.code.replace(/^\uFEFF/, '');
+  const code = still ? stillCode(raw, fullPage(raw)) : raw;
   const start = code.slice(LEADING.exec(code)?.[0].length ?? 0);
-  if (fullPage(code)) {
+  if (fullPage(raw)) {
     // A page of its own: its own styles, plus the size report. Our doctype and preamble come
     // first, whatever the page starts with: the parser puts the policy in the head before any
     // of the page's own content, so it covers all of it. The page's doctype is dropped.

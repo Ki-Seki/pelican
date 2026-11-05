@@ -56,6 +56,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/service.ts` | `pelican service`: the launchd agent or systemd unit |
 | `src/server/awake.ts` | Keeping the computer awake while Claude works |
 | `src/server/running.ts` | The note a running Pelican leaves, so `pelican token` and `pelican phone` find it |
+| `src/server/local.ts` | Where the command line reaches the running Pelican, and whether it is the one this account started |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |

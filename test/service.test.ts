@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -61,6 +61,36 @@ describe('the environment a service gets', () => {
     expect(kept).toEqual({ AWS_PROFILE: 'p', PATH: '/bin', PELICAN_PORT: '7861' });
     expect(secrets).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
   });
+});
+
+describe('credentials in the installing shell', () => {
+  it('are left out of a service by their value too: headers, and addresses with a user name or password', () => {
+    const { kept, secrets } = serviceEnvironment({
+      PATH: '/bin',
+      ANTHROPIC_CUSTOM_HEADERS: 'x-api-key: sk-ant-gateway-SECRET',
+      HTTPS_PROXY: 'http://alice:Winter2026!@proxy.corp:3128',
+      https_proxy: 'http://token@proxy.corp:3128',
+      ANTHROPIC_BASE_URL: 'https://bob:hunter2@gateway.corp/',
+      ALL_PROXY: 'socks5://proxy.corp:1080',
+      NO_PROXY: 'localhost,.corp',
+    });
+    expect(kept).toEqual({ ALL_PROXY: 'socks5://proxy.corp:1080', NO_PROXY: 'localhost,.corp', PATH: '/bin' });
+    expect(secrets.sort()).toEqual(['ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'HTTPS_PROXY', 'https_proxy']);
+  });
+
+  for (const platform of ['darwin', 'linux'] as const) {
+    it(`never stay readable by others in a service file that was there before (${platform})`, async () => {
+      const ctx = await context(platform, { env: { PATH: '/bin', HTTPS_PROXY: 'http://alice:Winter2026!@proxy.corp:3128' } });
+      const file = platform === 'darwin' ? plistFile(ctx.home) : unitFile(ctx.home);
+      await mkdir(path.dirname(file), { recursive: true });
+      // A service made by hand, as the docs of 0.2 told people to.
+      await writeFile(file, 'made by hand\n');
+      await chmod(file, 0o644);
+      await installService(ctx, () => {});
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      expect(await readFile(file, 'utf8')).not.toContain('Winter2026');
+    });
+  }
 });
 
 describe('on macOS', () => {

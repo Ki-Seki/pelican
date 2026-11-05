@@ -1,17 +1,20 @@
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
 import { config } from './config.js';
+import { openRegular } from './open.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
 /**
  * Folder trust. A folder can bring programs of its own: hooks, MCP servers, helper commands and
- * environment variables in its Claude Code settings, filters in its git config. Claude Code asks
- * before it runs them in an interactive session, but an SDK session never asks, so Pelican asks
- * instead, before the first Claude Code process in a folder nobody has trusted.
+ * environment variables in its Claude Code settings, commands, skills and agents that run a shell
+ * or tools without asking, filters in its git config. Claude Code asks before it runs them in an
+ * interactive session, but an SDK session never asks, so Pelican asks instead, before the first
+ * Claude Code process in a folder nobody has trusted.
  *
  * A folder is trusted when Claude Code's own record says so (the CLI's trust dialog, read and never
  * written), when it was trusted in Pelican, when Pelican made it (a scratch folder), or when Claude
@@ -37,13 +40,43 @@ export class NeedsTrust extends Error {
 const exists = (file: string) => stat(file).then(() => true, () => false);
 const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
 
-async function readJson(file: string): Promise<unknown> {
+/** Larger than any settings file; a folder could otherwise make the server read without end. */
+const MAX_READ = 16 * 1024 * 1024;
+
+/**
+ * A file's text, read only when it is a regular file of a sane size (`odd` when something else is
+ * there): a named pipe in its place would hold one of Node's few file threads until someone wrote
+ * to it, and a folder from a tarball can bring one.
+ */
+async function readText(file: string): Promise<{ text?: string; odd?: true }> {
+  let handle: Awaited<ReturnType<typeof openRegular>>;
   try {
-    return JSON.parse(await readFile(file, 'utf8')) as unknown;
+    handle = await openRegular(file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? {} : { odd: true };
+  }
+  try {
+    if ((await handle.stat()).size > MAX_READ) return { odd: true };
+    return { text: await handle.readFile('utf8') };
   } catch {
-    return undefined;
+    return { odd: true };
+  } finally {
+    await handle.close();
   }
 }
+
+/** A JSON file's value (undefined when it is missing or not JSON), and whether it is not a regular file. */
+async function readJsonFile(file: string): Promise<{ value: unknown; odd?: true }> {
+  const { text, odd } = await readText(file);
+  try {
+    return { value: text === undefined ? undefined : JSON.parse(text) as unknown, ...(odd ? { odd } : {}) };
+  } catch {
+    return { value: undefined };
+  }
+}
+
+const readJson = async (file: string): Promise<unknown> => (await readJsonFile(file)).value;
 
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -128,7 +161,7 @@ export async function claudeCodeTrusts(folder: string): Promise<boolean> {
 }
 
 // What the user answered in Pelican, by the folder the answer was for (the repository's top, as
-// Claude Code keeps its own), oldest first.
+// Claude Code keeps its own), oldest first; at most this many answers to trust.
 const MAX_CHOICES = 1000;
 const choicesFile = () => path.join(config.stateDir, 'trust.json');
 let choices: { file: string; folders: Map<string, TrustChoice> } | undefined;
@@ -181,7 +214,16 @@ export async function rememberChoice(folder: string, choice: TrustChoice): Promi
   const folders = await loadChoices();
   folders.delete(key);
   folders.set(key, choice);
-  while (folders.size > MAX_CHOICES) folders.delete(folders.keys().next().value!);
+  // Answers to trust are kept up to a number, the oldest going first (each scratch session gives
+  // one). "Use my settings only" is never let go of: the folder would count as trusted again,
+  // through the very sessions started that way.
+  let trusted = [...folders.values()].filter((kept) => kept === 'trusted').length;
+  for (const [folder, kept] of folders) {
+    if (trusted <= MAX_CHOICES) break;
+    if (kept !== 'trusted') continue;
+    folders.delete(folder);
+    trusted -= 1;
+  }
   await saveChoices(folders);
 }
 
@@ -198,9 +240,6 @@ export async function folderTrusted(folder: string): Promise<boolean> {
   return claudeRanIn(dir);
 }
 
-const MAX_ITEM = 200;
-const MAX_ITEMS = 24;
-const short = (text: string) => (text.length > MAX_ITEM ? `${text.slice(0, MAX_ITEM - 1)}…` : text);
 const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
 /** Settings that run a command of the folder's choosing, as Claude Code's trust dialog lists them. */
@@ -248,95 +287,294 @@ function fromMcp(file: unknown): string[] {
   });
 }
 
-type GitEntry = { section: string; subsection?: string; key: string; value: string };
+/** Frontmatter keys that give a command, skill or agent powers of its own (Claude Code reads them in any case and with `_` for `-`). */
+const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|permission[-_]?mode)["']?[ \t]*:(.*)$/i;
 
-/** A git config file's entries, read as text (git itself is not run). */
-function parseGitConfig(text: string): GitEntry[] {
-  const entries: GitEntry[] = [];
-  let section = '';
-  let subsection: string | undefined;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
-    const header = /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
-    if (header) {
-      const [name, ...rest] = header[1]!.split('.');
-      section = name!.toLowerCase();
-      subsection = header[2] ?? (rest.length > 0 ? rest.join('.') : undefined);
-      continue;
-    }
-    const pair = /^([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$/.exec(line);
-    if (pair) entries.push({ section, ...(subsection !== undefined ? { subsection } : {}), key: pair[1]!.toLowerCase(), value: (pair[2] ?? 'true').replace(/^"(.*)"$/, '$1') });
-  }
-  return entries;
-}
-
-/** The repository's own config file (a worktree's is its main repository's). */
-async function gitConfigOf(top: string): Promise<string | undefined> {
-  const dotGit = path.join(top, '.git');
-  const info = await stat(dotGit).catch(() => undefined);
-  if (!info) return undefined;
-  let gitDir = dotGit;
-  if (info.isFile()) {
-    const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8').catch(() => ''))?.[1]?.trim();
-    if (!pointer) return undefined;
-    gitDir = path.resolve(top, pointer);
-    const common = (await readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => '')).trim();
-    if (common) gitDir = path.resolve(gitDir, common);
-  }
-  return readFile(path.join(gitDir, 'config'), 'utf8').catch(() => undefined);
-}
-
-/** Programs the repository's git config makes git start on its own, even for `git status`. */
-function gitPrograms(entries: GitEntry[]): string[] {
+/**
+ * What a project's command, skill or agent may run without asking: tools its frontmatter allows,
+ * hooks, MCP servers, a permission mode; and for a command or a skill, the shell it runs as it
+ * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them.
+ */
+function fromMarkdown(what: string, text: string, shell: boolean): string[] {
   const found: string[] = [];
-  for (const entry of entries) {
-    if (entry.section === 'filter' && ['clean', 'smudge', 'process'].includes(entry.key) && entry.value) {
-      found.push(`Git filter ${entry.subsection ?? ''}: ${entry.value}`);
-    } else if (entry.section === 'core' && entry.key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
-      found.push(`Git fsmonitor: ${entry.value}`);
-    } else if (entry.section === 'core' && entry.key === 'hookspath' && entry.value) {
-      found.push(`Git hooks folder: ${entry.value}`);
+  const front = /^\uFEFF?\s*---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  const lines = front?.split(/\r?\n/) ?? [];
+  const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
+  // Keys of the frontmatter itself, not of a map inside it.
+  const top = indent(lines.find((line) => line.trim() && !line.trim().startsWith('#')) ?? '');
+  const under = (line: string) => !line.trim() || indent(line) > top || (indent(line) === top && line.trim().startsWith('-'));
+  lines.forEach((line, i) => {
+    const power = POWERS.exec(line);
+    if (!power || (indent(line) !== top && !line.includes('{'))) return;
+    // The value, with the lines under it (a list, a map), on one line.
+    const value = [power[2]!.trim()];
+    for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) if (lines[j]!.trim()) value.push(lines[j]!.trim());
+    const mode = value.join(' ').replace(/^["']|["']$/g, '');
+    if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
+    found.push(`${what}: ${line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`}`);
+  });
+  if (shell) {
+    for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(`${what} runs: ${block[1]!.trim()}`);
+    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(`${what} runs: ${inline[1]!}`);
+  }
+  return found;
+}
+
+/** Where Claude Code finds a project's commands, skills and agents in each folder's `.claude`. */
+const MARKDOWN = [['commands', 'Command'], ['skills', 'Skill'], ['agents', 'Agent']] as const;
+
+/**
+ * More than any project has: past this many files (or entries looked at), the folder is asked
+ * about instead of being read without end.
+ */
+type Budget = { files: number; entries: number };
+const budgetFor = (): Budget => ({ files: 500, entries: 10_000 });
+const spent = (budget: Budget) => budget.files < 0 || budget.entries < 0;
+
+/** The Markdown files in a folder and its subfolders, as Claude Code finds them (through links too). */
+async function markdownIn(root: string, budget: Budget): Promise<string[]> {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    const key = await realpath(dir).catch(() => dir);
+    if (seen.has(key) || depth > 10) return;
+    seen.add(key);
+    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (spent(budget) || (budget.entries -= 1) < 0) return;
+      const full = path.join(dir, entry.name);
+      const isDir = entry.isSymbolicLink() ? await stat(full).then((s) => s.isDirectory(), () => false) : entry.isDirectory();
+      if (isDir) await walk(full, depth + 1);
+      else if (entry.name.endsWith('.md') && (budget.files -= 1) >= 0) files.push(full);
+    }
+  };
+  await walk(root, 0);
+  return files;
+}
+
+/** What a folder's own commands, skills and agents bring (see fromMarkdown). */
+async function fromClaudeFolder(dir: string, from: string, budget: Budget): Promise<string[]> {
+  const found: string[] = [];
+  for (const [kind, what] of MARKDOWN) {
+    const root = path.join(dir, '.claude', kind);
+    for (const file of await markdownIn(root, budget)) {
+      const skill = /^skill\.md$/i.test(path.basename(file));
+      // A skill is its SKILL.md; the other files in its folder are documents Claude may read.
+      if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
+      const { text, odd } = await readText(file);
+      if (odd || text === undefined) {
+        found.push(`Cannot be read: ${path.relative(from, file)}`);
+        continue;
+      }
+      const name = path.relative(root, skill ? path.dirname(file) : file.slice(0, -'.md'.length)) || path.basename(root);
+      found.push(...fromMarkdown(`${what} ${kind === 'commands' ? '/' : ''}${name}`, text, kind !== 'agents'));
     }
   }
   return found;
 }
 
+/** A setting of a git config as git reads it: its name in git's spelling, its value, the file it is in. */
+type GitEntry = { name: string; value: string; file: string };
+
+/** The repository's own git config, as far as it could be read, and every file it includes. */
+type GitConfig = { entries: GitEntry[]; includes: string[]; unread: boolean };
+
+/** `filter.Evil.clean`: section `filter`, subsection `Evil` (its case kept, as git keeps it), key `clean`. */
+function nameParts(name: string): { section: string; subsection?: string; key: string } {
+  const first = name.indexOf('.');
+  const last = name.lastIndexOf('.');
+  const section = name.slice(0, first);
+  return first === last ? { section, key: name.slice(last + 1) } : { section, subsection: name.slice(first + 1, last), key: name.slice(last + 1) };
+}
+
+const isInclude = (entry: GitEntry) => entry.name === 'include.path' || /^includeif\..+\.path$/.test(entry.name);
+const gitTrue = (value: string) => ['', 'true', 'yes', 'on', '1'].includes(value.toLowerCase());
+
+/** git found no repository there: nothing of a repository's config can run. */
+class NoRepository extends Error {}
+
 /**
- * What Claude Code would run of the folder's own if it started there: read from the files, nothing
- * run. Settings and MCP servers of the folder and its parents up to the repository's top (Claude
- * Code reads the project's from there), never those of the home folder, which are the user's own.
+ * Settings of a git config, as git itself reads them: `git config` starts no filter, hook or
+ * monitor. Without the git settings of Pelican's own environment, with a time limit (an included
+ * file can be a pipe nobody writes to), and also in a repository another account owns, which the
+ * user's own git may be told to trust.
+ */
+function gitConfig(top: string, which: string[]): Promise<GitEntry[]> {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('GIT_')) env[name] = value;
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' });
+  const args = ['-c', 'safe.directory=*', 'config', ...which, '--list', '-z', '--show-origin', '--includes'];
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd: top, env, timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        // A repository without a config file of its own has nothing in it to run.
+        if (/unable to read config file '[^']*': No such file or directory/.test(String(stderr))) resolve([]);
+        else reject(/not a git repository|can only be used inside a git repository/i.test(String(stderr)) ? new NoRepository() : error);
+        return;
+      }
+      // `file:<path>` NUL `<name>` newline `<value>` NUL, a path relative to the top of the work tree.
+      const fields = String(stdout).split('\0');
+      const entries: GitEntry[] = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const origin = fields[i]!;
+        const item = fields[i + 1]!;
+        const cut = item.indexOf('\n');
+        entries.push({
+          file: origin.startsWith('file:') ? path.resolve(top, origin.slice('file:'.length)) : origin,
+          name: cut < 0 ? item : item.slice(0, cut),
+          value: cut < 0 ? '' : item.slice(cut + 1),
+        });
+      }
+      resolve(entries);
+    });
+  });
+}
+
+/** Where an include points, as git resolves it; undefined where only git knows (`~user/`, `%(prefix)/`). */
+function includeTarget(value: string, from: string): string | undefined {
+  if (value.startsWith('~/')) return path.join(process.env.HOME || os.homedir(), value.slice(2));
+  if (value.startsWith('~') || value.startsWith('%(')) return undefined;
+  return path.resolve(path.dirname(from), value);
+}
+
+/**
+ * The repository's own config, its worktree's and the files they include, through git, which reads
+ * same-line keys, `[filter.Name]` and includes as nothing else does. An include whose condition
+ * does not hold now (another branch) can hold later, so every included file is read; one that
+ * cannot be read leaves the config unread. Rejects when git could not read it; undefined when git
+ * is not there to run anything, or finds no repository.
+ */
+async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
+  let entries: GitEntry[];
+  try {
+    entries = await gitConfig(top, ['--local']);
+    if (entries.some((e) => e.name === 'extensions.worktreeconfig' && gitTrue(e.value))) entries.push(...(await gitConfig(top, ['--worktree'])));
+  } catch (error) {
+    if (error instanceof NoRepository || !(await gitRuns())) return undefined;
+    throw error;
+  }
+  const repo: GitConfig = { entries, includes: [], unread: false };
+  const read = new Set(entries.map((e) => e.file));
+  const pending = entries.filter(isInclude);
+  while (pending.length > 0) {
+    const include = pending.shift()!;
+    repo.includes.push(include.value);
+    const file = includeTarget(include.value, include.file);
+    if (!file) repo.unread = true;
+    if (!file || read.has(file)) continue;
+    read.add(file);
+    const info = await stat(file).catch(() => undefined);
+    // Not there (yet): nothing to read now, and the include is listed.
+    if (!info) continue;
+    // A pipe or a device is not read, nor a chain of includes longer than any real one.
+    const more = info.isFile() && read.size <= 50 ? await gitConfig(top, ['--file', file]).catch(() => undefined) : undefined;
+    if (!more) {
+      repo.unread = true;
+      continue;
+    }
+    for (const entry of more) {
+      if (isInclude(entry)) pending.push(entry);
+      read.add(entry.file);
+    }
+    repo.entries.push(...more);
+  }
+  return repo;
+}
+
+/** Whether git can run here at all; where it cannot, it runs nothing a repository sets up either. */
+let gitWorks: Promise<boolean> | undefined;
+function gitRuns(): Promise<boolean> {
+  gitWorks ??= new Promise((resolve) => {
+    execFile('git', ['--version'], { cwd: os.tmpdir(), timeout: 5000 }, (error, stdout) => {
+      const code = (error as NodeJS.ErrnoException | null)?.code as unknown;
+      // Not there, or a stand-in that exits with an error (one that only offers to install git):
+      // no git. A failure that says nothing of git (no process could start) counts as git.
+      resolve(error ? !(code === 'ENOENT' || typeof code === 'number') : /^git version/.test(String(stdout)));
+    });
+  });
+  return gitWorks;
+}
+
+const UNREAD_GIT = 'Git config that git could not read';
+
+/** Programs the repository's git config makes git start on its own, even for `git status`. */
+function gitPrograms(repo: GitConfig): string[] {
+  const found: string[] = [];
+  for (const entry of repo.entries) {
+    const { section, subsection, key } = nameParts(entry.name);
+    if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key) && entry.value) {
+      found.push(`Git filter ${subsection ?? ''}: ${entry.value}`);
+    } else if (section === 'core' && key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
+      found.push(`Git fsmonitor: ${entry.value}`);
+    } else if (section === 'core' && key === 'hookspath' && entry.value) {
+      found.push(`Git hooks folder: ${entry.value}`);
+    }
+  }
+  // An included file can change (another branch, a pull), and with it what git runs.
+  for (const include of repo.includes) found.push(`Git config includes: ${include}`);
+  if (repo.unread) found.push(UNREAD_GIT);
+  return found;
+}
+
+/** What git would run of the repository's own config, also when git could not read it all. */
+async function gitBrings(top: string): Promise<string[]> {
+  try {
+    const repo = await repositoryConfig(top);
+    return repo ? gitPrograms(repo) : [];
+  } catch {
+    return [UNREAD_GIT];
+  }
+}
+
+/**
+ * What the folder brings: read from its files, nothing run. Settings, MCP servers, commands,
+ * skills and agents of the folder and its parents up to the repository's top (Claude Code reads
+ * the project's from there), never those of the home folder, which are the user's own (by either
+ * of its paths: the folder's is a real one); and what the repository's git config runs.
  */
 export async function folderBrings(folder: string): Promise<string[]> {
   const dir = await real(folder);
-  const home = os.homedir();
+  const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
   const found: string[] = [];
-  for (let d = dir; d !== home; d = path.dirname(d)) {
-    for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await readJson(path.join(d, '.claude', name))));
-    found.push(...fromMcp(await readJson(path.join(d, '.mcp.json'))));
+  // A file of the folder's that is not a regular file is not read, and is asked about instead.
+  const json = async (file: string): Promise<unknown> => {
+    const { value, odd } = await readJsonFile(file);
+    if (odd) found.push(`Cannot be read: ${path.relative(dir, file)}`);
+    return value;
+  };
+  const budget = budgetFor();
+  for (let d = dir; !homes.has(d); d = path.dirname(d)) {
+    for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await json(path.join(d, '.claude', name))));
+    found.push(...fromMcp(await json(path.join(d, '.mcp.json'))));
+    found.push(...(await fromClaudeFolder(d, dir, budget)));
     if (d === top || path.dirname(d) === d) break;
   }
-  if (top) found.push(...gitPrograms(parseGitConfig((await gitConfigOf(top)) ?? '')));
-  const unique = [...new Set(found.map(short))];
-  return unique.length > MAX_ITEMS ? [...unique.slice(0, MAX_ITEMS - 1), `and ${unique.length - MAX_ITEMS + 1} more`] : unique;
+  if (spent(budget)) found.push('More commands, skills and agents than Pelican reads');
+  if (top) found.push(...(await gitBrings(top)));
+  // Every item, each whole: the part of a command that matters can come after any amount of
+  // padding, or after any number of harmless items (the sheet scrolls).
+  return [...new Set(found)];
 }
 
 /**
  * Git settings, for Claude Code and every git it starts, that turn off what the repository's own
  * config makes git run (filters, a file-system monitor, a hooks folder): the folder's settings are
- * left out, so are its programs.
+ * left out, so are its programs. Names as git spells them, so `[filter.Evil]` is turned off as
+ * `filter.evil`. A config git could not read in full cannot be turned off, so nothing starts.
  */
 async function gitOff(dir: string): Promise<Record<string, string>> {
   const top = await gitRoot(dir);
   if (!top) return {};
-  const entries = parseGitConfig((await gitConfigOf(top)) ?? '');
+  const repo = await repositoryConfig(top).catch((): GitConfig => ({ entries: [], includes: [], unread: true }));
+  if (!repo) return {};
+  if (repo.unread) throw new Error('Git could not read this folder’s git config, so Claude Code cannot start in it with your settings only.');
   const off: Array<[string, string]> = [];
-  for (const name of new Set(entries.filter((e) => e.section === 'filter' && e.subsection).map((e) => e.subsection!))) {
+  const parts = repo.entries.map((e) => nameParts(e.name));
+  for (const name of new Set(parts.filter((p) => p.section === 'filter' && p.subsection !== undefined).map((p) => p.subsection!))) {
     off.push([`filter.${name}.clean`, ''], [`filter.${name}.smudge`, ''], [`filter.${name}.process`, ''], [`filter.${name}.required`, 'false']);
   }
-  if (entries.some((e) => e.section === 'core' && e.key === 'fsmonitor')) off.push(['core.fsmonitor', 'false']);
-  if (entries.some((e) => e.section === 'core' && e.key === 'hookspath')) off.push(['core.hooksPath', '/dev/null']);
+  if (parts.some((p) => p.section === 'core' && p.key === 'fsmonitor')) off.push(['core.fsmonitor', 'false']);
+  if (parts.some((p) => p.section === 'core' && p.key === 'hookspath')) off.push(['core.hooksPath', '/dev/null']);
   if (off.length === 0) return {};
   // After any the environment already holds, which git reads first.
   const start = Number(process.env.GIT_CONFIG_COUNT) || 0;
@@ -379,4 +617,5 @@ export function forgetTrust(): void {
   ranCache.clear();
   claudeConfig = undefined;
   choices = undefined;
+  gitWorks = undefined;
 }

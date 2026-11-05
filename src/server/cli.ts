@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { config } from './config.js';
+import { askLocal, callable, pelicanAt, reachable, thisPelican } from './local.js';
 import { listensLocally } from './security.js';
 
 const DOCS = 'https://ki-seki.github.io/pelican/docs.html';
@@ -164,9 +165,6 @@ function addressFor(host: string, port: number): string {
   return `http://${name}:${port}/`;
 }
 
-/** Where this computer reaches a Pelican from the command line (a wildcard address is reached on loopback). */
-const callable = (host: string, port: number) => (host === '0.0.0.0' || host === '::' ? `http://127.0.0.1:${port}/` : addressFor(host, port).replace('://localhost:', '://127.0.0.1:'));
-
 /**
  * The Pelican a command is about: the one running with this state folder, unless a port was given;
  * otherwise the port and host of the settings.
@@ -197,48 +195,45 @@ async function tokenCommand(reset: boolean, portGiven: boolean): Promise<void> {
   if (token) console.log(tokenLink(addressFor(host, port), token));
 }
 
-/** Asks a local Pelican something, the way its page does. */
-async function askLocal(base: string, route: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(new URL(`api/${route}`, base), { ...init, headers: { 'X-Pelican': '1', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(5000) });
-}
-
-/** The answer of whatever listens on a port, if it is a Pelican: its sign-in state and its id. */
-async function pelicanAt(base: string): Promise<{ mode: string; instance?: string } | undefined> {
-  try {
-    const answer = await (await askLocal(base, 'auth')).json() as { mode?: unknown; instance?: unknown };
-    return typeof answer.mode === 'string' ? { mode: answer.mode, ...(typeof answer.instance === 'string' ? { instance: answer.instance } : {}) } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * `pelican phone`: a QR code that opens Pelican on the phone, signed in with a one-time code that
- * the running Pelican makes. The command signs its request with the same secret the server uses
- * (it reads the same config folder); no token or password goes anywhere.
+ * the running Pelican makes. It talks only to the Pelican this account started (the note in the
+ * state folder names it, local.ts), and asks for each code with a proof made with the secret the
+ * server signs with, good for that one request and a minute (auth.ts): never a cookie, and no
+ * token or password goes anywhere.
  */
 async function phoneCommand(given: string | undefined, portGiven: boolean): Promise<void> {
   const { findPhoneAddress, checkAddress, setupHint } = await import('./phone.js');
-  const { port, host } = await target(portGiven);
-  const base = callable(host, port);
-  const local = await pelicanAt(base);
-  if (!local) throw new Error(`Pelican is not running on port ${port}. Start it with \`${NAME}\` (or keep it running with \`${NAME} service install\`), then run \`${NAME} phone\` again.`);
-  const search = await findPhoneAddress(port, host, given);
+  const asked = portGiven ? config.port : undefined;
+  const local = await thisPelican(asked);
+  if (!local) {
+    const port = asked ?? (await target(false)).port;
+    // Something answers there, but not as the Pelican of these settings: it is asked nothing more.
+    if (await pelicanAt(callable(config.host, port))) {
+      throw new Error(`What answers on port ${port} is not the Pelican started with these settings. Run \`${NAME} phone\` with the settings it runs with (PELICAN_STATE_DIR, PELICAN_CONFIG_DIR).`);
+    }
+    throw new Error(`Pelican is not running on port ${port}. Start it with \`${NAME}\` (or keep it running with \`${NAME} service install\`), then run \`${NAME} phone\` again.`);
+  }
+  const { running } = local;
+  const search = await findPhoneAddress(running.port, running.host, given);
   if (!search.address) {
-    console.log(setupHint(search, port, NAME).join('\n'));
+    console.log(setupHint(search, running.port, NAME).join('\n'));
     console.log(`More: ${DOCS}#phone`);
     process.exitCode = 1;
     return;
   }
   const address = search.address;
-  const problem = local.instance ? await checkAddress(address.url, local.instance) : undefined;
+  const problem = await checkAddress(address.url, running.instance);
   if (problem) throw new Error(problem);
-  const { loadAuth, newSessionCookie } = await import('./auth.js');
+  const { commandProof, loadAuth } = await import('./auth.js');
   await loadAuth();
   const mint = async (): Promise<string | null> => {
-    if (local.mode === 'none') return null;
-    const cookie = newSessionCookie();
-    const response = await askLocal(base, 'access/code', { method: 'POST', headers: { Cookie: `${cookie.name}=${cookie.value}` } });
+    // Found again each time: a Pelican started again since is another server, with another id.
+    const now = await thisPelican(running.port);
+    if (!now) throw new Error(`Pelican is no longer running on port ${running.port}.`);
+    if (now.mode === 'none') return null;
+    const proof = commandProof('POST', '/api/access/code', now.running.instance);
+    const response = await askLocal(now.running.url, 'access/code', { method: 'POST', headers: { 'X-Pelican-Proof': proof } });
     if (response.status === 401) throw new Error('This Pelican keeps its sign-in in another folder (PELICAN_CONFIG_DIR): run this command with the same settings it runs with.');
     if (!response.ok) throw new Error(`Pelican did not make a code (${response.status}).`);
     return ((await response.json()) as { code: string | null }).code;
@@ -285,57 +280,67 @@ function serviceFlags(values: ReturnType<typeof parse>['values']): string[] {
 
 async function serviceCommand(action: string, flags: string[]): Promise<void> {
   const service = await import('./service.js');
+  const { runningServer } = await import('./running.js');
   const ctx = service.thisComputer(flags);
   const say = (line: string) => console.log(line);
   if (action === 'install') {
     const problem = await service.cannotInstall(ctx);
     if (problem) throw new Error(problem);
     // Another Pelican on the same port would take it, and the service would stop at once.
-    const { runningServer } = await import('./running.js');
     const running = await runningServer();
     const state = await service.serviceState(ctx);
     if (running && running.port === config.port && running.pid !== state.pid) {
       throw new Error(`Pelican is already running here (pid ${running.pid}, port ${running.port}). Stop it, then run \`${NAME} service install\` again.`);
     }
     await service.installService(ctx, say);
-    await afterStart(ctx);
+    await afterStart(ctx, running?.pid);
   } else if (action === 'uninstall') {
     await service.uninstallService(ctx, say);
   } else if (action === 'restart') {
+    const before = (await runningServer())?.pid;
     await service.restartService(ctx, say);
-    await afterStart(ctx);
+    await afterStart(ctx, before);
   } else {
     const state = await service.serviceState(ctx);
     if (!state.installed) {
       say(`Pelican is not set up as a service. \`${NAME} service install\` keeps it running.`);
       return;
     }
-    const base = callable(config.host, config.port);
-    const answering = Boolean(await pelicanAt(base));
-    say(state.running ? `Running${state.pid ? ` (pid ${state.pid})` : ''}${answering ? `, at ${addressFor(config.host, config.port)}` : ', but not answering yet'}.` : `Not running${state.lastExit ? ` (last exit: ${state.lastExit})` : ''}.`);
+    // Where the service listens is what it was installed with, which the note its process left
+    // says; the shell's own settings only when there is no such note.
+    const running = await runningServer();
+    const ours = running && state.pid !== undefined && running.pid === state.pid ? running : undefined;
+    const answering = Boolean(await pelicanAt(ours?.url ?? callable(config.host, config.port)));
+    const address = ours ? addressFor(ours.host, ours.port) : addressFor(config.host, config.port);
+    say(state.running ? `Running${state.pid ? ` (pid ${state.pid})` : ''}${answering ? `, at ${address}` : ', but not answering yet'}.` : `Not running${state.lastExit ? ` (last exit: ${state.lastExit})` : ''}.`);
     say(ctx.platform === 'darwin' ? `Log: ${service.logFile(ctx.home)}` : 'Log: journalctl --user -u pelican');
   }
 }
 
-/** Once a service (re)starts: wait until it answers, then say how to sign in, as at a start in a terminal. */
-async function afterStart(ctx: import('./service.js').ServiceContext): Promise<void> {
-  const base = callable(config.host, config.port);
-  let answer: Awaited<ReturnType<typeof pelicanAt>>;
-  for (let i = 0; i < 40 && !answer; i += 1) {
+/**
+ * Once a service (re)starts: wait until it answers, then say how to sign in, as at a start in a
+ * terminal. It is the Pelican whose note is not the one from before (`before`, the process it
+ * replaced), wherever it listens; the link with the token is shown only for it.
+ */
+async function afterStart(ctx: import('./service.js').ServiceContext, before: number | undefined): Promise<void> {
+  let found: Awaited<ReturnType<typeof thisPelican>>;
+  for (let i = 0; i < 40 && !found; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    answer = await pelicanAt(base);
+    const pelican = await thisPelican();
+    if (pelican && pelican.running.pid !== before) found = pelican;
   }
   const { logFile } = await import('./service.js');
-  if (!answer) {
+  if (!found) {
     console.log(`Pelican has not answered yet. See ${ctx.platform === 'darwin' ? logFile(ctx.home) : 'journalctl --user -u pelican'}, or \`${NAME} service status\`.`);
     return;
   }
   const { accessToken, loadAuth } = await import('./auth.js');
   await loadAuth();
+  const address = addressFor(found.running.host, found.running.port);
   // The link with the token goes to a terminal only, never into a pipe or a log.
-  const token = answer.mode === 'token' && process.stdout.isTTY ? accessToken() : undefined;
-  const signIn = answer.mode === 'token' && !token ? `\n  \`${NAME} token\` prints the link that signs a browser in` : '';
-  console.log(`\n  ${token ? tokenLink(addressFor(config.host, config.port), token) : addressFor(config.host, config.port)}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
+  const token = found.mode === 'token' && process.stdout.isTTY ? accessToken() : undefined;
+  const signIn = found.mode === 'token' && !token ? `\n  \`${NAME} token\` prints the link that signs a browser in` : '';
+  console.log(`\n  ${token ? tokenLink(address, token) : address}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
 }
 
 /** One line with every version a bug report needs. */
@@ -378,10 +383,15 @@ function openBrowser(url: string): void {
   }
 }
 
-/** Something on the port already: this very Pelican (say so and stop), or another program. */
+/**
+ * Something on the port already: the Pelican this account started (say so and stop), or another
+ * program, which may answer as Pelican does. That is an error, so a service starts again and gets
+ * the port back once the other program lets go of it.
+ */
 async function portTaken(): Promise<void> {
-  if (await pelicanAt(callable(config.host, config.port))) {
-    console.log(`Pelican is already running at ${addressFor(config.host, config.port)}. \`${NAME} token\` prints the link that signs you in.`);
+  const pelican = await thisPelican(config.port);
+  if (pelican) {
+    console.log(`Pelican is already running at ${addressFor(pelican.running.host, pelican.running.port)}. \`${NAME} token\` prints the link that signs you in.`);
     return;
   }
   throw new Error(`Port ${config.port} is in use by another program. Start Pelican on another one: ${NAME} --port ${config.port === 65535 ? 7861 : config.port + 1} (or set PELICAN_PORT).`);
@@ -468,8 +478,9 @@ async function main(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') return portTaken();
     throw error;
   }
+  // Where it really listens (`localhost` may be ::1), so the commands that talk to it reach it.
   const { recordRunning } = await import('./running.js');
-  await recordRunning({ port: config.port, host: config.host, url: callable(config.host, config.port), version: pkg.version }).catch(() => undefined);
+  await recordRunning({ port: config.port, host: config.host, url: reachable(url), version: pkg.version }).catch(() => undefined);
 
   const shown = url.replace('://127.0.0.1:', '://localhost:');
   const token = accessToken();
@@ -496,17 +507,12 @@ async function main(): Promise<void> {
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${open}\n  ${protection}${claude}\n`);
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
 
-  // The phone: a QR code with a one-time code (never the token) where the address is known.
+  // The phone: a QR code with a one-time code (never the token) where the address is known. Shown
+  // once: the terminal is never read here, or a Pelican started in the background (`pelican &`)
+  // would be stopped by the terminal (SIGTTIN). `pelican phone` makes a new code, on Enter too.
   if (search.address && interactive) {
-    const fresh = () => (mode === 'none' ? null : issueCode());
-    process.stdout.write(`${phoneBlock(search.address, fresh())}`);
-    if (mode !== 'none' && process.stdin.isTTY) {
-      process.stdout.write('  Press Enter for a new code.\n\n');
-      process.stdin.setEncoding('utf8');
-      process.stdin.on('data', () => process.stdout.write(`\n${phoneBlock(search.address!, fresh())}\n`));
-    } else {
-      process.stdout.write('\n');
-    }
+    const code = mode === 'none' ? null : issueCode();
+    process.stdout.write(`${phoneBlock(search.address, code)}${code ? `  A new one: \`${NAME} phone\`\n` : ''}\n`);
   } else if (search.address) {
     console.log(`  On your phone: ${search.address.url}\n`);
   } else if (!config.demo) {
