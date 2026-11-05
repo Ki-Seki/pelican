@@ -330,8 +330,9 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
 /**
  * Where each turn's "files changed" goes: under the last of Claude's answers in it. Turns end
  * where Claude Code's /diff ends them (see changes.ts), at the next row it counts as a prompt: a
- * prompt with words or a `/` command, a `!` command, a background task's note, an interruption, a
- * compaction. A `/` command's output belongs to it, and a picture sent without words is no new turn.
+ * prompt with words, files or a `/` command, a `!` command, a background task's note, an
+ * interruption, a compaction. A `/` command's output belongs to it, and a picture sent without
+ * words is no new turn.
  */
 export function filesChangedUnder(items: readonly Item[], turns: readonly TurnChanges[]): Map<string, TurnChanges> {
   const byStart = new Map(turns.map((turn) => [turn.uuid, turn]));
@@ -343,7 +344,8 @@ export function filesChangedUnder(items: readonly Item[], turns: readonly TurnCh
     if (turn && answer) under.set(answer, turn);
   };
   for (const item of items) {
-    const starts = item.kind === 'user' ? !item.steered && (Boolean(item.text) || Boolean(item.command))
+    // A message of files alone is text to /diff: its "Attached files:" block.
+    const starts = item.kind === 'user' ? !item.steered && (Boolean(item.text) || Boolean(item.command) || item.files.length > 0)
       : item.kind === 'notice' ? item.tone === 'task' || item.tone === 'interrupt'
         : item.kind === 'shell' || item.kind === 'compact';
     if (starts) {
