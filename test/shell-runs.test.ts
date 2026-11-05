@@ -1,4 +1,6 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -90,6 +92,10 @@ const { listModels } = await import('../src/server/models');
 const { feedFor } = await import('../src/server/feed');
 const { BASH_CAVEAT } = await import('../src/server/shell');
 const { liveShells, shellsEvent, startShell, stopShell } = await import('../src/server/shell-runs');
+const { app } = await import('../src/server/app');
+const { accessToken, loadAuth } = await import('../src/server/auth');
+const { config } = await import('../src/server/config');
+const { rememberChoice } = await import('../src/server/trust');
 
 const folder = process.cwd();
 const settle = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -215,6 +221,52 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
   });
+});
+
+describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to your settings only', () => {
+  it('runs git as Claude Code does there: none of the repository’s own programs run', async () => {
+    const session = '7b7b7b7b-1111-4222-8333-444444444444';
+    const shell = process.env.SHELL;
+    // A plain shell: nothing of the developer's login profile runs.
+    process.env.SHELL = '/bin/sh';
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pelican-user-only-')));
+    try {
+      config.auth = 'auto';
+      await loadAuth();
+      // A repository someone sent you, whose config runs a program of its own on `git status`.
+      const repo = path.join(dir, 'downloaded');
+      const marker = path.join(dir, 'fsmonitor-ran');
+      await mkdir(repo);
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      const program = path.join(dir, 'fsmonitor.sh');
+      await writeFile(program, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
+      execFileSync('git', ['config', 'core.fsmonitor', program], { cwd: repo });
+      const ran = () => stat(marker).then(() => true, () => false);
+      // It does run for a git of its own.
+      execFileSync('git', ['status', '--short'], { cwd: repo });
+      expect(await ran()).toBe(true);
+      await rm(marker);
+
+      // A session there, as Claude Code records one, in a folder its owner kept to their settings only.
+      const projects = path.join(scratch, 'claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'));
+      await mkdir(projects, { recursive: true });
+      const prompt = { type: 'user', uuid: 'p1', parentUuid: null, sessionId: session, cwd: repo, timestamp: '2026-11-05T10:00:00Z', message: { role: 'user', content: 'Look around' } };
+      await writeFile(path.join(projects, `${session}.jsonl`), `${JSON.stringify(prompt)}\n`);
+      await rememberChoice(repo, 'user-only');
+
+      const response = await app.request(`/api/sessions/${session}/shell`, {
+        method: 'POST',
+        headers: { host: 'localhost:7860', origin: 'http://localhost:7860', 'x-pelican': '1', 'content-type': 'application/json', authorization: `Bearer ${accessToken()}` },
+        body: JSON.stringify({ command: 'git status --short' }),
+      });
+      expect(response.status).toBe(202);
+      await until(() => liveShells(session).length === 0, 10_000);
+      expect(await ran()).toBe(false);
+    } finally {
+      process.env.SHELL = shell;
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe('what a turn has cost', () => {

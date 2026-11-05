@@ -81,14 +81,16 @@ async function record(sessionId: string, cwd: string, id: string, result: ShellR
 }
 
 /**
- * Starts a `!` command in the session's folder. Its pages see it at once and its output as it
- * comes; once done it goes into the conversation under the command's id.
+ * Starts a `!` command in the session's folder, with the environment Claude Code gets there
+ * (`env`, from launchFor). Its pages see it at once and its output as it comes; once done it goes
+ * into the conversation under the command's id.
  */
-export function startShell(sessionId: string, cwd: string, command: string): LiveShell {
+export function startShell(sessionId: string, cwd: string, command: string, env?: Record<string, string>): LiveShell {
   const id = randomUUID();
   const shell: LiveShell = { id, command, startedAt: Date.now(), output: '' };
   let entry: Entry | undefined;
   const run = startCommand(cwd, command, {
+    ...(env ? { env } : {}),
     onOutput: (text) => {
       if (!entry) return;
       entry.pending += text;

@@ -42,14 +42,16 @@ export type CommandRun = {
 /**
  * Runs one `!` command in a session's folder through the user's login shell, like Claude Code's
  * bash mode: no terminal, output handed on as it comes (`onOutput`, stdout and stderr together)
- * and kept up to a limit, ended by Stop or after `limitMs`.
+ * and kept up to a limit, ended by Stop or after `limitMs`. `env` is what Claude Code itself gets
+ * in the folder (trust.ts, launchFor): in one kept to the user's settings only, git runs none of
+ * the repository's own programs, for a `!` command as for Claude's.
  *
  * The command gets a process group of its own. It is done when its shell is: a process it left in
  * the background (`npm run dev &`) keeps running, and the result says so, instead of holding the
  * command open for its whole life by keeping the output pipes. Ending it ends everything it
  * started, not just the shell, whose children would otherwise run on.
  */
-export function startCommand(cwd: string, command: string, options: { limitMs?: number; onOutput?: (text: string) => void } = {}): CommandRun {
+export function startCommand(cwd: string, command: string, options: { limitMs?: number; onOutput?: (text: string) => void; env?: Record<string, string> } = {}): CommandRun {
   const limitMs = options.limitMs ?? MAX_RUN_MS;
   const shell = process.env.SHELL || '/bin/bash';
   const started = Date.now();
@@ -64,7 +66,7 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
   });
   const child = spawn(shell, ['-lc', command], {
     cwd,
-    env: { ...process.env, PAGER: 'cat', GIT_PAGER: 'cat', TERM: 'dumb' },
+    env: { ...process.env, ...options.env, PAGER: 'cat', GIT_PAGER: 'cat', TERM: 'dumb' },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: groups,
   });

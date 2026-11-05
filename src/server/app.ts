@@ -735,7 +735,9 @@ app.get('/api/sessions/:id/changes', async (c) => {
 /**
  * A `!` command: it starts at once, its output goes to the session's pages as it comes, and once
  * done it goes into the conversation (shell-runs.ts). A folder nobody trusted is asked about
- * before anything runs, as for a message, since recording it starts Claude Code there.
+ * before anything runs, as for a message, since recording it starts Claude Code there; the
+ * command runs as Claude Code would there, so in a folder kept to the user's settings only, git
+ * runs none of the repository's programs.
  */
 app.post('/api/sessions/:id/shell', async (c) => {
   const id = c.req.param('id');
@@ -747,8 +749,8 @@ app.post('/api/sessions/:id/shell', async (c) => {
   // A side chat reads; it runs nothing in the folder.
   if (await isSideChat(id)) return c.json({ error: 'A side chat runs no commands. Run it in the session itself.' }, 409);
   if (body.trust === 'trusted' || body.trust === 'user-only') await rememberChoice(cwd, body.trust);
-  await launchFor(cwd);
-  return c.json({ shell: startShell(id, cwd, command) }, 202);
+  const launch = await launchFor(cwd);
+  return c.json({ shell: startShell(id, cwd, command, launch.env) }, 202);
 });
 
 app.post('/api/sessions/:id/shell/:shell/stop', (c) => (stopShell(c.req.param('id'), c.req.param('shell'))
