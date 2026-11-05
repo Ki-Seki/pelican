@@ -41,7 +41,7 @@ import type {
   WorkflowPhase,
   WorkflowStatus,
 } from '../shared/protocol.js';
-import { agentTokens, parseMeta } from '../shared/workflows.js';
+import { agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
@@ -1114,9 +1114,13 @@ export class SessionRun {
     // A workflow's run id is only in its call's result: the folder its agents write to.
     const launched = (raw.tool_use_result ?? {}) as { taskId?: unknown; runId?: unknown };
     const flow = typeof launched.taskId === 'string' ? this.flows.get(launched.taskId) : undefined;
-    if (flow && typeof launched.runId === 'string') {
+    if (flow && typeof launched.runId === 'string' && RUN_ID.test(launched.runId)) {
       flow.runId = launched.runId;
+      // The call it answers, should its start not have said.
+      const answered = (content as Array<Record<string, unknown>>).find((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string');
+      flow.toolUseId ??= answered?.tool_use_id as string | undefined;
       flow.shown = undefined;
+      this.emit(true);
     }
     for (const block of content as Array<Record<string, unknown>>) {
       if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;

@@ -19,8 +19,17 @@ import { ToolCallView } from './ToolCall';
 /** How a run ended, in the words of Claude Code's notice. */
 const ENDED: Record<NonNullable<TaskNotice['status']>, WorkflowStatus> = { completed: 'completed', failed: 'failed', killed: 'killed', stopped: 'killed' };
 
-/** A run Claude Code reported in full: its record, or an end nothing changes any more. */
-const settled = (workflow: Workflow | undefined) => Boolean(workflow && (workflow.source === 'record' || !isRunning(workflow.status)));
+/**
+ * A run nothing changes any more: Claude Code's record of it, or an end long enough ago. One that
+ * ended moments ago is asked for again a little while, for its record, written just after.
+ */
+function settled(workflow: Workflow | undefined): boolean {
+  if (!workflow) return false;
+  if (workflow.source === 'record') return true;
+  if (isRunning(workflow.status)) return false;
+  const end = workflow.startedAt !== undefined && workflow.durationMs !== undefined ? workflow.startedAt + workflow.durationMs : 0;
+  return Date.now() - end > 30_000;
+}
 
 /**
  * What the card knows of the run: what this Pelican's Claude reports of it while it runs, else
