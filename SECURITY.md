@@ -101,7 +101,7 @@ can read your sessions and have Claude run commands as you, so treat access to i
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
   formats, each a regular file whose real path, links followed, is inside the session's own folder
   next to its transcript, and within a size. An agent's steps come a page at a time, at most a few
-  hundred kilobytes, and its pictures are left out.
+  hundred kilobytes (a message larger than 128 KB has its parts cut), and its pictures are left out.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it.
