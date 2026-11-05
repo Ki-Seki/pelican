@@ -13,12 +13,16 @@ export type Part =
   | { kind: 'tool'; key: string; call: ToolCall }
   | { kind: 'image'; key: string; image: ImageBlock };
 
+/** A file sent with a prompt; `id` is its upload and `path` where Claude reads it, once the server has written the prompt down. */
+export type SentFile = { name: string; id?: string; path?: string };
+
 export type Item =
   | {
     kind: 'user';
     key: string;
     text: string;
     images: ImageBlock[];
+    files: SentFile[];
     command?: { name: string; args: string };
     timestamp?: number;
     pending?: boolean;
@@ -61,6 +65,38 @@ type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
   | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
   | { kind: 'shell'; command: string; stdout: string; stderr: string };
+
+/**
+ * The files sent with a prompt, out of its text. Pelican tells Claude where they are in an
+ * "Attached files:" block of paths, which is for Claude, not for reading; a prompt still on its
+ * way names them on lines of their own, "📎 name".
+ */
+export function splitFiles(text: string, pending = false): { text: string; files: SentFile[] } {
+  const block = text.match(/(?:^|\n\n)Attached files:\n((?:- .+ \(.+\)(?:\n|$))+)$/);
+  if (block) {
+    const files = block[1]!.trimEnd().split('\n').map((line): SentFile => {
+      // The path ends in the file's own name, which may hold " (" itself.
+      const upload = line.match(/^- (.*\/uploads\/([0-9a-f-]{36})\/(.+)) \(\3\)$/);
+      if (upload) return { name: upload[3]!, id: upload[2]!, path: upload[1]! };
+      const other = line.match(/^- (.+) \((.+)\)$/);
+      return other ? { name: other[2]!, path: other[1]! } : { name: line.slice(2) };
+    });
+    return { text: text.slice(0, block.index).trimEnd(), files };
+  }
+  if (pending) {
+    const lines = text.split('\n');
+    let at = lines.length;
+    while (at > 0 && lines[at - 1]!.startsWith('📎 ')) at -= 1;
+    if (at < lines.length) return { text: lines.slice(0, at).join('\n').trimEnd(), files: lines.slice(at).map((line) => ({ name: line.slice(3) })) };
+  }
+  return { text, files: [] };
+}
+
+/** A prompt's text with its files' block put back, for sending it again with the same files. */
+export function withFiles(text: string, files: SentFile[]): string {
+  const lines = files.flatMap((file) => (file.path ? [`- ${file.path} (${file.name})`] : []));
+  return lines.length > 0 ? `${text}${text ? '\n\n' : ''}Attached files:\n${lines.join('\n')}` : text;
+}
 
 const unescape = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
@@ -136,6 +172,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       if (classified.kind === 'user') {
         push({
           ...classified,
+          ...splitFiles(classified.text, message.pending),
           key: message.uuid,
           images,
           ...(message.timestamp ? { timestamp: message.timestamp } : {}),

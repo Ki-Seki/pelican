@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ChatMessage, ToolResultBlock } from '../src/shared/protocol';
 import { describeTool } from '../src/web/lib/tools';
-import { buildItems, cleanOutput } from '../src/web/lib/turns';
+import { buildItems, cleanOutput, splitFiles, withFiles } from '../src/web/lib/turns';
 
 const ESC = '\u001b';
 
@@ -33,6 +33,39 @@ describe('cleanOutput', () => {
   it('cleans the output of local commands shown in the conversation', () => {
     const items = buildItems([{ uuid: 'o', role: 'user', blocks: [{ type: 'text', text: `<local-command-stdout>${ESC}[1mContext Usage${ESC}[22m\n62k/200k tokens</local-command-stdout>` }] }]);
     expect(items).toMatchObject([{ kind: 'notice', tone: 'output', text: 'Context Usage\n62k/200k tokens' }]);
+  });
+});
+
+describe('files sent with a prompt', () => {
+  const block = 'Attached files:\n- /home/me/.local/state/pelican/uploads/5f1e2d3c-4b5a-4968-8776-655443322110/report (1).pdf (report (1).pdf)\n- /tmp/notes.txt (notes.txt)';
+
+  it('are names to show, not the paths Claude reads them from', () => {
+    expect(splitFiles(`Why is it slow?\n\n${block}`)).toEqual({
+      text: 'Why is it slow?',
+      files: [
+        { name: 'report (1).pdf', id: '5f1e2d3c-4b5a-4968-8776-655443322110', path: '/home/me/.local/state/pelican/uploads/5f1e2d3c-4b5a-4968-8776-655443322110/report (1).pdf' },
+        { name: 'notes.txt', path: '/tmp/notes.txt' },
+      ],
+    });
+    expect(splitFiles(block).text).toBe('');
+    expect(splitFiles('Attached files: none, I forgot').files).toEqual([]);
+  });
+
+  it('come back as the same block when the prompt is sent again', () => {
+    const { text, files } = splitFiles(`Why is it slow?\n\n${block}`);
+    expect(withFiles(`${text} Look again.`, files)).toBe(`Why is it slow? Look again.\n\n${block}`);
+    expect(withFiles('Only text', [])).toBe('Only text');
+  });
+
+  it('are named on lines of their own while the prompt is on its way', () => {
+    expect(splitFiles('Read these\n📎 a.pdf\n📎 b.csv', true)).toEqual({ text: 'Read these', files: [{ name: 'a.pdf' }, { name: 'b.csv' }] });
+    // Typed text is left as it is once the prompt is written down.
+    expect(splitFiles('Read these\n📎 a.pdf').files).toEqual([]);
+  });
+
+  it('show with the prompt in the conversation', () => {
+    const items = buildItems([{ uuid: 'u', role: 'user', blocks: [{ type: 'text', text: `Why?\n\n${block}` }] }]);
+    expect(items).toMatchObject([{ kind: 'user', text: 'Why?', files: [{ name: 'report (1).pdf' }, { name: 'notes.txt' }] }]);
   });
 });
 

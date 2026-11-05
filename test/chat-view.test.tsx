@@ -130,6 +130,39 @@ describe('following the end of the conversation', () => {
   });
 });
 
+describe('a prompt', () => {
+  it('is text you can select, with its actions shown on a tap on a touch screen', () => {
+    media['(hover: none)'] = true;
+    render(<MessageList sessionId="s" view={view()} mode="normal" onRewind={() => {}} />);
+    const prompt = screen.getByText('Add a dark theme');
+    expect(prompt.closest('button')).toBeNull();
+    // The prompt's Copy comes first; the reply has its own.
+    const row = screen.getAllByRole('button', { name: 'Copy' })[0]!.parentElement!;
+    expect(row.className).toContain('sr-only');
+    // The end of selecting some of it is not a tap.
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'dark' } as Selection);
+    fireEvent.click(prompt);
+    expect(row.className).toContain('sr-only');
+    selection.mockRestore();
+    fireEvent.click(prompt);
+    expect(row.className).not.toContain('sr-only');
+    expect(screen.getByRole('button', { name: 'Rewind' })).toBeTruthy();
+  });
+
+  it('keeps its actions to a pointer’s hover or focus on a computer: a click does nothing', () => {
+    render(<MessageList sessionId="s" view={view()} mode="normal" />);
+    const row = screen.getAllByRole('button', { name: 'Copy' })[0]!.parentElement!;
+    fireEvent.click(screen.getByText('Add a dark theme'));
+    expect(row.className).toContain('group-focus-within/user:opacity-100');
+  });
+
+  it('has a heading for each turn, for moving through the conversation by headings', () => {
+    render(<MessageList sessionId="s" view={view()} mode="normal" />);
+    expect(screen.getAllByRole('heading', { level: 5 }).map((h) => h.textContent)).toEqual(['You said:']);
+    expect(screen.getAllByRole('heading', { level: 6 }).map((h) => h.textContent)).toEqual(['Claude said:']);
+  });
+});
+
 const tool = (name: string, input: Record<string, unknown>, content?: string, isError = false, extra: Partial<ToolCall> = {}): ToolCall => ({
   id: 't', name, input, ...(content !== undefined ? { result: { type: 'tool_result', tool_use_id: 't', content, ...(isError ? { is_error: true } : {}) } } : {}), ...extra,
 });
