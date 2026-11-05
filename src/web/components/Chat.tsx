@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
+import type { Start } from '../lib/start';
 import { baseName, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
@@ -24,6 +25,7 @@ import {
 import { currentTasks, type Todo } from '../lib/tools';
 import { Composer } from './Composer';
 import { MessageList } from './MessageList';
+import { StartIn } from './NewSession';
 import { PermissionCard } from './PermissionCard';
 import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
@@ -246,8 +248,8 @@ export function Chat({
   wide: boolean;
   onBack: () => void;
   onOpen: (id: string, replace?: boolean) => void;
-  /** Opens a new, empty session in a folder. */
-  onStartIn: (cwd: string) => void;
+  /** Opens a new, empty session somewhere else, in place of this one. */
+  onStartIn: (start: Start) => void;
 }) {
   const viewId = sessionId ?? `new:${scratch ? 'scratch' : newCwd}`;
   const view = useSessionView(viewId);
@@ -500,9 +502,9 @@ export function Chat({
         <MessageList sessionId={viewId} view={view} cwd={cwd} mode={viewOf(prefs, sessionId)} {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-          <div>
+          <div className="min-w-0 max-w-full">
             <div className="text-[17px] font-medium">What should Claude do?</div>
-            <div className="mt-1 font-mono text-[12.5px] text-faint">{subtitle}</div>
+            <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={onStartIn} />
           </div>
         </div>
       )}

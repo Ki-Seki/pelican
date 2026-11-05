@@ -298,8 +298,10 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [text]);
 
+  // On a phone too: a new session opens ready to type, with the keyboard up where the browser
+  // lets a page raise it.
   useEffect(() => {
-    if (autoFocus && !window.matchMedia('(pointer: coarse)').matches) area.current?.focus();
+    if (autoFocus) area.current?.focus();
   }, [autoFocus]);
 
   const addFiles = (files: FileList | File[]) => {

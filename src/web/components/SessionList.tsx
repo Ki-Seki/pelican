@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { type Entry, fold, foldKey, single } from '../lib/fold';
 import { dayGroup, relativeTime } from '../lib/format';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
+import { defaultStart, type Start } from '../lib/start';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
 
 /** Filter values for sessions outside projects. */
@@ -379,7 +380,8 @@ export function SessionList({
   machine: string;
   selectedId?: string;
   onOpen: (id: string) => void;
-  onNew: () => void;
+  /** Starts a new session there; nowhere given, the page that asks where. */
+  onNew: (start?: Start) => void;
   onSettings: () => void;
   connected: boolean;
   banner?: React.ReactNode;
@@ -520,6 +522,7 @@ export function SessionList({
   const compact = prefs.listDensity === 'compact';
   // What "All" shows, counted the way it is filtered.
   const visibleCount = (sessions ?? []).filter((s) => !s.archived && !(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)).length;
+  const startNew = () => onNew(project === SCRATCH ? { scratch: true } : defaultStart(sessions ?? [], project && !SPECIAL[project] ? project : undefined));
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -535,7 +538,7 @@ export function SessionList({
           <button type="button" aria-label="Settings" onClick={onSettings} className="grid size-11 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg pointer-fine:size-10">
             <Settings className="size-[18px]" />
           </button>
-          <button type="button" aria-label="New session" onClick={onNew} className="ml-1 grid size-11 place-items-center rounded-full bg-fg text-bg pointer-fine:size-10">
+          <button type="button" aria-label="New session" onClick={startNew} className="ml-1 grid size-11 place-items-center rounded-full bg-fg text-bg pointer-fine:size-10">
             <Plus className="size-5" />
           </button>
         </div>
