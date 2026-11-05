@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Options, PermissionResult, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -133,7 +133,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks } = await import('../src/server/runner');
+const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks, startSideChat } = await import('../src/server/runner');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
@@ -876,6 +876,81 @@ describe('notifications', () => {
     expect(askedFor({ ...base, toolName: 'mcp__github__create_issue', input: {} }, '/w')).toBe('Use github · create_issue');
     expect(oneLine('echo "\u202e\u2066hidden\u2069"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
     expect(oneLine('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`);
+  });
+});
+
+describe('side chats', () => {
+  /** A session on disk, Claude's first answer included, for a side chat to copy. */
+  async function session(): Promise<{ id: string; file: string }> {
+    const id = crypto.randomUUID();
+    const dir = path.join(scratch, 'claude', 'projects', folder.replace(/[^a-zA-Z0-9]/g, '-'));
+    await mkdir(dir, { recursive: true });
+    const prompt = crypto.randomUUID();
+    const file = path.join(dir, `${id}.jsonl`);
+    await writeFile(file, [
+      { type: 'user', uuid: prompt, parentUuid: null, sessionId: id, cwd: folder, timestamp: new Date(Date.now() - 120_000).toISOString(), message: { role: 'user', content: 'Add a dark theme' } },
+      {
+        type: 'assistant', uuid: crypto.randomUUID(), parentUuid: prompt, sessionId: id, cwd: folder, timestamp: new Date(Date.now() - 110_000).toISOString(),
+        message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'The colors are CSS variables already.' }] },
+      },
+    ].map((row) => `${JSON.stringify(row)}\n`).join(''));
+    return { id, file };
+  }
+
+  it('answer in a copy of the session, with the reading tools only, no MCP server and never Bypass, whatever the session runs with', async () => {
+    const parent = await session();
+    const before = await readFile(parent.file);
+    const side = await startSideChat(parent.id, { text: 'Why CSS variables?', settings: { model: 'opus', effort: 'high', ultracode: true, permissionMode: 'bypassPermissions' } });
+    expect(side).not.toBe(parent.id);
+    const claude = claudes.at(-1)!;
+    expect(claude.options).toMatchObject({
+      resume: side,
+      tools: ['Read', 'Grep', 'Glob'],
+      strictMcpConfig: true,
+      mcpServers: {},
+      permissionMode: 'dontAsk',
+      allowDangerouslySkipPermissions: false,
+      enableFileCheckpointing: false,
+      model: 'opus',
+      effort: 'high',
+    });
+    expect(claude.options.settings).toBeUndefined();
+    await settle();
+    expect(claude.prompts.map(textOf)).toEqual(['Why CSS variables?']);
+    // Anything Claude Code would still ask about is refused there, with nobody asked.
+    const { answer } = ask(claude, 'Bash', { command: 'git commit -am wip' });
+    expect((await answer).behavior).toBe('deny');
+    expect(getRun(side)!.state().permissions).toEqual([]);
+    // Bypass picked afterwards never reaches it.
+    const run = getRun(side)!;
+    await run.updateSettings({ permissionMode: 'bypassPermissions', model: 'opus' });
+    await run.setPermissionMode('bypassPermissions');
+    expect(claude.called('setPermissionMode')).toEqual([]);
+    expect(run.state().settings.permissionMode).toBe('dontAsk');
+    // The session itself: no Claude started for it, its transcript as it was.
+    expect(getRun(parent.id)).toBeUndefined();
+    expect(await readFile(parent.file)).toEqual(before);
+  });
+
+  it('take questions, not / commands, say nothing on a lock screen, and go on as side chats once their Claude has closed', async () => {
+    const parent = await session();
+    await expect(startSideChat(parent.id, { text: '/compact', settings: {} })).rejects.toThrow(/questions/);
+    const side = await startSideChat(parent.id, { text: 'What does the toggle change?', settings: {} });
+    const claude = claudes.at(-1)!;
+    const run = getRun(side)!;
+    claude.say(init({ permissionMode: 'dontAsk' }));
+    claude.say(reply('It sets data-theme on the root element.'));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(notices.filter((n) => n.tag.startsWith(side))).toEqual([]);
+    await expect(run.send({ text: '/model sonnet', attachments: [], settings: {} })).rejects.toThrow(/questions/);
+
+    run.close();
+    await settle();
+    await sendMessage({ sessionId: side }, { text: 'And where is it kept?', attachments: [], settings: { permissionMode: 'bypassPermissions' } });
+    const again = claudes.at(-1)!;
+    expect(again).not.toBe(claude);
+    expect(again.options).toMatchObject({ resume: side, tools: ['Read', 'Grep', 'Glob'], strictMcpConfig: true, permissionMode: 'dontAsk', allowDangerouslySkipPermissions: false });
   });
 });
 

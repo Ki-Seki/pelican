@@ -25,8 +25,9 @@ import { defaultMode, knownModels, listCompletions, listModels, planUsage, probe
 import { searchFiles } from './project-files.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage } from './runner.js';
+import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
 import { runCommand } from './shell.js';
+import { isSideChat } from './side-chat.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
@@ -488,6 +489,21 @@ app.post('/api/sessions/:id/fork', async (c) => {
   return c.json({ sessionId: await fork(id, upTo, body.title) });
 });
 
+/**
+ * A side question, as Claude Desktop asks one: the session so far is copied into a side chat whose
+ * Claude only reads, and the question goes there (runner.ts, startSideChat). The session itself is
+ * not touched, also while Claude works in it. Later questions go to the side chat as messages.
+ */
+app.post('/api/sessions/:id/side', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const body = await c.req.json<{ question?: unknown; settings?: unknown; uuid?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+  if (typeof body.question !== 'string' || !body.question.trim() || body.question.length > 200_000) return c.json({ error: 'Ask a question' }, 400);
+  if (!id || !(await sessionInfo(id))) return c.json({ error: 'No such session' }, 404);
+  const uuid = uuidOf(body.uuid);
+  const sessionId = await startSideChat(id, { text: body.question, settings: cleanSettings(body.settings), ...(uuid ? { uuid } : {}) });
+  return c.json({ sessionId });
+});
+
 /** Put a session away from the list, or bring it back; nothing else changes. */
 app.post('/api/sessions/:id/archive', async (c) => {
   const id = uuidOf(c.req.param('id'));
@@ -611,6 +627,7 @@ app.post('/api/sessions/:id/shell', async (c) => {
   if (!command?.trim()) return c.json({ error: 'No command' }, 400);
   const info = await sessionInfo(id);
   if (!info?.cwd || !(await isDirectory(info.cwd))) return c.json({ error: 'The session’s folder is missing' }, 404);
+  if (await isSideChat(id)) return c.json({ error: 'A side chat runs no commands. Run it in the session itself.' }, 409);
   const result = await runCommand(info.cwd, command.trim());
   // Into the conversation without a turn: Claude reads it with the next message.
   await (await ensureRun(id)).appendShell(result);

@@ -94,4 +94,18 @@ describe('firstTurnSession', () => {
     expect(await firstTurnSession(own)).toBe('own');
     expect(await firstTurnSession(path.join(dir, 'missing.jsonl'))).toBeUndefined();
   });
+
+  it('names the session an Agent SDK fork was made from, whose rows carry the fork’s own id', async () => {
+    const fork = await write('forked.jsonl', [
+      row({ type: 'user', sessionId: 'forked', forkedFrom: { sessionId: 'parent', messageUuid: 'm1' }, message: { role: 'user', content: 'from the parent' }, timestamp: '2026-11-02T09:00:00Z' }),
+      row({ type: 'custom-title', customTitle: 'Side chat', sessionId: 'forked' }),
+    ]);
+    expect(await firstTurnSession(fork)).toBe('parent');
+    // Copied whole by Claude Desktop, a fork's rows keep naming where they were forked from: the
+    // copy is of the fork, the session the rows say they are in.
+    const copy = await write('copy.jsonl', [
+      row({ type: 'user', sessionId: 'forked', forkedFrom: { sessionId: 'parent', messageUuid: 'm1' }, message: { role: 'user', content: 'from the parent' }, timestamp: '2026-11-02T09:00:00Z' }),
+    ]);
+    expect(await firstTurnSession(copy)).toBe('forked');
+  });
 });

@@ -286,12 +286,14 @@ const headCache = new Map<string, string | null>();
 /**
  * The session id on the first prompt or reply of a transcript. It is the file's own id, except
  * in a copy of another session: Claude Desktop's side chats start with the whole conversation
- * they came from, rows and ids unchanged. A file only grows at its end, so an answer is kept;
- * a file that holds no turn yet is asked again next time.
+ * they came from, rows and ids unchanged, and the Agent SDK's forks (Pelican's side chats) with
+ * rows that carry the copy's id and name the session each came from (`forkedFrom`). A file only
+ * grows at its end, so an answer is kept; a file that holds no turn yet is asked again next time.
  */
 export async function firstTurnSession(file: string): Promise<string | undefined> {
   const cached = headCache.get(file);
   if (cached !== undefined) return cached ?? undefined;
+  const own = path.basename(file, '.jsonl');
   let found: string | undefined;
   let read = 0;
   try {
@@ -303,9 +305,10 @@ export async function firstTurnSession(file: string): Promise<string | undefined
         if (read > HEAD_SCAN) break;
         if (!line.includes('"sessionId"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
         try {
-          const row = JSON.parse(line) as { type?: string; sessionId?: unknown; isSidechain?: boolean };
+          const row = JSON.parse(line) as { type?: string; sessionId?: unknown; isSidechain?: boolean; forkedFrom?: { sessionId?: unknown } };
           if ((row.type === 'user' || row.type === 'assistant') && !row.isSidechain && typeof row.sessionId === 'string') {
-            found = row.sessionId;
+            const from = row.forkedFrom?.sessionId;
+            found = row.sessionId === own && typeof from === 'string' && from ? from : row.sessionId;
             break;
           }
         } catch {

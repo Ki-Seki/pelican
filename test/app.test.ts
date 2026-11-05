@@ -157,6 +157,15 @@ describe('what a request may carry', () => {
     expect(response.status).toBe(400);
   });
 
+  it('a side question only with a question, about a session there is', async () => {
+    const side = (sessionId: string, body: unknown) => ask(`/api/sessions/${sessionId}/side`, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+    expect((await side('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf', {})).status).toBe(400);
+    expect((await side('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf', { question: '   ' })).status).toBe(400);
+    expect((await side('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf', { question: 7 })).status).toBe(400);
+    expect((await side('not-a-session', { question: 'Why?' })).status).toBe(404);
+    expect((await side('4e05eb31-6d40-4b57-93dd-bf4aeb9374cf', { question: 'Why?' })).status).toBe(404);
+  });
+
   it('nothing large before signing in: an upload is refused before its body is read', async () => {
     const response = await ask('/api/uploads', { method: 'POST', body: 'x'.repeat(1000), headers: { 'content-type': 'application/octet-stream', 'content-length': String(30 * 1024 * 1024) } }, false);
     expect(response.status).toBe(401);
@@ -219,6 +228,8 @@ describe('the demo', () => {
     expect((await ask('/api/dirs?path=/etc')).status).toBe(404);
     const response = await ask('/api/push/subscribe', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } });
     expect(response.status).toBe(403);
+    const side = await ask('/api/sessions/4e05eb31-6d40-4b57-93dd-bf4aeb9374cf/side', { method: 'POST', body: JSON.stringify({ question: 'Why?' }), headers: { 'content-type': 'application/json' } });
+    expect(side.status).toBe(403);
   });
 });
 

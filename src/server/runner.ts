@@ -37,6 +37,7 @@ import type {
   TaskOutput,
   TaskProgress,
 } from '../shared/protocol.js';
+import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
 import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
@@ -48,6 +49,7 @@ import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeText } from './shell.js';
+import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
@@ -287,8 +289,11 @@ export class SessionRun {
     private readonly resumeAt?: { entry: string; dropsTurn: string },
     /** Which settings Claude Code loads: a folder nobody trusted runs none of its own (trust.ts). */
     private readonly launch: Launch = FULL_SETTINGS,
+    /** A side chat (side-chat.ts): it reads, changes nothing, and runs in its own mode whatever is picked. */
+    readonly sideChat = false,
   ) {
     if (!resume) this.costSoFar = 0;
+    if (sideChat) this.settings = sideChatSettings(settings);
   }
 
   /**
@@ -383,6 +388,8 @@ export class SessionRun {
       stderr: (data) => {
         if (process.env.PELICAN_DEBUG) process.stderr.write(`[claude ${this.sessionId.slice(0, 8)}] ${data}`);
       },
+      // Last, so nothing above can give a side chat a tool, a server or a mode of the session's.
+      ...(this.sideChat ? sideChatOptions() : {}),
     };
     this.q = query({ prompt: this.input, options });
     void this.pump();
@@ -493,6 +500,7 @@ export class SessionRun {
   async send(input: SendInput): Promise<void> {
     // In the same process Claude Code would go on under a new id, beside this session's.
     if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
+    if (this.sideChat && SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
     await this.applySettings(input.settings);
     // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
     if (this.closed) throw new RunClosed();
@@ -616,9 +624,11 @@ export class SessionRun {
    * effort at all), which Claude gets and the run then says it has. Only the mode stays as it is
    * when none is given, as Claude Code changes it too.
    */
-  async applySettings(next: RunSettings, pick = false): Promise<void> {
+  async applySettings(asked: RunSettings, pick = false): Promise<void> {
     const q = this.q;
     if (!q) return;
+    // A side chat keeps its own mode, whatever its session's is.
+    const next = this.sideChat ? sideChatSettings(asked) : asked;
     const prev = this.settings;
     const mode = next.permissionMode ?? prev.permissionMode;
     this.settings = { ...next, ...(mode ? { permissionMode: mode } : {}) };
@@ -645,6 +655,7 @@ export class SessionRun {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    if (this.sideChat) return;
     await this.applySettings({ ...this.settings, permissionMode: mode }, true);
     this.emit();
   }
@@ -1084,7 +1095,8 @@ export class SessionRun {
             if (!goesOn) this.setBusy(false);
             this.emit();
             void this.readContext();
-            if (!stopped && !goesOn) {
+            // A side chat is answered while it is looked at; its session's own turns are what to hear about.
+            if (!stopped && !goesOn && !this.sideChat) {
               void notify({
                 title: this.title || 'Claude Code',
                 body: failed ? oneLine(`Stopped: ${this.error ?? 'error'}`, 180) : oneLine(reply.split('\n').find((line) => line.trim()) ?? '') || 'Finished',
@@ -1239,7 +1251,7 @@ async function sentTo(run: SessionRun, input: SendInput): Promise<boolean> {
  * Sends a message, starting (or resuming) the session's Claude process when
  * none is running. Without a session id a new session starts in `cwd`.
  */
-export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
+export async function sendMessage(target: { sessionId?: string; cwd?: string; sideChat?: boolean }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   if (target.sessionId) {
@@ -1249,10 +1261,12 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
     const cwd = info?.cwd ?? target.cwd;
     if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
     const launch = await launchFor(cwd);
+    // A side chat goes on as one, whichever app made it and wherever it is continued from.
+    const side = target.sideChat === true || (await isSideChat(target.sessionId));
     // Another request may have started one while this one looked the folder up.
     const started = getRun(target.sessionId);
     if (started && (await sentTo(started, input))) return started.sessionId;
-    const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch);
+    const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch, side);
     runs.set(run.sessionId, run);
     run.start();
     await run.send(input);
@@ -1277,13 +1291,14 @@ export async function replaceLastTurn(sessionId: string, cwd: string, entry: str
   // Turned away before anything changes: the running Claude stays as it is.
   if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   const launch = await launchFor(cwd);
+  const side = await isSideChat(sessionId);
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
   if (existing) {
     existing.close();
     runs.delete(sessionId);
   }
-  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch);
+  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch, side);
   runs.set(sessionId, run);
   run.start();
   try {
@@ -1310,12 +1325,34 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
   const cwd = info?.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
   const launch = await launchFor(cwd);
+  const side = await isSideChat(sessionId);
   const started = getRun(sessionId);
   if (started) return started;
-  const run = new SessionRun(sessionId, cwd, settings, true, undefined, launch);
+  const run = new SessionRun(sessionId, cwd, settings, true, undefined, launch, side);
   runs.set(sessionId, run);
   run.start();
   return run;
+}
+
+/**
+ * Asks a side question about a session, as Claude Desktop's side chats do: the session so far is
+ * copied (the Agent SDK's forkSession) under Desktop's title for one, and the copy's own Claude,
+ * which only reads, answers there. The session itself, running or not, is not touched. A copy
+ * whose Claude cannot take the question is removed again, so nothing is left behind.
+ */
+export async function startSideChat(sessionId: string, input: Omit<SendInput, 'attachments' | 'mode'>): Promise<string> {
+  if (config.demo) throw new Error('This is the demo: nothing runs.');
+  if (!input.text.trim()) throw new Error('Ask a question');
+  if (SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
+  const side = await fork(sessionId, undefined, SIDE_CHAT_TITLE);
+  try {
+    await sendMessage({ sessionId: side, sideChat: true }, { ...input, attachments: [] });
+  } catch (error) {
+    getRun(side)?.close();
+    await remove(side).catch(() => undefined);
+    throw error;
+  }
+  return side;
 }
 
 /**
