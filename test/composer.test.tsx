@@ -164,6 +164,102 @@ describe('quotes above the message box', () => {
   });
 });
 
+describe('a message that did not go, given back while more was typed', () => {
+  type Given = { text: string; key: number; back: true; attachments?: Array<{ id: string; name: string; mime: string; size: number; path: string }> };
+  /** The box for chat `key` with `typed` in it, then `given` back to it (its send failed); and the same box after a reload. */
+  function typedThenGiven(typed: string, given: Omit<Given, 'key' | 'back'>, key = 'g1') {
+    const node = (draft?: Given) => (
+      <QueryClientProvider client={new QueryClient()}>
+        <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={() => {}} onStop={() => {}} draftKey={key} {...(draft ? { draft } : {})} />
+      </QueryClientProvider>
+    );
+    const view = render(node());
+    const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
+    fireEvent.change(box(), { target: { value: typed } });
+    view.rerender(node({ ...given, key: 1, back: true }));
+    return { box, reload: () => (view.unmount(), render(node())) };
+  }
+  const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  /** What waits above the box, each with Put back. */
+  const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
+  const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: 'Put back' })[at]!);
+
+  it('joins what was typed, above it and a blank line apart', async () => {
+    const { box } = typedThenGiven('Also: the logs', { text: 'Why does the export fail?' });
+    await frame();
+    expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs');
+    expect(waiting()).toEqual([]);
+  });
+
+  it('with quotes or files only, brings them back and leaves the words as they were, no blank lines above them', async () => {
+    const { box } = typedThenGiven('typed since', { text: 'src/a.ts:3\n> const a = 1;' });
+    await frame();
+    expect(box().value).toBe('typed since');
+    expect(screen.getByRole('list', { name: 'Quotes' }).textContent).toContain('a.ts:3');
+    cleanup();
+    const files = typedThenGiven('typed since', { text: '', attachments: [{ id: 'up1', name: 'shot.png', mime: 'image/png', size: 2048, path: '/tmp/up1' }] }, 'g2');
+    await frame();
+    expect(files.box().value).toBe('typed since');
+    expect(screen.getByLabelText('Remove shot.png')).toBeTruthy();
+  });
+
+  it('a / command waits above the box: the words typed never become its arguments, and Put back swaps the two', async () => {
+    const { box } = typedThenGiven('next question', { text: '/compact' });
+    await frame();
+    expect(box().value).toBe('next question');
+    expect(waiting()).toEqual(['/compact']);
+    putBack();
+    expect(box().value).toBe('/compact');
+    expect(waiting()).toEqual(['next question']);
+    putBack();
+    expect(box().value).toBe('next question');
+    expect(waiting()).toEqual(['/compact']);
+  });
+
+  it('a ! command waits above the box too, and Put back puts it in once the box is empty', async () => {
+    const { box } = typedThenGiven('next question', { text: '!npm test' });
+    await frame();
+    expect(box().value).toBe('next question');
+    expect(waiting()).toEqual(['!npm test']);
+    fireEvent.change(box(), { target: { value: '' } });
+    putBack();
+    expect(box().value).toBe('!npm test');
+    expect(waiting()).toEqual([]);
+    await frame();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it('a message, while a command is being typed, waits beside it: above the command it would make it words', async () => {
+    const { box } = typedThenGiven('!ls -la', { text: 'Why does the export fail?' });
+    await frame();
+    expect(box().value).toBe('!ls -la');
+    expect(waiting()).toEqual(['Why does the export fail?']);
+  });
+
+  it('waits there across a reload, and Discard lets it go for good', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { reload } = typedThenGiven('next question', { text: '!npm test' });
+      act(() => {
+        vi.runAllTimers();
+      });
+      reload();
+      expect(waiting()).toEqual(['!npm test']);
+      expect((screen.getByLabelText('Message Claude') as HTMLTextAreaElement).value).toBe('next question');
+      fireEvent.click(screen.getByRole('button', { name: 'Discard !npm test' }));
+      expect(waiting()).toEqual([]);
+      act(() => {
+        vi.runAllTimers();
+      });
+      cleanup();
+      typedThenGiven('', { text: '' });
+      expect(waiting()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('/btw', () => {
   it('asks in the side chat, with the quotes, instead of sending here', () => {
     const onSideChat = vi.fn();

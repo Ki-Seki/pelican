@@ -80,6 +80,19 @@ describe('drafts', () => {
     expect(loadDraft('s1')).toMatchObject({ text: '', quotes: ['> the failing line'] });
   });
 
+  it('keep what waits to be put back once the message beside it was sent, and take it to another folder', () => {
+    saveDraft('s1', 'Then fix what fails', [], [], ['!npm test']);
+    expect(loadDraft('s1')).toMatchObject({ text: 'Then fix what fails', held: ['!npm test'] });
+    clearDraft('s1', 'Then fix what fails');
+    expect(loadDraft('s1')).toMatchObject({ text: '', held: ['!npm test'] });
+    saveDraft('new:/code/acme', '', [], [], ['/compact']);
+    moveDraft('new:/code/acme', 'new:/code/site');
+    expect(loadDraft('new:/code/site')?.held).toEqual(['/compact']);
+    expect(loadDraft('new:/code/acme')).toBeUndefined();
+    store.set('pelican:drafts', JSON.stringify({ s1: { text: '', held: ['!kept', 3, null, ' '], at: 1 } }));
+    expect(loadDraft('s1')?.held).toEqual(['!kept']);
+  });
+
   it('take their quotes along to another folder, and drop what is not a quote', () => {
     saveDraft('new:/code/acme', 'about this', [], ['> a line']);
     moveDraft('new:/code/acme', 'new:/code/site');

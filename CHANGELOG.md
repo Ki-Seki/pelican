@@ -84,8 +84,10 @@ from every app.
   compactions, and its cost where Claude Code counts one.
 - A finished `!` command shows the end of its output, as it did while it ran; Show all shows the
   start. A running one's Stop is named for it.
-- A message that does not go comes back to the message box above anything typed since; one sent
-  for you (Send now, Compact, Retry, Cancel) leaves the box as it is.
+- A message that does not go comes back to the message box, above anything typed since. A `!` or
+  `/` command, which words typed with it would change, waits above the box instead, Not sent, with
+  Put back, as does a message that comes back while a command is typed; it is kept across reloads.
+  One sent for you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
   files.
 - Side chat in the session menu leaves the keys in the side chat's box. Quotes that do not fit above

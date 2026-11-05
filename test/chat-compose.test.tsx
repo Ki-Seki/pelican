@@ -19,6 +19,8 @@ const server = vi.hoisted(() => ({
   /** Holds the next send's answer until it settles: a slow link, or a Claude still starting. */
   hold: undefined as Promise<void> | undefined,
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
+  /** The `!` commands asked to run; each takes its answer from `answers`, as a send does. */
+  shells: [] as string[],
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
   /** What the conversation holds after its first prompt. */
@@ -74,6 +76,15 @@ vi.mock('../src/web/lib/api', async (original) => {
         await answer(body);
         return { sessionId: CREATED };
       },
+      shell: async (_id: string, command: string) => {
+        server.shells.push(command);
+        const failure = server.answers.shift();
+        const held = server.hold;
+        server.hold = undefined;
+        await held;
+        if (failure) throw failure;
+        return { shell: { id: `sh-${server.shells.length}`, command, startedAt: Date.now(), output: '' } };
+      },
       upload: async (file: File): Promise<Attachment> => ({ id: `up-${file.name}`, name: file.name, mime: file.type || 'text/plain', size: file.size, path: `/tmp/${file.name}` }),
     },
   };
@@ -122,7 +133,7 @@ afterEach(async () => {
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
-  Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
+  Object.assign(server, { answers: [], hold: undefined, sent: [], shells: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address; one closed on a phone
   // goes back through the history a moment later, which must land before the next test begins.
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -305,6 +316,52 @@ describe('a message from the box that does not go', () => {
     release();
     await screen.findByText('Can’t reach studio');
     expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs');
+  });
+
+  /** What waits above the box to be put back. */
+  const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
+
+  it('a / command, while more was typed, waits above the box: the words typed never become its arguments', async () => {
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('/compact');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: 'next question' } });
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(box().value).toBe('next question');
+    expect(waiting()).toEqual(['/compact']);
+    // Put back, it takes the box, and the words wait in its place until they are put back in turn.
+    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('/compact');
+    expect(waiting()).toEqual(['next question']);
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '/compact', held: ['next question'] }), { timeout: 2000 });
+  });
+
+  it('a ! command that does not run, while more was typed, waits above the box, never lost', async () => {
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    fireEvent.change(box(), { target: { value: '!npm test' } });
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    await waitFor(() => expect(server.shells).toEqual(['npm test']));
+    fireEvent.change(box(), { target: { value: 'Then fix what fails' } });
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(box().value).toBe('Then fix what fails');
+    expect(waiting()).toEqual(['!npm test']);
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: 'Then fix what fails', held: ['!npm test'] }), { timeout: 2000 });
+    // Sent, the words go; the command still waits, in the box's draft too.
+    sendText('Then fix what fails');
+    await waitFor(() => expect(server.sent.map((body) => body.text)).toEqual(['Then fix what fails']));
+    expect(waiting()).toEqual(['!npm test']);
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '', held: ['!npm test'] }), { timeout: 2000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('!npm test');
+    expect(waiting()).toEqual([]);
   });
 });
 
