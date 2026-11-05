@@ -119,6 +119,35 @@ const ipv6 = await new Promise<boolean>((resolve) => {
 });
 const python = spawnSync('python3', ['--version']).status === 0;
 
+describe('a program that holds Pelican’s port', () => {
+  it('is sent nothing by `pelican phone`, which refuses', async () => {
+    const c = await computer();
+    const port = await freePort();
+    const other = await squatter(port);
+    try {
+      const { code, out } = await run(c, ['phone', 'https://laptop.example.ts.net/', '--port', String(port)]);
+      expect(code).toBe(1);
+      expect(out).toMatch(/not the Pelican started with these settings/);
+      expect(other.seen.filter((r) => r.method !== 'GET' || r.secret)).toEqual([]);
+    } finally {
+      other.server.close();
+    }
+  }, 30_000);
+
+  it('makes a start on that port fail, so a service tries again, instead of saying Pelican runs', async () => {
+    const c = await computer();
+    const port = await freePort();
+    const other = await squatter(port);
+    try {
+      const { code, out } = await run(c, ['--port', String(port)]);
+      expect(out).toMatch(/is in use by another program/);
+      expect(code).toBe(1);
+    } finally {
+      other.server.close();
+    }
+  }, 30_000);
+});
+
 describe('where a command reaches Pelican', () => {
   it('is where it listens: a wildcard on loopback, ::1 as itself, a name as it resolves', () => {
     expect(callable('127.0.0.1', 7860)).toBe('http://127.0.0.1:7860/');

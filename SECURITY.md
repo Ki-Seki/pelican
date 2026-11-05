@@ -15,9 +15,14 @@ can read your sessions and have Claude run commands as you, so treat access to i
   to the browser through a file only you can read; elsewhere `--open` opens the sign-in page.
 - **A phone signs in with a one-time code**, never the token: the QR codes of `pelican phone`, of
   the start banner and of Settings carry a code that works once and for two minutes, and a new
-  token or password voids the codes made before it. `pelican phone` first checks that the address
-  reaches this very Pelican, asking it only for its public sign-in state, so no code goes to an
-  address that turns out to be another server's. The page never sees the token or your password.
+  token or password voids the codes made before it. `pelican phone` talks only to the Pelican
+  your account started, which the note it leaves in its state folder (readable only by you) names,
+  and asks it for each code with a proof good for that one request and a minute, never a sign-in
+  cookie: another account's program on Pelican's port gets nothing that signs anyone in. It also
+  checks that the address reaches this very Pelican, asking it only for its public sign-in state,
+  so no code goes to an address that turns out to be another server's. A start on a port another
+  program holds fails, instead of saying Pelican runs. The page never sees the token or your
+  password.
 - **Or a password**, set on the computer itself with `pelican password` (never over the network),
   stored as a scrypt hash in `~/.config/pelican/auth.json`. While one is set, it replaces the token.
 - **Sign-in cookies** are `HttpOnly` and `SameSite=Strict`, and signed with a secret that belongs

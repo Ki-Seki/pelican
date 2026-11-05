@@ -15,7 +15,7 @@ import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
-import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, renewedCookie, signedIn } from './auth.js';
+import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
@@ -88,6 +88,10 @@ function originOf(header: string | undefined): string | undefined {
   }
 }
 
+/** `pelican phone` asking for a phone code, with a proof made for this very request (auth.ts), not a cookie. */
+const commandAsks = (c: Context) => c.req.method === 'POST' && c.req.path === '/api/access/code'
+  && proofValid(c.req.header('x-pelican-proof'), 'POST', '/api/access/code', instance);
+
 app.use('/api/*', async (c, next) => {
   const origin = c.req.header('origin');
   const parsed = originOf(origin);
@@ -108,7 +112,7 @@ app.use('/api/*', async (c, next) => {
     && !originAllowed(origin, c.req.header('host'), c.req.header('x-forwarded-host'))) {
     return c.json({ error: 'Request from another site' }, 403);
   }
-  if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'), c.req.header('authorization'))) {
+  if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'), c.req.header('authorization')) && !commandAsks(c)) {
     return c.json({ error: 'Sign in to continue', signIn: true }, 401);
   }
   // Use keeps a browser signed in: its cookie is replaced by a fresh one (at most once a day).

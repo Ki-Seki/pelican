@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { config } from './config.js';
-import { callable, reachable } from './local.js';
+import { askLocal, callable, pelicanAt, reachable, thisPelican } from './local.js';
 import { listensLocally } from './security.js';
 
 const DOCS = 'https://ki-seki.github.io/pelican/docs.html';
@@ -195,48 +195,45 @@ async function tokenCommand(reset: boolean, portGiven: boolean): Promise<void> {
   if (token) console.log(tokenLink(addressFor(host, port), token));
 }
 
-/** Asks a local Pelican something, the way its page does. */
-async function askLocal(base: string, route: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(new URL(`api/${route}`, base), { ...init, headers: { 'X-Pelican': '1', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(5000) });
-}
-
-/** The answer of whatever listens on a port, if it is a Pelican: its sign-in state and its id. */
-async function pelicanAt(base: string): Promise<{ mode: string; instance?: string } | undefined> {
-  try {
-    const answer = await (await askLocal(base, 'auth')).json() as { mode?: unknown; instance?: unknown };
-    return typeof answer.mode === 'string' ? { mode: answer.mode, ...(typeof answer.instance === 'string' ? { instance: answer.instance } : {}) } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * `pelican phone`: a QR code that opens Pelican on the phone, signed in with a one-time code that
- * the running Pelican makes. The command signs its request with the same secret the server uses
- * (it reads the same config folder); no token or password goes anywhere.
+ * the running Pelican makes. It talks only to the Pelican this account started (the note in the
+ * state folder names it, local.ts), and asks for each code with a proof made with the secret the
+ * server signs with, good for that one request and a minute (auth.ts): never a cookie, and no
+ * token or password goes anywhere.
  */
 async function phoneCommand(given: string | undefined, portGiven: boolean): Promise<void> {
   const { findPhoneAddress, checkAddress, setupHint } = await import('./phone.js');
-  const { port, host } = await target(portGiven);
-  const base = callable(host, port);
-  const local = await pelicanAt(base);
-  if (!local) throw new Error(`Pelican is not running on port ${port}. Start it with \`${NAME}\` (or keep it running with \`${NAME} service install\`), then run \`${NAME} phone\` again.`);
-  const search = await findPhoneAddress(port, host, given);
+  const asked = portGiven ? config.port : undefined;
+  const local = await thisPelican(asked);
+  if (!local) {
+    const port = asked ?? (await target(false)).port;
+    // Something answers there, but not as the Pelican of these settings: it is asked nothing more.
+    if (await pelicanAt(callable(config.host, port))) {
+      throw new Error(`What answers on port ${port} is not the Pelican started with these settings. Run \`${NAME} phone\` with the settings it runs with (PELICAN_STATE_DIR, PELICAN_CONFIG_DIR).`);
+    }
+    throw new Error(`Pelican is not running on port ${port}. Start it with \`${NAME}\` (or keep it running with \`${NAME} service install\`), then run \`${NAME} phone\` again.`);
+  }
+  const { running } = local;
+  const search = await findPhoneAddress(running.port, running.host, given);
   if (!search.address) {
-    console.log(setupHint(search, port, NAME).join('\n'));
+    console.log(setupHint(search, running.port, NAME).join('\n'));
     console.log(`More: ${DOCS}#phone`);
     process.exitCode = 1;
     return;
   }
   const address = search.address;
-  const problem = local.instance ? await checkAddress(address.url, local.instance) : undefined;
+  const problem = await checkAddress(address.url, running.instance);
   if (problem) throw new Error(problem);
-  const { loadAuth, newSessionCookie } = await import('./auth.js');
+  const { commandProof, loadAuth } = await import('./auth.js');
   await loadAuth();
   const mint = async (): Promise<string | null> => {
-    if (local.mode === 'none') return null;
-    const cookie = newSessionCookie();
-    const response = await askLocal(base, 'access/code', { method: 'POST', headers: { Cookie: `${cookie.name}=${cookie.value}` } });
+    // Found again each time: a Pelican started again since is another server, with another id.
+    const now = await thisPelican(running.port);
+    if (!now) throw new Error(`Pelican is no longer running on port ${running.port}.`);
+    if (now.mode === 'none') return null;
+    const proof = commandProof('POST', '/api/access/code', now.running.instance);
+    const response = await askLocal(now.running.url, 'access/code', { method: 'POST', headers: { 'X-Pelican-Proof': proof } });
     if (response.status === 401) throw new Error('This Pelican keeps its sign-in in another folder (PELICAN_CONFIG_DIR): run this command with the same settings it runs with.');
     if (!response.ok) throw new Error(`Pelican did not make a code (${response.status}).`);
     return ((await response.json()) as { code: string | null }).code;
@@ -376,10 +373,15 @@ function openBrowser(url: string): void {
   }
 }
 
-/** Something on the port already: this very Pelican (say so and stop), or another program. */
+/**
+ * Something on the port already: the Pelican this account started (say so and stop), or another
+ * program, which may answer as Pelican does. That is an error, so a service starts again and gets
+ * the port back once the other program lets go of it.
+ */
 async function portTaken(): Promise<void> {
-  if (await pelicanAt(callable(config.host, config.port))) {
-    console.log(`Pelican is already running at ${addressFor(config.host, config.port)}. \`${NAME} token\` prints the link that signs you in.`);
+  const pelican = await thisPelican(config.port);
+  if (pelican) {
+    console.log(`Pelican is already running at ${addressFor(pelican.running.host, pelican.running.port)}. \`${NAME} token\` prints the link that signs you in.`);
     return;
   }
   throw new Error(`Port ${config.port} is in use by another program. Start Pelican on another one: ${NAME} --port ${config.port === 65535 ? 7861 : config.port + 1} (or set PELICAN_PORT).`);
