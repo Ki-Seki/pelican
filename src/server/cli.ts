@@ -483,15 +483,16 @@ async function main(): Promise<void> {
       : mode === 'token' ? (interactive ? `the link signs a browser in (\`${NAME} token\` prints it again)` : `browsers sign in with the link \`${NAME} token\` prints`)
         : local ? 'no sign-in (--no-auth)' : 'no sign-in (--no-auth): anyone who reaches this address can run commands as you';
 
-  const { claudeCodeInfo, claudeCodeLine, claudeSignIn } = await import('./claude-code.js');
+  const { checkNewerClaude, claudeCodeInfo, claudeCodeLine, claudeSignIn, newerClaudeLine } = await import('./claude-code.js');
   const { findPhoneAddress, phoneBlock } = await import('./phone.js');
   const nothing: import('./phone.js').PhoneSearch = {};
-  const [code, signIn, search] = await Promise.all([
+  const [code, signIn, search, newer] = await Promise.all([
     claudeCodeInfo(),
     config.demo ? undefined : within(claudeSignIn(), 4000, undefined),
     config.demo && local ? nothing : within(findPhoneAddress(config.port, config.host), 4000, nothing),
+    within(checkNewerClaude(), 4000, undefined),
   ]);
-  const claude = config.demo ? '' : `\n  ${claudeCodeLine(code, signIn, `${NAME} login`)}`;
+  const claude = config.demo ? '' : `\n  ${claudeCodeLine(code, signIn, `${NAME} login`)}${newer ? `\n  ${newerClaudeLine(newer)}` : ''}`;
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${open}\n  ${protection}${claude}\n`);
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
 

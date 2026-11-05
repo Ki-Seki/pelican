@@ -18,7 +18,7 @@ import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCod
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
-import { claudeCodeInfo } from './claude-code.js';
+import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
@@ -188,9 +188,12 @@ app.get('/api/info', async (c) => {
   const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
   const key = pushKey();
   if (key) info.pushKey = key;
-  // Which Claude Code this Pelican runs, for About (and bug reports).
+  // Which Claude Code this Pelican runs, for About (and bug reports), and the user's own when newer.
   const code = await claudeCodeInfo();
-  if (code.version || code.path) info.claudeCode = { ...(code.version ? { version: code.version } : {}), ...(code.path ? { path: code.path } : {}) };
+  const newer = newerClaude();
+  if (code.version || code.path) {
+    info.claudeCode = { ...(code.version ? { version: code.version } : {}), ...(code.path ? { path: code.path } : {}), ...(newer ? { newer } : {}) };
+  }
   return c.json(info);
 });
 

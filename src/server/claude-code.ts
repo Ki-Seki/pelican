@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { constants, existsSync, readFileSync } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -8,7 +9,9 @@ import { config } from './config.js';
 /**
  * The Claude Code that Pelican runs: the one the Agent SDK bundles, or the one PELICAN_CLAUDE_PATH
  * names. Bug reports need its version, and the start banner says whether it is signed in, since a
- * signed-out Claude Code otherwise shows only when the first message fails.
+ * signed-out Claude Code otherwise shows only when the first message fails. The banner and About
+ * also say when the user's own `claude` is newer, since its new features reach Pelican only with
+ * an update.
  */
 
 const require = createRequire(import.meta.url);
@@ -75,6 +78,68 @@ export function claudeCodeInfo(): Promise<ClaudeCodeInfo> {
   })();
   return info;
 }
+
+/** Whether version `a` (x.y.z) comes after `b`. */
+export function isNewer(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((version) => version.split('.').map((part) => Number.parseInt(part, 10) || 0));
+  for (let i = 0; i < 3; i += 1) {
+    const difference = (x?.[i] ?? 0) - (y?.[i] ?? 0);
+    if (difference) return difference > 0;
+  }
+  return false;
+}
+
+/**
+ * The first `claude` on PATH, as a shell finds it, but in absolute folders only: an empty or
+ * relative entry would run a `claude` from whatever folder Pelican was started in.
+ */
+export async function claudeOnPath(PATH = process.env.PATH ?? ''): Promise<string | undefined> {
+  const name = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  for (const dir of PATH.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const file = path.join(dir, name);
+    try {
+      await access(file, constants.X_OK);
+      if ((await stat(file)).isFile()) return file;
+    } catch {
+      // Not in this folder.
+    }
+  }
+  return undefined;
+}
+
+/** The version of the `claude` on PATH when it is newer than `ours`; undefined when not, or when it cannot say in time. */
+export async function newerOnPath(ours: string, PATH?: string, timeout = 3000): Promise<string | undefined> {
+  const file = await claudeOnPath(PATH);
+  if (!file) return undefined;
+  const answer = await run(file, ['--version'], timeout);
+  const version = answer?.code === 0 ? /\d+\.\d+\.\d+/.exec(answer.stdout)?.[0] : undefined;
+  return version && isNewer(version, ours) ? version : undefined;
+}
+
+let newer: Promise<string | undefined> | undefined;
+let newerFound: string | undefined;
+
+/**
+ * The version of the user's own `claude` when it is newer than the Claude Code Pelican brings:
+ * that one has what Pelican gets only from an update. Asked once, at start, in the background.
+ * Not when PELICAN_CLAUDE_PATH names the Claude Code to run, the user's choice already, nor in
+ * the demo, which runs nothing.
+ */
+export function checkNewerClaude(): Promise<string | undefined> {
+  newer ??= (async () => {
+    const ours = config.claudeExecutable || config.demo ? undefined : (await claudeCodeInfo()).version;
+    newerFound = ours ? await newerOnPath(ours) : undefined;
+    return newerFound;
+  })();
+  return newer;
+}
+
+/** What the check at start found so far, without waiting for it. */
+export const newerClaude = (): string | undefined => newerFound;
+
+/** The banner's line when the user's own `claude` is newer than the Claude Code Pelican runs. */
+export const newerClaudeLine = (version: string): string => `Your claude is newer (${version}): update Pelican to get it`;
 
 export type SignIn = { loggedIn: boolean; email?: string } | undefined;
 

@@ -182,6 +182,13 @@ export function SettingsSheet({
             <br />
             Claude Code {info.claudeCode.version}
             {info.claudeCode.path && <> from <span className="font-mono text-[12px] break-all">{info.claudeCode.path}</span></>}
+            {info.claudeCode.newer && (
+              <>
+                <br />
+                Your <code className="font-mono text-[12px]">claude</code> is newer ({info.claudeCode.newer}):{' '}
+                <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#update" target="_blank" rel="noreferrer">update Pelican</a> to get it
+              </>
+            )}
           </>
         )}
         <br />
