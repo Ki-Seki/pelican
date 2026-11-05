@@ -43,15 +43,33 @@ jobs:
       - name: Publish with provenance (npm trusted publishing)
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
+          version="${RELEASE_TAG#v}"
           # A version published by hand already (the first release was) is not published again.
-          if npm view "pelican-cc@${RELEASE_TAG#v}" version >/dev/null 2>&1; then
-            echo "pelican-cc@${RELEASE_TAG#v} is on npm already"
-          else
-            npm publish ./pelican-cc-*.tgz --provenance --access public
+          if npm view "pelican-cc@$version" version >/dev/null 2>&1; then
+            echo "pelican-cc@$version is on npm already"
+            exit 0
           fi
+          # npm 11 publishes a prerelease, or a version below the newest, only under a tag of its
+          # own: release candidates go out as next, a fix for an older line as latest-<line>
+          # (latest-0.2), and nothing but the newest version becomes what everyone installs.
+          latest=$(npm view pelican-cc dist-tags.latest 2>/dev/null || true)
+          if [ "$PRERELEASE" = "true" ] || [ "${version#*-}" != "$version" ]; then
+            tag=next
+          elif [ -n "$latest" ] && ! node -e '
+            const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
+            process.exit((a.map((n, i) => n - b[i]).find((d) => d !== 0) ?? 0) >= 0 ? 0 : 1);
+          ' "$version" "$latest"; then
+            tag="latest-${version%.*}"
+          else
+            tag=latest
+          fi
+          echo "Publishing pelican-cc@$version as $tag"
+          npm publish ./pelican-cc-*.tgz --provenance --access public --tag "$tag"
+      # --clobber: a run that failed after uploading can run again.
       - name: Attach the package to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" pelican-cc-*.tgz --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$RELEASE_TAG" pelican-cc-*.tgz --clobber --repo "$GITHUB_REPOSITORY"

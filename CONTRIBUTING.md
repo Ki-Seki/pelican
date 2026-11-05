@@ -58,12 +58,17 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 
 1. Bump the version (`npm version <x.y.z> --no-git-tag-version`) and add its section to
    `CHANGELOG.md`; commit and push.
-2. `gh release create v<x.y.z> --title v<x.y.z> --notes-file <the changelog section>`.
+2. Tag that very commit, not whatever is newest by then:
+   `git tag v<x.y.z> <commit>` and `git push origin v<x.y.z>`.
+3. `gh release create v<x.y.z> --verify-tag --title v<x.y.z> --notes-file <the changelog section>`,
+   with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
 The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
 publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the
 `npm` environment, for a `v*` tag, may publish `pelican-cc`. The package is attached to the
-release too.
+release too. A release candidate goes to npm under the `next` tag, and a fix for an older line
+(0.2.4 after 0.3.0) under `latest-0.2`; only the newest version becomes `latest`, what
+`npm install -g pelican-cc` installs.
 
 ## Style
 
