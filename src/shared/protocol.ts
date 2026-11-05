@@ -181,6 +181,8 @@ export type ShellResult = {
   code: number | null;
   durationMs: number;
   truncated?: boolean;
+  /** It left a process running in the background (`npm run dev &`), which goes on after it. */
+  background?: boolean;
 };
 
 /** One of the account's usage limits, as Claude Code last reported it. */
