@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { Attachment, RunState, SessionSummary } from '../src/shared/protocol';
+import type { Attachment, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CREATED = '44444444-2222-4333-8444-555555555555';
@@ -16,8 +16,9 @@ const server = vi.hoisted(() => ({
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
-  /** How often git status was asked for. */
+  /** How often git status was asked for, and what it says. */
   gitReads: 0,
+  git: { repo: false } as GitStatus,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -41,7 +42,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       ],
       git: async () => {
         server.gitReads += 1;
-        return { repo: false };
+        return server.git;
       },
       tree: async () => [],
       session: async (id: string) => ({
@@ -100,7 +101,9 @@ afterEach(() => {
   localStorage.clear();
   setComments(CWD, []);
   media = {};
-  Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0 });
+  Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
+  // A view of Changes and files left open keeps its step in the address.
+  history.replaceState(null, '', '/');
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
@@ -282,8 +285,9 @@ describe('Changes and files, open beside the conversation', () => {
     return reads;
   };
 
-  it('reads git status every few seconds only while Claude works; idle, as often as the conversation does', async () => {
-    media['(min-width: 1440px)'] = true;
+  it('reads git status every few seconds only while Claude works, and every 30 s while it is idle', async () => {
+    media['(min-width: 1024px)'] = true;
+    server.git = { repo: true, branch: 'main', files: [] };
     setPrefs({ workspacePane: true });
     server.run = idle;
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -293,7 +297,7 @@ describe('Changes and files, open beside the conversation', () => {
       await loaded();
       await waitFor(() => expect(server.gitReads).toBeGreaterThan(0));
       await settle();
-      // A pane that stays open from one session to the next: the conversation's own reading, every 30 s.
+      // A pane that stays open from one session to the next, and is looked at: every 30 s.
       expect(await readsIn(60)).toBe(2);
       runIs(working);
       expect(await readsIn(10)).toBe(2);
@@ -308,6 +312,29 @@ describe('Changes and files, open beside the conversation', () => {
       vi.useRealTimers();
       setPrefs({ workspacePane: false });
       act(() => setRun(SESSION, undefined));
+      delete media['(min-width: 1024px)'];
+    }
+  });
+
+  it('reads it only as each turn ends while nobody looks at it', async () => {
+    media['(min-width: 1024px)'] = true;
+    server.git = { repo: true, branch: 'main', files: [] };
+    server.run = working;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      session();
+      await loaded();
+      await waitFor(() => expect(server.gitReads).toBeGreaterThan(0));
+      await settle();
+      expect(screen.queryByRole('complementary', { name: 'Changes and files' })).toBeNull();
+      expect(await readsIn(120)).toBe(0);
+      const before = server.gitReads;
+      runIs(idle);
+      await waitFor(() => expect(server.gitReads).toBe(before + 1));
+    } finally {
+      vi.useRealTimers();
+      act(() => setRun(SESSION, undefined));
+      delete media['(min-width: 1024px)'];
     }
   });
 });

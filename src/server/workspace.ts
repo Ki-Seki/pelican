@@ -111,16 +111,43 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   } catch {
     // Counts are a nicety.
   }
-  // A new file is all added lines; git does not count those for files it does not track yet.
-  await Promise.all(out.files.filter((f) => f.status === 'untracked').slice(0, 200).map(async (file) => {
-    try {
-      const content = await readProjectFile(cwd, file.path);
-      if (content.text !== undefined) file.added = content.text.split('\n').length - (content.text.endsWith('\n') ? 1 : 0);
-    } catch {
-      // Unreadable; no count.
-    }
-  }));
+  await countUntracked(cwd, out.files);
   return out;
+}
+
+/**
+ * Untracked files counted, at most, for their lines: the first ones, small ones, and only so much
+ * in all. Each status read used to read up to 200 of them whole (100 MB), every few seconds.
+ */
+export const UNTRACKED_COUNTED = { files: 100, bytesEach: 256 * 1024, bytesInAll: 4 * 1024 * 1024 };
+
+/**
+ * A new file is all added lines; git does not count those for files it does not track yet. Files
+ * past the limits, binary ones and special ones get no count (the list shows none).
+ */
+async function countUntracked(cwd: string, files: GitFile[]): Promise<void> {
+  let budget = UNTRACKED_COUNTED.bytesInAll;
+  for (const file of files.filter((f) => f.status === 'untracked').slice(0, UNTRACKED_COUNTED.files)) {
+    if (budget <= 0) return;
+    try {
+      const handle = await openRegular(await insideReal(cwd, file.path));
+      try {
+        const { size } = await handle.stat();
+        if (size > UNTRACKED_COUNTED.bytesEach || size > budget) continue;
+        budget -= size;
+        const data = Buffer.alloc(size);
+        await handle.read(data, 0, size, 0);
+        if (data.subarray(0, 8000).includes(0)) continue;
+        let lines = 0;
+        for (let at = data.indexOf(0x0a); at !== -1; at = data.indexOf(0x0a, at + 1)) lines += 1;
+        file.added = lines + (size > 0 && data[size - 1] !== 0x0a ? 1 : 0);
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      // Unreadable, or a link that leads out of the folder: no count.
+    }
+  }
 }
 
 /** The diff of one file against the last commit; an untracked file shows as all added. */

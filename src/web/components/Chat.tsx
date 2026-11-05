@@ -598,8 +598,9 @@ export function Chat({
     }
   };
 
-  // Files changed in the session's folder, for the badge on the Changes button; refreshed when a turn ends.
-  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd), refetchInterval: 30_000 });
+  // Files changed in the session's folder, for the badge on the Changes button: read when the chat
+  // opens and as each turn ends; Changes and files reads it more often only while it is looked at.
+  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd) });
   const changes = git?.repo ? git.files.length : 0;
   useEffect(() => {
     if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
@@ -722,7 +723,8 @@ export function Chat({
   return (
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
-        {!wide && (
+        {/* Also while Changes and files has folded the list away, beside the conversation. */}
+        {(!wide || workspace.folded) && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
@@ -881,6 +883,7 @@ export function Chat({
           open={workspace.open}
           docked={workspace.docked}
           busy={busy && permissions.length === 0}
+          {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           onAddToMessage={(text) => {

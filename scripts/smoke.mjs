@@ -139,43 +139,58 @@ async function driveApp(browser, base, sessions) {
 }
 
 /**
- * On a screen wide enough for Changes and files to sit beside the conversation, at the narrowest
- * such width: the pane stays inside the window (a conversation column that grew to fit its
- * content once pushed it out of view).
+ * On screens wide enough for Changes and files to sit beside the conversation, from the narrowest
+ * such width, where the session list folds away, to where list, conversation and pane all fit:
+ * the pane stays inside the window (a conversation column that grew to fit its content once pushed
+ * it out of view), nothing in it is cut off at its right edge, and the conversation keeps room.
  */
 async function checkDocked(browser, base, sessions) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await context.addInitScript(() => {
-    // Every frame runs this, sandboxed previews too, which have no storage.
-    try {
-      const prefs = JSON.parse(localStorage.getItem('pelican:prefs') || '{}');
-      localStorage.setItem('pelican:prefs', JSON.stringify({ ...prefs, workspacePane: true }));
-    } catch {
-      // A frame without storage.
-    }
-  });
-  const page = await context.newPage();
-  let at = '';
-  watch(page, () => `app, docked, ${at}`);
-  for (const session of sessions) {
-    at = `session ${session.id}`;
-    await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(300);
-    const out = await page.evaluate(() => {
-      const pane = document.querySelector('aside[aria-label="Changes and files"]');
-      if (!pane) return undefined;
-      // A line far wider than the column, cut short as long tool lines are: it must not widen it.
-      const column = document.querySelector('main .max-w-3xl');
-      const probe = document.createElement('div');
-      probe.className = 'truncate';
-      probe.textContent = 'A very long line '.repeat(80);
-      column?.append(probe);
-      const r = pane.getBoundingClientRect();
-      return r.right > innerWidth + 1 ? `Changes and files ends ${Math.round(r.right - innerWidth)}px past the window` : '';
+  for (const width of [1024, 1280, 1440]) {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    await context.addInitScript(() => {
+      // Every frame runs this, sandboxed previews too, which have no storage.
+      try {
+        const prefs = JSON.parse(localStorage.getItem('pelican:prefs') || '{}');
+        localStorage.setItem('pelican:prefs', JSON.stringify({ ...prefs, workspacePane: true }));
+      } catch {
+        // A frame without storage.
+      }
     });
-    if (out) problems.push(`app, docked, session ${session.id}: ${out}`);
+    const page = await context.newPage();
+    let at = '';
+    watch(page, () => `app, docked at ${width}px, ${at}`);
+    for (const session of sessions) {
+      at = `session ${session.id}`;
+      await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(300);
+      const found = await page.evaluate(() => {
+        const pane = document.querySelector('aside[aria-label="Changes and files"]');
+        if (!pane) return [];
+        // A line far wider than the column, cut short as long tool lines are: it must not widen it.
+        const column = document.querySelector('main .max-w-3xl');
+        const probe = document.createElement('div');
+        probe.className = 'truncate';
+        probe.textContent = 'A very long line '.repeat(80);
+        column?.append(probe);
+        const out = [];
+        const r = pane.getBoundingClientRect();
+        if (r.right > innerWidth + 1) out.push(`Changes and files ends ${Math.round(r.right - innerWidth)}px past the window`);
+        // What it shows wider than itself would be cut at its edge (it scrolls only up and down).
+        for (const el of pane.querySelectorAll('*')) {
+          const box = el.getBoundingClientRect();
+          if (box.width > 0 && box.right > r.right + 1 && !el.closest('.overflow-x-auto, .truncate, .sr-only')) {
+            out.push(`a ${el.tagName.toLowerCase()} in Changes and files ends ${Math.round(box.right - r.right)}px past its edge`);
+            break;
+          }
+        }
+        const conversation = document.querySelector('main')?.getBoundingClientRect();
+        if (conversation && conversation.width - r.width < 320) out.push(`the conversation is ${Math.round(conversation.width - r.width)}px wide beside the pane`);
+        return out;
+      });
+      problems.push(...found.map((problem) => `app, docked at ${width}px, session ${session.id}: ${problem}`));
+    }
+    await context.close();
   }
-  await context.close();
 }
 
 /** The site's own pages: the pictures fit their phones, the demo frame lays out as a phone does. */

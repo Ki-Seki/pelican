@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { bashModeText, runCommand } from '../src/server/shell';
-import { gitDiff, gitStatus, inside, listTree, readProjectFile } from '../src/server/workspace';
+import { gitDiff, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
 
 let repo: string;
 beforeAll(async () => {
@@ -36,6 +36,25 @@ describe('workspace', () => {
     expect(byPath['src/a.ts']).toMatchObject({ status: 'modified', added: 2, removed: 1 });
     expect(byPath['new.md']).toMatchObject({ status: 'untracked', added: 2 });
     expect(byPath['new name.txt']).toMatchObject({ status: 'renamed', from: 'old name.txt' });
+  });
+
+  it('counts the lines of new files only so far: big ones and those past the first hundred get no count', async () => {
+    const many = await mkdtemp(path.join(os.tmpdir(), 'pelican-untracked-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: many });
+      await writeFile(path.join(many, 'big.txt'), 'x\n'.repeat(UNTRACKED_COUNTED.bytesEach));
+      await writeFile(path.join(many, 'last line.txt'), 'a\nb');
+      await mkdir(path.join(many, 'more'));
+      for (let i = 0; i < UNTRACKED_COUNTED.files + 20; i += 1) await writeFile(path.join(many, 'more', `${String(i).padStart(3, '0')}.txt`), 'one\n');
+      const status = await gitStatus(many);
+      if (!status.repo) throw new Error('not a repository');
+      const byPath = Object.fromEntries(status.files.map((f) => [f.path, f]));
+      expect(byPath['big.txt']?.added).toBeUndefined();
+      expect(byPath['last line.txt']?.added).toBe(2);
+      expect(status.files.filter((f) => f.added !== undefined).length).toBeLessThanOrEqual(UNTRACKED_COUNTED.files);
+    } finally {
+      await rm(many, { recursive: true, force: true });
+    }
   });
 
   it('diffs a changed file and a new one', async () => {

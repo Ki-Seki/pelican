@@ -116,9 +116,22 @@ body {
   height: var(--app-h, 100dvh);
 }
 
-/* Changes and files, when it sits beside the conversation on a wide screen. */
+/* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px
+   the session list folds away while it is open, so the conversation keeps its room: the pane marks
+   the page (data-pane), App marks its columns (data-layout, data-list). */
 :root {
-  --pane-w: clamp(400px, 34vw, 640px);
+  --pane-w: clamp(360px, 34vw, 640px);
+}
+@media (max-width: 1279.98px) {
+  :root {
+    --pane-w: clamp(360px, 40vw, 520px);
+  }
+  :root[data-pane='docked'] [data-layout='wide'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  :root[data-pane='docked'] [data-layout='wide'] > [data-list] {
+    display: none;
+  }
 }
 
 .pb-safe {
