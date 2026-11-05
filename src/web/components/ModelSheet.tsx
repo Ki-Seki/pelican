@@ -1,5 +1,6 @@
 import { Loader2, Sparkles, Zap } from 'lucide-react';
 
+import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { ModelOption, RunSettings } from '../../shared/protocol';
 import { EFFORT_LABELS, EFFORT_SHORT } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
@@ -88,6 +89,36 @@ export function ModelSheet({
           onChange={(ultracode) => set({ ultracode })}
         />
       )}
+    </Sheet>
+  );
+}
+
+/**
+ * The permission modes to pick from: for one session in its composer, or for new sessions in
+ * Settings. Auto shows only where the model has it. The mode in use is listed even when it is not
+ * offered (Don't ask, which Claude Code's settings can give), so the list says where it is.
+ */
+export function ModeSheet({
+  open, onClose, title = 'When Claude wants to act', offered, value, model, onPick,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: string;
+  offered: readonly PermissionMode[];
+  value: PermissionMode;
+  model: ModelOption | undefined;
+  onPick: (mode: PermissionMode) => void;
+}) {
+  const available = offered.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
+  const modes = available.includes(value) ? available : [value, ...available];
+  return (
+    <Sheet open={open} onClose={onClose} title={title}>
+      {modes.map((m) => (
+        <SheetOption key={m} label={MODE_INFO[m].label} description={MODE_INFO[m].description} selected={m === value} onSelect={() => {
+          if (available.includes(m)) onPick(m);
+          onClose();
+        }} />
+      ))}
     </Sheet>
   );
 }

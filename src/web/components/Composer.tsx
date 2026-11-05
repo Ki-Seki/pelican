@@ -9,8 +9,7 @@ import { loadDraft, useDraftSaver } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
 import { composing, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
-import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
-import { Sheet, SheetOption } from './Sheet';
+import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
 
@@ -244,9 +243,6 @@ export function Composer({
 
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
-  // The session's own mode is listed even when it is not offered (Don't ask), so the list says where it is.
-  const offered = OFFERED_MODES.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
-  const modes = offered.includes(permission) ? offered : [permission, ...offered];
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
 
@@ -627,14 +623,7 @@ export function Composer({
 
       <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
 
-      <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
-        {modes.map((m) => (
-          <SheetOption key={m} label={MODE_INFO[m].label} description={MODE_INFO[m].description} selected={m === permission} onSelect={() => {
-            if (OFFERED_MODES.includes(m)) set({ permissionMode: m });
-            setSheet(undefined);
-          }} />
-        ))}
-      </Sheet>
+      <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} />
     </div>
   );
 }

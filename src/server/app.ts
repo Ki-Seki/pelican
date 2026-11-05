@@ -8,7 +8,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { compress } from 'hono/compress';
 
 import pkg from '../../package.json' with { type: 'json' };
-import { isPermissionMode } from '../shared/modes.js';
+import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
@@ -20,7 +20,7 @@ import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
+import { defaultMode, knownModels, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
@@ -325,7 +325,7 @@ async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise
  *   from just before it with the new text (the old turn stays in the transcript, off the line).
  * - An earlier one branches: a copy of the conversation up to just before it gets the new text
  *   (the first prompt: a new session in the same folder), and this session stays as it was.
- *   A branch is new work: it never starts in Bypass.
+ *   A branch is new work: it never starts in Bypass, but in the mode a new session would.
  * If the send fails, a branch and the copied images are removed, so nothing is left behind.
  */
 type EditFailure = { error: string; status: 404 | 409 };
@@ -344,7 +344,7 @@ async function claudeStarted(sessionId: string): Promise<void> {
   }
 }
 
-async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown }, key: string): Promise<Edited | EditFailure> {
+async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown; startMode?: unknown }, key: string): Promise<Edited | EditFailure> {
   const info = await sessionInfo(id);
   if (!info?.cwd || !(await isDirectory(info.cwd))) return { error: 'The session’s folder is missing', status: 404 };
   if (getRun(id)?.busy) return { error: 'Stop Claude before editing an earlier prompt.', status: 409 };
@@ -358,7 +358,11 @@ async function makeEdit(id: string, before: string, body: { text: string; settin
   // when no background task would be cut off by restarting Claude.
   const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
   const settings = cleanSettings(body.settings);
-  if (!entry && settings.permissionMode === 'bypassPermissions') settings.permissionMode = 'default';
+  if (!entry && settings.permissionMode === 'bypassPermissions') {
+    // The mode a new session there starts in: the page's pick in Settings, else Claude Code's own default, else Auto.
+    const picked = START_MODES.find((mode) => mode === body.startMode);
+    settings.permissionMode = startMode(picked, await defaultMode(info.cwd), knownModels()?.find((m) => m.value === (settings.model ?? 'default')));
+  }
   const attachments = await imagesOf(id, before, body.keepImages);
   const message = { text: body.text, attachments, settings, uuid: key };
   let branch: string | undefined;
@@ -388,13 +392,13 @@ async function makeEdit(id: string, before: string, body: { text: string; settin
  *   from just before it with the new text (the old turn stays in the transcript, off the line).
  * - An earlier one branches: a copy of the conversation up to just before it gets the new text
  *   (the first prompt: a new session in the same folder), and this session stays as it was.
- *   A branch is new work: it never starts in Bypass.
+ *   A branch is new work: it never starts in Bypass, but in the mode a new session would.
  * If Claude cannot start, a branch and the copied images are removed, so nothing is left behind.
  * Requests with the same `uuid` share one edit, also while it is still being made.
  */
 app.post('/api/sessions/:id/edit', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown }>()
+  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown; startMode?: unknown }>()
     .catch(() => ({}) as Record<string, unknown>);
   const key = uuidOf(body.uuid);
   const before = uuidOf(body.before);
@@ -405,7 +409,7 @@ app.post('/api/sessions/:id/edit', async (c) => {
   // Registered before anything is awaited, so a second request with this id waits for this one.
   let work = editing.get(key) as Promise<Edited | EditFailure> | undefined;
   if (!work) {
-    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages }, key);
+    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages, startMode: body.startMode }, key);
     work = made;
     editing.set(key, made as Promise<Edited>);
     void made.then((result) => {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Claude itself is not started here: the runner's calls are stand-ins that record what they got.
-const calls = vi.hoisted(() => ({ replace: [] as string[], send: [] as string[], fork: [] as string[], remove: [] as string[], failSend: false }));
+const calls = vi.hoisted(() => ({ replace: [] as string[], send: [] as string[], modes: [] as Array<string | undefined>, fork: [] as string[], remove: [] as string[], failSend: false }));
 vi.mock('../src/server/runner', async (original) => ({
   ...(await original<typeof import('../src/server/runner')>()),
   getRun: () => undefined,
@@ -13,9 +13,10 @@ vi.mock('../src/server/runner', async (original) => ({
     calls.replace.push(entry);
     return sessionId;
   },
-  sendMessage: async (target: { sessionId?: string; cwd?: string }) => {
+  sendMessage: async (target: { sessionId?: string; cwd?: string }, input: { settings: { permissionMode?: string } }) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     calls.send.push(target.sessionId ?? 'new session');
+    calls.modes.push(input.settings.permissionMode);
     if (calls.failSend) throw new Error('Claude Code process exited with code 1');
     return target.sessionId ?? '99999999-9999-4999-8999-999999999999';
   },
@@ -61,15 +62,15 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
 beforeEach(() => {
-  Object.assign(calls, { replace: [], send: [], fork: [], remove: [], failSend: false });
+  Object.assign(calls, { replace: [], send: [], modes: [], fork: [], remove: [], failSend: false });
 });
 
-const edit = async (before: number, id: string) => {
+const edit = async (before: number, id: string, extra: Record<string, unknown> = {}) => {
   const { app } = await import('../src/server/app');
   const response = await app.request(`/api/sessions/${SESSION}/edit`, {
     method: 'POST',
     headers: { host: 'localhost:7860', 'x-pelican': '1', 'content-type': 'application/json' },
-    body: JSON.stringify({ before: uuid(before), text: 'changed', settings: {}, uuid: id, keepImages: [] }),
+    body: JSON.stringify({ before: uuid(before), text: 'changed', settings: {}, uuid: id, keepImages: [], ...extra }),
   });
   return { status: response.status, body: await response.json() as { sessionId?: string; inPlace?: boolean; error?: string } };
 };
@@ -98,6 +99,24 @@ describe('editing a prompt', () => {
     expect(body.inPlace).toBe(false);
     expect(calls.fork).toEqual([]);
     expect(calls.send).toEqual(['new session']);
+  });
+
+  it('starts a branch of a session in Bypass in the mode a new session would, never in Bypass', async () => {
+    const bypass = { settings: { permissionMode: 'bypassPermissions' } };
+    await edit(3, key(5), bypass);
+    // No mode picked in Settings and none in Claude Code's settings: Auto.
+    expect(calls.modes).toEqual(['auto']);
+    await edit(3, key(6), { ...bypass, startMode: 'plan' });
+    expect(calls.modes.at(-1)).toBe('plan');
+    // A pick of Bypass is no pick.
+    await edit(3, key(7), { ...bypass, startMode: 'bypassPermissions' });
+    expect(calls.modes.at(-1)).toBe('auto');
+    await writeFile(path.join(root, 'claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }));
+    await edit(3, key(8), bypass);
+    expect(calls.modes.at(-1)).toBe('acceptEdits');
+    // Another mode is the session's own: the branch goes on in it.
+    await edit(3, key(9), { settings: { permissionMode: 'plan' }, startMode: 'auto' });
+    expect(calls.modes.at(-1)).toBe('plan');
   });
 
   it('leaves no branch behind when Claude cannot start', async () => {
