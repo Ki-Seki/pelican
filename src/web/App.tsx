@@ -1,15 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, MessageSquare, Plus } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { type ComponentProps, lazy, Suspense, useCallback, useEffect, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
-import { Chat } from './components/Chat';
 import { Lightbox } from './components/Lightbox';
 import { Login } from './components/Login';
 import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
-import { SettingsSheet } from './components/Settings';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import {
   disableNotifications,
@@ -21,6 +19,20 @@ import {
 import { applyTheme } from './lib/prefs';
 import { socket } from './lib/socket';
 import { STATIC_DEMO } from './lib/static-demo';
+
+// The conversation (Markdown, code highlighting, diffs) and Settings load when first needed: the
+// first screen is the list, and a phone on a slow link shows it sooner without them. A link to a
+// session starts loading the conversation at once; otherwise it loads once the list is up.
+const loadChat = () => import('./components/Chat');
+if (new URLSearchParams(location.search).has('s')) void loadChat();
+const LazyChat = lazy(() => loadChat().then((m) => ({ default: m.Chat })));
+const LazySettings = lazy(() => import('./components/Settings').then((m) => ({ default: m.SettingsSheet })));
+const Chat = (props: ComponentProps<typeof LazyChat>) => (
+  <Suspense fallback={<div className="flex h-full items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>}>
+    <LazyChat {...props} />
+  </Suspense>
+);
+const SettingsSheet = (props: ComponentProps<typeof LazySettings>) => <Suspense fallback={null}><LazySettings {...props} /></Suspense>;
 
 /**
  * Routes live in the query string (`?s=<id>`, `?new`, `?new&cwd=<path>`): the
@@ -114,6 +126,10 @@ function Main() {
   useEffect(() => {
     void queryClient.prefetchQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000 });
   }, [queryClient]);
+  useEffect(() => {
+    const timer = setTimeout(() => void loadChat(), 1500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => socket.on((event) => {
     if (event.type === 'sessions_changed') {
