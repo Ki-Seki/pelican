@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Bell, LogOut } from 'lucide-react';
+import { Bell, ChevronRight, LogOut } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { ServerInfo } from '../../shared/protocol';
@@ -7,7 +7,8 @@ import { qrSvg } from '../../shared/qr';
 import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
 import type { NotificationState } from '../lib/notifications';
-import { type Prefs, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
+import { loadDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
+import { ModelSheet, ModelSummary } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 
 const isLoopback = (host: string) => host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host.startsWith('127.');
@@ -18,8 +19,8 @@ const LIMIT: Record<string, string> = {
 };
 
 const NOTIFICATION_HINT: Record<NotificationState, string> = {
-  on: 'When Claude finishes a turn or needs you, on this device',
-  off: 'When Claude finishes a turn or needs you, on this device',
+  on: 'When Claude finishes or needs you',
+  off: 'When Claude finishes or needs you',
   denied: 'Blocked in this browser’s site settings',
   unsupported: 'This browser cannot receive them here (it needs HTTPS or localhost)',
 };
@@ -52,6 +53,9 @@ export function SettingsSheet({
       ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
     }));
   const account = models?.account;
+  // What new sessions start with. Changed only here: a choice in a session stays with that session.
+  const [defaults, setDefaults] = useState(loadDefaults);
+  const [modelOpen, setModelOpen] = useState(false);
   return (
     <Sheet open={open} onClose={onClose} title="Settings" done>
       <SheetHeading>Appearance</SheetHeading>
@@ -61,35 +65,35 @@ export function SettingsSheet({
         options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
       />
 
-      <SheetHeading>Conversations open in</SheetHeading>
+      {/* A session's own view is in its menu; this is the one the others open in. */}
+      <SheetHeading>Sessions open in</SheetHeading>
       <Segmented<ViewMode>
         value={prefs.view}
         onChange={(view) => setPrefs({ view })}
         options={[
           { value: 'summary', label: 'Summary', title: 'Your prompts and Claude’s replies' },
-          { value: 'normal', label: 'Normal', title: 'Replies with the steps folded' },
+          { value: 'normal', label: 'Normal', title: 'Replies, with the steps folded' },
           { value: 'verbose', label: 'Verbose', title: 'Every step open' },
         ]}
       />
-      <p className="px-3 pt-1 text-[12px] leading-snug text-faint">
-        {prefs.view === 'summary' ? 'Only your prompts and Claude’s replies.' : prefs.view === 'verbose' ? 'Every tool call open, with its command and output.' : 'Claude’s replies, with the steps between them folded.'}
-      </p>
 
-      <SheetHeading>While Claude is working</SheetHeading>
+      {/* Each session keeps its own model and mode; this is what new ones start with. */}
+      <SheetHeading>New sessions start with</SheetHeading>
+      <SheetOption
+        label="Model"
+        trailing={<span className="flex min-w-0 items-center gap-1 text-[13px] text-muted"><ModelSummary settings={defaults} models={models?.models} /><ChevronRight className="size-4 text-faint" /></span>}
+        onSelect={() => setModelOpen(true)}
+      />
+
+      <SheetHeading>Messages sent while Claude works</SheetHeading>
       <Segmented<Prefs['sendWhileBusy']>
         value={prefs.sendWhileBusy}
         onChange={(sendWhileBusy) => setPrefs({ sendWhileBusy })}
         options={[{ value: 'steer', label: 'Steer' }, { value: 'queue', label: 'Queue' }]}
       />
       <p className="px-3 pt-1 text-[12px] leading-snug text-faint">
-        {prefs.sendWhileBusy === 'steer' ? 'A new message reaches Claude at its next step, like typing in the terminal.' : 'A new message waits for the turn to end, then starts the next one.'} Each message can still go the other way: tap the word next to Send.
+        {prefs.sendWhileBusy === 'steer' ? 'Claude reads them at its next step.' : 'They are sent when the turn ends.'}
       </p>
-      <SheetToggle
-        label="Suggest what to ask next"
-        description="After a turn, Claude Code’s guess at your next prompt; tap it to use it"
-        checked={prefs.suggestions}
-        onChange={(suggestions) => setPrefs({ suggestions })}
-      />
 
       <SheetHeading>Enter key</SheetHeading>
       <Segmented<Prefs['enterToSend']>
@@ -97,32 +101,9 @@ export function SettingsSheet({
         onChange={(enterToSend) => setPrefs({ enterToSend })}
         options={[{ value: 'auto', label: 'Auto' }, { value: 'always', label: 'Sends' }, { value: 'never', label: 'New line' }]}
       />
-      <p className="px-3 pt-1 text-[12px] leading-snug text-faint">Auto: Enter sends on a computer and starts a new line on a phone. Shift+Enter always starts a new line.</p>
-
-      <SheetHeading>Session list</SheetHeading>
-      <Segmented<Prefs['listGroup']>
-        value={prefs.listGroup}
-        onChange={(listGroup) => setPrefs({ listGroup })}
-        options={[{ value: 'time', label: 'By time' }, { value: 'project', label: 'By project' }]}
-      />
+      {prefs.enterToSend === 'auto' && <p className="px-3 pt-1 text-[12px] leading-snug text-faint">Sends on a computer, a new line on a phone.</p>}
       <div className="h-1.5" />
-      <Segmented<Prefs['listDensity']>
-        value={prefs.listDensity}
-        onChange={(listDensity) => setPrefs({ listDensity })}
-        options={[{ value: 'detailed', label: 'Detailed' }, { value: 'compact', label: 'Compact' }]}
-      />
-      <SheetToggle
-        label="Show temporary sessions"
-        description="Runs in the system temp folder, usually started by another session. The Temporary filter always shows them."
-        checked={prefs.showTemporary}
-        onChange={(showTemporary) => setPrefs({ showTemporary })}
-      />
-      <SheetToggle
-        label="Show side chats"
-        description="Claude Desktop’s side chats: a copy of a session with a question or two of their own. A search always finds them."
-        checked={prefs.showSideChats}
-        onChange={(showSideChats) => setPrefs({ showSideChats })}
-      />
+      <SheetToggle label="Suggest what to ask next" checked={prefs.suggestions} onChange={(suggestions) => setPrefs({ suggestions })} />
 
       {/* The demo sends nothing anywhere, notifications included. */}
       {!info?.demo && (
@@ -178,7 +159,7 @@ export function SettingsSheet({
           <SheetHeading>On your phone</SheetHeading>
           {isLoopback(location.hostname) ? (
             <p className="px-3 pb-1 text-[13px] leading-relaxed text-muted">
-              This address works on this computer only. To use Pelican on your phone, reach this computer through Tailscale, an SSH tunnel or a proxy, then open that address here and scan its code. <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#phone" target="_blank" rel="noreferrer">How</a>
+              This address works only on this computer. <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#phone" target="_blank" rel="noreferrer">Reach it from your phone</a>
             </p>
           ) : (
             <PhoneCode open={open} />
@@ -194,6 +175,17 @@ export function SettingsSheet({
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>
       </div>
       {info?.auth && <SheetOption icon={<LogOut className="size-4" />} label="Sign out" danger onSelect={onSignOut} />}
+      <ModelSheet
+        open={modelOpen}
+        onClose={() => setModelOpen(false)}
+        title="New sessions start with"
+        settings={defaults}
+        models={models?.models}
+        onChange={(next) => {
+          setDefaults(next);
+          saveDefaults(next);
+        }}
+      />
     </Sheet>
   );
 }
@@ -240,9 +232,7 @@ function PhoneCode({ open }: { open: boolean }) {
         <img src={qrImage(link)} alt="" className="size-28 shrink-0 rounded-lg border border-line bg-white p-1.5" />
       )}
       <p className="min-w-0 text-[13px] leading-relaxed text-muted">
-        {signsIn
-          ? <>Scan with your phone’s camera to open Pelican there, signed in. The code works once, for two minutes.</>
-          : <>Scan with your phone’s camera to open this page there.</>}
+        {signsIn ? <>Scan to open Pelican on your phone, signed in. Works once, for two minutes.</> : <>Scan to open Pelican on your phone.</>}
         <br />
         <span className="font-mono text-[12px] break-all text-faint">{appBase.href}</span>
         {error && <><br /><span className="text-danger">{error}</span></>}

@@ -6,7 +6,7 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
 import { baseName, shortPath, untilTime } from '../lib/format';
-import { loadDefaults, markSeen, markTipSeen, saveDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs } from '../lib/prefs';
+import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import {
@@ -31,6 +31,9 @@ import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
 import { Workspace } from './Workspace';
 
+/** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
+const withoutBypass = (settings: RunSettings): RunSettings =>
+  (settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: 'default' } : settings);
 
 function localMessage(uuid: string, text: string, attachments: Attachment[]): ChatMessage {
   const blocks: Block[] = [];
@@ -261,7 +264,14 @@ export function Chat({
   });
   const listed = queryClient.getQueryData<SessionSummary[]>(['sessions'])?.find((s) => s.id === sessionId);
   const session = detail?.session ?? listed;
-  const [settings, setSettings] = useState<RunSettings>(loadDefaults);
+  const [settings, setSettings] = useState<RunSettings>(() => {
+    const base = loadDefaults();
+    if (!sessionId) return base;
+    const live = getView(sessionId).run?.settings;
+    if (live) return { ...base, ...live };
+    const choice = sessionChoice(sessionId);
+    return choice ? { ...base, ...choice.settings } : base;
+  });
   const [initialDraft] = useState(() => getDraft(viewId));
   const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean } | undefined>(() => (initialDraft ? { text: initialDraft.text, key: 1 } : undefined));
   const [note, setNote] = useState(initialDraft?.note);
@@ -291,33 +301,35 @@ export function Chat({
     if (sessionId) markSeen(sessionId, Math.max(Date.now(), session?.lastActivity ?? 0));
   }, [sessionId, session?.lastActivity, view.messages.length]);
 
-  // Which settings the composer shows, most specific first: what the session runs with here right
-  // now; else what it last ran with (its transcript); else the defaults for new work. Once you
-  // change something in this session, your choice stays.
+  // The model, effort, speed, Ultracode and permission mode belong to the session. The composer
+  // shows, most specific first: what Claude runs with for it here right now (kept up to date,
+  // also when plan mode ends or another tab changes them); else a choice made here that no turn has
+  // used yet; else what its last turn ran with (its transcript), the model named as it was picked
+  // here. New sessions start from the defaults in Settings, which only Settings changes.
   const chosen = useRef(false);
   const runSettings = view.run?.settings;
-  const recorded = useMemo(() => fromRecorded(detail?.settings, modelList?.models), [detail?.settings, modelList?.models]);
-  const settingsKey = JSON.stringify([runSettings ?? null, recorded]);
+  const runKey = JSON.stringify(runSettings ?? null);
   useEffect(() => {
-    if (chosen.current) return;
-    // A choice made here since the session last ran, which no turn has used yet, comes first.
-    const choice = sessionId && session ? sessionChoice(sessionId) : undefined;
-    if (choice && choice.at > session!.lastActivity) {
-      chosen.current = true;
-      setSettings((current) => ({ ...current, ...choice.settings }));
-      return;
-    }
     if (runSettings) setSettings((current) => ({ ...current, ...runSettings }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runKey]);
+  const recorded = useMemo(
+    () => fromRecorded(detail?.settings, modelList?.models, sessionId ? sessionChoice(sessionId)?.settings.model : undefined),
+    [detail?.settings, modelList?.models, sessionId],
+  );
+  const recordedKey = JSON.stringify(recorded ?? null);
+  useEffect(() => {
+    if (runSettings || chosen.current || !sessionId) return;
+    const choice = session ? sessionChoice(sessionId) : undefined;
+    if (choice && session && choice.at > session.lastActivity) setSettings((current) => ({ ...current, ...choice.settings }));
     else if (recorded) setSettings({ ...loadDefaults(), ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, settingsKey, session?.lastActivity]);
+  }, [sessionId, recordedKey, session?.lastActivity, Boolean(runSettings)]);
 
   const changeSettings = (next: RunSettings) => {
     chosen.current = true;
     setSettings(next);
-    // A change is also the default for new sessions, as /model and /effort are in Claude Code,
-    // and stays with this session when you leave it and come back.
-    saveDefaults(next);
+    // It stays with this session when you leave and come back; a new session's goes with it once sent.
     if (sessionId) saveSessionChoice(sessionId, next);
     // A Claude running for this session switches now (from its next step), not at the next message.
     if (sessionId && view.run) {
@@ -340,8 +352,10 @@ export function Chat({
     try {
       if (sessionId) {
         await api.send(sessionId, body);
+        saveSessionChoice(sessionId, settings);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
+        saveSessionChoice(created, settings);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -407,6 +421,7 @@ export function Chat({
       // The server decides: the last prompt is replaced here; an earlier one branches, and a
       // branch never starts in Bypass.
       const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages });
+      saveSessionChoice(result.sessionId, result.inPlace ? settings : withoutBypass(settings));
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       if (result.inPlace) {
         truncateFrom(viewId, uuid);
@@ -482,7 +497,7 @@ export function Chat({
       </header>
 
       {sessionId || view.messages.length > 0 ? (
-        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={prefs.view} {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
+        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={viewOf(prefs, sessionId)} {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
           <div>
@@ -584,6 +599,8 @@ export function Chat({
           {...(view.run ? { run: view.run } : {})}
           onRenamed={refresh}
           onForked={(id) => {
+            // A branch is new work: it carries this session's settings, except Bypass.
+            saveSessionChoice(id, withoutBypass(settings));
             setMenuOpen(false);
             void queryClient.invalidateQueries({ queryKey: ['sessions'] });
             onOpen(id);

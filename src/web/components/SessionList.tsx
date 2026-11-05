@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, GitBranch, LayoutList, Loader2, Plus, Search, Settings, X } from 'lucide-react';
+import { ChevronDown, GitBranch, ListFilter, Loader2, Plus, Search, Settings, X } from 'lucide-react';
 import { memo, useEffect, useMemo, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
@@ -117,16 +117,15 @@ function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }
         onChange={(listDensity) => setPrefs({ listDensity })}
         options={[{ value: 'detailed', label: 'Detailed' }, { value: 'compact', label: 'Compact' }]}
       />
-      <div className="h-2" />
+      <SheetHeading>Also show</SheetHeading>
       <SheetToggle
-        label="Show temporary sessions"
-        description="Runs in the system temp folder, usually started by another session"
+        label="Temporary sessions"
+        description="Mostly started by other sessions"
         checked={prefs.showTemporary}
         onChange={(showTemporary) => setPrefs({ showTemporary })}
       />
       <SheetToggle
-        label="Show side chats"
-        description="Claude Desktop’s side chats: a copy of a session with a question or two of their own"
+        label="Side chats"
         checked={prefs.showSideChats}
         onChange={(showSideChats) => setPrefs({ showSideChats })}
       />
@@ -160,7 +159,7 @@ export function SessionList({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   // One chip per real project; scratch sessions share one chip, and so do temporary ones,
-  // which "All" leaves out unless Settings says otherwise: they are mostly runs other sessions started.
+  // which "All" leaves out unless the list's options say otherwise: they are mostly runs other sessions started.
   const projects = useMemo(() => {
     const seen = new Map<string, number>();
     for (const s of sessions ?? []) if (s.project && !s.scratch && !s.temp && !s.archived && !seen.has(s.project)) seen.set(s.project, s.lastActivity);
@@ -241,9 +240,6 @@ export function SessionList({
             </div>
             <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount} sessions` : ''}</div>
           </div>
-          <button type="button" aria-label="List view" onClick={() => setViewOpen(true)} className="grid size-10 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
-            <LayoutList className="size-[18px]" />
-          </button>
           <button type="button" aria-label="Settings" onClick={onSettings} className="grid size-10 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
             <Settings className="size-[18px]" />
           </button>
@@ -251,7 +247,8 @@ export function SessionList({
             <Plus className="size-5" />
           </button>
         </div>
-        <label className="mt-3 flex h-10 items-center gap-2 rounded-xl bg-chip px-3">
+        <div className="mt-3 flex items-center gap-1">
+        <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl bg-chip px-3">
           <Search className="size-4 shrink-0 text-faint" />
           <input
             value={query}
@@ -265,6 +262,11 @@ export function SessionList({
             </button>
           )}
         </label>
+        {/* How the list is grouped and what it shows: next to the list, apart from Settings. */}
+        <button type="button" aria-label="List options" onClick={() => setViewOpen(true)} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+          <ListFilter className="size-[18px]" />
+        </button>
+        </div>
         {(projects.length > 1 || archivedCount > 0) && (
           <div className="no-scrollbar -mx-4 mt-2 flex gap-1.5 overflow-x-auto px-4">
             {[undefined, ...projects].map((p) => (

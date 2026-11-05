@@ -23,9 +23,8 @@ const write = (key: string, value: unknown) => {
 };
 
 /**
- * Composer settings a new session starts with; remembered per browser. The permission mode is
- * not among them: it belongs to one session, as Shift+Tab's does in Claude Code, so choosing
- * Bypass once never makes it the start of every new session. New work asks first.
+ * What a new session starts with, set in Settings (a choice in a session stays in that session);
+ * remembered per browser. The permission mode is not among them: new work asks first.
  */
 export function loadDefaults(): RunSettings {
   const raw = read<Partial<RunSettings>>(SETTINGS_KEY, {});
@@ -57,18 +56,19 @@ const CHOICES_KEY = 'pelican:session-settings';
 type Choice = { settings: RunSettings; at: number };
 
 /**
- * What was picked in one session's composer and not yet used: it stays when you leave the
- * session and come back, until a turn runs with it (or after it). Bypass is not kept here either.
+ * What was picked in one session's composer, and when: a pick no turn has used yet stays when
+ * you leave the session and come back, and the model picked stays named as picked (Opus 5.5,
+ * not Default, though both are the same model). Bypass too: it is the session's own.
  */
 export function sessionChoice(sessionId: string): Choice | undefined {
   return read<Record<string, Choice>>(CHOICES_KEY, {})[sessionId];
 }
 
-export function saveSessionChoice(sessionId: string, { permissionMode, ...settings }: RunSettings): void {
+export function saveSessionChoice(sessionId: string, settings: RunSettings): void {
   const all = read<Record<string, Choice>>(CHOICES_KEY, {});
-  all[sessionId] = { settings: { ...settings, ...(permissionMode && permissionMode !== 'bypassPermissions' ? { permissionMode } : {}) }, at: Date.now() };
-  // The newest few dozen are plenty.
-  const kept = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 50);
+  all[sessionId] = { settings, at: Date.now() };
+  // The newest couple of hundred are plenty.
+  const kept = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 200);
   write(CHOICES_KEY, Object.fromEntries(kept));
 }
 
@@ -92,11 +92,13 @@ export type Prefs = {
   sendWhileBusy: 'steer' | 'queue';
   /** Offer Claude Code's guess at the next prompt after a turn. */
   suggestions: boolean;
+  /** Sessions shown in a view of their own, not `view` (set in each session's menu). */
+  sessionViews: Record<string, ViewMode>;
 };
 
 const DEFAULT_PREFS: Prefs = {
   theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, showSideChats: false, listGroup: 'time', listDensity: 'detailed',
-  sendWhileBusy: 'steer', suggestions: true,
+  sendWhileBusy: 'steer', suggestions: true, sessionViews: {},
 };
 
 let prefs: Prefs = read(PREFS_KEY, DEFAULT_PREFS);
@@ -111,6 +113,18 @@ export function setPrefs(patch: Partial<Prefs>): void {
   write(PREFS_KEY, prefs);
   applyTheme();
   for (const listener of listeners) listener();
+}
+
+/** The view a session opens in: its own when one was picked for it, else the default. */
+export const viewOf = (p: Prefs, sessionId: string | undefined): ViewMode => (sessionId && p.sessionViews?.[sessionId]) || p.view;
+
+/** A session's own view; picking the one the others open in makes it follow that one again. */
+export function setSessionView(sessionId: string, view: ViewMode): void {
+  const views = { ...(prefs.sessionViews ?? {}) };
+  delete views[sessionId];
+  if (view !== prefs.view) views[sessionId] = view;
+  // The latest couple of hundred are plenty (a key set again moves to the end).
+  setPrefs({ sessionViews: Object.fromEntries(Object.entries(views).slice(-200)) });
 }
 
 export function usePrefs(): Prefs {

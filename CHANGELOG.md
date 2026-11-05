@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.3
+
+- A session keeps its own model, effort, speed, Ultracode and permission mode, Bypass included:
+  leaving and coming back, or Pelican restarting, no longer turns Opus 5.5 into Default or
+  Bypass into Ask. What new sessions start with is set in Settings alone; a choice in one
+  session stays in that session. A branch still starts by asking first.
+- The view (Summary, Normal, Verbose) can differ per session, from the session menu; Settings
+  holds the one the others open in.
+- The session list's options moved next to the search and are no longer repeated in Settings.
+  Settings, the session menu and the model sheet say less.
+- Dictation explains why it stopped: a blocked microphone, a page that does not let Pelican use
+  it, or a browser without a speech service.
+
 ## 0.2.2
 
 - That a session is also open, idle, in another app is explained once, the first time it

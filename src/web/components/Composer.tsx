@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Sparkles, Square, SquareTerminal, X, Zap } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Agent, Attachment, Command, ModelOption, PermissionMode, RunSettings, SendMode } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { EFFORT_LABELS, EFFORT_SHORT, enterSends, getPrefs, PERMISSION_MODES } from '../lib/prefs';
-import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
+import { enterSends, getPrefs, PERMISSION_MODES } from '../lib/prefs';
+import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
+import { Sheet, SheetOption } from './Sheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string };
 
@@ -52,7 +53,7 @@ type Recognition = {
   continuous: boolean;
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
   start: () => void;
   stop: () => void;
 };
@@ -63,6 +64,47 @@ const SpeechRecognition = (() => {
   const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition;
 })();
+
+/** Inside another page (a frame), which decides whether the microphone may be used here. */
+const framed = (() => {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+})();
+
+/** Whether the page that holds this one lets it use the microphone (Chromium says; others do not). */
+function microphoneAllowed(): boolean | undefined {
+  const doc = document as unknown as { permissionsPolicy?: { allowsFeature(f: string): boolean }; featurePolicy?: { allowsFeature(f: string): boolean } };
+  const policy = doc.permissionsPolicy ?? doc.featurePolicy;
+  return policy ? policy.allowsFeature('microphone') : undefined;
+}
+
+const NO_SERVICE = 'This browser does not offer dictation here. Your keyboard’s microphone works too.';
+const NOT_IN_FRAME = 'The page Pelican is shown in does not let it use the microphone. Open Pelican in a tab of its own to dictate.';
+
+/** Why dictation stopped, in words; nothing for a stop that needs no explaining. */
+function dictationProblem(code: string | undefined): string | undefined {
+  switch (code) {
+    case 'aborted':
+      return undefined;
+    case 'no-speech':
+      return 'Nothing was heard. Tap the microphone and speak.';
+    case 'not-allowed':
+      return framed && microphoneAllowed() !== true ? NOT_IN_FRAME : 'The microphone is blocked for this site. Allow it in the browser’s site settings, then try again.';
+    case 'service-not-allowed':
+      return framed && microphoneAllowed() === false ? NOT_IN_FRAME : NO_SERVICE;
+    case 'network':
+      return NO_SERVICE;
+    case 'audio-capture':
+      return 'No microphone was found.';
+    case 'language-not-supported':
+      return 'Dictation does not support this language in this browser.';
+    default:
+      return `Dictation stopped${code ? ` (${code})` : ''}.`;
+  }
+}
 
 /** What the text before the caret asks to complete: a slash command at the start, or an @ mention. */
 type Trigger = { kind: 'command' | 'file'; query: string; start: number; end: number };
@@ -166,9 +208,7 @@ export function Composer({
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
-  const model = models?.find((m) => m.value === (settings.model ?? 'default')) ?? models?.[0];
-  const efforts = model?.efforts ?? [];
-  const canUltra = efforts.includes('xhigh');
+  const model = modelOf(models, settings);
   const modes = PERMISSION_MODES.filter((m) => m.value !== 'auto' || model?.supportsAuto !== false);
   const permission = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
   const uploading = uploads.some((u) => !u.attachment && !u.error);
@@ -206,13 +246,25 @@ export function Composer({
 
   // Dictation: what you say goes into the box, to read over before sending.
   const [listening, setListening] = useState(false);
+  const [dictationError, setDictationError] = useState<string>();
   const recognition = useRef<Recognition | undefined>(undefined);
+  useEffect(() => {
+    if (!dictationError) return undefined;
+    const timer = setTimeout(() => setDictationError(undefined), 8000);
+    return () => clearTimeout(timer);
+  }, [dictationError]);
   const dictate = () => {
+    setDictationError(undefined);
     if (listening) {
       recognition.current?.stop();
       return;
     }
     if (!SpeechRecognition) return;
+    // The page holding this one has not let it use the microphone: say so instead of failing quietly.
+    if (microphoneAllowed() === false) {
+      setDictationError(framed ? NOT_IN_FRAME : 'The microphone is blocked for this site.');
+      return;
+    }
     const rec = new SpeechRecognition();
     rec.lang = navigator.language || 'en-US';
     rec.interimResults = true;
@@ -224,13 +276,17 @@ export function Composer({
       setText(`${before}${before && !/\s$/.test(before) ? ' ' : ''}${said.trimStart()}`);
     };
     rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
+    rec.onerror = (event) => {
+      setListening(false);
+      setDictationError(dictationProblem(event?.error));
+    };
     try {
       rec.start();
       recognition.current = rec;
       setListening(true);
-    } catch {
+    } catch (error) {
       setListening(false);
+      setDictationError(dictationProblem((error as { name?: string })?.name === 'NotAllowedError' ? 'not-allowed' : undefined));
     }
   };
   useEffect(() => () => recognition.current?.stop(), []);
@@ -381,6 +437,7 @@ export function Composer({
             ))}
           </div>
         )}
+        {dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-danger">{dictationError}</div>}
         <textarea
           ref={area}
           value={text}
@@ -388,6 +445,7 @@ export function Composer({
           disabled={disabled}
           placeholder={placeholder}
           onChange={(e) => {
+            setDictationError(undefined);
             setText(e.target.value);
             setCaret(e.target.selectionStart);
             setDismissed(undefined);
@@ -419,10 +477,7 @@ export function Composer({
           ) : (
           <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pr-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
             <Chip label="Model, effort and speed" onClick={() => setSheet('model')}>
-              <span className="max-w-32 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
-              {settings.effort && <span className="text-faint">{EFFORT_SHORT[settings.effort] ?? settings.effort}</span>}
-              {canUltra && settings.ultracode && <Sparkles className="size-3 text-faint" aria-label="Ultracode on" />}
-              {model?.supportsFast && settings.fast && <Zap className="size-3 text-faint" aria-label="Fast mode on" />}
+              <ModelSummary settings={settings} models={models} />
             </Chip>
             <span aria-hidden className="h-3.5 w-px shrink-0 bg-line" />
             <Chip label="Permission mode" tone={permission.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
@@ -467,61 +522,7 @@ export function Composer({
         </div>
       </div>
 
-      <Sheet open={sheet === 'model'} onClose={() => setSheet(undefined)} title="Model" done>
-        {efforts.length > 0 && (
-          <>
-            <SheetHeading>Reasoning effort</SheetHeading>
-            <Segmented
-              value={settings.effort}
-              onChange={(effort) => set({ effort })}
-              options={[
-                { value: undefined, label: 'Default', title: 'What Claude Code uses for this model' },
-                ...efforts.map((e) => ({ value: e as string | undefined, label: EFFORT_SHORT[e] ?? e, title: EFFORT_LABELS[e] ?? e })),
-              ]}
-            />
-          </>
-        )}
-        {(model?.supportsFast || canUltra) && <div className="h-2" />}
-        {model?.supportsFast && (
-          <SheetToggle
-            icon={<Zap className={`size-4 ${settings.fast ? 'fill-current text-wait' : 'text-faint'}`} />}
-            label="Fast mode"
-            description="Faster output, billed at a higher rate"
-            checked={Boolean(settings.fast)}
-            onChange={(fast) => set({ fast })}
-          />
-        )}
-        {canUltra && (
-          <SheetToggle
-            icon={<Sparkles className={`size-4 ${settings.ultracode ? 'text-run' : 'text-faint'}`} />}
-            label="Ultracode"
-            description="Claude plans and runs its work as workflows of parallel agents, on top of any effort level"
-            checked={Boolean(settings.ultracode)}
-            onChange={(ultracode) => set({ ultracode })}
-          />
-        )}
-        <SheetHeading>Model</SheetHeading>
-        {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
-        {models?.map((m) => (
-          <SheetOption
-            key={m.value}
-            label={m.label}
-            description={m.description}
-            selected={m.value === model?.value}
-            onSelect={() => {
-              const effort = settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined;
-              onSettings({
-                ...settings,
-                model: m.value,
-                effort,
-                fast: m.supportsFast ? settings.fast : false,
-                ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
-                permissionMode: settings.permissionMode === 'auto' && m.supportsAuto === false ? 'default' : settings.permissionMode,
-              });
-            }}
-          />
-        ))}
-      </Sheet>
+      <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
 
       <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
         {modes.map((m) => (

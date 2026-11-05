@@ -5,14 +5,8 @@ import { type FormEvent, useEffect, useState } from 'react';
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shortPath } from '../lib/format';
-import { setPrefs, usePrefs, type ViewMode } from '../lib/prefs';
+import { setSessionView, usePrefs, viewOf, type ViewMode } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
-
-const VIEW_HINT: Record<ViewMode, string> = {
-  summary: 'Your prompts and Claude’s replies; the steps in between are counted, not shown.',
-  normal: 'Replies in full, long runs of steps folded.',
-  verbose: 'Every step open, with its command, diff or output, and Claude’s thinking.',
-};
 
 const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
 const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', pending: 'Connecting', 'needs-auth': 'Needs sign-in', failed: 'Failed', disabled: 'Off' };
@@ -66,10 +60,10 @@ function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
       {!showAll && signIn.length > 0 && (
         <button type="button" onClick={() => setShowAll(true)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-muted hover:bg-hover">
           <span className="size-2 shrink-0 rounded-full bg-wait" />
-          {signIn.length} more need signing in, in Claude Code or on claude.ai
+          {signIn.length} more need signing in
         </button>
       )}
-      {data && !data.live && data.servers.length > 0 && <p className="px-3 pt-0.5 text-[12px] leading-snug text-faint">As a new Claude here would see them. Send a message to turn servers on or off for this session.</p>}
+      {data && !data.live && data.servers.length > 0 && <p className="px-3 pt-0.5 text-[12px] leading-snug text-faint">They can be turned on or off once Claude runs here.</p>}
     </>
   );
 }
@@ -166,13 +160,17 @@ export function SessionMenu({
 
   return (
     <Sheet open={open} onClose={onClose} title="Session" done>
+      {/* This session's own; the one sessions start with is in Settings. */}
       <SheetHeading>View</SheetHeading>
       <Segmented<ViewMode>
-        value={prefs.view}
-        onChange={(view) => setPrefs({ view })}
-        options={[{ value: 'summary', label: 'Summary' }, { value: 'normal', label: 'Normal' }, { value: 'verbose', label: 'Verbose' }]}
+        value={viewOf(prefs, sessionId)}
+        onChange={(view) => setSessionView(sessionId, view)}
+        options={[
+          { value: 'summary', label: 'Summary', title: 'Your prompts and Claude’s replies' },
+          { value: 'normal', label: 'Normal', title: 'Replies, with the steps folded' },
+          { value: 'verbose', label: 'Verbose', title: 'Every step open' },
+        ]}
       />
-      <p className="px-3 pt-1 pb-1 text-[12px] leading-snug text-faint">{VIEW_HINT[prefs.view]}</p>
 
       <SheetHeading>Actions</SheetHeading>
       {error && <div className="mx-3 mb-1 rounded-lg bg-chip px-3 py-2 text-[13px] text-danger">{error}</div>}
@@ -200,7 +198,7 @@ export function SessionMenu({
       <SheetOption
         icon={<GitFork className="size-4" />}
         label="Branch"
-        description="A copy to carry on separately; this one stays as it is"
+        description="A copy to carry on separately"
         onSelect={() => act(async () => {
           const id = await api.fork(sessionId);
           if (id) onForked(id);
@@ -214,12 +212,11 @@ export function SessionMenu({
           onSelect={() => copy('resume', resumeCommand(sessionId, cwd))}
         />
       )}
-      <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" description="Prompts and replies, with each step on one line" onSelect={exportMarkdown} />
+      <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" onSelect={exportMarkdown} />
       {session?.archived ? (
         <SheetOption
           icon={<ArchiveRestore className="size-4" />}
           label="Unarchive"
-          description="Back in the list"
           onSelect={() => act(async () => {
             await api.archive(sessionId, false);
             onRenamed();
@@ -229,7 +226,6 @@ export function SessionMenu({
         <SheetOption
           icon={<Archive className="size-4" />}
           label="Archive"
-          description="Off the list, under Archived; the session itself stays as it is"
           onSelect={() => act(async () => {
             await api.archive(sessionId, true);
             onDeleted();
@@ -239,7 +235,7 @@ export function SessionMenu({
       {confirmDelete ? (
         <div className="mx-1 my-1 rounded-xl border border-line px-3 py-2.5">
           <div className="text-[14px]">Delete this session?</div>
-          <div className="mt-0.5 text-[12.5px] leading-snug text-muted">Its transcript is removed from this machine, for every Claude Code app. This cannot be undone.</div>
+          <div className="mt-0.5 text-[12.5px] leading-snug text-muted">Its transcript is removed from this computer, for every Claude Code app. This cannot be undone.</div>
           <div className="mt-2.5 flex gap-2">
             <button
               type="button"
@@ -273,9 +269,7 @@ export function SessionMenu({
       {session?.createdAt && <Detail label="Started">{when(session.createdAt)}</Detail>}
       {session?.lastActivity ? <Detail label="Last active">{when(session.lastActivity)}</Detail> : null}
       {session?.openIn && (
-        <Detail label="Also open">
-          In {session.openIn}. Pelican catches up with what was said there before it sends; {session.openIn} sees what you send here once the session is reopened there.
-        </Detail>
+        <Detail label="Also open">In {session.openIn}</Detail>
       )}
       {run?.context && (
         <Detail label="Context">
