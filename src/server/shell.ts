@@ -27,10 +27,15 @@ const DRAIN_MS = 200;
 const KILL_AFTER_MS = 2000;
 
 /**
- * How much of a command's output Claude gets in the conversation, in bytes as Claude Code's bash
- * mode measures it: its `bashOutputMaxChars` setting, 30,000 unless set, held to 4,000 to 128,000.
+ * How much of a command's output Claude Code's bash mode reads back, in bytes, and how much of
+ * what it read Claude gets inline, in characters: its `bashOutputMaxChars` setting for both, held
+ * to 4,000 to 128,000; unset, it reads as much as the BASH_MAX_OUTPUT_LENGTH variable says, from 1
+ * to 150,000 (H1 in Claude Code), and gives 30,000 inline. Neither set: 30,000 of both.
  */
-export const INLINE_BYTES = { standard: 30_000, least: 4_000, most: 128_000 };
+export const OUTPUT_LIMITS = { standard: 30_000, least: 4_000, most: 128_000, variableMost: 150_000 };
+/** Claude Code's two limits for a command's output, as bashModeSettings finds them. */
+export type OutputLimits = { readMax: number; inlineMax: number };
+const STANDARD_LIMITS: OutputLimits = { readMax: OUTPUT_LIMITS.standard, inlineMax: OUTPUT_LIMITS.standard };
 /** How much of a longer output Claude Code saves to a file: 64 MB, from which on it says it cut it. */
 export const SAVED_BYTES = 64 * 1024 * 1024;
 /** How much of an output saved to a file Claude Code shows Claude in its place, in characters. */
@@ -53,9 +58,9 @@ const readAt = promisify(read);
 
 /**
  * What a `!` command printed, stdout and stderr together in the order it wrote them, kept as
- * Claude Code keeps it: its start at hand, as much as Claude ever gets inline, and when there is
- * more, all of it, up to the 64 MB Claude Code saves of one, written to a file as it comes rather
- * than held. The file has no name once open (it goes with Pelican, whatever happens).
+ * Claude Code keeps it: its start at hand, as much as Claude Code ever reads back of one, and when
+ * there is more, all of it, up to the 64 MB Claude Code saves of one, written to a file as it comes
+ * rather than held. The file has no name once open (it goes with Pelican, whatever happens).
  */
 export class CommandOutput {
   /** All it printed, in bytes, also past what is kept. */
@@ -69,12 +74,12 @@ export class CommandOutput {
   add(chunk: Buffer): void {
     const before = this.bytes;
     this.bytes += chunk.length;
-    if (this.held < INLINE_BYTES.most) {
-      const part = chunk.subarray(0, INLINE_BYTES.most - this.held);
+    if (this.held < OUTPUT_LIMITS.variableMost) {
+      const part = chunk.subarray(0, OUTPUT_LIMITS.variableMost - this.held);
       this.head.push(part);
       this.held += part.length;
     }
-    if (this.bytes <= INLINE_BYTES.most || this.lost) return;
+    if (this.bytes <= OUTPUT_LIMITS.variableMost || this.lost) return;
     if (this.spill) {
       this.write(chunk);
       return;
@@ -93,7 +98,7 @@ export class CommandOutput {
       }
     }
     this.write(Buffer.concat(this.head));
-    this.write(chunk.subarray(INLINE_BYTES.most - before));
+    this.write(chunk.subarray(OUTPUT_LIMITS.variableMost - before));
   }
 
   private write(data: Buffer): void {
@@ -117,7 +122,7 @@ export class CommandOutput {
 
   /** All of it, up to Claude Code's 64 MB, written to `file`, which must not exist yet; readable only by you. */
   async saveTo(file: string): Promise<void> {
-    if (this.bytes <= INLINE_BYTES.most) {
+    if (this.bytes <= OUTPUT_LIMITS.variableMost) {
       await writeFile(file, Buffer.concat(this.head), { flag: 'wx', mode: 0o600 });
       return;
     }
@@ -298,9 +303,33 @@ function ending(result: ShellResult): string {
   return '';
 }
 
-const inlineBytes = (setting: unknown) => (typeof setting === 'number' && Number.isInteger(setting) && setting > 0
-  ? Math.min(INLINE_BYTES.most, Math.max(INLINE_BYTES.least, setting))
-  : INLINE_BYTES.standard);
+/** `bashOutputMaxChars` as Claude Code takes it: a whole number above 0, held to 4,000 to 128,000; else unset. */
+const settingLimit = (setting: unknown) => (typeof setting === 'number' && Number.isSafeInteger(setting) && setting > 0
+  ? Math.min(OUTPUT_LIMITS.most, Math.max(OUTPUT_LIMITS.least, setting))
+  : undefined);
+
+/**
+ * A number in a variable as Claude Code reads one (its Up): `5000`, `5e3`, `5,000`, `5_000` and
+ * `5 000` alike, else the whole number it starts with.
+ */
+function numberIn(raw: string): number {
+  const text = raw.trim();
+  if (text.length <= 32) {
+    if (/^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/.test(text)) {
+      const n = Number(text);
+      return Number.isInteger(n) ? n : NaN;
+    }
+    if (/^[+-]?\d{1,3}([_,\u00a0\u202f ])\d{3}(?:\1\d{3})*$/.test(text)) return parseInt(text.replace(/[_,\u00a0\u202f ]/g, ''), 10);
+  }
+  return parseInt(text, 10);
+}
+
+/** BASH_MAX_OUTPUT_LENGTH as Claude Code takes it: a number from 1, 150,000 at most; else 30,000. */
+function variableLimit(value: string | undefined): number {
+  if (!value) return OUTPUT_LIMITS.standard;
+  const n = numberIn(value);
+  return Number.isNaN(n) || n <= 0 ? OUTPUT_LIMITS.standard : Math.min(n, OUTPUT_LIMITS.variableMost);
+}
 
 /** Commands whose exit code 1 is an answer, not a failure, as Claude Code reads them: no match, files differ, false. */
 const ANSWERS = new Set(['grep', 'rg', 'egrep', 'fgrep', 'find', 'diff', 'test', '[']);
@@ -609,28 +638,28 @@ function persistedOutput(text: string, file: string, size: number): string {
   return `<persisted-output>\n${saved}\n\nPreview (first ${sizeText(PREVIEW_CHARS)}):\n${preview}${more ? '\n...\n' : '\n'}</persisted-output>`;
 }
 
-/** A command's result as it goes to Claude: how much goes inline, and where all of it was saved when more. */
-export type ForClaude = ShellResult & {
-  /** How much of the output Claude gets in the conversation, in bytes: Claude Code's `bashOutputMaxChars`. */
-  inlineMax?: number;
-  /** Where all of the output was saved when it was more than that, as Claude Code saves it (the session's tool-results folder). */
+/** A command's result as it goes to Claude: Claude Code's limits for it, and where it was saved when it went past them. */
+export type ForClaude = ShellResult & Partial<OutputLimits> & {
+  /** Where the output was saved in place of the conversation, as Claude Code saves it (the session's tool-results folder). */
   savedTo?: string;
+  /** How big Claude Code says that is: the text it read, in characters, when that is what it saved; else all of it, in bytes. */
+  savedSize?: number;
 };
 
 /**
- * The output as Claude Code's bash mode puts it in the conversation, measured in bytes as it
- * measures it. A command that went well: in `<bash-stdout>`, trimmed (see trimmed), or Claude
- * Code's word that it printed nothing; longer than Claude gets inline, Claude Code's preview of the
- * file that holds all of it (`savedTo`). One that failed: in `<bash-stderr>` as it came, cut at that
- * length. Escaped so it cannot end its tags. One Pelican ended (Stop, the time limit), which Claude
- * Code has no record of its own for, as one that failed, with a word on how it ended.
+ * The output as Claude Code's bash mode puts it in the conversation, from what it reads back of it
+ * (`readMax` bytes). A command that went well: in `<bash-stdout>`, trimmed (see trimmed), or Claude
+ * Code's word that it printed nothing; saved in place of the conversation, Claude Code's preview of
+ * the file (`savedTo`). One that failed: in `<bash-stderr>` as it came, cut there. Escaped so it
+ * cannot end its tags. One Pelican ended (Stop, the time limit), which Claude Code has no record of
+ * its own for, as one that failed, with a word on how it ended.
  */
 function outputText(result: ForClaude): string {
   const tags = (stdout: string, stderr: string) => `<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`;
-  const start = result.output.text(result.inlineMax ?? INLINE_BYTES.standard);
+  const start = result.output.text(result.readMax ?? OUTPUT_LIMITS.standard);
   if (!succeeded(result)) return tags('', escape(start + ending(result)));
   const text = trimmed(start);
-  if (result.savedTo) return tags(persistedOutput(text, result.savedTo, result.output.bytes), '');
+  if (result.savedTo) return tags(persistedOutput(text, result.savedTo, result.savedSize ?? result.output.bytes), '');
   return tags(escape(text || '(Bash completed with no output)'), '');
 }
 
@@ -716,19 +745,30 @@ export async function savedOutputPage(sessionId: string, name: string, from: num
 }
 
 /**
- * A command's result as it goes to Claude, as Claude Code's bash mode sends it: inline up to
- * `inlineMax` bytes; past that, for one that went well, all of it saved where Claude Code saves it,
- * in the session's tool-results folder beside its transcript, under a name of Claude Code's kind
- * (`b` and eight letters or digits). Written once, never over a file already there, readable only
- * by you; when it cannot be, Claude gets the start inline, as from Claude Code when its copy fails.
+ * A command's result as it goes to Claude, as Claude Code's bash mode sends it, saved where Claude
+ * Code saves one, in the session's tool-results folder beside its transcript. One that went well
+ * and printed more than Claude Code reads back (`readMax` bytes): all of it, up to 64 MB, under a
+ * name of the bash tool's kind (`b` and eight letters or digits). One read back whole whose text is
+ * still longer than Claude gets inline (`inlineMax` characters, which only BASH_MAX_OUTPUT_LENGTH
+ * above 30,000 leaves room for): that text, under a call's id, as Claude Code saves a long tool
+ * result. Written once, never over a file already there, readable only by you; when it cannot be,
+ * Claude gets the text inline, as from Claude Code when its copy fails.
  */
-export async function forClaude(sessionId: string, result: ShellResult, inlineMax: number): Promise<ForClaude> {
-  const out: ForClaude = { ...result, inlineMax };
-  if (!succeeded(result) || result.output.bytes <= inlineMax) return out;
+export async function forClaude(sessionId: string, result: ShellResult, limits: OutputLimits = STANDARD_LIMITS): Promise<ForClaude> {
+  const out: ForClaude = { ...result, ...limits };
+  if (!succeeded(result)) return out;
+  const whole = result.output.bytes <= limits.readMax;
+  const text = whole ? trimmed(result.output.text(limits.readMax)) : '';
+  if (whole && text.length <= limits.inlineMax) return out;
   const dir = await toolResultsFolder(sessionId);
   if (!dir) return out;
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (whole) {
+      const file = path.join(dir, `${randomUUID()}.txt`);
+      await writeFile(file, text, { flag: 'wx', mode: 0o600 });
+      return { ...out, savedTo: file, savedSize: text.length };
+    }
     const file = path.join(dir, `b${[...randomBytes(8)].map((byte) => NAME_LETTERS[byte % NAME_LETTERS.length]).join('')}.txt`);
     await result.output.saveTo(file);
     return { ...out, savedTo: file };
@@ -740,17 +780,22 @@ export async function forClaude(sessionId: string, result: ShellResult, inlineMa
 /**
  * How Claude Code's bash mode treats a command in this folder, from the settings Claude Code runs
  * with there (the user's own only, where the folder's are not used): whether Claude answers it,
- * unless `respondToBashCommands` is false, and how much of its output Claude gets inline
- * (`bashOutputMaxChars`, in bytes). Reading settings runs nothing.
+ * unless `respondToBashCommands` is false, and its limits for the output (OUTPUT_LIMITS), from
+ * `bashOutputMaxChars`, else BASH_MAX_OUTPUT_LENGTH as Claude Code gets it: from the settings'
+ * `env`, which it sets over the one it started with, else from Pelican's, which it inherits.
+ * Reading settings runs nothing.
  */
-export async function bashModeSettings(cwd: string): Promise<{ respond: boolean; inlineMax: number }> {
+export async function bashModeSettings(cwd: string): Promise<{ respond: boolean } & OutputLimits> {
   try {
     const { settingSources } = await launchFor(cwd);
     const dir = await realpath(cwd).catch(() => cwd);
     const { effective } = await resolveSettings({ cwd: dir, settingSources });
-    return { respond: effective.respondToBashCommands !== false, inlineMax: inlineBytes(effective.bashOutputMaxChars) };
+    const set = settingLimit(effective.bashOutputMaxChars);
+    const env: unknown = (effective.env as Record<string, unknown> | undefined)?.BASH_MAX_OUTPUT_LENGTH;
+    const variable = typeof env === 'string' ? env : typeof env === 'number' ? String(env) : process.env.BASH_MAX_OUTPUT_LENGTH;
+    return { respond: effective.respondToBashCommands !== false, readMax: set ?? variableLimit(variable), inlineMax: set ?? OUTPUT_LIMITS.standard };
   } catch {
     // Settings that cannot be read, or an SDK without the call: Claude Code's defaults.
-    return { respond: true, inlineMax: INLINE_BYTES.standard };
+    return { respond: true, ...STANDARD_LIMITS };
   }
 }
