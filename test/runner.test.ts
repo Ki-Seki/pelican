@@ -595,6 +595,31 @@ describe('work that runs on its own', () => {
     expect(run.closed).toBe(true);
   });
 
+  it('a recurring check shows no time gone by, and is let go a week on, as Claude Code lets it go', async () => {
+    const { run, claude, state } = await start();
+    const firstDue = Date.now() + 60_000;
+    claude.say(toolCall('c1', 'CronCreate', { cron: '* * * * *', prompt: 'check the deploy' }));
+    claude.say(toolResult('c1', { id: 'job-1', humanSchedule: 'every minute', recurring: true, nextFireAt: firstDue }));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(state().scheduled).toEqual([{ id: 'job-1', what: 'every minute: check the deploy', next: firstDue, repeats: true }]);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // It fired: when it comes next, Claude Code works out as it goes. Still there, and Claude stays for it.
+      vi.setSystemTime(firstDue + 30_000);
+      expect(state().scheduled).toEqual([{ id: 'job-1', what: 'every minute: check the deploy', repeats: true }]);
+      closeIdle(Date.now() + config.idleCloseMs + 60_000);
+      expect(run.closed).toBe(false);
+      // A week after it was made, Claude Code has let it go: nothing keeps Claude running for it.
+      vi.setSystemTime(Date.now() + 7 * 24 * 3600_000);
+      expect(state().scheduled).toBeUndefined();
+      closeIdle(Date.now() + config.idleCloseMs + 60_000);
+      expect(run.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports what subagents and background tasks are doing, and what a command printed', async () => {
     const { run, claude, state } = await start();
     claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));

@@ -218,6 +218,8 @@ function formValues(input: Record<string, unknown>): Record<string, string | num
 
 /** A scheduled check stays counted this long after it was due, in case it fires late. */
 const DUE_GRACE_MS = 10 * 60_000;
+/** Claude Code lets a recurring check go this long after it was made (CronCreate: "auto-expired after 7 days"). */
+const RECURRING_MAX_AGE_MS = 7 * 24 * 3600_000;
 
 /** One Claude Code process driving one session. It stays alive between turns until idle. */
 export class SessionRun {
@@ -250,6 +252,8 @@ export class SessionRun {
   private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
   private wakeup?: ScheduledCheck;
   private crons = new Map<string, ScheduledCheck>();
+  /** When Claude Code lets each recurring check go. */
+  private cronEnds = new Map<string, number>();
   /** Prompts waiting for the turn to end; Claude gets them together when it does. */
   private queued: Prompt[] = [];
   /** The turn ended with prompts waiting, which went out at once: the idle that follows is not the end. */
@@ -311,12 +315,34 @@ export class SessionRun {
     return this.tasks.length + (this.wakeup ? 1 : 0) + this.crons.size;
   }
 
-  /** Drops one-off checks long past due; whether any went. */
+  /**
+   * The checks still to come at `now`: not one-off checks long past due, nor recurring ones Claude
+   * Code has let go. A recurring check that fired shows no time: Claude Code works out the next one
+   * as it goes, its own way, and a time gone by would say it is late.
+   */
+  private checksAt(now: number): { wakeup: ScheduledCheck | undefined; crons: Map<string, ScheduledCheck> } {
+    const wakeup = this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now ? undefined : this.wakeup;
+    const crons = new Map<string, ScheduledCheck>();
+    for (const [id, cron] of this.crons) {
+      if (cron.repeats ? (this.cronEnds.get(id) ?? Infinity) < now : (cron.next ?? 0) + DUE_GRACE_MS < now) continue;
+      if (cron.repeats && cron.next !== undefined && cron.next < now) {
+        const { next: _fired, ...rest } = cron;
+        crons.set(id, rest);
+      } else {
+        crons.set(id, cron);
+      }
+    }
+    return { wakeup, crons };
+  }
+
+  /** Keeps only the checks still to come; whether that changed anything. */
   private forgetPastChecks(now = Date.now()): boolean {
-    const before = (this.wakeup ? 1 : 0) + this.crons.size;
-    if (this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now) this.wakeup = undefined;
-    for (const [id, cron] of this.crons) if (!cron.repeats && (cron.next ?? 0) + DUE_GRACE_MS < now) this.crons.delete(id);
-    return (this.wakeup ? 1 : 0) + this.crons.size !== before;
+    const { wakeup, crons } = this.checksAt(now);
+    const changed = wakeup !== this.wakeup || crons.size !== this.crons.size || [...crons].some(([id, cron]) => this.crons.get(id) !== cron);
+    this.wakeup = wakeup;
+    this.crons = crons;
+    for (const id of this.cronEnds.keys()) if (!crons.has(id)) this.cronEnds.delete(id);
+    return changed;
   }
 
   start(): void {
@@ -370,7 +396,8 @@ export class SessionRun {
       const tool = this.taskTools.get(task);
       return tool ? [[tool, report]] : [];
     }));
-    const scheduled = [...(this.wakeup ? [this.wakeup] : []), ...this.crons.values()];
+    const checks = this.checksAt(Date.now());
+    const scheduled = [...(checks.wakeup ? [checks.wakeup] : []), ...checks.crons.values()];
     return {
       sessionId: this.sessionId,
       cwd: this.cwd,
@@ -861,14 +888,17 @@ export class SessionRun {
         const id = str(output.id);
         if (!id) continue;
         const prompt = str(call.input.prompt);
+        const repeats = output.recurring !== false;
         this.crons.set(id, {
           id,
           what: oneLine(`${str(output.humanSchedule) || str(call.input.cron)}${prompt ? `: ${prompt}` : ''}`, 100),
           ...(typeof output.nextFireAt === 'number' ? { next: output.nextFireAt } : {}),
-          repeats: output.recurring !== false,
+          repeats,
         });
+        if (repeats) this.cronEnds.set(id, Date.now() + RECURRING_MAX_AGE_MS);
       } else {
         this.crons.delete(str(call.input.id));
+        this.cronEnds.delete(str(call.input.id));
       }
     }
   }
@@ -1081,6 +1111,7 @@ export class SessionRun {
       this.taskCount = 0;
       this.wakeup = undefined;
       this.crons.clear();
+      this.cronEnds.clear();
       this.progress.clear();
       this.taskTools.clear();
       this.activity = undefined;
