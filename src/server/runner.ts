@@ -292,6 +292,10 @@ export class SessionRun {
    */
   get backgroundCount(): number {
     if (this.forgetPastChecks()) this.emit();
+    return this.work();
+  }
+
+  private work(): number {
     return this.tasks.length + (this.wakeup ? 1 : 0) + this.crons.size;
   }
 
@@ -412,7 +416,7 @@ export class SessionRun {
     // Session lists only care about the status and the work left running; streamed text stays
     // with the session's viewers.
     const status = this.status();
-    const tasks = this.tasks.length + (this.wakeup ? 1 : 0) + this.crons.size;
+    const tasks = this.work();
     if (`${status}:${tasks}` !== this.lastStatus) {
       this.lastStatus = `${status}:${tasks}`;
       broadcastAll({ type: 'status', sessionId: this.sessionId, status, ...(tasks > 0 ? { tasks } : {}) });
