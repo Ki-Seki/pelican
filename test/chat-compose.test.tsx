@@ -237,3 +237,15 @@ describe('Add to message, from Changes and files', () => {
     expect(box().value).toContain('Use the variables here too');
   });
 });
+
+describe('a session another app is waiting in, while Claude is idle here', () => {
+  it('says so, and that a message sent here starts a second Claude', async () => {
+    server.session = { status: 'waiting', runningIn: 'the terminal' };
+    server.run = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] };
+    session();
+    const header = (await screen.findByText('Needs you in the terminal')).closest('header');
+    expect(header).toBeTruthy();
+    expect(screen.getByText(/Claude is waiting for an answer in the terminal; answer it there\. A message sent here starts a second Claude/)).toBeTruthy();
+    expect(box().placeholder).toBe('Needs you in the terminal · a message starts a second Claude');
+  });
+});
