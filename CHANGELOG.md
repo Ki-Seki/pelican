@@ -47,7 +47,9 @@ from every app.
   opens in Normal.
 - A `!` command may run 30 minutes instead of two, and Claude answers it when it ends, which is a
   turn like a prompt. A command you stop gets no answer, and one still running when Pelican stops
-  gets up to 15 seconds to tidy up (Ctrl+C again ends it at once), then ends with it.
+  gets up to 15 seconds to tidy up, then ends with it; Ctrl+C again ends it at once. Under launchd
+  it gets what the login item leaves: `pelican service install` now asks launchd for 20 seconds,
+  where it gave 5.
 - Claude gets a `!` command's output as Claude Code's bash mode gives it, byte for byte for one
   that ends on its own: stdout and stderr together in the order they were written, up to 30,000
   bytes or what `bashOutputMaxChars` sets, instead of up to 200,000 characters of each. A longer
