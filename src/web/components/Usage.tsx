@@ -341,7 +341,7 @@ function TokensChart({ unit, points }: { unit: 'day' | 'week'; points: UsagePoin
                 const bottom = READOUT_H + PLOT_H;
                 // Rounded at the top only: the column stands on the baseline.
                 const d = `M${x},${bottom}V${bottom - h + r}Q${x},${bottom - h} ${x + r},${bottom - h}H${x + barW - r}Q${x + barW},${bottom - h} ${x + barW},${bottom - h + r}V${bottom}Z`;
-                return <path key={p.day} d={d} fill="var(--fg)" opacity={active === undefined || active === i ? (active === i ? 1 : 0.72) : 0.35} />;
+                return <path key={p.day} d={d} fill="var(--fg)" opacity={active === undefined ? 0.72 : active === i ? 1 : 0.5} />;
               })}
               {ticks.map((t) => (
                 <text key={`${t.i}-${t.text}`} x={tickX(t)} y={READOUT_H + PLOT_H + 13} textAnchor={t.anchor} fontSize={11} fill="var(--faint)">{t.text}</text>

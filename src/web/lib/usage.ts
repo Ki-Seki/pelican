@@ -47,11 +47,11 @@ export function periodWords(range: UsageRange, summary: Pick<UsageSummary, 'from
 
 const hourText = (hour: number) => new Date(2000, 0, 1, hour).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
-/** The four hours of the day most of these times fall in (two in three or more), if they do. */
+/** The four hours of the day, from one of these times on, that most of them fall in (two in three or more), if they do. */
 export function hourBand(hours: number[]): [number, number] | undefined {
   if (hours.length < 2) return undefined;
   let best: [number, number] | undefined;
-  for (let start = 0; start < 24; start += 1) {
+  for (const start of [...new Set(hours)].sort((a, b) => a - b)) {
     const inside = hours.filter((h) => (h - start + 24) % 24 < 4).length;
     if (inside * 3 >= hours.length * 2 && (!best || inside > best[1])) best = [start, inside];
   }
