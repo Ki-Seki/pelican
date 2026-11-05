@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const CWD = '/code/app';
 const TEXT = 'const a = 1;\nconst b = 2;\nconst c = 3;\n';
-const server = vi.hoisted(() => ({ searched: [] as string[], files: {} as Record<string, string> }));
+const server = vi.hoisted(() => ({ searched: [] as string[], files: {} as Record<string, string>, found: [] as Array<{ n: number; text: string }> }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -20,7 +20,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       files: async (_cwd: string, q: string) => ['src/a.ts', 'src/'].filter((f) => f.includes(q)),
       search: async (_cwd: string, q: string) => {
         server.searched.push(q);
-        return { engine: 'rg', truncated: false, files: [{ path: 'src/a.ts', lines: [{ n: 2, text: 'const b = 2;' }] }] };
+        return { engine: 'rg', truncated: false, files: [{ path: 'src/a.ts', lines: [{ n: 2, text: 'const b = 2;' }, ...server.found] }] };
       },
       tree: async () => [],
     },
@@ -43,6 +43,7 @@ afterEach(() => {
   setComments(CWD, []);
   server.searched = [];
   server.files = {};
+  server.found = [];
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
@@ -90,6 +91,21 @@ describe('searching Files', () => {
     fireEvent.click(await screen.findByText('const b = 2;', { exact: false }));
     expect(server.searched).toEqual(['a.ts']);
     expect(go).toHaveBeenLastCalledWith({ tab: 'files', path: 'src/a.ts', line: 2 });
+  });
+
+  it('shows what it found on a long line where it is, after a "…", and marks it', async () => {
+    server.found = [
+      { n: 7, text: '    // Every color the page uses is a CSS variable, and the dark one is set by data-theme on the root.' },
+      { n: 9, text: 'theme: dark' },
+    ];
+    wrap(<WorkspaceFiles cwd={CWD} step={{ tab: 'files' }} open go={() => {}} up={() => {}} onAddToMessage={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'theme' } });
+    fireEvent.click(screen.getByText(/Search in files for/));
+    const far = (await screen.findByText('7')).nextElementSibling!;
+    expect(far.textContent).toBe('…set by data-theme on the root.');
+    expect(far.querySelector('mark')?.textContent).toBe('theme');
+    // Near the start of its line, it shows from the start.
+    expect(screen.getByText('9').nextElementSibling!.textContent).toBe('theme: dark');
   });
 });
 

@@ -8,12 +8,34 @@ import type { WorkspaceStep } from '../lib/workspace-route';
 import { FileViewer } from './FileViewer';
 import { PathLabel } from './PathLabel';
 
-/** A line of a file that holds the text, with the text shown where it is. */
+/** How far along a line what was found may start and still be shown from the line's start. */
+const FROM_START = 20;
+/** Further along, how much of the line comes before it, from the start of a word where one is near. */
+const BEFORE = 12;
+
+/**
+ * A line of a file that holds the text, with the text marked where it is. A row shows one line
+ * and cuts what does not fit at its end, so a line where the text is far along starts shortly
+ * before it, after a "…": the text is always in view.
+ */
 function Found({ text, query }: { text: string; query: string }) {
   const caseless = query === query.toLowerCase();
   const at = (caseless ? text.toLowerCase() : text).indexOf(caseless ? query.toLowerCase() : query);
   if (at < 0) return <>{text}</>;
-  return <>{text.slice(0, at)}<mark className="rounded-sm bg-chip text-fg">{text.slice(at, at + query.length)}</mark>{text.slice(at + query.length)}</>;
+  let from = 0;
+  if (at > FROM_START) {
+    const start = at - BEFORE;
+    const space = text.slice(start - 1, at).search(/\s/);
+    from = space >= 0 ? start + space : start;
+  }
+  return (
+    <>
+      {from > 0 && '…'}
+      {text.slice(from, at)}
+      <mark className="rounded-sm bg-mark text-fg">{text.slice(at, at + query.length)}</mark>
+      {text.slice(at + query.length)}
+    </>
+  );
 }
 
 /**

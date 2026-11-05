@@ -39,12 +39,19 @@ describe('colours', () => {
           if (ratio < 4.5) failures.push(`${name} ${text} on ${surface}: ${ratio.toFixed(2)}`);
         }
       }
-      for (const [text, surface] of [['add', 'add-bg'], ['del', 'del-bg'], ['bg', 'fg'], ['bg', 'danger'], ['accent-fg', 'accent']] as const) {
+      for (const [text, surface] of [['add', 'add-bg'], ['del', 'del-bg'], ['bg', 'fg'], ['bg', 'danger'], ['accent-fg', 'accent'], ['fg', 'mark']] as const) {
         const ratio = contrast(t[text]!, t[surface]!);
         if (ratio < 4.5) failures.push(`${name} ${text} on ${surface}: ${ratio.toFixed(2)}`);
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it('mark what a search found so it stands out from the line around it, on a row and under the pointer', () => {
+    for (const t of Object.values(themes)) {
+      expect(contrast(t.mark!, t.bg!)).toBeGreaterThan(1.3);
+      expect(contrast(t.mark!, t.hover!)).toBeGreaterThan(1.25);
+    }
   });
 
   it('keep faint a step lighter than muted, so the two still read apart', () => {

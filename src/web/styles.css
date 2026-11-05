@@ -19,6 +19,7 @@
   --color-add-bg: var(--add-bg);
   --color-del: var(--del);
   --color-del-bg: var(--del-bg);
+  --color-mark: var(--mark);
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
@@ -44,6 +45,8 @@
   --add-bg: #e6f6ea;
   --del: #a4232f;
   --del-bg: #fbe9eb;
+  /* Behind text found by a search: a highlighter's amber, under text at full contrast. */
+  --mark: #f7d27a;
   color-scheme: light;
 }
 
@@ -67,6 +70,7 @@
     --add-bg: #10291b;
     --del: #ff9ba3;
     --del-bg: #331418;
+    --mark: #5a4210;
     color-scheme: dark;
   }
 }
@@ -90,6 +94,7 @@
   --add-bg: #10291b;
   --del: #ff9ba3;
   --del-bg: #331418;
+  --mark: #5a4210;
   color-scheme: dark;
 }
 
