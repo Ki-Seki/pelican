@@ -42,6 +42,17 @@ export function saveDefaults({ permissionMode: _mode, ...settings }: RunSettings
   write(SETTINGS_KEY, settings);
 }
 
+const TIPS_KEY = 'pelican:tips-seen';
+
+/** Tips shown once per browser: whether this one was seen (and closed) already. */
+export function tipSeen(name: string): boolean {
+  return Boolean(read<Record<string, boolean>>(TIPS_KEY, {})[name]);
+}
+
+export function markTipSeen(name: string): void {
+  write(TIPS_KEY, { ...read<Record<string, boolean>>(TIPS_KEY, {}), [name]: true });
+}
+
 const CHOICES_KEY = 'pelican:session-settings';
 type Choice = { settings: RunSettings; at: number };
 

@@ -6,7 +6,7 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { api, apiUrl } from '../lib/api';
 import { newId } from '../lib/ids';
 import { baseName, shortPath, untilTime } from '../lib/format';
-import { loadDefaults, markSeen, saveDefaults, saveSessionChoice, sessionChoice, usePrefs } from '../lib/prefs';
+import { loadDefaults, markSeen, markTipSeen, saveDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import {
@@ -269,6 +269,7 @@ export function Chat({
   const [menuOpen, setMenuOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
+  const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
   const [running, setRunning] = useState<string>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
 
@@ -463,8 +464,6 @@ export function Chat({
             {session?.gitBranch && (
               <span className="flex min-w-0 shrink items-center gap-0.5 truncate"><GitBranch className="size-3 shrink-0" />{session.gitBranch}</span>
             )}
-            {/* Open, idle, in another app too: worth knowing, not worth a banner (the menu says more). */}
-            {session?.openIn && status !== 'live' && <span className="shrink-0 truncate">· also in {session.openIn}</span>}
           </div>
         </button>
         {/* On a phone the meter shows up once the context is filling; the session menu always has the number. */}
@@ -514,6 +513,16 @@ export function Chat({
         {session?.status === 'live' && !view.run && (
           <Notice tone="live">
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
+          </Notice>
+        )}
+        {/* Open, idle, in another app too: explained once, the first time it happens; the session
+            menu says it for each session after that. */}
+        {session?.openIn && status !== 'live' && !busy && !openElsewhereSeen && (
+          <Notice onDismiss={() => {
+            markTipSeen('open-elsewhere');
+            setOpenElsewhereSeen(true);
+          }}>
+            This session is also open in {session.openIn} (others may be too). Pelican catches up before it sends; {session.openIn} sees your messages once you reopen the session there.
           </Notice>
         )}
         {modelList?.signedIn === false && (

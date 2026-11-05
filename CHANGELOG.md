@@ -2,9 +2,9 @@
 
 ## 0.2.2
 
-- A session also open, idle, in another app says so with a word in its header ("also in Claude
-  Desktop"), and the session menu explains; the banner above the composer is gone. A session
-  another app is working on still says so plainly.
+- That a session is also open, idle, in another app is explained once, the first time it
+  happens, and then only in the session menu; the banner no longer sits above the composer of
+  every such session. A session another app is working on still says so plainly.
 - Releases publish to npm from GitHub Actions through npm's trusted publishing, with
   provenance: no npm token exists, and only the release workflow may publish.
 
