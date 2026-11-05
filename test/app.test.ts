@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
-import { accessToken, issueCode, loadAuth, resetAttempts } from '../src/server/auth';
+import { accessToken, issueCode, loadAuth, newSessionCookie, resetAttempts } from '../src/server/auth';
 import { config } from '../src/server/config';
 
 let dir: string;
@@ -92,6 +92,24 @@ describe('signing in', () => {
     // Under a proxy's path prefix, the redirect stays under it.
     const prefixed = await ask(`/pelican/?token=${accessToken()}`, {}, false);
     expect(prefixed.headers.get('location')).toBe('./');
+  });
+
+  it('an old link or a used code says why on the sign-in page, and only there', async () => {
+    expect((await ask('/?token=nope&s=abc', {}, false)).headers.get('location')).toBe('./?s=abc&signin=link');
+    const { code } = await (await ask('/api/access/code', { method: 'POST' })).json() as { code: string };
+    await ask(`/?code=${code}`, {}, false);
+    expect((await ask(`/?code=${code}`, {}, false)).headers.get('location')).toBe('./?signin=code');
+    const cookie = newSessionCookie();
+    expect((await ask('/?token=nope', { headers: { cookie: `${cookie.name}=${cookie.value}` } }, false)).headers.get('location')).toBe('./');
+  });
+
+  it('use keeps a browser signed in: an older cookie is renewed', async () => {
+    const old = newSessionCookie(Date.now() - 3 * 86_400_000);
+    const response = await ask('/api/info', { headers: { cookie: `${old.name}=${old.value}` } }, false);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toMatch(new RegExp(`^${old.name}=\\d+\\.[\\w-]+; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`));
+    const fresh = newSessionCookie();
+    expect((await ask('/api/info', { headers: { cookie: `${fresh.name}=${fresh.value}` } }, false)).headers.get('set-cookie')).toBeNull();
   });
 
   it('logs in with the token, and counts wrong ones', async () => {

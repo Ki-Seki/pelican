@@ -11,7 +11,7 @@ import type { Attachment, ChatMessage, PermissionDecision, PermissionMode, RunSe
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
-import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, signedIn } from './auth.js';
+import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
@@ -102,6 +102,9 @@ app.use('/api/*', async (c, next) => {
   if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'), c.req.header('authorization'))) {
     return c.json({ error: 'Sign in to continue', signIn: true }, 401);
   }
+  // Use keeps a browser signed in: its cookie is replaced by a fresh one (at most once a day).
+  const renewed = c.req.path.startsWith('/api/auth/logout') ? undefined : renewedCookie(c.req.header('cookie'));
+  if (renewed) c.header('Set-Cookie', cookieHeader(c, renewed.name, renewed.value, renewed.maxAge));
   if (config.demo && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
     return c.json({ error: 'This is the demo: nothing runs and nothing changes. Start Pelican without --demo to talk to Claude.' }, 403);
   }
@@ -741,10 +744,14 @@ app.get('/*', async (c) => {
     const url = new URL(c.req.url);
     url.searchParams.delete('token');
     url.searchParams.delete('code');
+    url.searchParams.delete('signin');
+    const ok = token !== undefined ? checkToken(token) : redeemCode(code);
+    // The sign-in page says why a link or a code did not work (it carries no secret), unless this
+    // browser is signed in anyway.
+    if (!ok && !signedIn(c.req.header('cookie'))) url.searchParams.set('signin', token !== undefined ? 'link' : 'code');
     // Relative to where the page is, so it works under a proxy's path prefix, and can never
     // name another site (`//other.example/` would).
     const location = `./${url.pathname.split('/').pop() ?? ''}${url.search}`;
-    const ok = token !== undefined ? checkToken(token) : redeemCode(code);
     if (!ok) return c.body(null, 302, { Location: location, 'Cache-Control': 'no-store' });
     const cookie = newSessionCookie();
     return c.body(null, 302, { Location: location, 'Set-Cookie': cookieHeader(c, cookie.name, cookie.value, cookie.maxAge), 'Cache-Control': 'no-store' });
