@@ -706,6 +706,40 @@ describe('when Claude Code ends', () => {
     expect(events.filter((e) => e.type === 'run').at(-1)).toEqual({ type: 'run', sessionId, state: null });
   });
 
+  it('prompts queued for a turn whose Claude Code ended part way go to it resumed, as when a turn ends', async () => {
+    const { sessionId, claude, run, messages } = await start();
+    claude.say(init());
+    await run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000e1' });
+    await run.send({ text: 'And update the changelog', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000e2' });
+    // Killed, or crashed, mid-turn.
+    claude.fail(new Error('Claude Code process exited with code 137'));
+    await vi.waitFor(() => expect(claudes.at(-1)).not.toBe(claude));
+    const resumed = claudes.at(-1)!;
+    expect(resumed.options).toMatchObject({ resume: sessionId, cwd: folder });
+    await vi.waitFor(() => expect(resumed.prompts).toHaveLength(1));
+    expect(resumed.prompts.map((p) => [p.uuid, textOf(p)])).toEqual([['00000000-0000-4000-8000-0000000000e1', 'Then run the tests']]);
+    // The first is in the conversation; the next waits its turn, still listed and still yours to take back.
+    expect(messages().filter((m) => m.role === 'user').map((m) => m.uuid)).toEqual(['00000000-0000-4000-8000-0000000000e1']);
+    const fresh = getRun(sessionId)!;
+    expect(fresh).not.toBe(run);
+    expect(fresh.state()).toMatchObject({ busy: true, queued: [{ uuid: '00000000-0000-4000-8000-0000000000e2', text: 'And update the changelog' }] });
+  });
+
+  it('what was queued for a Claude closed here, or one that never started, starts nothing', async () => {
+    const shutDown = await start();
+    shutDown.claude.say(init());
+    await shutDown.run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue' });
+    const neverStarted = await start();
+    await neverStarted.run.send({ text: 'Then run the tests', attachments: [], settings: {}, mode: 'queue' });
+    const before = claudes.length;
+    // Pelican shutting down closes every Claude; one that cannot start would only fail again.
+    closeAll();
+    neverStarted.claude.fail(new Error('Claude Code is not signed in'));
+    await vi.waitFor(() => expect(getRun(shutDown.sessionId) ?? getRun(neverStarted.sessionId)).toBeUndefined());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claudes).toHaveLength(before);
+  });
+
   it('a run that ended on an error says why, and nothing more of what it was doing', async () => {
     const { sessionId, claude, events } = await start();
     claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));

@@ -263,6 +263,8 @@ export class SessionRun {
   });
   // Most callers never wait for it: a failure here must not count as unhandled.
   private readonly readyHandled = this.ready.catch(() => undefined);
+  /** Claude Code said something: it started, and the session is there to resume. */
+  private began = false;
   private suggestion?: string;
 
   constructor(
@@ -902,6 +904,7 @@ export class SessionRun {
     try {
       for await (const message of q as AsyncIterable<SDKMessage>) {
         this.lastActive = Date.now();
+        this.began = true;
         this.started.resolve();
         const raw = message as unknown as Record<string, unknown>;
         switch (message.type) {
@@ -1052,10 +1055,12 @@ export class SessionRun {
       this.error = readableError((error as Error).message);
       console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
     } finally {
+      // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
+      const closedHere = this.closed;
       this.closed = true;
       this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
       this.settleAll('Session closed.');
-      this.queued = [];
+      const leftover = this.queued.splice(0);
       // Its background work and checks ended with the process, and what they last said with it.
       this.tasks = [];
       this.taskCount = 0;
@@ -1082,6 +1087,10 @@ export class SessionRun {
           feedFor(this.sessionId).broadcast({ type: 'run', sessionId: this.sessionId, state: null });
           this.sayStatus();
         }
+        // What waited for the turn goes when it ends, also when Claude Code ended it by exiting: to the
+        // session's Claude, resumed. Not when Pelican closed it (shutting down closes every one), nor
+        // when it never started: that one would only fail again.
+        if (leftover.length > 0 && !closedHere && this.began) void sendLeftovers(this.sessionId, this.cwd, this.settings, leftover);
       }
       this.finished = true;
       sessionsChanged();
@@ -1090,6 +1099,21 @@ export class SessionRun {
 }
 
 const queuedPrompt = ({ uuid, text, attachments }: Prompt): QueuedPrompt => ({ uuid, text, ...(attachments.length > 0 ? { attachments } : {}) });
+
+/**
+ * Prompts queued for a turn whose Claude Code ended part way, sent to the session's Claude, resumed,
+ * in order: the first starts a turn and the others wait for it, listed, as they waited before.
+ */
+async function sendLeftovers(sessionId: string, cwd: string, settings: RunSettings, prompts: Prompt[]): Promise<void> {
+  for (const { uuid, text, attachments } of prompts) {
+    try {
+      await sendMessage({ sessionId, cwd }, { text, attachments, settings, uuid, mode: 'queue' });
+    } catch (error) {
+      console.warn(`[pelican] what was queued in ${sessionId.slice(0, 8)} could not be sent:`, (error as Error).message);
+      return;
+    }
+  }
+}
 
 const runs = new Map<string, SessionRun>();
 
