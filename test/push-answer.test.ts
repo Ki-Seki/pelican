@@ -48,3 +48,21 @@ describe('a notification of a request Claude waits on', () => {
     expect(JSON.parse(sent.at(-1)!.body)).not.toHaveProperty('request');
   });
 });
+
+describe('a notification’s title, the session’s', () => {
+  const titleOf = async (title: string) => {
+    await notify({ title, body: 'Fixed.', sessionId: 's-1', tag: 's-1:done' });
+    return (JSON.parse(sent.at(-1)!.body) as { title: string }).title;
+  };
+
+  it('leaves out what hides text or turns it around, as the text does, and keeps emoji whole', async () => {
+    // A session can be called anything: by a /rename, or by the first prompt.
+    expect(await titleOf('Fix the \u202elogin\u2066 test\u200b')).toBe('Fix the login test');
+    expect(await titleOf('Deploy\u2028notes\u0007 \u{e0041}done')).toBe('Deploy notes done');
+    expect(await titleOf('\u26a0\ufe0f Deploy \u{1f469}\u200d\u{1f4bb}')).toBe('\u26a0\ufe0f Deploy \u{1f469}\u200d\u{1f4bb}');
+  });
+
+  it('is Claude Code when nothing of it shows', async () => {
+    expect(await titleOf('\u2066\u2069\u200b')).toBe('Claude Code');
+  });
+});

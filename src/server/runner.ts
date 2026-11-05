@@ -50,7 +50,7 @@ import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
-import { answerable, notify } from './push.js';
+import { answerable, notify, oneLine } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
 import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
@@ -164,30 +164,6 @@ export function readableError(text: string): string {
     return 'The conversation changed after that prompt (another app added to it), so the prompt was not replaced. Reload, then edit it again or send a new message.';
   }
   return startError(text) ?? plainError(text, config.machine) ?? text;
-}
-
-/**
- * An emoji as the conversation shows it, with the invisible characters that are part of it: a
- * keycap, a flag of two letters or of a region's tags, or a picture with its text or emoji style,
- * its skin tone, and the joiners that make several pictures one.
- */
-const EMOJI = /[#*0-9]\ufe0f?\u20e3|\p{RI}\p{RI}|\u{1f3f4}[\u{e0061}-\u{e007a}]{2}[\u{e0030}-\u{e0039}\u{e0061}-\u{e007a}]{1,4}\u{e007f}|\p{ExtPict}(?:\p{EMod}|[\ufe0e\ufe0f])?(?:\u200d\p{ExtPict}(?:\p{EMod}|\ufe0f)?)*/u;
-
-/** Characters a lock screen leaves out, outside an emoji: controls, line breaks, invisible and direction-changing ones. */
-const UNSHOWN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]+/u;
-const EMOJI_OR_UNSHOWN = new RegExp(`(${EMOJI.source})|${UNSHOWN.source}`, 'gu');
-const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
-
-/** Text for a lock screen: one line, short, emoji whole, without control, invisible or direction-changing characters. */
-export function oneLine(text: string, max = 120): string {
-  const flat = text.replace(EMOJI_OR_UNSHOWN, (_, emoji?: string) => emoji ?? ' ').replace(/\s+/g, ' ').trim();
-  // Cut between characters as they show, never inside one: an emoji, a letter and its accent.
-  const shown: string[] = [];
-  for (const { segment } of graphemes.segment(flat)) {
-    if (shown.length === max) return `${shown.slice(0, max - 1).join('')}…`;
-    shown.push(segment);
-  }
-  return flat;
 }
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');

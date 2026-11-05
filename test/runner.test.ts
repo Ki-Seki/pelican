@@ -133,7 +133,8 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks, startSideChat } = await import('../src/server/runner');
+const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { oneLine } = await import('../src/server/push');
 const { sideChatPrompt } = await import('../src/server/side-chat');
 const { fork } = await import('../src/server/actions');
 const { connect, feedFor } = await import('../src/server/feed');

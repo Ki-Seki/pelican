@@ -101,7 +101,8 @@ from every app.
   characters, fewer when they are wide). A notification shows the command itself, not Claude's
   description of it; edits, other tools, other commands, questions and plans open the session.
 - Notifications and check-ins keep emoji whole, also those made of several pictures, and still
-  leave out characters that hide text or turn it around.
+  leave out characters that hide text or turn it around, now also from a notification's title, the
+  session's.
 - Export as Markdown has the conversation as it shows here: `!` commands with their output and
   `/` commands as typed, without the tags, notes and summaries Claude Code and Pelican add for
   Claude, such as a side chat's note with each question.

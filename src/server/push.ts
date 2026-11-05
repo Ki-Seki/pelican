@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import webpush from 'web-push';
 
+import { EMOJI } from '../shared/hidden.js';
 import type { PermissionRequest } from '../shared/protocol.js';
 import { cookieName } from './auth.js';
 import { config } from './config.js';
@@ -69,6 +70,23 @@ export type PushPayload = {
   /** A request the notification can answer: Allow and Deny, where the device shows buttons. */
   request?: string;
 };
+
+/** Characters a lock screen leaves out, outside an emoji: controls, line breaks, invisible and direction-changing ones. */
+const UNSHOWN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]+/u;
+const EMOJI_OR_UNSHOWN = new RegExp(`(${EMOJI.source})|${UNSHOWN.source}`, 'gu');
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+/** Text for a lock screen: one line, short, emoji whole, without control, invisible or direction-changing characters. */
+export function oneLine(text: string, max = 120): string {
+  const flat = text.replace(EMOJI_OR_UNSHOWN, (_, emoji?: string) => emoji ?? ' ').replace(/\s+/g, ' ').trim();
+  // Cut between characters as they show, never inside one: an emoji, a letter and its accent.
+  const shown: string[] = [];
+  for (const { segment } of graphemes.segment(flat)) {
+    if (shown.length === max) return `${shown.slice(0, max - 1).join('')}…`;
+    shown.push(segment);
+  }
+  return flat;
+}
 
 /**
  * Text every notification shows as it is, in any system font: printable ASCII, one space between
@@ -179,6 +197,8 @@ export function answerable(request: PermissionRequest): Partial<Pick<PushPayload
 /** Sends a notification to every subscribed device; drops subscriptions the push service rejects. */
 export async function notify(payload: PushPayload): Promise<void> {
   if (!keys || subscriptions.length === 0) return;
+  // The title is the session's, which can hold what hides text or turns it around, as any text can.
+  const shown = { ...payload, title: oneLine(payload.title) || 'Claude Code' };
   // Devices signed out by a new token or password get nothing more, and are forgotten.
   const signer = cookieName();
   const gone = subscriptions.filter((s) => s.signer !== signer).map((s) => s.endpoint);
@@ -187,7 +207,7 @@ export async function notify(payload: PushPayload): Promise<void> {
     const id = encodeURIComponent(payload.sessionId);
     const url = config.sessionUrl ? config.sessionUrl.replaceAll('{id}', id)
       : subscription.openUrl ? `${subscription.openUrl}${id}` : undefined;
-    const body = JSON.stringify({ ...payload, url });
+    const body = JSON.stringify({ ...shown, url });
     try {
       await webpush.sendNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, body, { TTL: 3600, urgency: 'high' });
     } catch (error) {
