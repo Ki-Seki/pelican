@@ -8,7 +8,7 @@ import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
-import { buildItems, type Item, type Part } from '../lib/turns';
+import { buildItems, cleanOutput, type Item, type Part } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
@@ -350,11 +350,10 @@ function readableSummary(summary: string): string {
     .trim();
 }
 
-/** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
 /** A `!` command someone ran in the session, with its output. */
 function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const [all, setAll] = useState(false);
-  const output = [item.stdout, item.stderr].filter((part) => part.trim()).join('\n').trimEnd();
+  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').trimEnd(), [item.stdout, item.stderr]);
   const long = output.split('\n').length > 14 || output.length > 1600;
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
@@ -375,6 +374,7 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   );
 }
 
+/** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
 function Compacted({ summary }: { summary: string }) {
   const [open, setOpen] = useState(false);
   return (

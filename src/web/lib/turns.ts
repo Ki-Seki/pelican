@@ -36,8 +36,26 @@ const tag = (text: string, name: string) => {
   return match?.[1]?.trim();
 };
 
-// eslint-disable-next-line no-control-regex
-const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+/* eslint-disable no-control-regex */
+/**
+ * Output as a terminal would leave it on screen: colors, links and other escape codes gone (a
+ * link keeps its text), a line rewritten with \r (a progress bar) as it ended, and Claude Code's
+ * error tags taken off.
+ */
+export function cleanOutput(text: string): string {
+  const unwrapped = text.match(/^\s*<tool_use_error>([\s\S]*)<\/tool_use_error>\s*$/)?.[1] ?? text;
+  return unwrapped
+    // OSC, DCS and the like run to BEL or ST; one cut off ends at the line's end.
+    .replace(/\u001b[P\]X^_][^\u0007\u001b\n]*(?:\u0007|\u001b\\)?/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[ -/]*[0-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => (line.includes('\r') ? line.split('\r').filter(Boolean).at(-1) ?? '' : line))
+    .join('\n')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+}
+/* eslint-enable no-control-regex */
 
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
@@ -63,7 +81,7 @@ function classifyUserText(raw: string): Classified | undefined {
   }
   const stdout = tag(text, 'local-command-stdout') ?? tag(text, 'local-command-stderr');
   if (stdout !== undefined) {
-    const clean = stripAnsi(stdout).trim();
+    const clean = cleanOutput(stdout).trim();
     return clean ? { kind: 'notice', tone: 'output', text: clean } : undefined;
   }
   if (text.startsWith('<task-notification>')) {

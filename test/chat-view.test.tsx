@@ -130,6 +130,16 @@ describe('following the end of the conversation', () => {
   });
 });
 
+const tool = (name: string, input: Record<string, unknown>, content?: string, isError = false, extra: Partial<ToolCall> = {}): ToolCall => ({
+  id: 't', name, input, ...(content !== undefined ? { result: { type: 'tool_result', tool_use_id: 't', content, ...(isError ? { is_error: true } : {}) } } : {}), ...extra,
+});
+describe('tool output', () => {
+  it('shows without escape codes', () => {
+    const { container } = render(<ToolCallView call={tool('Bash', { command: 'npm test' }, '\u001b[32m✓\u001b[39m passed\rdone')} running={false} defaultOpen />);
+    expect(container.querySelectorAll('pre')[1]!.textContent).toBe('done');
+  });
+});
+
 describe('code in a reply', () => {
   it('has its copy button in a bar of its own, not over the code', () => {
     const html = renderToStaticMarkup(<Markdown text={'```python\nprint("hi")\n```'} />);

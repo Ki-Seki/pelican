@@ -5,7 +5,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useSessionId } from '../lib/session-context';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
-import { buildItems, resultImages, resultText, type ToolCall } from '../lib/turns';
+import { buildItems, cleanOutput, resultImages, resultText, type ToolCall } from '../lib/turns';
 import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
@@ -26,8 +26,9 @@ function editsOf(call: ToolCall): Edit[] {
   return [];
 }
 
-function Output({ text, failed }: { text: string; failed?: boolean }) {
+function Output({ text: raw, failed }: { text: string; failed?: boolean }) {
   const [all, setAll] = useState(false);
+  const text = useMemo(() => cleanOutput(raw), [raw]);
   if (!text.trim()) return <div className="text-[12px] text-faint">No output</div>;
   const long = text.length > 1200 || text.split('\n').length > 14;
   return (
