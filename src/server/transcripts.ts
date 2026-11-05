@@ -146,6 +146,11 @@ export type LastTurn = {
   copied?: boolean;
   /** After its last turn the session went on in another one (a background session handed off). */
   continuedIn?: string;
+  /**
+   * The end of the file holds a summary Claude Code wrote and no last prompt: the SDK titles the
+   * session with that summary, not with a prompt (see sessionTitle).
+   */
+  summarized?: boolean;
 };
 
 /** After the last turn, how far back to look for a reply with text (tool calls in between). */
@@ -156,6 +161,8 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
   let found: LastTurn | undefined;
   let foundAt = 0;
   let continuedIn: string | undefined;
+  let summarized: boolean | undefined;
+  const done = (turn: LastTurn | undefined) => (turn && summarized ? { ...turn, summarized: true } : turn);
   try {
     handle = await openRegular(file);
     const { size } = await handle.stat();
@@ -178,7 +185,10 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
         carry = data.subarray(0, firstBreak);
         data = data.subarray(firstBreak + 1);
       }
-      const lines = data.toString('utf8').split('\n');
+      const text = data.toString('utf8');
+      // Where the SDK finds a session's title: a last prompt, else a summary row, in the file's end.
+      summarized ??= !text.includes('"lastPrompt":"') && text.includes('"type":"summary"');
+      const lines = text.split('\n');
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const line = lines[i]!;
         if (!found && !continuedIn && line.includes('"type":"continued-in"')) {
@@ -210,12 +220,12 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
           }
           if (row.type === 'assistant') {
             // Not Claude's words: the list says why the turn stopped instead.
-            if (apiError(row)) return { ...found, stopped: stoppedBecause(textOf(row), typeof row.error === 'string' ? row.error : undefined) };
+            if (apiError(row)) return done({ ...found, stopped: stoppedBecause(textOf(row), typeof row.error === 'string' ? row.error : undefined) });
             const preview = replyText(row);
-            if (preview) return { ...found, preview };
+            if (preview) return done({ ...found, preview });
           } else if (found && row.type === 'user' && typeof row.message?.content === 'string') {
             // Reached the prompt before any reply text: the turn has said nothing yet.
-            return found;
+            return done(found);
           }
         } catch {
           // A row can be half-written while Claude is streaming into the file.
@@ -227,7 +237,7 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
   } finally {
     await handle?.close();
   }
-  return found;
+  return done(found);
 }
 
 const lastTurnCache = new Map<string, { size: number; mtimeMs: number; value: LastTurn | undefined }>();

@@ -46,7 +46,7 @@ import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
-import { sessionInfo } from './sessions.js';
+import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeText } from './shell.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
@@ -331,7 +331,7 @@ export class SessionRun {
     this.q = query({ prompt: this.input, options });
     void this.pump();
     void sessionInfo(this.sessionId).then((info) => {
-      if (info) this.title = info.customTitle || info.summary || '';
+      if (info) this.title = sessionTitle(info) ?? '';
     });
   }
 

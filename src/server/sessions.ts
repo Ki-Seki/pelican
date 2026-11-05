@@ -5,6 +5,7 @@ import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-a
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import { shortTitle } from '../shared/titles.js';
 import { archivedIds } from './archive.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
@@ -17,9 +18,19 @@ export type StatusSource = (sessionId: string) => SessionStatus | undefined;
 
 const infoCache = new Map<string, SDKSessionInfo>();
 
-function titleOf(info: SDKSessionInfo): string {
-  const title = info.customTitle || info.summary || info.firstPrompt || '';
-  return title.replace(/\s+/g, ' ').trim() || 'Untitled session';
+const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * What a session is called. A title it was given (a /rename, or the one Claude Code wrote for it)
+ * and a summary Claude Code wrote stay as they are. Without either, the SDK names it by the text
+ * of a prompt, the last or the first, a pasted page as likely as a line: that is shortened to a
+ * title (shortTitle). `summarized`: the transcript ends on a summary Claude Code wrote, with no
+ * last prompt after it, which is then what the SDK gives as `summary`.
+ */
+export function sessionTitle(info: SDKSessionInfo, summarized = false): string | undefined {
+  if (info.customTitle && oneLine(info.customTitle)) return oneLine(info.customTitle);
+  if (summarized && info.summary && oneLine(info.summary)) return oneLine(info.summary);
+  return shortTitle(info.summary || info.firstPrompt || '') || undefined;
 }
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
@@ -46,7 +57,7 @@ async function summarize(
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
-  const title = titleOf(info);
+  const title = sessionTitle(info, lastTurn?.summarized) ?? 'Untitled session';
   // Claude Desktop's side chats: a copy of a conversation with a question or two of its own.
   const copiedFrom = file && title === 'Side chat' ? await firstTurnSession(file) : undefined;
   const sideChatOf = copiedFrom && copiedFrom !== info.sessionId ? copiedFrom : undefined;

@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, C
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO } from '../../shared/modes';
+import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
@@ -495,7 +496,8 @@ export function Chat({
 
   const firstPrompt = view.messages.find((m) => m.role === 'user' && m.blocks.some((b) => b.type === 'text'));
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
-  const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
+  // Before the list has it, a new session is called by its first prompt, shortened as the server does.
+  const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
   const permissions = view.run?.permissions ?? [];
