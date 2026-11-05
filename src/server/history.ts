@@ -46,6 +46,8 @@ type Node = {
 type Transcript = {
   /** Where pages load the pictures its messages hold as data. */
   address: ((uuid: string) => ImageAddress) | undefined;
+  /** A subagent's own transcript, whose rows are all on a side chain; its pictures are left out. */
+  sidechain: boolean;
   /** The settings the session last ran with, in file order. */
   recorded: RecordedSettings;
   ino: number;
@@ -95,12 +97,12 @@ function weightOf(value: unknown, depth = 0): number {
   return weight;
 }
 
-function empty(file: string, ino: number): Transcript {
+function empty(file: string, ino: number, sidechain: boolean): Transcript {
   // The demo's pages are saved as files for the project site, which has no server to ask for a picture.
   const id = encodeURIComponent(path.basename(file, '.jsonl'));
-  const address = config.demo ? undefined : (uuid: string) => (n: number) => `api/sessions/${id}/images/${encodeURIComponent(uuid)}/${n}`;
+  const address = config.demo || sidechain ? undefined : (uuid: string) => (n: number) => `api/sessions/${id}/images/${encodeURIComponent(uuid)}/${n}`;
   return {
-    address, recorded: {}, ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
+    address, sidechain, recorded: {}, ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
     chain: [], chainIndex: new Map(), chainLeaf: undefined, messages: [], weight: 0, readAt: Date.now(),
   };
 }
@@ -161,6 +163,18 @@ function steeredMessage(row: Record<string, unknown>, uuid: string, address: Ima
   return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
 }
 
+/**
+ * A background task's end that came while Claude worked (a workflow's, a command's): Claude Code
+ * keeps it as a queued command where Claude took it in, with the same `<task-notification>` it
+ * writes as a message of its own between turns.
+ */
+function queuedNotice(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+  const attachment = row.attachment as { type?: string; prompt?: unknown; commandMode?: unknown } | undefined;
+  if (row.type !== 'attachment' || attachment?.type !== 'queued_command' || attachment.commandMode !== 'task-notification') return undefined;
+  if (typeof attachment.prompt !== 'string' || !attachment.prompt.trimStart().startsWith('<task-notification>')) return undefined;
+  return toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, message: { role: 'user', content: attachment.prompt } });
+}
+
 /** A line of Claude Code's own in the conversation, shown as a note, never as a prompt. */
 function noteOf(row: Record<string, unknown>, uuid: string, text: string | undefined): ChatMessage | undefined {
   if (!text?.trim()) return undefined;
@@ -202,11 +216,13 @@ function addLine(t: Transcript, line: string, at: number, bytes: number): void {
     return;
   }
   const uuid = str(row.uuid);
-  if (!uuid || row.isSidechain === true) return;
+  if (!uuid || (row.isSidechain === true && !t.sidechain)) return;
   note(t.recorded, row);
   const turn = row.type === 'user' || row.type === 'assistant';
   const address = t.address?.(uuid);
-  const message = turn ? toChatMessage(row, address) : steeredMessage(row, uuid, address) ?? localCommand(row, uuid) ?? notice(row, uuid);
+  const message = turn
+    ? toChatMessage(row, t.sidechain ? 'omit' : address)
+    : steeredMessage(row, uuid, address) ?? queuedNotice(row, uuid) ?? localCommand(row, uuid) ?? notice(row, uuid);
   const weight = message ? weightOf(message.blocks) : 0;
   const existing = t.nodes.get(uuid);
   if (existing) {
@@ -304,7 +320,7 @@ function conversation(t: Transcript): ChatMessage[] {
   return t.messages;
 }
 
-async function read(file: string): Promise<ChatMessage[]> {
+async function read(file: string, sidechain: boolean): Promise<ChatMessage[]> {
   let info;
   try {
     info = await stat(file);
@@ -314,7 +330,7 @@ async function read(file: string): Promise<ChatMessage[]> {
   }
   let t = transcripts.get(file);
   // Replaced or cut short: start over.
-  if (!t || t.ino !== info.ino || info.size < t.offset) t = empty(file, info.ino);
+  if (!t || t.ino !== info.ino || info.size < t.offset || t.sidechain !== sidechain) t = empty(file, info.ino, sidechain);
   transcripts.delete(file);
   transcripts.set(file, t);
   t.readAt = Date.now();
@@ -329,11 +345,14 @@ export async function readRecordedSettings(file: string): Promise<RecordedSettin
   return { ...(transcripts.get(file)?.recorded ?? {}) };
 }
 
-/** The conversation in a transcript file, oldest message first. */
-export function readHistory(file: string): Promise<ChatMessage[]> {
+/**
+ * The conversation in a transcript file, oldest message first. `sidechain`: a subagent's own
+ * transcript (a workflow agent's), read the same way, without its pictures.
+ */
+export function readHistory(file: string, { sidechain = false }: { sidechain?: boolean } = {}): Promise<ChatMessage[]> {
   // One read per file at a time: reads build on each other's state.
   const previous = locks.get(file) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(() => read(file));
+  const next = previous.catch(() => undefined).then(() => read(file, sidechain));
   locks.set(file, next);
   void next.finally(() => {
     if (locks.get(file) === next) locks.delete(file);

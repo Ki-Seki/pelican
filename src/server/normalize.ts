@@ -1,4 +1,5 @@
-import type { Block, ChatMessage, ImageBlock, TextBlock } from '../shared/protocol.js';
+import type { Block, ChatMessage, ImageBlock, TextBlock, WorkflowLaunch } from '../shared/protocol.js';
+import { RUN_ID } from '../shared/workflows.js';
 
 const MAX_TEXT = 60_000;
 const MAX_RESULT_TEXT = 24_000;
@@ -36,7 +37,8 @@ function clipInput(input: Raw): Raw {
  */
 export type ImageAddress = (n: number) => string;
 
-type Images = { address?: ImageAddress; n: number };
+/** `omit`: pictures held as data are left out (a page that has no address to load them from). */
+type Images = { address?: ImageAddress; omit?: boolean; n: number };
 
 function image(raw: Raw, images: Images): ImageBlock | undefined {
   const source = raw.source;
@@ -46,6 +48,7 @@ function image(raw: Raw, images: Images): ImageBlock | undefined {
     images.n += 1;
     if (images.address) return { type: 'image', source: { type: 'url', url: images.address(n) } };
     const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/png';
+    if (images.omit) return { type: 'image', source: { type: 'base64', media_type: mediaType, data: '' }, omitted: true };
     return source.data.length > MAX_IMAGE_BASE64
       ? { type: 'image', source: { type: 'base64', media_type: mediaType, data: '' }, omitted: true }
       : { type: 'image', source: { type: 'base64', media_type: mediaType, data: source.data } };
@@ -150,11 +153,35 @@ function blocks(content: unknown, images: Images): Block[] {
 }
 
 /**
+ * What a Workflow call launched, from what Claude Code records of its result (`toolUseResult` in a
+ * transcript, `tool_use_result` in the stream): the run its agents write to, and its task.
+ */
+function workflowLaunch(output: Raw): WorkflowLaunch | undefined {
+  const text = (value: unknown, max = 2000) => (typeof value === 'string' && value && value.length <= max ? value : undefined);
+  const runId = text(output.runId, 80);
+  const name = text(output.workflowName, 200);
+  if (output.taskType !== 'local_workflow' && !(runId && RUN_ID.test(runId)) && !name) return undefined;
+  const taskId = text(output.taskId, 80);
+  const summary = text(output.summary);
+  const sessionUrl = text(output.sessionUrl);
+  const scriptFile = text(output.scriptPath)?.split(/[\\/]/).pop();
+  return {
+    ...(runId && RUN_ID.test(runId) ? { runId } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(name ? { name } : {}),
+    ...(summary ? { summary } : {}),
+    ...(sessionUrl && /^https:\/\//.test(sessionUrl) ? { sessionUrl } : {}),
+    ...(scriptFile && /^[\w.-]{1,200}\.js$/.test(scriptFile) ? { scriptFile } : {}),
+  };
+}
+
+/**
  * Converts a transcript message (`getSessionMessages`) or a streamed SDK message
  * into the shape the app renders. Returns undefined for messages with nothing
- * to show. With `address`, pictures held as data are referred to by address.
+ * to show. With `address`, pictures held as data are referred to by address; with `omit`, they are
+ * left out.
  */
-export function toChatMessage(raw: Raw, address?: ImageAddress): ChatMessage | undefined {
+export function toChatMessage(raw: Raw, address?: ImageAddress | 'omit'): ChatMessage | undefined {
   const type = raw.type;
   if (type !== 'user' && type !== 'assistant') return undefined;
   if (typeof raw.uuid !== 'string') return undefined;
@@ -162,7 +189,7 @@ export function toChatMessage(raw: Raw, address?: ImageAddress): ChatMessage | u
   const out: ChatMessage = {
     uuid: raw.uuid,
     role: type,
-    blocks: blocks(message.content, { ...(address ? { address } : {}), n: 0 }),
+    blocks: blocks(message.content, { ...(address === 'omit' ? { omit: true } : address ? { address } : {}), n: 0 }),
   };
   if (out.blocks.length === 0) return undefined;
   const timestamp = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN;
@@ -186,5 +213,9 @@ export function toChatMessage(raw: Raw, address?: ImageAddress): ChatMessage | u
   if (typeof raw.toolDenialKind === 'string' && raw.toolDenialKind !== 'interrupted') {
     for (const block of out.blocks) if (block.type === 'tool_result') block.denied = true;
   }
+  const output = isRecord(raw.toolUseResult) ? raw.toolUseResult : isRecord(raw.tool_use_result) ? raw.tool_use_result : undefined;
+  const launch = output && workflowLaunch(output);
+  const results = launch ? out.blocks.filter((b) => b.type === 'tool_result') : [];
+  if (launch && results.length === 1 && results[0]!.type === 'tool_result') results[0]!.workflow = launch;
   return out;
 }
