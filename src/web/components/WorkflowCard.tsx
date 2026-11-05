@@ -461,7 +461,8 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
 
   const reveal = useCallback(() => {
     setOpen(true);
-    requestAnimationFrame(() => element?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+    const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(() => element?.scrollIntoView?.({ block: 'start', behavior: still ? 'auto' : 'smooth' }));
   }, [element]);
   useRevealed(call.id, reveal);
 
@@ -501,7 +502,13 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
 
   return (
     <section ref={setElement} id={`workflow-${call.id}`} aria-label={`Workflow${name ? ` ${name}` : ''}`} className="my-1.5 scroll-mt-3 overflow-hidden rounded-xl border border-line bg-panel">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="relative flex w-full items-start gap-2.5 px-3 pt-2.5 pb-2.5 text-left">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={[`Workflow${name ? ` ${name}` : ''}`, description, line.join(', ')].filter(Boolean).join('. ')}
+        onClick={() => setOpen((v) => !v)}
+        className="relative flex w-full items-start gap-2.5 px-3 pt-2.5 pb-2.5 text-left"
+      >
         <WorkflowIcon className="mt-[3px] size-3.5 shrink-0 text-muted" aria-hidden />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-baseline gap-1.5 pr-5">
@@ -561,7 +568,7 @@ export function WorkflowEnded({ toolUseId, name, status, durationMs }: { toolUse
       <WorkflowIcon className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">
         Workflow {name && <span className="font-mono text-[12px]">{name}</span>} <span className={status === 'failed' ? 'text-danger' : ''}>{word}</span>
-        {durationMs !== undefined && <span className="text-faint tabular-nums"> · {durationText(durationMs)}</span>}
+        {durationMs !== undefined && <>{' '}<span className="text-faint tabular-nums">· {durationText(durationMs)}</span></>}
       </span>
       <ArrowUp className="size-3.5 shrink-0 text-faint" aria-hidden />
     </button>
