@@ -26,7 +26,7 @@ import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
-import { claudeRanIn } from './trust.js';
+import { folderTrusted, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 
 export const app = new Hono();
 
@@ -119,6 +119,8 @@ const limits = {
 app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth : c.req.path === '/api/uploads' ? limits.upload : limits.json)(c, next));
 
 app.onError((error, c) => {
+  // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
+  if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings }, 409);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });
@@ -180,7 +182,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
   return c.json(await loadPage(c.req.param('id'), before === undefined ? undefined : Number(before), limit));
 });
 
-type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
+type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode; trust?: TrustChoice };
 
 const PERMISSION_MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
 const permissionMode = (value: unknown): PermissionMode | undefined =>
@@ -214,6 +216,7 @@ function sendBody(raw: unknown): SendBody | string {
   if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null)) return 'Settings must be an object';
   if (body.cwd !== undefined && typeof body.cwd !== 'string') return 'The folder must be a path';
   if (body.scratch !== undefined && typeof body.scratch !== 'boolean') return 'scratch must be true or false';
+  if (body.trust !== undefined && body.trust !== 'trusted' && body.trust !== 'user-only') return 'trust must be trusted or user-only';
   return body as SendBody;
 }
 
@@ -228,6 +231,14 @@ app.post('/api/sessions', async (c) => {
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
   const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
   if (!cwd) return c.json({ error: 'No such folder' }, 400);
+  // A folder Pelican made is trusted; any other that nobody trusted is asked about first, every new
+  // session, until the answer is to trust it.
+  if (body.scratch) await rememberChoice(cwd, 'trusted');
+  else if (body.trust) await rememberChoice(cwd, body.trust);
+  else {
+    const question = await trustQuestion(cwd);
+    if (question) return c.json({ error: 'Trust this folder before Claude Code starts in it.', needsTrust: true, brings: question.brings }, 409);
+  }
   const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {
     text: typeof body.text === 'string' ? body.text : '',
@@ -241,6 +252,10 @@ app.post('/api/sessions', async (c) => {
 app.post('/api/sessions/:id/messages', async (c) => {
   const body = sendBody(await c.req.json().catch(() => undefined));
   if (typeof body === 'string') return c.json({ error: body }, 400);
+  if (body.trust) {
+    const folder = getRun(c.req.param('id'))?.cwd ?? (await sessionInfo(c.req.param('id')))?.cwd;
+    if (folder && (await isDirectory(folder))) await rememberChoice(folder, body.trust);
+  }
   const uuid = uuidOf(body.uuid);
   const mode = sendMode(body.mode);
   const sessionId = await sendMessage({ sessionId: c.req.param('id') }, {
@@ -505,8 +520,8 @@ async function insideRepository(cwd: string): Promise<boolean> {
   }
 }
 
-/** Git runs only where Claude Code has run: a folder you are only shown runs nothing of its own. */
-const gitAllowed = (cwd: string) => (config.demo ? Promise.resolve(true) : claudeRanIn(cwd));
+/** Git runs only in a trusted folder (trust.ts): a folder you are only shown runs nothing of its own. */
+const gitAllowed = (cwd: string) => folderTrusted(cwd);
 
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);

@@ -1,9 +1,8 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { config } from './config.js';
 import { git } from './git.js';
-import { claudeRanIn } from './trust.js';
+import { folderTrusted } from './trust.js';
 
 const cache = new Map<string, { at: number; files: string[] }>();
 const TTL_MS = 30_000;
@@ -16,8 +15,8 @@ async function projectFiles(cwd: string): Promise<string[]> {
   if (cached && Date.now() - cached.at < TTL_MS) return cached.files;
   let files: string[];
   try {
-    // Git only where Claude Code has run; anywhere else the folder is walked.
-    if (!config.demo && !(await claudeRanIn(cwd))) throw new Error('not trusted');
+    // Git only in a trusted folder (trust.ts); anywhere else the folder is walked.
+    if (!(await folderTrusted(cwd))) throw new Error('not trusted');
     const stdout = await git(cwd, ['ls-files', '--cached', '--others', '--exclude-standard'], 5000);
     files = stdout.split('\n').filter(Boolean).slice(0, MAX_FILES);
   } catch {

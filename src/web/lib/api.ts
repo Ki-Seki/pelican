@@ -35,10 +35,19 @@ export const appBase = new URL('./', location.href);
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly signIn = false) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly signIn = false,
+    /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about. */
+    readonly trust?: { brings: string[] },
+  ) {
     super(message);
   }
 }
+
+/** Starting in a folder nobody trusted: trust it, or run with the user's own settings only. */
+export type TrustChoice = 'trusted' | 'user-only';
 
 /** Called when the server says the session cookie is missing or expired. */
 let onSignedOut: () => void = () => {};
@@ -68,9 +77,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...MARK, ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean };
+    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean; needsTrust?: boolean; brings?: unknown };
     if (body.signIn) onSignedOut();
-    throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn));
+    const trust = body.needsTrust ? { brings: Array.isArray(body.brings) ? body.brings.filter((b): b is string => typeof b === 'string') : [] } : undefined;
+    throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn), trust);
   }
   return (await response.json()) as T;
 }
@@ -95,9 +105,9 @@ export const api = {
     request<MessagesPage>(
       `sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before === undefined ? '' : `&before=${before}`}`,
     ),
-  send: (id: string, body: { text: string; attachments: string[]; settings: RunSettings; uuid: string; mode?: SendMode }) =>
+  send: (id: string, body: { text: string; attachments: string[]; settings: RunSettings; uuid: string; mode?: SendMode; trust?: TrustChoice }) =>
     send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/messages`, body),
-  create: (body: { cwd?: string; scratch?: boolean; text: string; attachments: string[]; settings: RunSettings; uuid: string }) =>
+  create: (body: { cwd?: string; scratch?: boolean; text: string; attachments: string[]; settings: RunSettings; uuid: string; trust?: TrustChoice }) =>
     send<{ sessionId: string }>('POST', 'sessions', body),
   interrupt: (id: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/interrupt`),
   decide: (id: string, requestId: string, decision: PermissionDecision) =>
