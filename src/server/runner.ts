@@ -1,5 +1,5 @@
 import { randomUUID, type UUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -42,6 +42,7 @@ import { config } from './config.js';
 import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
+import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
@@ -1030,10 +1031,6 @@ export function runStatus(sessionId: string): SessionStatus | undefined {
 export function runState(sessionId: string): RunState | undefined {
   if (config.demo) return demoRunState(sessionId);
   return getRun(sessionId)?.state();
-}
-
-async function isDirectory(dir: string): Promise<boolean> {
-  return stat(dir).then((s) => s.isDirectory(), () => false);
 }
 
 /**
