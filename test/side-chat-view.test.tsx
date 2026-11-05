@@ -88,7 +88,7 @@ afterEach(() => {
   history.replaceState(null, '', '/');
 });
 
-/** A computer wide enough for panes beside the conversation; Changes and files docks from 1440. */
+/** A computer: panes sit beside the conversation from 1024px, and the session list fits beside them from 1280px. */
 const computer = (width: number) => {
   media = { '(min-width: 1024px)': width >= 1024, '(min-width: 1280px)': width >= 1280, '(min-width: 1440px)': width >= 1440, '(hover: hover) and (pointer: fine)': true, '(pointer: fine)': true };
 };
@@ -262,6 +262,27 @@ describe('the side chat', () => {
       await waitFor(() => expect(within(view).getByRole('group', { name: 'The text of src/cache.ts' })).toBeTruthy());
       expect(location.search).toContain('w=files');
     });
+  });
+
+  it('sits beside the conversation from 1024px, as Changes and files does, the session list folding away below 1280px', async () => {
+    computer(1024);
+    session();
+    await loaded();
+    expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    expect(pane()).not.toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull();
+    expect(document.documentElement.dataset.pane).toBe('docked');
+    // The list is folded away: the way back to it is in the header, and Cmd/Ctrl+K brings it back.
+    expect(screen.getByRole('button', { name: 'Back to sessions' })).toBeTruthy();
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    });
+    expect(pane()).toBeNull();
+    expect(document.documentElement.dataset.pane).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
   });
 
   it('is a sheet over the conversation on a phone', async () => {

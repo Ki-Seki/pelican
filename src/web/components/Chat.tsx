@@ -805,8 +805,8 @@ export function Chat({
     <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
-        {/* Also while Changes and files has folded the list away, beside the conversation. */}
-        {(!wide || workspace.folded) && (
+        {/* Also while Changes and files, or the side chat, has folded the list away beside the conversation. */}
+        {(!wide || workspace.folded || side.folded) && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
