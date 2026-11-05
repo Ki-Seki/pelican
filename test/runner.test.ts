@@ -879,8 +879,8 @@ describe('notifications', () => {
     expect(askedFor({ ...base, toolName: 'WebFetch', input: { url: 'https://docs.example.com/a?b' } }, '/w')).toBe('Fetch docs.example.com');
     expect(askedFor({ ...base, toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which database?' }] } }, '/w')).toBe('Which database?');
     expect(askedFor({ ...base, toolName: 'mcp__github__create_issue', input: {} }, '/w')).toBe('Use github · create_issue');
-    expect(oneLine('echo "‮⁦hidden⁩"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
-    expect(oneLine('a b c؜d⁠e­f', 30)).toBe('a b c d e f');
+    expect(oneLine('echo "\u202e\u2066hidden\u2069"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
+    expect(oneLine('a\u2028b\u2029c\u061cd\u2060e\u00adf', 30)).toBe('a b c d e f');
     expect(oneLine('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`);
     // Cut between characters: an emoji is kept whole or left out.
     expect(oneLine(`${'x'.repeat(8)}🌟🌟`, 10)).toBe(`${'x'.repeat(8)}🌟🌟`);
@@ -904,7 +904,7 @@ describe('notifications', () => {
     const unanswerable: Array<[string, Record<string, unknown>, string]> = [
       ['Bash', { command: `ls ${'-la '.repeat(40)}\nrm -rf ~/projects` }, `ls ${'-la '.repeat(40).trim()} …`],
       ['Bash', { command: 'ls -la\nrm -rf ~/projects' }, 'ls -la …'],
-      ['Bash', { command: 'echo "‮⁦hidden⁩" && rm -rf ~' }, 'echo " hidden " && rm -rf ~'],
+      ['Bash', { command: 'echo "\u202e\u2066hidden\u2069" && rm -rf ~' }, 'echo " hidden " && rm -rf ~'],
       ['Bash', { command: 'npm test', dangerouslyDisableSandbox: true }, 'npm test'],
       ['Edit', { file_path: `${folder}/src/a.ts`, old_string: 'a', new_string: 'b' }, 'Edit src/a.ts'],
       ['mcp__linear__create_issue', { title: 'Flaky test' }, 'Use linear · create_issue'],

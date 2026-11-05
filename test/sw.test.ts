@@ -125,7 +125,7 @@ describe('which requests a notification may answer', async () => {
     expect(bash({ command: `echo ${'x'.repeat(ALLOWED_COMMAND_MAX - 4)}` })).toEqual({});
     expect(bash({ command: 'ls -la\nrm -rf ~/projects' })).toEqual({});
     expect(bash({ command: 'ls\r' })).toEqual({});
-    for (const hidden of ['‮', '⁦', '​', '؜', '⁠', '­', '﻿', ' ', ' ', '　', '\t', '\u{e0041}', '']) {
+    for (const hidden of ['\u202e', '\u2066', '\u200b', '\u061c', '\u2060', '\u00ad', '\ufeff', '\u2028', '\u00a0', '\u3000', '\t', '\u{e0041}', '\ue000']) {
       expect(bash({ command: `echo safe${hidden} && rm -rf ~` }), JSON.stringify(hidden)).toEqual({});
     }
     // Spaces that could push the rest of a command out of sight.
