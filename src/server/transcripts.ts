@@ -82,17 +82,37 @@ const FIRST_CHUNK = 32 * 1024;
 const MAX_CHUNK = 1024 * 1024;
 const MAX_SCAN = 16 * 1024 * 1024;
 
+/**
+ * Markdown as one line of plain text. Marks go by where they stand, not wherever the characters
+ * appear: `export_rows`, `__init__.py` and `a > b` keep theirs, which a coding session's replies
+ * are full of.
+ */
+export function plainText(markdown: string): string {
+  return markdown
+    .replace(/^ {0,3}(`{3,}|~{3,}).*$/gm, '')
+    .replace(/^[\s|:-]*-{3,}[\s|:-]*$/gm, '')
+    .replace(/^ {0,3}#{1,6}\s+/gm, '')
+    .replace(/^ {0,3}(?:>\s?)+/gm, '')
+    .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+    // Code as it is; emphasis unwrapped only around whole words, so `__init__.py` stays.
+    .replace(INLINE, (_, ticks: string | undefined, code: string, before: string, _mark: string, inner: string) => (ticks ? code : `${before}${inner}`))
+    .replace(/`+/g, '')
+    .replace(/\|/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** A code span, or emphasis around words: `**`, `__`, `*` or `_`, closed before a space, punctuation or the end. */
+const INLINE = /(`+)([^`]*?)\1|(^|[\s(])(\*\*|__|\*|_)(?![*_\s])(.*?[^*_\s])\4(?=$|\s|[).,;:!?](?:\s|$))/gm;
+
 /** Text blocks of an assistant row, as one line for a session-list preview. */
 function replyText(row: { message?: { content?: unknown } }): string | undefined {
   const content = row.message?.content;
   if (!Array.isArray(content)) return undefined;
-  const text = content
+  const text = plainText(content
     .filter((b): b is { type: string; text: string } => b?.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
-    .join(' ')
-    .replace(/[`*_#>|]+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .join('\n\n'));
   return text ? text.slice(0, 160) : undefined;
 }
 
