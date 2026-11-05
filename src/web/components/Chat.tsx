@@ -17,6 +17,7 @@ import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
+import { elsewhere, elsewherePlaceholder, elsewhereTip, TIP_KEYS } from '../lib/status';
 import {
   addLocalMessage,
   adoptView,
@@ -35,7 +36,7 @@ import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
-import { StatusBadge, StatusDot } from './SessionList';
+import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
@@ -304,10 +305,10 @@ function NoteText({ text }: { text: string }) {
 }
 
 /** A line above the composer. Red only for what went wrong; the demo's note and warnings are info. */
-function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error' | 'live'; children: React.ReactNode; onDismiss?: () => void }) {
+function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error'; children: React.ReactNode; onDismiss?: () => void }) {
   return (
     <div className={`mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-xl px-3 py-2 text-[12.5px] leading-snug ${tone === 'error' ? 'border border-line bg-panel text-danger' : 'text-muted'}`}>
-      {tone === 'error' ? <TriangleAlert className="mt-px size-4 shrink-0" /> : tone === 'live' ? <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-live" /> : <Info className="mt-px size-3.5 shrink-0" />}
+      {tone === 'error' ? <TriangleAlert className="mt-px size-4 shrink-0" /> : <Info className="mt-px size-3.5 shrink-0" />}
       <div className="min-w-0 flex-1">{children}</div>
       {onDismiss && (
         <button type="button" aria-label="Dismiss" onClick={onDismiss} className="relative -my-0.5 grid size-6 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2.5 hover:text-fg">
@@ -380,7 +381,7 @@ export function Chat({
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
-  const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
+  const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   const [running, setRunning] = useState<string>();
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -503,7 +504,13 @@ export function Chat({
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
-  const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
+  // Another app working on the session, or waiting there for an answer, is what the session is
+  // doing, also while Claude is idle here: the status says it, the same way the list does.
+  const other = elsewhere(session, view.run);
+  const otherAtWork = other && other.situation !== 'open' ? other : undefined;
+  const status = permissions.length > 0 ? 'waiting' : busy ? 'running'
+    : otherAtWork ? (otherAtWork.situation === 'waiting' ? 'waiting' : 'live')
+      : view.run ? 'idle' : session?.status ?? 'idle';
   // Between turns: background tasks and subagents still running, and the checks Claude stays running for.
   const working = view.run ? (busy ? 0 : (view.run.tasks?.length ?? 0) + (view.run.scheduled?.length ?? 0)) : session?.tasks ?? 0;
 
@@ -682,12 +689,7 @@ export function Chat({
           >
             <div className="truncate text-[15px] font-medium">{title || ' '}</div>
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
-              {/* The list has room for "Working in Claude Desktop"; a phone's header, for the folder too. */}
-              {!wide && status === 'live' && session?.runningIn && !view.run ? (
-                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-live"><StatusDot status="live" />In {session.runningIn}</span>
-              ) : (
-                <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} tasks={working} />
-              )}
+              <StatusBadge status={status} runningIn={otherAtWork ? session?.runningIn : undefined} tasks={working} />
               <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
               {/* On a phone the line has room for the branch only when nothing else is going on; the session menu always has it. */}
               {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
@@ -765,22 +767,15 @@ export function Chat({
           </div>
         )}
         {limitNotice(limits) && <Notice tone={limitReached(limits) ? 'error' : 'info'}>{limitNotice(limits)}</Notice>}
-        {session?.status === 'live' && !view.run && (
-          <Notice tone="live">Sending here starts a second Claude on this conversation.</Notice>
-        )}
-        {session?.status === 'waiting' && session.runningIn && !view.run && (
-          <Notice>
-            Claude is waiting for an answer in {session.runningIn}. Sending here runs a second Claude on the same conversation.
-          </Notice>
-        )}
-        {/* Open, idle, in another app too: explained once, the first time it happens; the session
-            menu says it for each session after that. */}
-        {session?.openIn && status !== 'live' && !busy && !openElsewhereSeen && (
+        {/* Another app has the session: each way it can (open, working, waiting there) is explained
+            once in this browser, the first time it happens. After that the status says it, the
+            message box says what sending does, and the session menu names an app it is open in. */}
+        {other && !tipsSeen.has(TIP_KEYS[other.situation]) && (
           <Notice onDismiss={() => {
-            markTipSeen('open-elsewhere');
-            setOpenElsewhereSeen(true);
+            markTipSeen(TIP_KEYS[other.situation]);
+            setTipsSeen((seen) => new Set(seen).add(TIP_KEYS[other.situation]));
           }}>
-            Also open in {session.openIn}, which shows what you send here once you reopen the session there.
+            {elsewhereTip(other)}
           </Notice>
         )}
         {modelList?.signedIn === false && (
@@ -819,7 +814,7 @@ export function Chat({
         stopping={Boolean(view.run?.stopping)}
         // On a computer the box takes the keys as soon as a chat opens (the composer skips this on touch screens).
         autoFocus
-        placeholder={sessionId ? 'Reply to Claude' : 'Message Claude'}
+        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
         {...(cwd ? { cwd } : {})}

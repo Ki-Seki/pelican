@@ -344,12 +344,20 @@ export function Composer({
   };
   useEffect(() => () => recognition.current?.stop(), []);
 
+  const hint = busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
-  }, [text]);
+    // Empty, the box is as tall as what it says: a hint that takes two lines on a phone shows whole.
+    let height = el.scrollHeight;
+    if (!el.value && hint) {
+      el.value = hint;
+      height = el.scrollHeight;
+      el.value = '';
+    }
+    el.style.height = `${Math.min(height, Math.round(window.innerHeight * 0.4))}px`;
+  }, [text, hint]);
 
   // On a phone too: a new session opens ready to type, with the keyboard up where the browser
   // lets a page raise it.
@@ -529,7 +537,7 @@ export function Composer({
           value={text}
           rows={1}
           disabled={disabled}
-          placeholder={busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder}
+          placeholder={hint}
           aria-label="Message Claude"
           aria-autocomplete={showSuggestions ? 'list' : undefined}
           aria-controls={showSuggestions ? listId : undefined}

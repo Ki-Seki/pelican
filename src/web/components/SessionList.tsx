@@ -9,6 +9,7 @@ import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { composing, MOD_ARIA } from '../lib/keyboard';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { defaultStart, type Start } from '../lib/start';
+import { statusLabel } from '../lib/status';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
 
 /** Filter values for sessions outside projects. */
@@ -16,18 +17,6 @@ const SCRATCH = '\u0000scratch';
 const TEMP = '\u0000temp';
 const ARCHIVED = '\u0000archived';
 const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary', [ARCHIVED]: 'Archived' };
-
-/**
- * What a session is doing, in words. `tasks`: background tasks and subagents still running in it
- * (and checks Claude stays running for), said between turns as "2 tasks".
- */
-export function statusLabel(status: SessionStatus, runningIn?: string, tasks = 0): string {
-  if (status === 'running') return 'Working';
-  if (status === 'waiting') return runningIn ? `Needs you in ${runningIn}` : 'Needs you';
-  if (status === 'live') return runningIn ? `Working in ${runningIn}` : 'Working elsewhere';
-  if (tasks > 0) return tasks === 1 ? '1 task' : `${tasks} tasks`;
-  return '';
-}
 
 const DOT: Record<SessionStatus, string> = { running: 'bg-run', waiting: 'bg-wait', live: 'bg-live', idle: 'bg-line' };
 const TEXT: Record<SessionStatus, string> = { running: 'text-run', waiting: 'text-wait', live: 'text-live', idle: 'text-faint' };
