@@ -238,6 +238,13 @@ export type RecordedSettings = { model?: string; effort?: string; fast?: boolean
 export type SendMode = 'steer' | 'queue';
 
 /**
+ * A page of an output Claude Code saved in a session's tool-results folder in place of one too
+ * long for the conversation: `text` from `from` bytes in, `size` the file's in bytes, `next`
+ * where the next page starts, while there is more.
+ */
+export type SavedOutputPage = { text: string; from: number; size: number; next?: number };
+
+/**
  * A `!` command still running, as its output comes. Its record in the conversation has the same
  * id (the message holding the command), and replaces it once written.
  */

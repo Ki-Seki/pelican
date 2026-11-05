@@ -30,6 +30,7 @@ import { searchFiles } from './project-files.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
+import { savedOutputPage } from './shell.js';
 import { startShell, stopShell } from './shell-runs.js';
 import { isSideChat } from './side-chat.js';
 import { shownRun } from './stream.js';
@@ -758,6 +759,16 @@ app.post('/api/sessions/:id/shell', async (c) => {
   if (body.trust === 'trusted' || body.trust === 'user-only') await rememberChoice(cwd, body.trust);
   const launch = await launchFor(cwd);
   return c.json({ shell: startShell(id, cwd, command, launch.env) }, 202);
+});
+
+/**
+ * An output Claude Code saved in a session's tool-results folder in place of one too long for the
+ * conversation, as a long `!` command's record names it: read only, by its name alone, from that
+ * session's own folder, a page at a time (`from`, in bytes), for Show all.
+ */
+app.get('/api/sessions/:id/tool-results/:name', async (c) => {
+  const page = await savedOutputPage(c.req.param('id'), c.req.param('name'), Number(c.req.query('from') ?? 0));
+  return page ? c.json(page) : c.json({ error: 'That output is no longer saved' }, 404);
 });
 
 app.post('/api/sessions/:id/shell/:shell/stop', (c) => (stopShell(c.req.param('id'), c.req.param('shell'))

@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 
 import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 
+import type { SavedOutputPage } from '../shared/protocol.js';
+import { openRegular } from './open.js';
 import { transcriptPath } from './transcripts.js';
 import { launchFor } from './trust.js';
 
@@ -457,6 +459,53 @@ export async function toolResultsFolder(sessionId: string): Promise<string | und
   if (!SESSION_ID.test(sessionId)) return undefined;
   const transcript = await transcriptPath(sessionId);
   return transcript ? path.join(path.dirname(transcript), sessionId, 'tool-results') : undefined;
+}
+
+/** A file Claude Code names in a session's tool-results folder: `b` and eight letters for a `!` command's, a tool call's id for others'. */
+const SAVED_NAME = /^[A-Za-z0-9_-]{1,128}\.(?:txt|json)$/;
+/** How much of a saved output one read gives: a page a phone takes in, the next a tap away. */
+export const SAVED_PAGE_BYTES = 256 * 1024;
+
+/**
+ * One page of an output Claude Code saved in place of one too long for the conversation (a long
+ * `!` command's, as its record names it), from `from` bytes in, whole characters only: read by its
+ * name alone, from that session's own tool-results folder, a regular file reached through no link.
+ * Undefined for anything else, or once Claude Code has let it go.
+ */
+export async function savedOutputPage(sessionId: string, name: string, from: number): Promise<SavedOutputPage | undefined> {
+  if (!SAVED_NAME.test(name) || !Number.isSafeInteger(from) || from < 0) return undefined;
+  const folder = await toolResultsFolder(sessionId);
+  if (!folder) return undefined;
+  try {
+    // Where it must be, with only the projects' own folders resolved: a link on the way leads elsewhere.
+    const expected = path.join(await realpath(path.dirname(path.dirname(folder))), sessionId, 'tool-results', name);
+    if (await realpath(path.join(folder, name)) !== expected) return undefined;
+    const handle = await openRegular(expected);
+    try {
+      const { size } = await handle.stat();
+      const start = Math.min(from, size);
+      const buffer = Buffer.alloc(Math.min(SAVED_PAGE_BYTES, size - start));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+      let begin = 0;
+      // Asked for from inside a character: from the next whole one.
+      while (start > 0 && begin < bytesRead && (buffer[begin]! & 0xc0) === 0x80) begin += 1;
+      let end = bytesRead;
+      if (start + bytesRead < size) {
+        // A character the page would cut in two goes to the next page.
+        let lead = end - 1;
+        while (lead > begin && (buffer[lead]! & 0xc0) === 0x80) lead -= 1;
+        const byte = buffer[lead]!;
+        const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+        if (lead + length > end) end = lead;
+      }
+      const next = start + end;
+      return { text: buffer.toString('utf8', begin, end), from: start + begin, size, ...(next < size ? { next } : {}) };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 /**

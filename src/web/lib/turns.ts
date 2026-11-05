@@ -40,7 +40,8 @@ export type Item =
     next?: 'compact' | 'retry';
   }
   | { kind: 'compact'; key: string; summary: string }
-  | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; timestamp?: number }
+  /** `saved`: the file Claude Code saved all of a long output in, by its name in the session's tool-results folder. */
+  | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; saved?: string; timestamp?: number }
   | { kind: 'day'; key: string; timestamp: number };
 
 const tag = (text: string, name: string) => {
@@ -72,9 +73,9 @@ export function cleanOutput(text: string): string {
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
   | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
-  | { kind: 'shell'; command: string; stdout: string; stderr: string }
+  | { kind: 'shell'; command: string; stdout: string; stderr: string; saved?: string }
   /** The output of the `!` command just before, in a message of its own, as Claude Code writes it. */
-  | { kind: 'shell-output'; stdout: string; stderr: string };
+  | { kind: 'shell-output'; stdout: string; stderr: string; saved?: string };
 
 /**
  * The files sent with a prompt, out of its text. Pelican tells Claude where they are in an
@@ -110,14 +111,27 @@ export function withFiles(text: string, files: SentFile[]): string {
 
 const unescape = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
+/** A file Claude Code names in a session's tool-results folder, as the server reads one. */
+const SAVED_NAME = /^[A-Za-z0-9_-]{1,128}\.(?:txt|json)$/;
+
 /**
  * A `!` command's output as it shows: unescaped, or, for one too long for the conversation, what
  * Claude Code saved in its place (`<persisted-output>`, written as it came) unwrapped: the start
- * Claude got, then Claude Code's line saying where all of it is.
+ * Claude got, then Claude Code's line saying where all of it is, with that file's name (`saved`).
  */
-function shellOutput(raw: string): string {
-  const saved = /^<persisted-output>\n([^\n]*)\n\n(?:Preview \([^)\n]*\):\n)?([\s\S]*?)\n?<\/persisted-output>$/.exec(raw);
-  return saved ? `${saved[2]!.replace(/\n+$/, '')}\n${saved[1]}` : unescape(raw);
+function shellOutput(raw: string): { text: string; saved?: string } {
+  const persisted = /^<persisted-output>\n([^\n]*)\n\n(?:Preview \([^)\n]*\):\n)?([\s\S]*?)\n?<\/persisted-output>$/.exec(raw);
+  if (!persisted) return { text: unescape(raw) };
+  const name = /saved to: (.+)$/.exec(persisted[1]!)?.[1]?.split(/[\\/]/).at(-1);
+  return { text: `${persisted[2]!.replace(/\n+$/, '')}\n${persisted[1]}`, ...(name && SAVED_NAME.test(name) ? { saved: name } : {}) };
+}
+
+/** The output of a `!` command's record, as the card shows it. */
+function shellRecord(text: string): { stdout: string; stderr: string; saved?: string } {
+  const stdout = shellOutput(tag(text, 'bash-stdout') ?? '');
+  const stderr = shellOutput(tag(text, 'bash-stderr') ?? '');
+  const saved = stdout.saved ?? stderr.saved;
+  return { stdout: stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}) };
 }
 
 /** Splits what Claude Code wraps in tags out of a user message's text. */
@@ -127,12 +141,8 @@ function classifyUserText(raw: string): Classified | undefined {
   if (text.includes('<local-command-caveat>')) return undefined;
   // A `!` command and its output (Claude Code's bash mode), from any client.
   const bash = tag(text, 'bash-input');
-  if (bash !== undefined) {
-    return { kind: 'shell', command: unescape(bash), stdout: shellOutput(tag(text, 'bash-stdout') ?? ''), stderr: shellOutput(tag(text, 'bash-stderr') ?? '') };
-  }
-  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) {
-    return { kind: 'shell-output', stdout: shellOutput(tag(text, 'bash-stdout') ?? ''), stderr: shellOutput(tag(text, 'bash-stderr') ?? '') };
-  }
+  if (bash !== undefined) return { kind: 'shell', command: unescape(bash), ...shellRecord(text) };
+  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) return { kind: 'shell-output', ...shellRecord(text) };
   const commandName = tag(text, 'command-name');
   if (commandName) {
     return { kind: 'user', text: '', images: [], command: { name: commandName, args: tag(text, 'command-args') ?? '' } };
@@ -164,6 +174,8 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   }
 
   const items: Item[] = [];
+  /** The `!` commands whose output has been seen: what comes after it is not theirs. */
+  const withOutput = new Set<string>();
   let turn: Extract<Item, { kind: 'assistant' }> | undefined;
   let lastDay: string | undefined;
   let tasks: { names: string; done: boolean } | undefined;
@@ -226,13 +238,17 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
         turn = undefined;
       } else if (classified.kind === 'shell') {
         push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) });
+        // A record of the CLI's older shape holds its output with the command.
+        if (classified.stdout || classified.stderr || classified.saved) withOutput.add(message.uuid);
         turn = undefined;
       } else if (classified.kind === 'shell-output') {
         // It goes with its command; on its own, it is nothing to show.
         const last = items.at(-1);
-        if (last?.kind === 'shell' && !last.stdout && !last.stderr) {
+        if (last?.kind === 'shell' && !withOutput.has(last.key)) {
+          withOutput.add(last.key);
           last.stdout = classified.stdout;
           last.stderr = classified.stderr;
+          if (classified.saved) last.saved = classified.saved;
         }
       } else {
         push({ ...classified, key: message.uuid });
