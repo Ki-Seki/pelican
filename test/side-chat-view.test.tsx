@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, RunSettings } from '../src/shared/protocol';
+import type { ChatMessage, GitStatus, RunSettings } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const SIDE = '55555555-2222-4333-8444-555555555555';
@@ -17,6 +17,7 @@ const server = vi.hoisted(() => ({
   after: [] as ChatMessage[],
   /** The side chat's transcript: the copy of the session's conversation, then its own. */
   sideMessages: [] as ChatMessage[],
+  git: { repo: false } as GitStatus,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -30,14 +31,14 @@ vi.mock('../src/web/lib/api', async (original) => {
       usage: async () => [],
       defaults: async () => ({ permissionMode: null }),
       completions: async () => ({ commands: [], agents: [] }),
-      git: async () => ({ repo: false }),
+      git: async () => server.git,
       tree: async () => [],
       exists: async (_cwd: string, paths: string[]) => paths,
       file: async (_cwd: string, path: string) => ({ path, size: 24, text: 'const key = user.id;\nexport { key };\n' }),
-      changes: async () => ({ turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: false }], lines: {} }),
+      changes: async () => ({ turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], lines: {} }),
       turnDiff: async () => '',
       session: async (id: string) => ({
-        session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle' },
+        session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...(id === SIDE ? { title: 'Side chat', sideChatOf: SESSION } : {}) },
         run: null,
         tasks: [],
         settings: {},
@@ -91,7 +92,7 @@ afterEach(() => {
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
-  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [] });
+  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false } });
   history.replaceState(null, '', '/');
 });
 
@@ -314,5 +315,59 @@ describe('the side chat', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
     expect(within(sheet).getByText('Reads this session · changes nothing')).toBeTruthy();
     expect(pane()).toBeNull();
+  });
+});
+
+describe('a side chat opened as a session of its own (from the list, a search, the usage page)', () => {
+  const tasks: ChatMessage = {
+    uuid: 'a0',
+    role: 'assistant',
+    blocks: [{ type: 'tool_use', id: 't1', name: 'TodoWrite', input: { todos: [{ content: 'Clean the cache', status: 'in_progress', activeForm: 'Cleaning the cache' }, { content: 'Run the tests', status: 'pending', activeForm: 'Running the tests' }] } }],
+    timestamp: Date.now() - 50_000,
+  };
+  const open = (id: string) => wrap(<Chat sessionId={id} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+  /** The task list pinned above the message box, as live work. */
+  const pinned = () => screen.queryByRole('button', { name: /^0\/2/ });
+
+  it('is read only here too: questions, and nothing that runs commands or changes files', async () => {
+    computer(1440);
+    setPrefs({ workspacePane: true });
+    server.git = { repo: true, branch: 'feat/x', base: 'main', files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
+    server.after = [tasks];
+    // The session itself, for comparison: its own box, its tasks, Commit and Create PR, Rewind and Edit.
+    history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
+    open(SESSION);
+    await loaded();
+    await screen.findByRole('button', { name: 'Create PR' });
+    expect(screen.getByLabelText('Message Claude')).toBeTruthy();
+    expect(pinned()).not.toBeNull();
+    expect(screen.getByTitle(/^Rewind code/)).toBeTruthy();
+    cleanup();
+
+    history.replaceState(null, '', `/?s=${SIDE}&w=changes&t=u1`);
+    open(SIDE);
+    await screen.findAllByText('Clean up the build');
+    const box = screen.getByLabelText('Side question') as HTMLTextAreaElement;
+    expect(box.placeholder).toBe('Ask a side question');
+    for (const name of ['Attach files', 'Model, effort and speed', 'Permission mode']) expect(screen.queryByRole('button', { name })).toBeNull();
+    // The task list it copied is the session's work, not its own.
+    expect(pinned()).toBeNull();
+    // The prompt it copied offers no Rewind, nor Edit.
+    expect(screen.queryByTitle(/^Rewind code/)).toBeNull();
+    expect(screen.queryByTitle(/^Edit and send again/)).toBeNull();
+    // Its turn's changes, without Rewind code; the folder's, without Commit, Push or Create PR.
+    const changes = await screen.findByRole('complementary', { name: 'Changes and files' });
+    await within(changes).findByText('cache.ts');
+    expect(within(changes).queryByText('Rewind code')).toBeNull();
+    fireEvent.click(within(changes).getByRole('button', { name: /^Show:/ }));
+    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Uncommitted'));
+    await waitFor(() => expect(location.search).not.toContain('t=u1'));
+    await within(changes).findByText('cache.ts');
+    for (const name of ['Commit', 'Push', 'Create PR']) expect(within(changes).queryByRole('button', { name })).toBeNull();
+    // A ! is a question's, as in the side chat beside a session: nothing runs.
+    fireEvent.change(box, { target: { value: '!npm test' } });
+    expect(screen.queryByText('Shell command')).toBeNull();
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    await waitFor(() => expect(server.sent).toEqual([{ id: SIDE, text: '!npm test' }]));
   });
 });

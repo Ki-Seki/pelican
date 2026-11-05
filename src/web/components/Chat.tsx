@@ -371,6 +371,10 @@ export function Chat({
   });
   const listed = queryClient.getQueryData<SessionSummary[]>(['sessions'])?.find((s) => s.id === sessionId);
   const session = detail?.session ?? listed;
+  // A side chat opened as a session of its own (from the list, a search, the usage page) is read
+  // only here too, as its Claude is: questions, without files, `!` or `/` commands, nor anything
+  // that changes files (Rewind, Edit, Commit and the like).
+  const sideChat = Boolean(session?.sideChatOf);
   const [carry] = useState(() => {
     const settings = sessionId ? undefined : carried.get(viewId);
     carried.delete(viewId);
@@ -488,7 +492,7 @@ export function Chat({
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
-    if (sessionId && CLEAR.test(text) && cwd) {
+    if (sessionId && !sideChat && CLEAR.test(text) && cwd) {
       // Out of Bypass, the new conversation starts in the mode a new session does.
       const { permissionMode = 'default', ...rest } = settings;
       carried.set(`new:${cwd}`, permissionMode === 'bypassPermissions' ? rest : { ...rest, permissionMode });
@@ -561,7 +565,7 @@ export function Chat({
   // A side chat has none of its own; Changes and files and it take turns beside the conversation,
   // one on screen at a time.
   const composer = useRef<ComposerHandle>(null);
-  const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace, () => composer.current?.focus());
+  const side = useSideChat(Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
   const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
@@ -677,7 +681,8 @@ export function Chat({
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
     [sessionId, view.offset, view.messages, detail?.tasks],
   );
-  const showTasks = tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
+  // A side chat's tasks are the copy of its session's, not work of its own.
+  const showTasks = !sideChat && tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
 
   useEffect(() => setSessionTitle(title), [title]);
   useEffect(() => () => setSessionTitle(undefined), []);
@@ -713,7 +718,7 @@ export function Chat({
       if (e.key !== 'Escape' || e.defaultPrevented || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
       const target = e.target instanceof HTMLElement ? e.target : undefined;
       if (target && target !== document.body && !root.current?.contains(target)) return;
-      if (target?.matches('input, textarea, select, [contenteditable="true"]') && !target.matches('[aria-label="Message Claude"]')) return;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]') && !target.matches('[aria-label="Message Claude"], [aria-label="Side question"]')) return;
       e.preventDefault();
       void api.interrupt(sessionId);
     };
@@ -803,7 +808,7 @@ export function Chat({
   return (
     <PathLinksContext.Provider value={links}>
     <CommentsChat.Provider value={viewId}>
-    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {/* Also while Changes and files, or the side chat, has folded the list away beside the conversation. */}
         {(!wide || workspace.folded || side.folded) && (
@@ -862,8 +867,8 @@ export function Chat({
             cwd={cwd}
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
-            {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
-            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') } : {})}
+            {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+            {...(sessionId ? { onRetry: sendAgain, ...(sideChat ? {} : { onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') }) } : {})}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -946,15 +951,15 @@ export function Chat({
         onSettings={changeSettings}
         models={modelList?.models}
         onSend={(text, attachments, mode) => void send(text, attachments, mode, 'box')}
-        {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
-        {...(sessionId && !session?.sideChatOf ? { onSideChat: side.show } : {})}
+        {...(sessionId && !sideChat ? { onShell: (command: string) => void shell(command), onSideChat: side.show } : {})}
+        side={sideChat}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
         // On a computer the box takes the keys as soon as a chat opens. On a phone only a new
         // session, opened to type in, does: a session opened to read must not raise the keyboard
         // over the conversation.
         autoFocus={!sessionId || hasKeyboard()}
-        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
+        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sideChat ? 'Ask a side question' : sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
         {...(cwd ? { cwd } : {})}
@@ -975,7 +980,7 @@ export function Chat({
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+          {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: (uuid: string) => setRewinding(uuid) }) } : {})}
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
             // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.
@@ -1018,7 +1023,7 @@ export function Chat({
           {...(machine ? { machine } : {})}
           thinking={thought}
           onRenamed={refresh}
-          {...(!session?.sideChatOf ? {
+          {...(!sideChat ? {
             onSideChat: () => {
               setMenuOpen(false);
               side.show();

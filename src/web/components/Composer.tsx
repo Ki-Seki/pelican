@@ -236,6 +236,7 @@ export function Composer({
   disabled,
   onSideChat,
   side = false,
+  atBottom = true,
   ref,
 }: {
   busy: boolean;
@@ -263,6 +264,8 @@ export function Composer({
   onSideChat?: (question: string) => void;
   /** A side chat's own box: questions only, without files, settings, `!` or `/` commands. */
   side?: boolean;
+  /** At the bottom of the screen, clear of a phone's edge; a side chat's pane or sheet keeps clear of it itself. */
+  atBottom?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {
   const [saved] = useState(() => (draftKey && !draft ? loadDraft(draftKey) : undefined));
@@ -545,8 +548,7 @@ export function Composer({
 
   return (
     // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
-    // A side chat's box sits in a pane or a sheet, which keeps clear of the phone's edge itself.
-    <div className={`${side ? 'pb-2' : 'pb-safe'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
+    <div className={`${atBottom ? 'pb-safe' : 'pb-2'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
       {showSuggestions && (
         <div
           id={listId}

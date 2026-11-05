@@ -321,6 +321,7 @@ export function SideChat({
       )}
       <Composer
         side
+        atBottom={false}
         busy={busy}
         settings={settings}
         onSettings={() => {}}
