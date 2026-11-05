@@ -22,8 +22,10 @@ import type {
   TreeEntry,
   UsageLimit,
 } from '../../shared/protocol';
+import { useSyncExternalStore } from 'react';
+
 import type { Todo } from '../../shared/tasks';
-import { STATIC_DEMO, staticRequest } from './static-demo';
+import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
 
 /**
  * The app does not know the path it is served under (`/` on its own, or a
@@ -34,10 +36,71 @@ export const appBase = new URL('./', location.href);
 
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
+/** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly signIn = false) {
+  constructor(message: string, readonly status: number, readonly signIn = false, readonly demo = false) {
     super(message);
   }
+}
+
+/** Whether an error is the demo saying what it does not do, rather than something going wrong. */
+export const isDemoNote = (error: unknown): boolean => error instanceof ApiError && error.demo;
+
+/** Whether an error only says the computer could not be reached (said once, by the offline line). */
+export const isUnreachable = (error: unknown): boolean => error instanceof ApiError && error.status === 0;
+
+/** The computer's name, from the server's info, for saying which one cannot be reached. */
+let machineName: string | undefined;
+
+/**
+ * Whether the last request reached the server. A socket can drop while requests still work (a
+ * proxy without WebSockets), and the other way round; the offline line tells the two apart.
+ */
+let reachable = true;
+const reachListeners = new Set<() => void>();
+function setReachable(value: boolean): void {
+  if (reachable === value) return;
+  reachable = value;
+  for (const listener of reachListeners) listener();
+}
+
+export function useReachable(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      reachListeners.add(listener);
+      return () => reachListeners.delete(listener);
+    },
+    () => reachable,
+  );
+}
+
+/** fetch, with a dropped connection said in words ("Can’t reach laptop") instead of the browser's. */
+async function reach(url: string, init: RequestInit): Promise<Response> {
+  if (STATIC_DEMO) return fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    setReachable(false);
+    throw new ApiError(`Can’t reach ${machineName || 'your computer'}`, 0);
+  }
+  setReachable(true);
+  return response;
+}
+
+/**
+ * Answers given in the page instead of by the server: the demo's (lib/demo). `answer` takes every
+ * request that would change something; `read` may answer a read itself; `adjust` sees each answer.
+ */
+export type LocalAnswers = {
+  answer: (path: string, init: RequestInit) => Promise<unknown>;
+  read: (path: string) => Promise<unknown> | undefined;
+  adjust: (path: string, data: unknown) => unknown;
+};
+let local: LocalAnswers | undefined;
+export function answerLocally(answers: LocalAnswers | undefined): void {
+  local = answers;
 }
 
 /** Called when the server says the session cookie is missing or expired. */
@@ -55,15 +118,9 @@ const MAX_UPLOAD = 25 * 1024 * 1024;
 export type AuthMode = 'none' | 'password' | 'token';
 export type AuthState = { required: boolean; mode: AuthMode; signedIn: boolean };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  if (STATIC_DEMO) {
-    try {
-      return (await staticRequest(appBase, path, init)) as T;
-    } catch (error) {
-      throw new ApiError((error as Error).message, 403);
-    }
-  }
-  const response = await fetch(apiUrl(path), {
+async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
+  if (STATIC_DEMO) return staticRequest(appBase, path, init);
+  const response = await reach(apiUrl(path), {
     ...init,
     headers: { ...MARK, ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
   });
@@ -72,7 +129,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (body.signIn) onSignedOut();
     throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn));
   }
-  return (await response.json()) as T;
+  return response.json();
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    if (local && init?.method && init.method !== 'GET') return (await local.answer(path, init)) as T;
+    const data = (local && local.read(path)) || fromServer(path, init);
+    return (local ? local.adjust(path, await data) : await data) as T;
+  } catch (error) {
+    if (error instanceof DemoRefusal) throw new ApiError(error.message, 403, false, true);
+    throw error;
+  }
 }
 
 const send = <T>(method: string, path: string, body?: unknown) =>
@@ -87,7 +155,12 @@ export const api = {
   logout: () => send<{ ok: boolean }>('POST', 'auth/logout'),
   /** A one-time code that signs a phone in, good for two minutes (null when nobody signs in). */
   accessCode: () => send<{ code: string | null }>('POST', 'access/code').then((r) => r.code),
-  info: () => request<ServerInfo>('info'),
+  info: () => request<ServerInfo>('info').then((info) => {
+    machineName = info.machine;
+    return info;
+  }),
+  /** Asks the server for nothing much, to learn whether it can be reached. */
+  probe: () => request<ServerInfo>('info').then(() => true, () => false),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
     request<{ session: SessionSummary | null; run: RunState | null; tasks: Todo[]; settings: RecordedSettings }>(`sessions/${encodeURIComponent(id)}`),
@@ -144,11 +217,11 @@ export const api = {
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   upload: async (file: File): Promise<Attachment> => {
-    if (STATIC_DEMO) throw new ApiError('This demo runs in your browser: nothing is uploaded.', 403);
+    if (local || STATIC_DEMO) return request<Attachment>('uploads', { method: 'POST' });
     if (file.size > MAX_UPLOAD) throw new ApiError(`${file.name} is larger than 25 MB`, 413);
     const form = new FormData();
     form.append('file', file);
-    const response = await fetch(apiUrl('uploads'), { method: 'POST', body: form, headers: MARK });
+    const response = await reach(apiUrl('uploads'), { method: 'POST', body: form, headers: MARK });
     if (!response.ok) {
       const body = (await response.json().catch(() => ({}))) as { error?: string };
       throw new ApiError(body.error ?? response.statusText, response.status);

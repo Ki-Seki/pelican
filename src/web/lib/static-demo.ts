@@ -30,12 +30,22 @@ function shift(value: unknown, by: number): unknown {
 
 let generatedAt: Promise<number> | undefined;
 
+/**
+ * What both demos (this one and `pelican --demo`) say, in these words only, to anything they do
+ * not act out: calmly, as a note, not as an error.
+ */
+export const DEMO_NOTE = STATIC_DEMO
+  ? 'This is a demo, so nothing runs. Install Pelican to work with Claude.'
+  : 'This is the demo, so nothing runs. Start Pelican without --demo to work with Claude.';
+
+/** Where the site's demo sends people who want the real thing. */
+export const INSTALL_URL = '../docs.html#install';
+
+/** The demo saying what it does not do; shown as a note. */
 export class DemoRefusal extends Error {}
 
 export async function staticRequest(base: URL, path: string, init?: RequestInit): Promise<unknown> {
-  if (init?.method && init.method !== 'GET') {
-    throw new DemoRefusal('This demo runs in your browser with made-up sessions, so nothing is sent or changed. Install Pelican to work with Claude.');
-  }
+  if (init?.method && init.method !== 'GET') throw new DemoRefusal(DEMO_NOTE);
   generatedAt ??= fetch(new URL('data/meta.json', base)).then((r) => r.json()).then((m: { generatedAt: number }) => m.generatedAt);
   const [query, params] = path.split('?');
   // A file search the build did not save: filter the full list here.
