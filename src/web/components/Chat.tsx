@@ -474,6 +474,8 @@ export function Chat({
       // Out of Bypass, the new conversation starts in the mode a new session does.
       const { permissionMode = 'default', ...rest } = settings;
       carried.set(`new:${cwd}`, permissionMode === 'bypassPermissions' ? rest : { ...rest, permissionMode });
+      // Done with, as a sent message is: left as this session's draft, it would clear again.
+      clearDraft(viewId, text);
       onStartIn({ cwd });
       return;
     }

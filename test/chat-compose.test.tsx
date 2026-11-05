@@ -80,6 +80,7 @@ beforeAll(() => {
 
 const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
+const { loadDraft } = await import('../src/web/lib/drafts');
 
 afterEach(() => {
   cleanup();
@@ -167,5 +168,19 @@ describe('a message that did not go', () => {
     expect(screen.getByLabelText('Remove notes.txt')).toBeTruthy();
     await waitFor(() => expect(stored()?.attachments).toEqual([expect.objectContaining({ id: 'up-notes.txt' })]), { timeout: 2000 });
     expect(server.sent).toHaveLength(1);
+  });
+});
+
+describe('/clear', () => {
+  it('opens a new session and leaves nothing behind in the old one to clear it again', async () => {
+    const onStartIn = vi.fn();
+    wrap(<Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={onStartIn} />);
+    await loaded();
+    sendText('/clear');
+    expect(onStartIn).toHaveBeenCalledWith({ cwd: CWD });
+    cleanup();
+    expect(loadDraft(SESSION)).toBeUndefined();
+    session();
+    expect(box().value).toBe('');
   });
 });
