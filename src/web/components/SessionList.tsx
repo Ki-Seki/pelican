@@ -571,10 +571,12 @@ export function SessionList({
             // ⌘K comes here (App); Enter opens the first match, Esc clears.
             aria-keyshortcuts={`${MOD_ARIA}+K`}
             onKeyDown={(e) => {
+              // Keys an input method takes are its own: Esc there cancels a conversion, not the search.
+              if (composing(e.nativeEvent)) return;
               if (e.key === 'Escape' && query) {
                 e.preventDefault();
                 setQuery('');
-              } else if (e.key === 'Enter' && query.trim() && !composing(e.nativeEvent)) {
+              } else if (e.key === 'Enter' && query.trim()) {
                 const first = groups[0]?.entries[0]?.session;
                 if (first) onOpen(first.id);
               }

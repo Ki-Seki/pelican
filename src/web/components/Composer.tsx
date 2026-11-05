@@ -426,12 +426,13 @@ export function Composer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Keys an input method takes are its own (the Enter that picks a word, the Esc that cancels
+    // one, the arrows through its list), not the / and @ list's or the box's.
+    if (composing(e.nativeEvent)) return;
     // ⌘/Ctrl+Enter sends whatever the Enter key setting, list open or not.
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      if (!composing(e.nativeEvent)) {
-        e.preventDefault();
-        submit();
-      }
+      e.preventDefault();
+      submit();
       return;
     }
     if (showSuggestions && suggestions.length > 0) {
@@ -440,7 +441,7 @@ export function Composer({
         setHighlight((h) => (h + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
         return;
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !composing(e.nativeEvent))) {
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         accept(suggestions[highlight] ?? suggestions[0]!);
         return;

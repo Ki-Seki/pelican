@@ -5,6 +5,7 @@ import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
 import { apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
+import { composing } from '../lib/keyboard';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
@@ -377,6 +378,8 @@ function EditPrompt({ text, images, files, last, onCancel, onSend }: {
         readOnly={busy}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
+          // Keys an input method takes are its own: Esc there cancels a conversion, not the edit.
+          if (composing(e.nativeEvent)) return;
           if (e.key === 'Escape' && !busy) onCancel();
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
         }}

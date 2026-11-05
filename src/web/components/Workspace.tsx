@@ -6,6 +6,7 @@ import type { GitFile } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { baseName, formatBytes } from '../lib/format';
 import { newId } from '../lib/ids';
+import { composing } from '../lib/keyboard';
 import { markTipSeen, setPrefs, tipSeen, usePrefs } from '../lib/prefs';
 import { type CodeLine, commentKey, commentsMessage, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
 import { Markdown } from './Markdown';
@@ -108,6 +109,8 @@ function CommentBox({ note, onNote, onSave, onCancel }: { note: string; onNote: 
         placeholder="Comment for Claude"
         onChange={(e) => onNote(e.target.value)}
         onKeyDown={(e) => {
+          // Keys an input method takes are its own: Esc there cancels a conversion, not the comment.
+          if (composing(e.nativeEvent)) return;
           if (e.key === 'Escape') {
             // The comment goes; the sheet around it stays.
             e.preventDefault();
