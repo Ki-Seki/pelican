@@ -5,7 +5,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shortPath } from '../lib/format';
-import { setSessionView, usePrefs, viewOf, type ViewMode } from '../lib/prefs';
+import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
 import { DEMO_NOTE } from '../lib/static-demo';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 
@@ -89,6 +89,7 @@ export function SessionMenu({
   cwd,
   home,
   run,
+  thinking = false,
   onRenamed,
   onForked,
   onDeleted,
@@ -100,6 +101,8 @@ export function SessionMenu({
   cwd?: string;
   home?: string;
   run?: RunState;
+  /** Claude has thought in this session: the Thinking view is offered. */
+  thinking?: boolean;
   onRenamed: () => void;
   onForked: (id: string) => void;
   onDeleted: () => void;
@@ -162,15 +165,11 @@ export function SessionMenu({
   return (
     <Sheet open={open} onClose={onClose} title="Session" done>
       {/* This session's own; the one sessions start with is in Settings. */}
-      <SheetHeading>View</SheetHeading>
+      <SheetHeading>Transcript view</SheetHeading>
       <Segmented<ViewMode>
         value={viewOf(prefs, sessionId)}
         onChange={(view) => setSessionView(sessionId, view)}
-        options={[
-          { value: 'summary', label: 'Summary', title: 'Your prompts and Claude’s replies' },
-          { value: 'normal', label: 'Normal', title: 'Replies, with the steps folded' },
-          { value: 'verbose', label: 'Verbose', title: 'Every step open' },
-        ]}
+        options={[...viewsFor(thinking, viewOf(prefs, sessionId))]}
       />
 
       <SheetHeading>Actions</SheetHeading>

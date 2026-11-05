@@ -12,7 +12,7 @@ import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
-import { loadDefaults, markSeen, markTipSeen, newSessionDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
@@ -653,6 +653,20 @@ export function Chat({
     return () => window.removeEventListener('keydown', onKey);
   }, [busy, sessionId]);
 
+  // Ctrl+O steps through the transcript views, as in Claude Desktop (Ctrl on a Mac too); Thinking
+  // comes in once Claude has thought here.
+  const thought = useMemo(() => view.messages.some((m) => m.blocks.some((b) => b.type === 'thinking' && b.thinking.trim() !== '')), [view.messages]);
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'o' || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      setSessionView(sessionId, nextView(viewOf(getPrefs(), sessionId), thought));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sessionId, thought]);
+
   // Files dropped anywhere on the conversation go to the composer.
   const composer = useRef<ComposerHandle>(null);
   const [dropping, setDropping] = useState(false);
@@ -913,6 +927,7 @@ export function Chat({
           {...(cwd ? { cwd } : {})}
           {...(home ? { home } : {})}
           {...(view.run ? { run: view.run } : {})}
+          thinking={thought}
           onRenamed={refresh}
           onForked={(id) => void branchSettings().then((next) => {
             // A branch is new work: it carries this session's settings, except Bypass.

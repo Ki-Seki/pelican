@@ -61,10 +61,15 @@ function segment(parts: Part[]): Segment[] {
 
 const FOLD_AFTER = 5;
 
-function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; running: boolean; verbose: boolean }) {
+/**
+ * A run of steps. Normal folds a long one, keeping its end in view; Thinking lists every step, one
+ * line each, with the thinking between them open; Verbose opens everything.
+ */
+function Steps({ parts, cwd, running, view }: { parts: Part[]; cwd?: string; running: boolean; view: ViewMode }) {
   const tools = parts.filter((p) => p.kind === 'tool').length;
   const [open, setOpen] = useState(false);
-  const fold = !verbose && !open && !running && parts.length > FOLD_AFTER;
+  const verbose = view === 'verbose';
+  const fold = view === 'normal' && !open && !running && parts.length > FOLD_AFTER;
   const shown = fold ? parts.slice(-2) : parts;
   return (
     <div className="my-1.5">
@@ -79,7 +84,7 @@ function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; 
         part.kind === 'tool' ? (
           <ToolCallView key={part.key} call={part.call} cwd={cwd} running={running} defaultOpen={verbose} />
         ) : part.kind === 'thinking' ? (
-          <Thinking key={part.key} text={part.text} defaultOpen={verbose} />
+          <Thinking key={part.key} text={part.text} defaultOpen />
         ) : null,
       )}
     </div>
@@ -110,34 +115,17 @@ const TurnHeading = () => <h6 className="sr-only">Claude said:</h6>;
 const AssistantTurn = memo(function AssistantTurn({
   item, cwd, running, view, stats,
 }: { item: Extract<Item, { kind: 'assistant' }>; cwd?: string; running: boolean; view: ViewMode; stats?: RunState['lastTurn'] }) {
-  const segments = useMemo(() => segment(item.parts), [item.parts]);
+  // Claude's thinking shows from the Thinking view on, as in Desktop.
+  const segments = useMemo(() => segment(view === 'normal' ? item.parts.filter((p) => p.kind !== 'thinking') : item.parts), [item.parts, view]);
   const texts = item.parts.filter((p): p is Extract<Part, { kind: 'text' }> => p.kind === 'text');
   const lastText = texts.at(-1);
-  const steps = item.parts.filter((p) => p.kind === 'tool').length;
-
-  if (view === 'summary') {
-    // Visuals Claude drew are part of the answer, so they stay with the reply.
-    const visuals = item.parts.filter((p): p is Extract<Part, { kind: 'tool' }> => p.kind === 'tool' && /(^|__)show_widget$/.test(p.call.name));
-    if (!lastText && !running && visuals.length === 0) {
-      return steps > 0 ? <div className="flex items-center gap-2 text-[12.5px] text-faint"><Layers className="size-3.5" />{steps} steps, no reply</div> : null;
-    }
-    return (
-      <div className="group/turn">
-        <TurnHeading />
-        {steps > 0 && <div className="flex items-center gap-2 text-[12px] text-faint"><Layers className="size-3" />{steps} step{steps === 1 ? '' : 's'}</div>}
-        {visuals.map((part) => <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} />)}
-        {lastText && <Markdown text={lastText.text} className="my-2" />}
-        {!running && <TurnFooter text={lastText?.text} timestamp={item.timestamp} stats={stats} />}
-      </div>
-    );
-  }
 
   return (
     <div className="group/turn">
       <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
-          <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} verbose={view === 'verbose'} />
+          <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} view={view} />
         ) : seg.kind === 'text' ? (
           <Markdown key={seg.key} text={seg.text} className="my-2" />
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
@@ -492,7 +480,7 @@ function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Reco
   }
 }
 
-function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: number }) {
+function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; since?: number; view: ViewMode }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -506,7 +494,8 @@ function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: 
     <div>
       {run.partial.map((block, i) => {
         if (block.type === 'text') return block.text ? <StreamingMarkdown key={i} text={block.text} className="my-2" /> : null;
-        if (block.type === 'thinking') return <Thinking key={i} text={block.thinking} live />;
+        // Normal says that Claude thinks; the other views show what, as it comes.
+        if (block.type === 'thinking') return <Thinking key={i} text={view === 'normal' ? '' : block.thinking} live defaultOpen />;
         const summary = describeTool(block.name, partialTarget(block), cwd);
         const Icon = summary.icon;
         return (
@@ -707,7 +696,7 @@ export function MessageList({
               <TriangleAlert className="size-4" /> {view.error}
             </div>
           )}
-          <div className={mode === 'summary' ? 'space-y-3' : 'space-y-4'}>
+          <div className="space-y-4">
             {items.map((item) => {
               switch (item.kind) {
                 case 'user':
@@ -726,7 +715,7 @@ export function MessageList({
                     />
                   );
                 case 'notice':
-                  return mode === 'summary' && item.tone === 'output' ? null : <Notice key={item.key} item={item} />;
+                  return <Notice key={item.key} item={item} />;
                 case 'compact':
                   return <Compacted key={item.key} summary={item.summary} />;
                 case 'day':
@@ -735,7 +724,7 @@ export function MessageList({
                   return null;
               }
             })}
-            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} {...(promptAt ? { since: promptAt } : {})} />}
+            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} view={mode} {...(promptAt ? { since: promptAt } : {})} />}
             {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />

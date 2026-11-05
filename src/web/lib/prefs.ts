@@ -88,8 +88,25 @@ export function saveSessionChoice(sessionId: string, settings: RunSettings): voi
   write(CHOICES_KEY, Object.fromEntries(kept));
 }
 
-export type ViewMode = 'summary' | 'normal' | 'verbose';
+/**
+ * How much of a conversation shows: Claude Desktop's transcript views, in its order. Normal folds
+ * the steps into one-line summaries and shows the replies whole; Thinking adds Claude's thinking;
+ * Verbose opens every step as well.
+ */
+export type ViewMode = 'normal' | 'thinking' | 'verbose';
 export type Theme = 'system' | 'light' | 'dark';
+
+export const VIEW_OPTIONS: ReadonlyArray<{ value: ViewMode; label: string; title: string }> = [
+  { value: 'normal', label: 'Normal', title: 'Steps folded into one line each, with Claude’s full replies' },
+  { value: 'thinking', label: 'Thinking', title: 'Steps folded, plus Claude’s thinking' },
+  { value: 'verbose', label: 'Verbose', title: 'Every step open, plus Claude’s thinking' },
+];
+
+/**
+ * A view as it was kept. Desktop dropped Summary, and a session set to it opens in Normal there,
+ * so here too: Pelican's own Summary goes the same way, and anything unknown is Normal.
+ */
+export const viewMode = (value: unknown): ViewMode => (value === 'thinking' || value === 'verbose' ? value : 'normal');
 
 /** How the app looks and behaves on this device. */
 export type Prefs = {
@@ -119,7 +136,26 @@ const DEFAULT_PREFS: Prefs = {
   sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false,
 };
 
-let prefs: Prefs = read(PREFS_KEY, DEFAULT_PREFS);
+/**
+ * The views kept from before, in today's names: Normal and Verbose stay as picked, Summary becomes
+ * Normal; a session's own view that is now the same as the default follows the default again.
+ */
+export function migrateViews(stored: Prefs): Prefs {
+  const view = viewMode(stored.view);
+  const sessionViews = Object.fromEntries(Object.entries(stored.sessionViews ?? {}).flatMap(([id, picked]) => {
+    const kept = viewMode(picked);
+    return kept === view ? [] : [[id, kept]];
+  }));
+  return { ...stored, view, sessionViews };
+}
+
+let prefs: Prefs = (() => {
+  const stored = read(PREFS_KEY, DEFAULT_PREFS);
+  const migrated = migrateViews(stored);
+  // Written back once, in today's names.
+  if (JSON.stringify(migrated) !== JSON.stringify(stored)) write(PREFS_KEY, migrated);
+  return migrated;
+})();
 const listeners = new Set<() => void>();
 
 export function getPrefs(): Prefs {
@@ -135,6 +171,18 @@ export function setPrefs(patch: Partial<Prefs>): void {
 
 /** The view a session opens in: its own when one was picked for it, else the default. */
 export const viewOf = (p: Prefs, sessionId: string | undefined): ViewMode => (sessionId && p.sessionViews?.[sessionId]) || p.view;
+
+/**
+ * The views a session offers, as Desktop's session menu does: Thinking only once Claude has
+ * thought in it (or when it is the view already).
+ */
+export const viewsFor = (thinking: boolean, current: ViewMode) => VIEW_OPTIONS.filter((option) => option.value !== 'thinking' || thinking || current === 'thinking');
+
+/** The view after `view`, as Ctrl+O steps through them in Desktop. */
+export function nextView(view: ViewMode, thinking: boolean): ViewMode {
+  const order = viewsFor(thinking, view).map((option) => option.value);
+  return order[(order.indexOf(view) + 1) % order.length] ?? 'normal';
+}
 
 /** A session's own view; picking the one the others open in makes it follow that one again. */
 export function setSessionView(sessionId: string, view: ViewMode): void {
