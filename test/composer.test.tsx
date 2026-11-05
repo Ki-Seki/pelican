@@ -13,15 +13,16 @@ beforeAll(() => {
 const { Composer } = await import('../src/web/components/Composer');
 const { setPrefs } = await import('../src/web/lib/prefs');
 const { loadDraft, saveDraft } = await import('../src/web/lib/drafts');
+const { addQuote } = await import('../src/web/lib/quote');
 
-function renderComposer(draftKey = 'chat') {
+function renderComposer(draftKey = 'chat', extra: { onSideChat?: (question: string) => void; side?: boolean; draft?: { text: string; key: number } } = {}) {
   const onSend = vi.fn();
   const view = render(
     <QueryClientProvider client={new QueryClient()}>
-      <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={() => {}} draftKey={draftKey} />
+      <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={() => {}} draftKey={draftKey} {...extra} />
     </QueryClientProvider>,
   );
-  return { onSend, box: screen.getByLabelText('Message Claude') as HTMLTextAreaElement, unmount: view.unmount };
+  return { onSend, box: screen.getByLabelText(extra.side ? 'Side question' : 'Message Claude') as HTMLTextAreaElement, unmount: view.unmount, rerender: view.rerender };
 }
 
 afterEach(() => {
@@ -80,5 +81,78 @@ describe('the message box', () => {
     expect(screen.getByAltText('shot.png').getAttribute('src')).toContain('api/uploads/up1');
     fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
     expect(onSend).toHaveBeenCalledWith('look', [expect.objectContaining({ id: 'up1' })], 'steer');
+  });
+});
+
+describe('quotes above the message box', () => {
+  it('show as chips, go above the words when sent, and each can be removed first', () => {
+    const { onSend, box } = renderComposer('q1');
+    act(() => {
+      addQuote('q1', '> Why CSS variables?');
+      addQuote('q1', 'src/styles/theme.css:2-3\n>   --bg: #ffffff;\n>   --fg: #111111;');
+      addQuote('q1', '> left out');
+    });
+    expect(screen.getByText('Why CSS variables?')).toBeTruthy();
+    expect(screen.getByText('theme.css:2-3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the quote left out' }));
+    fireEvent.change(box, { target: { value: 'And not a context?' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith(
+      '> Why CSS variables?\n\nsrc/styles/theme.css:2-3\n>   --bg: #ffffff;\n>   --fg: #111111;\n\nAnd not a context?',
+      [],
+      'steer',
+    );
+    expect(screen.queryByText('Why CSS variables?')).toBeNull();
+  });
+
+  it('can be sent alone, and are kept with the draft', () => {
+    vi.useFakeTimers();
+    try {
+      const first = renderComposer('q2');
+      act(() => addQuote('q2', '> The settings page already reads them.'));
+      first.unmount();
+      expect(loadDraft('q2')?.quotes).toEqual(['> The settings page already reads them.']);
+      const again = renderComposer('q2');
+      expect(screen.getByText('The settings page already reads them.')).toBeTruthy();
+      fireEvent.keyDown(again.box, { key: 'Enter', keyCode: 13 });
+      expect(again.onSend).toHaveBeenCalledWith('> The settings page already reads them.', [], 'steer');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('come back as chips with a message whose send failed', () => {
+    const { box } = renderComposer('q3', { draft: { text: '> a quote\n\nmy words', key: 1 } });
+    expect(box.value).toBe('my words');
+    expect(screen.getByText('a quote')).toBeTruthy();
+  });
+});
+
+describe('/btw', () => {
+  it('asks in the side chat, with the quotes, instead of sending here', () => {
+    const onSideChat = vi.fn();
+    const { onSend, box } = renderComposer('b1', { onSideChat });
+    act(() => addQuote('b1', '> the toggle'));
+    fireEvent.change(box, { target: { value: '/btw why here?' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSideChat).toHaveBeenCalledWith('> the toggle\n\nwhy here?');
+    expect(onSend).not.toHaveBeenCalled();
+    expect(box.value).toBe('');
+    // On its own it is in the / list first, as a command: Enter takes it, the next Enter opens the side chat.
+    fireEvent.change(box, { target: { value: '/btw' } });
+    expect(screen.getByRole('option', { name: /\/btw/ })).toBeTruthy();
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(box.value).toBe('/btw ');
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSideChat).toHaveBeenLastCalledWith('');
+  });
+
+  it('in the side chat itself only says what the rest is', () => {
+    const { onSend, box } = renderComposer('b2', { side: true });
+    expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Permission mode' })).toBeNull();
+    fireEvent.change(box, { target: { value: '/btw what does it read?' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith('what does it read?', [], 'steer');
   });
 });
