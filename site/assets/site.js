@@ -8,7 +8,6 @@ const onScroll = () => top?.classList.toggle('scrolled', scrollY > 8);
 addEventListener('scroll', onScroll, { passive: true });
 onScroll();
 
-// Comments (after #) are not copied, and neither are blank lines.
 for (const block of document.querySelectorAll('.cmd, pre.code, .docs pre')) {
   const button = document.createElement('button');
   button.className = 'copy';
@@ -16,10 +15,7 @@ for (const block of document.querySelectorAll('.cmd, pre.code, .docs pre')) {
   button.setAttribute('aria-label', 'Copy');
   button.innerHTML = COPY;
   button.addEventListener('click', async () => {
-    const text = block.querySelector('code').innerText.split('\n')
-      .map((line) => line.replace(/\s+#\s.*$/, '').trimEnd())
-      .filter((line) => line && !line.startsWith('#'))
-      .join('\n');
+    const text = block.querySelector('code').innerText.trim();
     try {
       await navigator.clipboard.writeText(text);
     } catch {

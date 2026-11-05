@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A security problem
+    url: https://github.com/Ki-Seki/pelican/security/advisories/new
+    about: Report it privately, please, not in an issue.
+  - name: A question
+    url: https://ki-seki.github.io/pelican/docs.html#faq
+    about: The docs answer the common ones.

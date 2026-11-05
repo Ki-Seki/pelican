@@ -21,15 +21,23 @@ To work without touching your own sessions, build once and use the demo:
 ## Before you send a change
 
 ```bash
-npm test             # unit tests (Vitest)
+npm test
 npm run typecheck
 npm run build
 ```
 
-Check what you changed in a browser, at phone size too. `node scripts/shot.mjs <url> <out.png>`
-takes a screenshot with headless Chrome (set `CHROME` if it is not in the usual place), and
+The tests never see your own Claude Code sessions or Pelican sign-in: `test/setup.ts` points them
+at temporary folders before anything reads the environment, and keeps your git settings out of the
+repositories they make.
+
+Check what you changed in a browser, at phone size too. `node scripts/smoke.mjs` opens the built
+app with made-up sessions in headless Chrome, every session and sheet, on a phone and wide, light
+and dark, and fails on any page error, console error or failed request; CI runs it, and runs it on
+the site too (`node scripts/site.mjs _site && node scripts/smoke.mjs _site`).
+`node scripts/shot.mjs <url> <out.png>` takes a screenshot, and
 `node scripts/e2e-live.mjs <link> <folder> <out>` drives one real turn through the app against a
-running Pelican (the link it printed, with the token).
+running Pelican (the link it printed, with the token). Set `CHROME` if Chrome is not in the usual
+place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 
 ## Where things are
 
@@ -44,18 +52,23 @@ running Pelican (the link it printed, with the token).
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, screenshots and icons |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots and icons |
 
 ## Releasing
 
 1. Bump the version (`npm version <x.y.z> --no-git-tag-version`) and add its section to
    `CHANGELOG.md`; commit and push.
-2. `gh release create v<x.y.z> --title v<x.y.z> --notes-file <the changelog section>`.
+2. Tag that very commit, not whatever is newest by then:
+   `git tag v<x.y.z> <commit>` and `git push origin v<x.y.z>`.
+3. `gh release create v<x.y.z> --verify-tag --title v<x.y.z> --notes-file <the changelog section>`,
+   with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
 The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
 publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the
 `npm` environment, for a `v*` tag, may publish `pelican-cc`. The package is attached to the
-release too.
+release too. A release candidate goes to npm under the `next` tag, and a fix for an older line
+(0.2.4 after 0.3.0) under `latest-0.2`; only the newest version becomes `latest`, what
+`npm install -g pelican-cc` installs.
 
 ## Style
 

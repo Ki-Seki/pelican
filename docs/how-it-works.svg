@@ -75,12 +75,12 @@
   <text class="xs mono t-teal" x="448" y="227" text-anchor="middle">REST · WebSocket</text>
   <rect class="pill-teal" x="360" y="248" width="176" height="26" rx="13"/>
   <text class="xs mono t-teal" x="448" y="265" text-anchor="middle">Claude Agent SDK</text>
-  <text class="s t2" x="360" y="304">password · host and origin checks</text>
+  <text class="s t2" x="360" y="304">sign-in · host and origin checks</text>
 
   <!-- Claude Code -->
   <rect class="card" x="672" y="128" width="232" height="196" rx="12"/>
   <text class="h1 t1" x="694" y="162">Claude Code</text>
-  <text class="b t2" x="694" y="184">the one you already use</text>
+  <text class="b t2" x="694" y="184">with your own setup</text>
   <rect class="tag" x="694" y="210" width="86" height="26" rx="6"/>
   <text class="xs t2" x="737" y="227" text-anchor="middle">your login</text>
   <rect class="tag" x="788" y="210" width="94" height="26" rx="6"/>
