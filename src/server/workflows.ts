@@ -655,17 +655,18 @@ export type WorkflowAnswer = { workflow: Workflow; tag: string };
 const tagOf = (value: unknown) => `"${createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 27)}"`;
 
 /**
- * Whether a run nothing has said the end of is still at work. Its agents writing now say so. A
- * Claude Code that found it in the session without a record of its end wrote an orphan's notice:
- * then only the run's own agents say it lives on (the Claude Code that started it, still at it,
- * writes after that notice), not that some Claude Code has the session open, as the one that wrote
- * the notice does. Without that notice, a Claude Code with the session open may be running it.
+ * Whether a run nothing has said the end of is still at work. Its agents writing now say so.
+ * Without word of its end, a Claude Code with the session open may be running it. A Claude Code
+ * that found it in the session without a record of its end wrote an orphan's notice: then it runs
+ * only while a Claude Code has the session open, and that alone is not enough, as the one that wrote
+ * the notice has it open too: its agents went on after the notice (the Claude Code that started it,
+ * still at it), or write now.
  */
 async function stillRunning(sessionId: string, lastAt: number, orphan: Notice | undefined): Promise<boolean> {
   const quiet = Date.now() - lastAt;
-  if (quiet < ACTIVE_MS) return true;
-  if (orphan) return orphan.at !== undefined && lastAt > orphan.at && quiet < QUIET_MS;
-  return (await liveProcesses()).has(sessionId);
+  if (!orphan) return quiet < ACTIVE_MS || (await liveProcesses()).has(sessionId);
+  const wentOn = quiet < ACTIVE_MS || (orphan.at !== undefined && lastAt > orphan.at && quiet < QUIET_MS);
+  return wentOn && (await liveProcesses()).has(sessionId);
 }
 
 /**

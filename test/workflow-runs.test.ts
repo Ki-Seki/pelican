@@ -127,7 +127,25 @@ describe('how a run nothing said the end of stands', () => {
     await transcript(id, [said('Review it'), call('toolu_g'), launched('toolu_g', runId, 'w3'), orphan('toolu_g', runId, 'w3')], Date.now() - 20 * MIN);
     await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
     await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5 * MIN));
+    elsewhere.add(id);
     expect((await workflowView(id, 'toolu_g'))!.workflow.status).toBe('running');
+  });
+
+  it('one whose agents went on after that notice is stopped once no Claude Code has the session open', async () => {
+    // The Claude Code that started it died without a word of its own after the notice was written.
+    const id = newSession();
+    const runId = 'wf_2222ffff-222';
+    await transcript(id, [said('Review it'), call('toolu_d'), launched('toolu_d', runId, 'w6'), orphan('toolu_d', runId, 'w6')], Date.now() - 30 * MIN);
+    await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
+    await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5 * MIN));
+    expect((await workflowView(id, 'toolu_d'))!.workflow.status).toBe('stopped');
+    // Even with its agents writing just now.
+    await appendFile(path.join(folder(id), `subagents/workflows/${runId}/agent-a1.jsonl`), `${toolStep('a1', 2, 'a1-1r', Date.now() - 1000).join('\n')}\n`);
+    const now = (await workflowView(id, 'toolu_d'))!.workflow;
+    expect(now.agents[0]!.lastProgressAt).toBeGreaterThan(Date.now() - 60_000);
+    expect(now.status).toBe('stopped');
+    elsewhere.add(id);
+    expect((await workflowView(id, 'toolu_d'))!.workflow.status).toBe('running');
   });
 
   it('one whose agents went on after that notice and then fell silent for longer than Claude Code lets them is stopped', async () => {
