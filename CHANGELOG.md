@@ -83,6 +83,9 @@ from every app.
   description of it; edits, other tools, other commands, questions and plans open the session.
 - Notifications and check-ins keep emoji whole, also those made of several pictures, and still
   leave out characters that hide text or turn it around.
+- Export as Markdown has the conversation as it shows here: `!` commands with their output and
+  `/` commands as typed, without the tags, notes and summaries Claude Code and Pelican add for
+  Claude, such as a side chat's note with each question.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
 - A finished `!` command shows the end of its output, as it did while it ran; Show all shows the
