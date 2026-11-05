@@ -139,7 +139,8 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   if (shown) {
     return (
       <div className="px-1 pb-4">
-        {diff.isLoading ? <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div> : <UnifiedDiff diff={diff.data ?? ''} path={shown} cwd={cwd} />}
+        {/* Each file's diff starts fresh: a comment being written on one never moves to another. */}
+        {diff.isLoading ? <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div> : <UnifiedDiff key={`${cwd}\0${step.scope ?? ''}\0${shown}`} diff={diff.data ?? ''} path={shown} cwd={cwd} />}
       </div>
     );
   }

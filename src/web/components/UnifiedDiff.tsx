@@ -2,7 +2,7 @@ import { useId, useMemo, useRef, useState } from 'react';
 
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
-import { type CodeLine, commentKey, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
+import { type CodeLine, commentKey, type DiffLine, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
 import { CommentBox, CommentNote, useSendComments } from './Comments';
 import { useLinePick } from './line-pick';
 
@@ -12,9 +12,18 @@ const isCode = (line: { kind: string }): line is CodeLine => line.kind === 'add'
  * A unified diff, one row per line, wrapped to the screen, with the line numbers. A tap on a line
  * (or Enter on the one the arrow keys reach) opens a comment on it for Claude, as the diff views of
  * Claude Code on the web and Claude Desktop do; the comments go into the message being written.
+ * A diff read again can come back empty (the file was committed) or no longer empty (Claude edited
+ * it): what shows in place of the lines is decided here, and the lines have a component of their own.
  */
 export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; cwd: string }) {
   const lines = useMemo(() => parseDiff(diff), [diff]);
+  if (!diff.trim()) return <div className="px-3 py-6 text-center text-[13px] text-faint">No changes in this file</div>;
+  if (/^Binary files /m.test(diff)) return <div className="px-3 py-6 text-center text-[13px] text-faint">A binary file changed</div>;
+  if (lines.length === 0) return <pre className="px-3 py-6 font-mono text-[12px] whitespace-pre-wrap text-faint">{diff}</pre>;
+  return <DiffLines lines={lines} path={path} cwd={cwd} />;
+}
+
+function DiffLines({ lines, path, cwd }: { lines: DiffLine[]; path: string; cwd: string }) {
   const all = useComments(cwd);
   const comments = useMemo(() => all.filter((c) => c.path === path), [all, path]);
   // What is typed follows a tap on another line, so a missed line costs nothing.
@@ -24,17 +33,13 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
   const box = useRef<HTMLDivElement>(null);
   const id = useId();
   const sendAll = useSendComments();
-
-  if (!diff.trim()) return <div className="px-3 py-6 text-center text-[13px] text-faint">No changes in this file</div>;
-  if (/^Binary files /m.test(diff)) return <div className="px-3 py-6 text-center text-[13px] text-faint">A binary file changed</div>;
-  if (lines.length === 0) return <pre className="px-3 py-6 font-mono text-[12px] whitespace-pre-wrap text-faint">{diff}</pre>;
+  const pick = useLinePick((line: CodeLine) => setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' })));
 
   const digits = String(Math.max(...lines.map((line) => (isCode(line) ? lineNumber(line) : 0)))).length;
   const onLine = (line: CodeLine) => comments.filter((c) => commentKey(c) === lineKey(line) && c.code === line.text);
   const outdated = comments.filter((c) => !lines.some((line) => isCode(line) && commentKey(c) === lineKey(line) && c.code === line.text));
   const codeAt = lines.flatMap((line, i) => (isCode(line) ? [i] : []));
 
-  const pick = useLinePick((line: CodeLine) => setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' })));
   const save = (line: CodeLine, note: string, now: boolean) => {
     setComments(cwd, [...all, { id: newId(), path, kind: line.kind, line: lineNumber(line), code: line.text, note: note.trim() }]);
     setEditing(undefined);

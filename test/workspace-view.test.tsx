@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { GitStatus, SessionChanges } from '../src/shared/protocol';
 
 const CWD = '/code/app';
-const server = vi.hoisted(() => ({ asked: [] as string[] }));
+const server = vi.hoisted(() => ({ asked: [] as string[], diff: '' }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -28,7 +28,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         return scope === 'base' ? since : status;
       },
       changes: async () => changes,
-      gitDiff: async () => '',
+      gitDiff: async () => server.diff,
       turnDiff: async (_id: string, turn: string, path: string) => {
         server.asked.push(`turn ${turn} ${path}`);
         return `--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,1 @@\n+:root {}\n`;
@@ -52,10 +52,13 @@ beforeAll(() => {
 });
 
 const { Workspace } = await import('../src/web/components/Workspace');
+const { UnifiedDiff } = await import('../src/web/components/UnifiedDiff');
+const { WorkspaceChanges } = await import('../src/web/components/WorkspaceChanges');
 
 afterEach(() => {
   cleanup();
   server.asked = [];
+  server.diff = '';
   history.replaceState(null, '', '/');
 });
 
@@ -103,5 +106,46 @@ describe('what Changes shows', () => {
     expect(onClose).toHaveBeenCalled();
     // What is behind the view takes nothing while it is open.
     expect(screen.getByRole('region', { name: 'Changes and files' }).closest('#root')).toBeNull();
+  });
+});
+
+describe('a diff read again while it is open', () => {
+  const DIFF = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n';
+
+  it('says "No changes in this file" once its change is committed, and shows the lines when Claude edits it again', () => {
+    const view = render(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByRole('group', { name: 'Changes to src/a.ts' })).toBeTruthy();
+    view.rerender(<UnifiedDiff diff="" path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('No changes in this file')).toBeTruthy();
+    view.rerender(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('const b = 3;', { exact: false })).toBeTruthy();
+    view.rerender(<UnifiedDiff diff={'Binary files a/logo.png and b/logo.png differ\n'} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('A binary file changed')).toBeTruthy();
+  });
+
+  it('in Changes, as when the window gets the focus back after a commit: the view stays and says so', async () => {
+    server.diff = DIFF;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent) => errors.push(event.error);
+    window.addEventListener('error', onError);
+    try {
+      const status = { data: { repo: true as const, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified' as const }] }, isLoading: false, isFetching: false, refetch: () => undefined };
+      render(
+        <QueryClientProvider client={client}>
+          <WorkspaceChanges cwd={CWD} sessionId="s1" step={{ tab: 'changes', path: 'src/a.ts' }} looking busy={false} status={status} commentsIn={new Map()} go={() => {}} setScope={() => {}} />
+        </QueryClientProvider>,
+      );
+      await screen.findByText('const b = 3;', { exact: false });
+      server.diff = '';
+      await act(() => client.refetchQueries({ queryKey: ['diff'] }));
+      expect(await screen.findByText('No changes in this file')).toBeTruthy();
+      server.diff = DIFF;
+      await act(() => client.refetchQueries({ queryKey: ['diff'] }));
+      expect(await screen.findByText('const b = 3;', { exact: false })).toBeTruthy();
+    } finally {
+      window.removeEventListener('error', onError);
+    }
+    expect(errors).toEqual([]);
   });
 });
