@@ -459,7 +459,7 @@ async function subagentFiles(dir: string, project: string, session: string, foun
   }
   if (depth > 0 || !list.some((e) => e.isDirectory() && e.name === 'workflows')) return;
   const runs = await listingSubagents(() => entries(path.join(dir, 'workflows')));
-  await Promise.all(runs.filter((r) => r.isDirectory() && /^[\w.-]{1,160}$/.test(r.name))
+  await Promise.all(runs.filter((r) => r.isDirectory() && /^[\w-][\w.-]{0,159}$/.test(r.name))
     .map((r) => subagentFiles(path.join(dir, 'workflows', r.name), project, session, found, 1)));
 }
 
