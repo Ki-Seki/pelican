@@ -37,6 +37,10 @@ export type CommandRun = {
   readonly result: Promise<ShellResult>;
   /** Ends it and everything it started, the whole process group, not just the shell. */
   stop: () => void;
+  /** Whether anything it started still runs (its process group; on Windows, its shell). */
+  alive: () => boolean;
+  /** Ends at once what is left of a command asked to stop, which did not: for when Pelican exits. */
+  kill: () => void;
 };
 
 /**
@@ -133,7 +137,15 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
   });
   // Not waited for: what it left running exits on its own, or with the server.
   child.unref();
-  return { result, stop: () => end('stop') };
+  return {
+    result,
+    stop: () => end('stop'),
+    alive: () => (groups && child.pid !== undefined ? running(child.pid) : child.exitCode === null && child.signalCode === null),
+    // Only one that was asked to end: what a finished command left in the background runs on.
+    kill: () => {
+      if (endedBy) signal('SIGKILL');
+    },
+  };
 }
 
 /** A command run to its end, for callers that only need the result. */

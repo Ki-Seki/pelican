@@ -141,8 +141,22 @@ export function stopShell(sessionId: string, id: string): boolean {
 
 let shuttingDown = false;
 
-/** Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. */
-export function stopAllShells(): void {
+/** How long the commands still running get to end when Pelican shuts down, before they are made to. */
+const SHUTDOWN_GRACE_MS = 1500;
+/** How often it looks whether they have. */
+const SHUTDOWN_LOOK_MS = 50;
+
+/**
+ * Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. Each
+ * is asked to end (SIGTERM: a dev server or a test runner tidies up), and given a moment; then what
+ * is left of any of them is made to (SIGKILL), while Pelican is still there to do it. Settles once
+ * nothing of them runs.
+ */
+export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS): Promise<void> {
   shuttingDown = true;
-  for (const entries of bySession.values()) for (const entry of entries.values()) if (!entry.shell.done) entry.run.stop();
+  const running = [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
+  for (const entry of running) entry.run.stop();
+  const until = Date.now() + graceMs;
+  while (running.some((entry) => entry.run.alive()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
+  for (const entry of running) entry.run.kill();
 }
