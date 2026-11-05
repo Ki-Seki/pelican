@@ -1,5 +1,5 @@
 import { SquarePen, X } from 'lucide-react';
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
 import { api, isDemoNote, isUnreachable } from '../lib/api';
@@ -81,8 +81,16 @@ export type SideChatState = {
   /** Opens it; a question is asked there at once. */
   show: (question?: string) => void;
   close: () => void;
+  /**
+   * Puts it away for what is asked for in its place, then does that: a file named in the
+   * conversation or in an answer, a turn's changes. Beside the conversation at once; a sheet first
+   * plays its way out, as it holds the rest of the page until it has gone.
+   */
+  makeWay: (then: () => void) => void;
   /** A question to ask as it opens, new each time (`key`). */
   question?: { text: string; key: number };
+  /** In the sheet, to know when the sheet has gone. */
+  sheet: RefObject<HTMLDivElement | null>;
 };
 
 /**
@@ -110,6 +118,16 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
   const close = useCallback(() => toggle(false), [toggle]);
   const isOpen = available && open;
   const docked = isOpen && beside;
+
+  const sheet = useRef<HTMLDivElement>(null);
+  const shown = useRef({ isOpen, docked });
+  shown.current = { isOpen, docked };
+  const makeWay = useCallback((then: () => void) => {
+    const dialog = shown.current.isOpen && !shown.current.docked ? sheet.current?.closest('dialog') : null;
+    toggle(false);
+    if (dialog?.open) dialog.addEventListener('close', () => then(), { once: true });
+    else then();
+  }, [toggle]);
 
   useEffect(() => {
     if (open) return;
@@ -144,7 +162,7 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
     if (!paneIsOpen) setPaneOpen(true);
   }, [paneIsOpen, setPaneOpen, dockable, docked, toggle]);
 
-  return { open: isOpen, docked, show, close, ...(question ? { question } : {}) };
+  return { open: isOpen, docked, show, close, makeWay, sheet, ...(question ? { question } : {}) };
 }
 
 const pendingMessage = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now(), pending: true });
@@ -344,7 +362,7 @@ export function SideChat({
         </div>
       )}
     >
-      <div className="-mx-2 -mb-2 flex h-full min-h-0 flex-col">{body}</div>
+      <div ref={state.sheet} className="-mx-2 -mb-2 flex h-full min-h-0 flex-col">{body}</div>
     </Sheet>
   );
 }

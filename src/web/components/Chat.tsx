@@ -558,8 +558,10 @@ export function Chat({
   const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
-  // A side chat has none of its own; Changes and files and it take turns beside the conversation.
+  // A side chat has none of its own; Changes and files and it take turns beside the conversation,
+  // one on screen at a time.
   const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace);
+  const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
@@ -657,16 +659,18 @@ export function Chat({
     if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
     if (!busy && sessionId) void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
   }, [busy, cwd, sessionId, queryClient]);
-  // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
+  // Paths in the conversation, and in a side chat's answers, open their file in Changes and files,
+  // at their line; a turn's line its changes. The side chat makes way first, wherever it is.
   const { show: showWorkspace } = workspace;
+  const { makeWay } = side;
   // Line comments waiting to go with the next message from this chat.
   const waitingComments = useComments(viewId);
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
-    openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
-    openTurn: (uuid) => showWorkspace({ tab: 'changes', scope: uuid }),
+    openFile: (path, line) => makeWay(() => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) })),
+    openTurn: (uuid) => makeWay(() => showWorkspace({ tab: 'changes', scope: uuid })),
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
-  } : undefined, [cwd, showWorkspace, turnChanges]);
+  } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
 
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
@@ -831,10 +835,10 @@ export function Chat({
           <button
             type="button"
             aria-label="Changes and files"
-            aria-pressed={workspace.dockable ? workspace.open && !side.docked : undefined}
+            aria-pressed={workspace.dockable ? paneShown : undefined}
             title={`Changes and files (${PANE_KEYS})`}
-            onClick={() => workspace.setOpen(!workspace.open)}
-            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.docked && !side.docked ? 'bg-hover text-fg' : 'text-muted'}`}
+            onClick={() => (paneShown ? workspace.setOpen(false) : makeWay(() => workspace.show()))}
+            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.dockable && paneShown ? 'bg-hover text-fg' : 'text-muted'}`}
           >
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
@@ -918,9 +922,9 @@ export function Chat({
             <NoteText text={sendError.text} />
           </Notice>
         )}
-        {waitingComments.length > 0 && !workspace.open && (
+        {waitingComments.length > 0 && !paneShown && (
           <div className="mx-auto mb-2 flex max-w-3xl">
-            <button type="button" onClick={() => workspace.show({ tab: 'changes' })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
+            <button type="button" onClick={() => makeWay(() => workspace.show({ tab: 'changes' }))} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
               <MessageSquare className="size-3.5 shrink-0 text-faint" />
               <span className="truncate">{waitingComments.length === 1 ? '1 comment goes with your next message' : `${waitingComments.length} comments go with your next message`}</span>
             </button>
@@ -965,7 +969,7 @@ export function Chat({
 
       {cwd && (
         <Workspace
-          open={workspace.open && !(side.docked && workspace.dockable)}
+          open={paneShown}
           docked={workspace.docked}
           busy={busy && permissions.length === 0}
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
