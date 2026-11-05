@@ -81,9 +81,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   installs the exact dependency tree CI tested, with integrity hashes, and the Agent SDK, with the
   Claude Code it bundles, is pinned to one version.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
-  Claude Code's settings into the launchd agent or systemd unit (readable only by you), never a
-  variable whose name says it is a key, a token or a password; its log never holds the sign-in
-  link.
+  Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
+  when the file was there before. It never writes a variable whose name says it is a key, a token,
+  a password or headers, nor an address with a user name or password in it; its log never holds
+  the sign-in link.
 
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them. It stores uploads, push notification keys and subscriptions, the folders you trusted
