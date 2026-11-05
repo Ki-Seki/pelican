@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, Plus, Search, Settings, X } from 'lucide-react';
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { type Entry, fold, foldKey, single } from '../lib/fold';
-import { dayGroup, relativeTime } from '../lib/format';
+import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { defaultStart, type Start } from '../lib/start';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
@@ -69,15 +69,30 @@ function openHere(e: React.MouseEvent, id: string, onOpen: (id: string) => void)
   onOpen(id);
 }
 
+/** What a row is called for a screen reader: its title, state and age, not every word on it. */
+function rowName(session: SessionSummary, unread: boolean, showProject: boolean): string {
+  return [
+    session.title,
+    statusLabel(session.status, session.runningIn),
+    unread ? 'new activity' : '',
+    session.archived ? 'archived' : '',
+    showProject ? (session.scratch ? 'scratch' : session.project) : '',
+    timeAgo(session.lastActivity),
+  ].filter(Boolean).join(', ');
+}
+
 /** The open session: a bar at the row's edge as well as the tint, which alone is too faint to tell. */
 const OpenMark = () => <span aria-hidden className="absolute inset-y-2.5 left-0 w-[3px] rounded-full bg-fg" />;
 
 type RowProps = { session: SessionSummary; selected: boolean; unread: boolean; showProject: boolean; onOpen: (id: string) => void };
 
 const DetailedRow = memo(function DetailedRow({ session, selected, unread, showProject, onOpen }: RowProps) {
+  const preview = useId();
   return (
     <a
       href={sessionHref(session.id)}
+      aria-label={rowName(session, unread, showProject)}
+      aria-describedby={session.preview ? preview : undefined}
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       className={`relative block rounded-xl px-3 py-2.5 transition-colors ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
@@ -88,7 +103,7 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
         <div className={`line-clamp-2 min-w-0 flex-1 text-[15px] leading-snug ${unread ? 'font-semibold' : ''}`}>{session.title}</div>
         <span className="shrink-0 pt-0.5 text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
       </div>
-      {session.preview && <div className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
+      {session.preview && <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
       <div className="mt-1 flex items-center gap-2 text-[12.5px] text-muted">
         <StatusBadge status={session.status} runningIn={session.runningIn} />
         {showProject && <Where session={session} />}
@@ -107,6 +122,7 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
   return (
     <a
       href={sessionHref(session.id)}
+      aria-label={rowName(session, unread, showProject)}
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       title={statusLabel(session.status, session.runningIn) || undefined}
@@ -133,7 +149,9 @@ const COMMIT = 0.4;
  * button stays showing. With a mouse or the keyboard the action is a button on the row, shown on
  * hover or focus.
  */
-function Swipeable({ archived, compact, selected, onAction, children }: {
+function Swipeable({ name, archived, compact, selected, onAction, children }: {
+  /** The session's title, so each row's button says which session it acts on. */
+  name: string;
   archived: boolean;
   compact: boolean;
   selected: boolean;
@@ -246,7 +264,7 @@ function Swipeable({ archived, compact, selected, onAction, children }: {
         <button
           type="button"
           data-row-action
-          aria-label={label}
+          aria-label={`${label}: ${name}`}
           title={label}
           onClick={onAction}
           className={`absolute right-1.5 hidden size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg pointer-fine:grid ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'} ${selected ? 'bg-chip' : 'bg-hover'}`}
@@ -261,7 +279,7 @@ function Swipeable({ archived, compact, selected, onAction, children }: {
 const ListRow = memo(function ListRow({ session, compact, onArchive, ...row }: RowProps & { compact: boolean; onArchive: (session: SessionSummary, archived: boolean) => void }) {
   const Row = compact ? CompactRow : DetailedRow;
   return (
-    <Swipeable archived={Boolean(session.archived)} compact={compact} selected={row.selected} onAction={() => onArchive(session, !session.archived)}>
+    <Swipeable name={session.title} archived={Boolean(session.archived)} compact={compact} selected={row.selected} onAction={() => onArchive(session, !session.archived)}>
       <Row session={session} {...row} />
     </Swipeable>
   );
@@ -543,12 +561,13 @@ export function SessionList({
           </button>
         </div>
         <div className="mt-3 flex items-center gap-1">
-        <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-chip pl-3 pointer-fine:h-10">
+        <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-chip pl-3 focus-within:ring-1 focus-within:ring-faint pointer-fine:h-10">
           <Search className="size-4 shrink-0 text-faint" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search sessions"
+            aria-label="Search sessions"
             className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-faint"
           />
           {query && (

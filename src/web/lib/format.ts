@@ -13,6 +13,19 @@ export function relativeTime(ms: number, now = Date.now()): string {
   return date.toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short' });
 }
 
+/** The same in words, as a screen reader should say it: "3 minutes ago", "2 days ago", "March 4". */
+export function timeAgo(ms: number, now = Date.now()): string {
+  const diff = Math.max(0, now - ms);
+  const ago = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'} ago`;
+  if (diff < MINUTE) return 'just now';
+  if (diff < HOUR) return ago(Math.floor(diff / MINUTE), 'minute');
+  if (diff < DAY) return ago(Math.floor(diff / HOUR), 'hour');
+  if (diff < 7 * DAY) return ago(Math.floor(diff / DAY), 'day');
+  const date = new Date(ms);
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return date.toLocaleDateString('en', sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 const startOfDay = (ms: number) => {
   const d = new Date(ms);
   d.setHours(0, 0, 0, 0);
