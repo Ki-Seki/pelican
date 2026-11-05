@@ -75,6 +75,14 @@ export default defineConfig({
     outDir: '../../dist/web',
     emptyOutDir: true,
     target: 'es2022',
+    rolldownOptions: {
+      output: {
+        // What the session list needs comes in one file. Left to itself, Rolldown moves what the
+        // list shares with a part loaded inside a lazily loaded one (the usage page in Settings, the
+        // tabs of Changes and files in the conversation) into a second file the list waits for too.
+        codeSplitting: { groups: [{ name: 'index', tags: ['$initial'] }] },
+      },
+    },
   },
   server: {
     port: 5173,
