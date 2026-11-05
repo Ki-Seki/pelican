@@ -62,10 +62,9 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
 
 ## What it does
 
-- **Every session, wherever you started it.** The terminal, Claude Desktop, your editor: each
-  session is there, live while it runs, with its whole history back past every compaction. When
-  another app is working on one or waits for you there, Pelican says which app; once it is idle,
-  continue it here.
+- **Every session, wherever you started it.** Live while it runs, with its whole history back past
+  every compaction. When another app is working on one, or waits for you there, Pelican says which
+  app; once it is idle, continue it here.
 - **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
   works, `!` commands, `/` commands and skills, `@` files, every model and permission mode, rewind
   and branch, subagents and background tasks, MCP servers and usage limits.
