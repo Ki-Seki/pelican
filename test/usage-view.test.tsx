@@ -51,3 +51,10 @@ describe('the usage page', () => {
     expect(tile.textContent).toContain('on Oct 1');
   });
 });
+
+describe('the usage page’s note on counting', () => {
+  it('says that Claude Code’s /stats counts each content block, so its totals are higher', async () => {
+    page();
+    expect(await screen.findByText(/each reply counted once\. Claude Code’s \/stats counts each content block of a reply, so its totals are higher\./)).toBeTruthy();
+  });
+});
