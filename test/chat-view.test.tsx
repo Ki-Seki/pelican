@@ -166,6 +166,50 @@ describe('a prompt', () => {
 const tool = (name: string, input: Record<string, unknown>, content?: string, isError = false, extra: Partial<ToolCall> = {}): ToolCall => ({
   id: 't', name, input, ...(content !== undefined ? { result: { type: 'tool_result', tool_use_id: 't', content, ...(isError ? { is_error: true } : {}) } } : {}), ...extra,
 });
+const REJECT = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+
+describe('what you decided stays visible', () => {
+  it('a refused command says so, with your note, not as a failure', () => {
+    render(<ToolCallView call={tool('Bash', { command: 'docker volume rm pg', description: 'Remove the volume' }, `${REJECT} To tell you how to proceed, the user said:\nNever remove volumes.`, true)} running={false} />);
+    expect(screen.getByText('denied')).toBeTruthy();
+    expect(screen.queryByText('failed')).toBeNull();
+    expect(screen.getByText('Never remove volumes.')).toBeTruthy();
+  });
+
+  it('a refused edit counts no changed lines; a failed one says failed', () => {
+    const edit = { file_path: '/p/a.ts', old_string: 'a', new_string: 'b\nc' };
+    const { container } = render(<ToolCallView call={tool('Edit', edit, `${REJECT} STOP what you are doing.`, true)} running={false} />);
+    expect(container.textContent).not.toMatch(/\+2/);
+    cleanup();
+    const failed = render(<ToolCallView call={tool('Edit', edit, '<tool_use_error>String to replace not found in file.</tool_use_error>', true)} running={false} />);
+    expect(screen.getByText('failed')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /a\.ts/ }));
+    expect(failed.container.textContent).toContain('String to replace not found in file.');
+    expect(failed.container.textContent).not.toContain('<tool_use_error>');
+  });
+
+  it('your answers show under Claude’s questions', () => {
+    const questions = [{ question: 'Which database?', options: [] }, { question: 'Which environments?', options: [] }];
+    render(<ToolCallView call={tool('AskUserQuestion', { questions }, 'Your questions have been answered: "Which database?"="Postgres", "Which environments?"="dev, staging" notes: not production yet. You can now continue with these answers in mind.')} running={false} />);
+    expect(screen.getByText('Postgres')).toBeTruthy();
+    expect(screen.getByText('dev, staging')).toBeTruthy();
+    expect(screen.getByText('not production yet')).toBeTruthy();
+    cleanup();
+    render(<ToolCallView call={tool('AskUserQuestion', { questions }, 'The user chose not to answer.', true)} running={false} />);
+    expect(screen.getByText('Not answered')).toBeTruthy();
+  });
+
+  it('a plan says whether you approved it or sent it back, and what you said', () => {
+    const plan = { plan: '## Plan\n\n1. Drop the old tables.' };
+    render(<ToolCallView call={tool('ExitPlanMode', plan, `${REJECT} To tell you how to proceed, the user said:\nKeep the old tables for a week.`, true)} running={false} />);
+    expect(screen.getByText('Plan · Sent back')).toBeTruthy();
+    expect(screen.getByText('Keep the old tables for a week.')).toBeTruthy();
+    cleanup();
+    render(<ToolCallView call={tool('ExitPlanMode', plan, 'User has approved your plan. You can now start coding.')} running={false} />);
+    expect(screen.getByText('Plan · Approved')).toBeTruthy();
+  });
+});
+
 describe('tool output', () => {
   it('shows without escape codes', () => {
     const { container } = render(<ToolCallView call={tool('Bash', { command: 'npm test' }, '\u001b[32m✓\u001b[39m passed\rdone')} running={false} defaultOpen />);

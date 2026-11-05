@@ -5,13 +5,18 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useSessionId } from '../lib/session-context';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
-import { buildItems, cleanOutput, resultImages, resultText, type ToolCall } from '../lib/turns';
+import { answersOf, buildItems, cleanOutput, type Outcome, outcomeOf, resultImages, resultText, type ToolCall } from '../lib/turns';
 import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
+
+/** What you wrote when you turned something down, shown where it happened. */
+function Note({ text }: { text: string }) {
+  return <div className="border-l-2 border-line pl-3 text-[13.5px] leading-relaxed whitespace-pre-wrap text-muted">{text}</div>;
+}
 
 type Edit = { before: string; after: string };
 
@@ -149,12 +154,15 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
 /** A page or a picture Claude wrote, worth seeing rendered rather than as code. */
 const PREVIEWABLE = /\.(html?|svg)$/i;
 
-function Detail({ call, cwd }: { call: ToolCall; cwd?: string }) {
-  const output = resultText(call.result);
-  const failed = call.result?.is_error;
+function Detail({ call, cwd, outcome }: { call: ToolCall; cwd?: string; outcome: Outcome }) {
+  // A call that never ran (refused) or was cut short gave back only a note to Claude, which the
+  // row already shows: what is left to see is what it would have done.
+  const ran = outcome.kind === 'done' || outcome.kind === 'failed';
+  const failed = outcome.kind === 'failed';
+  const output = ran ? resultText(call.result) : '';
   const edits = editsOf(call);
   const file = str(call.input.file_path);
-  if (call.name === 'Write' && PREVIEWABLE.test(file) && !failed) {
+  if (call.name === 'Write' && PREVIEWABLE.test(file) && (outcome.kind === 'done' || outcome.kind === 'pending')) {
     const name = file.split('/').pop() ?? file;
     return <PreviewCard source={{ kind: /\.svg$/i.test(file) ? 'svg' : 'html', code: str(call.input.content), title: name }} label={name} />;
   }
@@ -174,7 +182,7 @@ function Detail({ call, cwd }: { call: ToolCall; cwd?: string }) {
             <span className="select-none text-faint">$ </span>
             {str(call.input.command)}
           </pre>
-          {call.result && <Output text={output} failed={failed} />}
+          {ran && <Output text={output} failed={failed} />}
         </div>
       );
     case 'Agent':
@@ -189,14 +197,14 @@ function Detail({ call, cwd }: { call: ToolCall; cwd?: string }) {
             </details>
           )}
           {agentId && <AgentSteps agentId={agentId} cwd={cwd} />}
-          {call.result && <Markdown text={output.replace(/\n*agentId:[\s\S]*$/, '')} className="text-[14px]" />}
+          {ran && <Markdown text={output.replace(/\n*agentId:[\s\S]*$/, '')} className="text-[14px]" />}
         </div>
       );
     }
     default:
       return (
         <div className="space-y-2">
-          {call.result ? (
+          {ran ? (
             <>
               <Output text={output} failed={failed} />
               <Images call={call} />
@@ -237,35 +245,52 @@ export function TodoList({ input }: { input: Record<string, unknown> }) {
   );
 }
 
+/** Claude's questions with what you answered: the answers live in the text Claude Code gave back, not in the call. */
 function QuestionsAnswered({ call }: { call: ToolCall }) {
   const questions = Array.isArray(call.input.questions) ? (call.input.questions as Array<Record<string, unknown>>) : [];
-  const answers = (call.input.answers ?? {}) as Record<string, string>;
+  const outcome = outcomeOf(call);
   const output = resultText(call.result);
+  const answers = outcome.kind === 'done' ? answersOf(questions.map((q) => str(q.question)), output) : {};
+  // Words typed in place of picking, for all the questions at once.
+  const response = outcome.kind === 'done' ? output.match(/^The user responded: ([\s\S]*)$/)?.[1] : undefined;
+  const answered = Boolean(response) || Object.values(answers).some((a) => a.answer || a.notes);
   return (
-    <div className="rounded-xl border border-line bg-panel px-3 py-2.5 text-[13.5px]">
-      {questions.map((q, i) => (
-        <div key={i} className={i > 0 ? 'mt-2' : ''}>
-          <div className="text-muted">{str(q.question)}</div>
-          {answers[str(q.question)] && <div className="mt-0.5 font-medium">{answers[str(q.question)]}</div>}
-        </div>
-      ))}
+    <div className="my-1.5 rounded-xl border border-line bg-panel px-3 py-2.5 text-[13.5px]">
+      {questions.map((q, i) => {
+        const answer = answers[str(q.question)];
+        return (
+          <div key={i} className={i > 0 ? 'mt-2' : ''}>
+            <div className="text-muted">{str(q.question)}</div>
+            {answer?.answer && <div className="mt-0.5 font-medium">{answer.answer}</div>}
+            {answer?.notes && <div className="mt-0.5 whitespace-pre-wrap text-muted">{answer.notes}</div>}
+          </div>
+        );
+      })}
+      {response && <div className="mt-2 font-medium whitespace-pre-wrap">{response}</div>}
       {questions.length === 0 && output && <div className="text-muted">{output}</div>}
+      {questions.length > 0 && !answered && <div className="mt-2 text-faint">{outcome.kind === 'stopped' ? 'Interrupted' : 'Not answered'}</div>}
+      {outcome.kind === 'denied' && outcome.note && <div className="mt-1.5"><Note text={outcome.note} /></div>}
     </div>
   );
 }
 
+const PLAN_STATUS: Partial<Record<Outcome['kind'], string>> = { done: 'Approved', denied: 'Sent back', stopped: 'Interrupted' };
+
 function PlanCard({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
   const plan = str(call.input.plan);
+  const outcome = outcomeOf(call);
+  const status = PLAN_STATUS[outcome.kind];
   return (
-    <div className="rounded-xl border border-line bg-panel px-3 py-2.5">
-      <div className="mb-1 text-[12px] text-faint">Plan</div>
+    <div className="my-1.5 rounded-xl border border-line bg-panel px-3 py-2.5">
+      <div className="mb-1 text-[12px] text-faint">Plan{status ? ` · ${status}` : ''}</div>
       <div className={open ? '' : 'max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]'}>
         <Markdown text={plan} className="text-[14px]" />
       </div>
       <button type="button" aria-expanded={open} className="mt-1 text-[12px] text-faint hover:text-fg" onClick={() => setOpen((v) => !v)}>
         {open ? 'Show less' : 'Show the whole plan'}
       </button>
+      {outcome.kind === 'denied' && outcome.note && <div className="mt-2"><Note text={outcome.note} /></div>}
     </div>
   );
 }
@@ -292,7 +317,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => setOpen(defaultOpen), [defaultOpen]);
   const summary = describeTool(call.name, call.input, cwd);
-  const failed = Boolean(call.result?.is_error);
+  const outcome = outcomeOf(call);
   const stats = useMemo(() => {
     const edits = editsOf(call);
     if (edits.length === 0) return undefined;
@@ -318,7 +343,9 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   if (call.name === 'ExitPlanMode' && str(call.input.plan) && call.result) return <PlanCard call={call} />;
 
   const Icon = summary.icon;
-  const pending = !call.result;
+  const failed = outcome.kind === 'failed';
+  // A refused or interrupted edit changed nothing, whatever it meant to change.
+  const changed = stats && (outcome.kind === 'done' || outcome.kind === 'pending') && (stats.added > 0 || stats.removed > 0);
   return (
     <div>
       <button
@@ -330,22 +357,25 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
         <Icon className={`size-3.5 shrink-0 ${failed ? 'text-danger' : ''}`} />
         <span className="shrink-0 text-fg/80">{summary.verb}</span>
         {summary.target && <ToolTarget summary={summary} />}
-        {stats && (stats.added > 0 || stats.removed > 0) && (
+        {changed && (
           <span className="shrink-0 font-mono text-[11px]">
             {stats.added > 0 && <span className="text-add">+{stats.added}</span>}
             {stats.removed > 0 && <span className="ml-1 text-del">−{stats.removed}</span>}
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-          {pending && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
+          {outcome.kind === 'pending' && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
           {failed && <span className="text-[11px] text-danger">failed</span>}
+          {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
+          {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
           <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
         </span>
       </button>
+      {outcome.kind === 'denied' && outcome.note && <div className="mb-1.5 ml-5.5"><Note text={outcome.note} /></div>}
       {open && (
         <div className="animate-fade mt-1 mb-2 ml-5.5">
           {summary.note && <div className="mb-1.5 text-[12px] text-faint">{summary.note}</div>}
-          <Detail call={call} cwd={cwd} />
+          <Detail call={call} cwd={cwd} outcome={outcome} />
         </div>
       )}
     </div>

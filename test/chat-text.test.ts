@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ChatMessage, ToolResultBlock } from '../src/shared/protocol';
 import { describeTool } from '../src/web/lib/tools';
-import { buildItems, cleanOutput, splitFiles, withFiles } from '../src/web/lib/turns';
+import { answersOf, buildItems, cleanOutput, outcomeOf, splitFiles, type ToolCall, withFiles } from '../src/web/lib/turns';
 
 const ESC = '\u001b';
 
@@ -66,6 +66,75 @@ describe('files sent with a prompt', () => {
   it('show with the prompt in the conversation', () => {
     const items = buildItems([{ uuid: 'u', role: 'user', blocks: [{ type: 'text', text: `Why?\n\n${block}` }] }]);
     expect(items).toMatchObject([{ kind: 'user', text: 'Why?', files: [{ name: 'report (1).pdf' }, { name: 'notes.txt' }] }]);
+  });
+});
+
+const REJECT = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+const call = (name: string, content: string, extra: Partial<ToolResultBlock> = {}): ToolCall => ({
+  id: 't', name, input: {}, result: { type: 'tool_result', tool_use_id: 't', content, is_error: true, ...extra },
+});
+
+describe('outcomeOf', () => {
+  it('tells a call that ran from one still waiting', () => {
+    expect(outcomeOf({ id: 't', name: 'Bash', input: {} })).toEqual({ kind: 'pending' });
+    expect(outcomeOf({ id: 't', name: 'Bash', input: {}, result: { type: 'tool_result', tool_use_id: 't', content: 'ok' } })).toEqual({ kind: 'done' });
+    expect(outcomeOf(call('Bash', 'Exit code 1\nnpm ERR!'))).toEqual({ kind: 'failed' });
+    expect(outcomeOf(call('Edit', '<tool_use_error>String to replace not found in file.</tool_use_error>'))).toEqual({ kind: 'failed' });
+  });
+
+  it('knows Claude Code’s refusals, with the user’s words when there are some', () => {
+    expect(outcomeOf(call('Bash', `${REJECT} To tell you how to proceed, the user said:\nNever remove volumes.`))).toEqual({ kind: 'denied', note: 'Never remove volumes.' });
+    expect(outcomeOf(call('Edit', `${REJECT} STOP what you are doing and wait for the user to tell you how to proceed.`))).toEqual({ kind: 'denied' });
+    expect(outcomeOf(call('Bash', 'Permission for this tool use was denied. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). The user said:\nnot this one'))).toEqual({ kind: 'denied', note: 'not this one' });
+    expect(outcomeOf(call('ExitPlanMode', 'The agent proposed a plan that was rejected by the user. The user chose to stay in plan mode rather than proceed with implementation.\n\nRejected plan:\n## Plan'))).toEqual({ kind: 'denied' });
+  });
+
+  it('knows Pelican’s own refusals: its fixed words, a note the transcript marks, a plan or question turned down', () => {
+    expect(outcomeOf(call('Bash', 'The user declined this.'))).toEqual({ kind: 'denied' });
+    expect(outcomeOf(call('Write', 'Put it in .env.local instead.', { denied: true }))).toEqual({ kind: 'denied', note: 'Put it in .env.local instead.' });
+    expect(outcomeOf(call('ExitPlanMode', 'Keep the old tables for a week.'))).toEqual({ kind: 'denied', note: 'Keep the old tables for a week.' });
+    expect(outcomeOf(call('AskUserQuestion', 'The user chose not to answer.'))).toEqual({ kind: 'denied' });
+    expect(outcomeOf(call('ExitPlanMode', '<tool_use_error>Not in plan mode</tool_use_error>'))).toEqual({ kind: 'failed' });
+  });
+
+  it('tells a call cut short from one refused', () => {
+    for (const text of [
+      '[Request interrupted by user for tool use]',
+      `${REJECT} STOP what you are doing and wait for the user to tell you how to proceed. Correction to the text above: this call was stopped while running, not refused before it ran.`,
+      "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.",
+      '[Tool call did not complete: the turn was ended to deliver the message that follows.]',
+      'Interrupted by the user.',
+      'Session closed.',
+    ]) expect(outcomeOf(call('Bash', text)), text).toEqual({ kind: 'stopped' });
+  });
+});
+
+describe('answersOf', () => {
+  const asked = ['Which database should the service use?', 'Which environments need it?'];
+
+  it('reads each answer and note, in Claude Code’s words of today and before', () => {
+    expect(answersOf(asked, 'Your questions have been answered: "Which database should the service use?"="Postgres", "Which environments need it?"="dev, staging" notes: not production yet. You can now continue with these answers in mind.')).toEqual({
+      'Which database should the service use?': { answer: 'Postgres' },
+      'Which environments need it?': { answer: 'dev, staging', notes: 'not production yet' },
+    });
+    expect(answersOf(asked, 'User has answered your questions: "Which database should the service use?"="SQLite", "Which environments need it?"="dev". You can now continue with the user\'s answers in mind.')).toEqual({
+      'Which database should the service use?': { answer: 'SQLite' },
+      'Which environments need it?': { answer: 'dev' },
+    });
+  });
+
+  it('keeps quotes and commas inside an answer, and a question left without one', () => {
+    expect(answersOf(asked, 'The user answered: "Which database should the service use?"="the "fast" one, please", "Which environments need it?"=(no option selected) notes: ask Sam. Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.')).toEqual({
+      'Which database should the service use?': { answer: 'the "fast" one, please' },
+      'Which environments need it?': { notes: 'ask Sam' },
+    });
+  });
+
+  it('leaves out a preview and questions the text does not answer', () => {
+    expect(answersOf(asked, 'Your questions have been answered: "Which database should the service use?"="Postgres" selected preview:\n<pre>db: postgres</pre>. You can now continue with these answers in mind.')).toEqual({
+      'Which database should the service use?': { answer: 'Postgres' },
+    });
+    expect(answersOf(asked, 'The user did not answer the questions.')).toEqual({});
   });
 });
 

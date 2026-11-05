@@ -48,6 +48,8 @@ export type ToolResultBlock = {
   content: string | Array<TextBlock | ImageBlock>;
   is_error?: boolean;
   truncated?: boolean;
+  /** The call was refused before it ran (by the user, a rule or auto mode), as the transcript records it. */
+  denied?: boolean;
 };
 export type Block = TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
