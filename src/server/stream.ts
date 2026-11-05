@@ -15,6 +15,9 @@ const textOf = (block: PartialBlock) => (block.type === 'text' ? block.text : bl
 export const shown = (block: PartialBlock): PartialBlock =>
   (block.type === 'tool_use' && block.inputJson.length > PARTIAL_INPUT_MAX ? { ...block, inputJson: block.inputJson.slice(0, PARTIAL_INPUT_MAX) } : { ...block });
 
+/** A run as a page gets it, by any way: its blocks as shown, never the whole file being written. */
+export const shownRun = (state: RunState): RunState => ({ ...state, partial: state.partial.map(shown) });
+
 const restOf = new WeakMap<RunState, string>();
 
 /** The state without its streamed blocks, as text; worked out once per state, however many clients watch. */

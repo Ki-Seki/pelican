@@ -26,6 +26,7 @@ import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
+import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
@@ -206,7 +207,7 @@ app.get('/api/sessions/:id', async (c) => {
   if (!session && !run) return c.json({ error: 'No such session' }, 404);
   // The task list needs the whole conversation; the page may only have loaded its end.
   const tasks = currentTasks(await loadMessages(id));
-  return c.json({ session: session ?? null, run: run ?? null, tasks, settings: await recordedSettings(id) });
+  return c.json({ session: session ?? null, run: run ? shownRun(run) : null, tasks, settings: await recordedSettings(id) });
 });
 
 app.get('/api/sessions/:id/messages', async (c) => {
