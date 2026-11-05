@@ -1,0 +1,194 @@
+// Opens Pelican in a real browser and fails on any page error, console error, failed request or
+// HTTP error: the list, its sheets, and every session with its sheets, on a phone and wide, light
+// and dark. Runs in CI after the build, and before the site is published.
+//   node scripts/smoke.mjs              the built app, through `pelican --demo`
+//   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
+// CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken.
+import { readdir, readFile, stat } from 'node:fs/promises';
+import http from 'node:http';
+import path from 'node:path';
+
+import { chromium } from 'playwright-core';
+
+import { MARK, startDemo } from './demo-server.mjs';
+
+const CHROME = process.env.CHROME
+  ?? (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome');
+const SIZES = {
+  phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
+  wide: { viewport: { width: 1280, height: 800 } },
+};
+const LIST_BUTTONS = ['Settings', 'New session', 'List options'];
+const SESSION_BUTTONS = ['Session menu', 'Model, effort and speed', 'Permission mode', 'Changes and files'];
+
+const problems = [];
+const notes = [];
+
+/** GitHub Pages, near enough: files under one folder, a folder's index.html, nothing else. */
+async function serveFolder(root) {
+  const types = {
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+    '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.mp4': 'video/mp4',
+    '.webmanifest': 'application/manifest+json', '.map': 'application/json', '.woff2': 'font/woff2',
+  };
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    const file = path.join(root, decodeURIComponent(url.pathname));
+    try {
+      if (!file.startsWith(root)) throw new Error('outside');
+      const info = await stat(file);
+      if (info.isDirectory() && !url.pathname.endsWith('/')) {
+        response.writeHead(301, { location: `${url.pathname}/${url.search}` }).end();
+        return;
+      }
+      const target = info.isDirectory() ? path.join(file, 'index.html') : file;
+      const body = await readFile(target);
+      response.writeHead(200, { 'content-type': types[path.extname(target)] ?? 'application/octet-stream' }).end(body);
+    } catch {
+      response.writeHead(404).end('not found');
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { base: `http://127.0.0.1:${server.address().port}/`, stop: () => server.close() };
+}
+
+/** Every page error, console error, failed request and HTTP error, with where it happened. */
+function watch(page, where) {
+  page.on('pageerror', (error) => problems.push(`${where()}: page error: ${error.message}`));
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`${where()}: console error: ${message.text()}`);
+  });
+  page.on('requestfailed', (request) => {
+    // Leaving a page cancels what it was still loading; that is not a failure.
+    if (request.failure()?.errorText !== 'net::ERR_ABORTED') problems.push(`${where()}: request failed: ${request.url()} ${request.failure()?.errorText}`);
+  });
+  page.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`${where()}: HTTP ${response.status()}: ${response.url()}`);
+  });
+}
+
+async function press(page, label, where) {
+  const button = page.getByRole('button', { name: label, exact: true }).first();
+  if (!(await button.count())) {
+    notes.push(`${where}: no "${label}" button`);
+    return;
+  }
+  await button.click();
+  await page.waitForTimeout(250);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+}
+
+/** The list, its sheets, and every session with its sheets. */
+async function driveApp(browser, base, sessions) {
+  const titles = [...new Set(sessions.map((s) => s.title).filter(Boolean))].slice(0, 3);
+  for (const [size, options] of Object.entries(SIZES)) {
+    for (const scheme of ['light', 'dark']) {
+      const context = await browser.newContext({ ...options, colorScheme: scheme });
+      const page = await context.newPage();
+      let at = 'the list';
+      watch(page, () => `app, ${size}, ${scheme}, ${at}`);
+      await page.goto(base, { waitUntil: 'networkidle' });
+      for (const title of titles) {
+        if (!(await page.getByText(title, { exact: true }).first().isVisible())) problems.push(`app, ${size}, ${scheme}: the list does not show "${title}"`);
+      }
+      for (const label of LIST_BUTTONS) {
+        await press(page, label, `app, ${size}`);
+        await page.goto(base, { waitUntil: 'networkidle' });
+      }
+      for (const session of sessions) {
+        at = `session ${session.id}`;
+        await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+        await page.waitForTimeout(300);
+        if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
+        for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
+      }
+      await context.close();
+    }
+  }
+}
+
+/** The site's own pages: the pictures fit their phones, the demo frame lays out as a phone does. */
+async function checkSite(browser, base) {
+  for (const [size, options] of Object.entries(SIZES)) {
+    for (const scheme of ['light', 'dark']) {
+      const context = await browser.newContext({ ...options, colorScheme: scheme });
+      const page = await context.newPage();
+      let at = '';
+      watch(page, () => `site, ${size}, ${scheme}, ${at}`);
+      for (const name of ['index.html', 'docs.html']) {
+        at = name;
+        await page.goto(base + (name === 'index.html' ? '' : name), { waitUntil: 'networkidle' });
+        const found = await page.evaluate(() => {
+          const out = [];
+          const box = (el) => el.getBoundingClientRect();
+          for (const img of document.querySelectorAll('.phone img')) {
+            const a = box(img);
+            const b = box(img.closest('.screen'));
+            if (a.width === 0) continue;
+            if (a.left < b.left - 1 || a.right > b.right + 1 || a.top < b.top - 1 || a.bottom > b.bottom + 1) out.push(`${img.getAttribute('src')} overflows its phone`);
+          }
+          const frame = document.querySelector('.device iframe');
+          if (frame && box(frame).width > 0) {
+            const a = box(frame);
+            const b = box(frame.closest('.screen'));
+            if (Math.abs(a.bottom - b.bottom) > 2 || Math.abs(a.width - b.width) > 2) out.push('the demo frame does not fill its phone');
+          }
+          for (const link of document.querySelectorAll('a[href^="#"]')) {
+            const id = decodeURIComponent(link.getAttribute('href').slice(1));
+            if (id && !document.getElementById(id)) out.push(`the link to #${id} goes nowhere`);
+          }
+          const ctas = document.querySelector('.hero .ctas');
+          if (ctas && innerWidth <= 640 && box(ctas).bottom > innerHeight) out.push('the buttons are below the first screen');
+          return out;
+        });
+        problems.push(...found.map((problem) => `site, ${size}, ${scheme}, ${name}: ${problem}`));
+        const frame = page.frames().find((f) => f.url().includes('/demo/'));
+        if (frame && await page.locator('.device iframe').isVisible()) {
+          await frame.waitForLoadState('networkidle');
+          const width = await frame.evaluate(() => innerWidth);
+          if (width !== 390) problems.push(`site, ${size}, ${scheme}, ${name}: the demo frame lays out at ${width}px, not 390px`);
+        }
+      }
+      await context.close();
+    }
+  }
+}
+
+/** What the saved demo answers say the sessions are. */
+async function savedSessions(site) {
+  const data = path.join(site, 'demo', 'data');
+  for (const file of await readdir(data)) {
+    const body = JSON.parse(await readFile(path.join(data, file), 'utf8'));
+    if (Array.isArray(body?.sessions)) return body.sessions;
+  }
+  throw new Error(`${data} has no saved list of sessions`);
+}
+
+const site = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
+const started = Date.now();
+const browser = await chromium.launch({ executablePath: CHROME, headless: true });
+let stop = async () => {};
+try {
+  if (site) {
+    const server = await serveFolder(site);
+    stop = async () => server.stop();
+    await checkSite(browser, server.base);
+    await driveApp(browser, `${server.base}demo/`, await savedSessions(site));
+  } else {
+    const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
+    stop = demo.stop;
+    const { sessions } = await (await fetch(`${demo.base}api/sessions`, { headers: MARK })).json();
+    if (!sessions?.length) problems.push('the demo has no sessions');
+    await driveApp(browser, demo.base, sessions ?? []);
+  }
+} finally {
+  await browser.close();
+  await stop();
+}
+
+for (const note of [...new Set(notes)]) console.log(`note: ${note}`);
+const unique = [...new Set(problems)];
+console.log(`${site ? `site ${site}` : 'app'}: ${unique.length} problem${unique.length === 1 ? '' : 's'} in ${Math.round((Date.now() - started) / 1000)} s`);
+for (const problem of unique) console.log(`  ${problem}`);
+process.exit(unique.length ? 1 : 0);

@@ -74,7 +74,7 @@ async function save(request) {
 }
 const q = encodeURIComponent;
 
-for (const request of ['auth', 'info', 'models', 'usage', 'projects', 'dirs']) await save(request);
+for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs']) await save(request);
 const { sessions } = await save('sessions');
 const folders = new Set();
 for (const session of sessions) {

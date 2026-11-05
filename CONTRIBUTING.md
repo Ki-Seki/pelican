@@ -21,15 +21,23 @@ To work without touching your own sessions, build once and use the demo:
 ## Before you send a change
 
 ```bash
-npm test             # unit tests (Vitest)
+npm test
 npm run typecheck
 npm run build
 ```
 
-Check what you changed in a browser, at phone size too. `node scripts/shot.mjs <url> <out.png>`
-takes a screenshot with headless Chrome (set `CHROME` if it is not in the usual place), and
+The tests never see your own Claude Code sessions or Pelican sign-in: `test/setup.ts` points them
+at temporary folders before anything reads the environment, and keeps your git settings out of the
+repositories they make.
+
+Check what you changed in a browser, at phone size too. `node scripts/smoke.mjs` opens the built
+app with made-up sessions in headless Chrome, every session and sheet, on a phone and wide, light
+and dark, and fails on any page error, console error or failed request; CI runs it, and runs it on
+the site too (`node scripts/site.mjs _site && node scripts/smoke.mjs _site`).
+`node scripts/shot.mjs <url> <out.png>` takes a screenshot, and
 `node scripts/e2e-live.mjs <link> <folder> <out>` drives one real turn through the app against a
-running Pelican (the link it printed, with the token).
+running Pelican (the link it printed, with the token). Set `CHROME` if Chrome is not in the usual
+place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 
 ## Where things are
 
@@ -44,7 +52,7 @@ running Pelican (the link it printed, with the token).
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, screenshots and icons |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots and icons |
 
 ## Releasing
 
