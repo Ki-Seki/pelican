@@ -35,8 +35,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   signed in under: a new token or password stops notifications to every device, and signing out
   turns them off on that device first. Allow and Deny on a notification send the request the page
   would, with its header, from its origin and under its sign-in, and do nothing for a request that
-  was already answered. They are offered only for a command the notification shows whole, on one
-  line and without hidden characters, never on Claude's description of it.
+  was already answered. They are offered only for a command every notification shows whole and as
+  it runs, never on Claude's description of it: printable ASCII with one space between words, on
+  one line, short enough to fit two lines of the narrowest notification (a macOS banner beside the
+  site's icon) even in the widest letters. Anything else opens the session.
 - **A browser signed out keeps nothing to show.** Signing out forgets its drafts and asks the
   browser to drop what it keeps of Pelican, and the pictures of a conversation are checked with
   Pelican each time they are shown, so a signed-out browser gets none from its cache.
