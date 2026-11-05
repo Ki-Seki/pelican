@@ -105,6 +105,33 @@ describe('quotes above the message box', () => {
     expect(screen.queryByText('Why CSS variables?')).toBeNull();
   });
 
+  it('removed with the keys, give them to the next quote, or to the message box once none is left', async () => {
+    const { box } = renderComposer('q5');
+    act(() => {
+      addQuote('q5', '> first');
+      addQuote('q5', '> second');
+    });
+    const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    const remove = (label: string) => screen.getByRole('button', { name: `Remove the quote ${label}` });
+    remove('first').focus();
+    // Enter or Space on a button clicks it with no pointer behind the click.
+    fireEvent.click(remove('first'), { detail: 0 });
+    await frame();
+    expect(document.activeElement).toBe(remove('second'));
+    fireEvent.click(remove('second'), { detail: 0 });
+    await frame();
+    expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+    expect(document.activeElement).toBe(box);
+  });
+
+  it('removed with a tap on a phone, leave the keyboard down', async () => {
+    const { box } = renderComposer('q6');
+    act(() => addQuote('q6', '> only'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the quote only' }), { detail: 1 });
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(document.activeElement).not.toBe(box);
+  });
+
   it('wait for the next message when a / command goes, which has to start its own', () => {
     const { onSend, box } = renderComposer('q4');
     act(() => addQuote('q4', '> keep me'));

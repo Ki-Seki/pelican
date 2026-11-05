@@ -11,7 +11,7 @@ Object.assign(globalThis, {
     removeItem: (key: string) => void store.delete(key),
   },
 });
-const { clearDraft, forgetDrafts, loadDraft, moveDraft, saveDraft } = await import('../src/web/lib/drafts');
+const { clearDraft, forgetDrafts, loadDraft, messageWithQuotes, moveDraft, saveDraft } = await import('../src/web/lib/drafts');
 
 const file: Attachment = { id: 'u1', name: 'shot.png', mime: 'image/png', size: 10, path: '/tmp/u1' };
 
@@ -94,6 +94,25 @@ describe('drafts', () => {
     forgetDrafts();
     expect(loadDraft('s1')).toBeUndefined();
     expect(loadDraft('s2')).toBeUndefined();
+  });
+
+  it('take the line comments waiting with them when this browser signs out, also where those have not loaded', async () => {
+    store.set('pelican:comments', JSON.stringify({ chats: { s1: [{ id: 'c1', path: 'a.ts', kind: 'add', line: 1, code: 'x', note: 'y' }] } }));
+    forgetDrafts();
+    expect(store.has('pelican:comments')).toBe(false);
+    // Loaded, its copy in memory goes too.
+    const { commentsOf, setComments } = await import('../src/web/lib/review');
+    setComments('s2', [{ id: 'c2', path: 'a.ts', kind: 'add', line: 1, code: 'x', note: 'y' }]);
+    forgetDrafts();
+    expect(commentsOf('s2')).toEqual([]);
+    expect(store.has('pelican:comments')).toBe(false);
+  });
+
+  it('make the message that goes out of their quotes and words, which a send compares them with', () => {
+    expect(messageWithQuotes(['> a quote  ', 'a.ts:3\n> x'], '  my words ')).toBe('> a quote\n\na.ts:3\n> x\n\nmy words');
+    saveDraft('s1', 'my words', [], ['> a quote']);
+    clearDraft('s1', messageWithQuotes(['> a quote'], 'my words'));
+    expect(loadDraft('s1')).toBeUndefined();
   });
 
   it('survive a broken store', () => {

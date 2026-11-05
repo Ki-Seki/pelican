@@ -1,21 +1,28 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Attachment, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
+import type { Attachment, ChatMessage, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CREATED = '44444444-2222-4333-8444-555555555555';
+/** Another session in the same folder. */
+const OTHER = '66666666-2222-4333-8444-555555555555';
 const CWD = '/code/app';
+const FILE = 'const a = 1;\nconst b = 2;\nconst c = 3;\n';
 
 /** What the computer answers, as each test sets it. */
 const server = vi.hoisted(() => ({
   /** Each send's answer in turn: an error it fails with, or nothing for one that goes through. */
   answers: [] as Array<Error | undefined>,
+  /** Holds the next send's answer until it settles: a slow link, or a Claude still starting. */
+  hold: undefined as Promise<void> | undefined,
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
+  /** What the conversation holds after its first prompt. */
+  after: [] as ChatMessage[],
   /** How often git status was asked for, and what it says. */
   gitReads: 0,
   git: { repo: false } as GitStatus,
@@ -26,6 +33,9 @@ vi.mock('../src/web/lib/api', async (original) => {
   const answer = async (body: { text: string; attachments: string[]; trust?: string }) => {
     server.sent.push(body);
     const failure = server.answers.shift();
+    const held = server.hold;
+    server.hold = undefined;
+    await held;
     if (failure) throw failure;
   };
   return {
@@ -45,13 +55,17 @@ vi.mock('../src/web/lib/api', async (original) => {
         return server.git;
       },
       tree: async () => [],
+      file: async (_cwd: string, path: string) => ({ path, size: FILE.length, text: FILE }),
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...server.session },
         run: server.run,
         tasks: [],
         settings: {},
       }),
-      messages: async () => ({ messages: [{ uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Clean up the build' }], timestamp: Date.now() - 60_000 }], total: 1, offset: 0 }),
+      messages: async () => {
+        const messages: ChatMessage[] = [{ uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Clean up the build' }], timestamp: Date.now() - 60_000 }, ...server.after];
+        return { messages, total: messages.length, offset: 0 };
+      },
       send: async (_id: string, body: { text: string; attachments: string[]; trust?: string }) => {
         await answer(body);
         return { sessionId: SESSION };
@@ -93,25 +107,45 @@ const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
 const { setPrefs } = await import('../src/web/lib/prefs');
-const { setComments } = await import('../src/web/lib/review');
+const { commentsOf, setComments } = await import('../src/web/lib/review');
 const { setRun } = await import('../src/web/lib/store');
+const { goTo } = await import('../src/web/lib/workspace-route');
 
-afterEach(() => {
+/** The address with Changes and files at a file of the folder, as a path in the conversation opens it. */
+function atFile(id: string, path: string) {
+  history.replaceState(null, '', `/?s=${id}`);
+  goTo({ tab: 'files', path }, false);
+}
+
+afterEach(async () => {
   cleanup();
   localStorage.clear();
-  setComments(CWD, []);
+  for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
-  Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
-  // A view of Changes and files left open keeps its step in the address.
+  Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
+  // A view of Changes and files left open keeps its step in the address; one closed on a phone
+  // goes back through the history a moment later, which must land before the next test begins.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   history.replaceState(null, '', '/');
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
-const session = () => wrap(<Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+const session = (id = SESSION) => wrap(<Chat sessionId={id} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 const loaded = () => screen.findAllByText('Clean up the build');
 const untrusted = () => new ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: PreToolUse (.claude/settings.json)'] });
+
+/** Holds the next send's answer: what it returns lets it go. */
+function holdNextSend(): () => void {
+  let release = () => {};
+  server.hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => act(release);
+}
 
 function sendText(text: string) {
   fireEvent.change(box(), { target: { value: text } });
@@ -188,6 +222,92 @@ describe('a message that did not go', () => {
   });
 });
 
+describe('what is being typed, when a message the chat sends on its own does not go', () => {
+  const comment = { id: 'c1', path: 'src/a.ts', kind: 'add' as const, line: 3, code: 'const a = 1;', note: 'Name this better' };
+  const typing = () => fireEvent.change(box(), { target: { value: 'Half-written thought' } });
+  const apiError = (text: string): ChatMessage => ({ uuid: 'e1', role: 'assistant', blocks: [{ type: 'text', text }], apiError: true, timestamp: Date.now() - 50_000 });
+
+  it('stays in the box after Send now, and the comments wait again', async () => {
+    setComments(SESSION, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    typing();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByText('Send now'));
+    await screen.findByText('Can’t reach studio');
+    expect(server.sent.map((body) => body.text)).toEqual(['src/a.ts:3\n> + const a = 1;\nName this better']);
+    expect(box().value).toBe('Half-written thought');
+    expect(commentsOf(SESSION)).toEqual([comment]);
+    await waitFor(() => expect(loadDraft(SESSION)?.text).toBe('Half-written thought'), { timeout: 2000 });
+  });
+
+  it('stays in the box after Send now in a folder nobody trusted, the question put away', async () => {
+    setComments(SESSION, [comment]);
+    server.answers = [untrusted()];
+    session();
+    await loaded();
+    typing();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByText('Send now'));
+    const sheet = await screen.findByRole('dialog', { name: 'Trust this folder?' });
+    act(() => {
+      sheet.dispatchEvent(new Event('cancel', { cancelable: true }));
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Trust this folder?' })).toBeNull());
+    expect(box().value).toBe('Half-written thought');
+    expect(commentsOf(SESSION)).toEqual([comment]);
+  });
+
+  it('stays in the box after Compact, Retry or Cancel on a check-in, which take no comments', async () => {
+    // Sessions of their own: the conversation must end on the error, with nothing sent after it.
+    const ended = ['77777777-2222-4333-8444-555555555551', '77777777-2222-4333-8444-555555555552', '77777777-2222-4333-8444-555555555553'] as const;
+    for (const [id, error, button] of [[ended[0], 'Prompt is too long', 'Compact'], [ended[1], 'API Error: 529 Overloaded', 'Retry']] as const) {
+      setComments(id, [comment]);
+      server.after = [apiError(error)];
+      server.answers = [new Error('Can’t reach studio')];
+      session(id);
+      const next = await screen.findByRole('button', { name: button });
+      typing();
+      fireEvent.click(next);
+      await screen.findByText('Can’t reach studio');
+      expect(box().value).toBe('Half-written thought');
+      expect(commentsOf(id)).toEqual([comment]);
+      cleanup();
+    }
+    server.after = [];
+    server.run = { sessionId: ended[2], cwd: CWD, busy: false, settings: {}, permissions: [], partial: [], scheduled: [{ id: 'wakeup', what: 'Check the deploy', repeats: true }] };
+    server.answers = [new Error('Can’t reach studio')];
+    try {
+      session(ended[2]);
+      const cancel = await screen.findByRole('button', { name: 'Cancel' });
+      typing();
+      fireEvent.click(cancel);
+      await screen.findByText('Can’t reach studio');
+      expect(box().value).toBe('Half-written thought');
+      expect(server.sent.map((body) => body.text)).toEqual(['/compact', 'Clean up the build', 'Stop the loop (Check the deploy).']);
+    } finally {
+      act(() => setRun(ended[2], undefined));
+      for (const id of ended) setComments(id, []);
+    }
+  });
+});
+
+describe('a message from the box that does not go', () => {
+  it('goes back above what was typed since it went', async () => {
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Why does the export fail?');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: 'Also: the logs' } });
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs');
+  });
+});
+
 describe('/clear', () => {
   it('opens a new session and leaves nothing behind in the old one to clear it again', async () => {
     const onStartIn = vi.fn();
@@ -234,21 +354,99 @@ describe('a new session moved to another folder before it starts', () => {
 
 describe('line comments, as in Claude Desktop', () => {
   const comment = { id: 'c1', path: 'src/styles/theme.css', kind: 'add' as const, line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' };
+  const said = "src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too";
 
-  it('go with the next message, after what was typed, and are gone once it went', async () => {
-    setComments(CWD, [comment]);
+  it('go with the next message, before what was typed and a blank line, and are gone once it went', async () => {
+    setComments(SESSION, [comment]);
     session();
     await loaded();
     expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
     fireEvent.change(box(), { target: { value: 'Looks good otherwise' } });
     fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe("Looks good otherwise\n\nsrc/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
+    expect(server.sent[0]!.text).toBe(`${said}\n\nLooks good otherwise`);
     await waitFor(() => expect(screen.queryByText('1 comment goes with your next message')).toBeNull());
   });
 
+  it('belong to the session they were written in: another session in the folder neither shows nor sends them', async () => {
+    media['(min-width: 1024px)'] = true;
+    setPrefs({ workspacePane: true });
+    atFile(SESSION, 'src/a.ts');
+    try {
+      session();
+      await loaded();
+      // Written in the file this session's pane shows.
+      await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+      fireEvent.click(document.querySelector('[data-line="2"]')!);
+      fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Name it b2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+      expect(commentsOf(SESSION)).toMatchObject([{ path: 'src/a.ts', line: 2, note: 'Name it b2' }]);
+      expect(commentsOf(CWD)).toEqual([]);
+      cleanup();
+
+      history.replaceState(null, '', `/?s=${OTHER}`);
+      session(OTHER);
+      await loaded();
+      expect(within(screen.getByRole('complementary', { name: 'Changes and files' })).queryByText(/comment/)).toBeNull();
+      sendText('Run the login test once more');
+      await waitFor(() => expect(server.sent).toHaveLength(1));
+      expect(server.sent[0]!.text).toBe('Run the login test once more');
+      expect(commentsOf(SESSION)).toHaveLength(1);
+    } finally {
+      setPrefs({ workspacePane: false });
+    }
+  });
+
+  it('go with one message only: one sent while the first is on its way carries none of them', async () => {
+    setComments(SESSION, [comment]);
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Looks good otherwise');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    // On their way with it: no longer waiting for the next message.
+    expect(screen.queryByText('1 comment goes with your next message')).toBeNull();
+    sendText('Also run the tests');
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    release();
+    expect(server.sent.map((body) => body.text)).toEqual([`${said}\n\nLooks good otherwise`, 'Also run the tests']);
+  });
+
+  it('go once however often Send now is tapped while they are on their way', async () => {
+    media['(min-width: 1024px)'] = true;
+    setComments(SESSION, [comment]);
+    session();
+    await loaded();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    const release = holdNextSend();
+    const sendNow = await screen.findByText('Send now');
+    fireEvent.click(sendNow);
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    if (sendNow.isConnected) fireEvent.click(sendNow);
+    fireEvent.keyDown(screen.getByRole('complementary', { name: 'Changes and files' }), { key: 'Enter', metaKey: true });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    release();
+    expect(server.sent.map((body) => body.text)).toEqual([said]);
+  });
+
+  it('come back when the message they went with does not go, before any written meanwhile', async () => {
+    const later = { ...comment, id: 'c2', line: 9, note: 'And here' };
+    setComments(SESSION, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Looks good');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    act(() => setComments(SESSION, [later]));
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(commentsOf(SESSION).map((c) => c.id)).toEqual(['c1', 'c2']);
+    expect(screen.getByText('2 comments go with your next message')).toBeTruthy();
+  });
+
   it('stay when the message does not go through, and never go with a command', async () => {
-    setComments(CWD, [comment]);
+    setComments(SESSION, [comment]);
     server.answers = [new Error('Can’t reach studio')];
     session();
     await loaded();
@@ -264,13 +462,22 @@ describe('line comments, as in Claude Desktop', () => {
   });
 
   it('are sent on their own with Send now, from Changes and files', async () => {
-    setComments(CWD, [comment]);
+    setComments(SESSION, [comment]);
     session();
     await loaded();
     fireEvent.click(screen.getByLabelText('Changes and files'));
     fireEvent.click(await screen.findByText('Send now'));
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe("src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
+    expect(server.sent[0]!.text).toBe(said);
+  });
+
+  it('written before a new session starts, go with its first message', async () => {
+    setComments(`new:${CWD}`, [comment]);
+    fresh();
+    sendText('Start with the theme');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe(`${said}\n\nStart with the theme`);
+    expect(commentsOf(`new:${CWD}`)).toEqual([]);
   });
 });
 
@@ -281,9 +488,89 @@ describe('Commit, Push and Create PR', () => {
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });
     fireEvent.click(screen.getByLabelText('Changes and files'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }, LAZY));
     await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
     expect(server.sent).toEqual([]);
+  });
+});
+
+describe('a file open in Changes and files', () => {
+  const open = async () => {
+    media['(min-width: 1024px)'] = true;
+    setPrefs({ workspacePane: true });
+    atFile(SESSION, 'src/a.ts');
+    session();
+    await loaded();
+    fireEvent.change(box(), { target: { value: 'First this.' } });
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+    return screen.getByRole('complementary', { name: 'Changes and files' });
+  };
+  afterEach(() => setPrefs({ workspacePane: false }));
+
+  it('quotes the lines selected above the message box, as a quote waits, leaving what is typed', async () => {
+    const pane = await open();
+    const range = document.createRange();
+    range.setStart(document.querySelector('[data-line="1"]')!.lastChild!, 0);
+    range.setEnd(document.querySelector('[data-line="2"]')!.lastChild!, 1);
+    act(() => {
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    fireEvent.click(await within(pane).findByRole('button', { name: 'Quote' }));
+    const quotes = await screen.findByRole('list', { name: 'Quotes' });
+    expect(within(quotes).getByText('a.ts:1-2')).toBeTruthy();
+    expect(box().value).toBe('First this.');
+    getSelection()!.removeAllRanges();
+  });
+
+  it('mentions the file in the message box, after what is typed', async () => {
+    const pane = await open();
+    fireEvent.click(within(pane).getByRole('button', { name: 'Mention' }));
+    await waitFor(() => expect(box().value).toBe('First this. @src/a.ts '));
+    expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+  });
+});
+
+describe('Ctrl+O', () => {
+  // A session of its own, whose conversation ends on what Claude thought and ran.
+  const THOUGHT = '88888888-2222-4333-8444-555555555555';
+  const thinking = 'The owners lookup runs once per row.';
+  const output = 'def export_rows(batch):';
+  beforeEach(() => {
+    server.after = [
+      { uuid: 'a1', role: 'assistant', blocks: [{ type: 'thinking', thinking }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/code/app/export.py' } }], timestamp: Date.now() - 50_000 },
+      { uuid: 'r1', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 't1', content: output }], timestamp: Date.now() - 49_000 },
+      { uuid: 'a2', role: 'assistant', blocks: [{ type: 'text', text: 'Each row asks for its owner.' }], timestamp: Date.now() - 48_000 },
+    ];
+  });
+  const ctrlO = (extra: Partial<KeyboardEventInit> = {}) => act(() => {
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true, ...extra });
+  });
+
+  it('steps the conversation through Normal, Thinking and Verbose, as in Claude Desktop', async () => {
+    session(THOUGHT);
+    await screen.findByText('Each row asks for its owner.');
+    expect(screen.queryByText(thinking)).toBeNull();
+    ctrlO();
+    expect(screen.getByText(thinking)).toBeTruthy();
+    expect(screen.queryByText(output)).toBeNull();
+    ctrlO();
+    expect(screen.getByText(new RegExp(output.replace(/[()]/g, '\\$&')))).toBeTruthy();
+    ctrlO();
+    expect(screen.queryByText(thinking)).toBeNull();
+  });
+
+  it('leaves the view as it is with another key held, or with a sheet open', async () => {
+    session(THOUGHT);
+    await screen.findByText('Each row asks for its owner.');
+    ctrlO({ shiftKey: true });
+    ctrlO({ metaKey: true });
+    expect(screen.queryByText(thinking)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    await screen.findByRole('dialog');
+    ctrlO();
+    expect(screen.queryByText(thinking)).toBeNull();
   });
 });
 

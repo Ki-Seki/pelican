@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { commentsMessage } from '../src/web/lib/review';
-import { addQuote, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteText, receiveQuotes, splitQuotes } from '../src/web/lib/quote';
+import { addQuote, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteLines, quoteText, receiveQuotes, splitQuotes } from '../src/web/lib/quote';
 
 describe('quoteText', () => {
   it('quotes text from the conversation as > lines, without the blank lines around it', () => {
@@ -15,17 +15,18 @@ describe('quoteText', () => {
   });
 
   it('quotes a file’s lines under path:start-end, as they are in the file', () => {
+    // Whole lines selected end with a line break, which is no line of its own: the range is 7-8.
     const text = '      <FontSizePicker />\n      <ThemeToggle value={theme} />\n';
-    expect(quoteText({ path: 'src/settings/Settings.tsx', start: 7, end: 8, text }))
+    expect(quoteText({ path: 'src/settings/Settings.tsx', start: 7, text }))
       .toBe('src/settings/Settings.tsx:7-8\n>       <FontSizePicker />\n>       <ThemeToggle value={theme} />');
-    // The range follows from the lines when the caller gives only where they start.
+    // The range follows from the lines, blank ones included.
     expect(quoteText({ path: 'a.ts', start: 3, text: 'one\n\nthree' })).toBe('a.ts:3-5\n> one\n>\n> three');
     expect(quoteText({ path: 'a.ts', start: 12, text: 'return x;' })).toBe('a.ts:12\n> return x;');
   });
 
   it('keeps the first lines of a long file quote, and its range says which', () => {
     const text = Array.from({ length: MAX_QUOTE_LINES + 50 }, (_, i) => `line ${i + 1}`).join('\n');
-    const quote = quoteText({ path: 'big.txt', start: 1, end: MAX_QUOTE_LINES + 50, text });
+    const quote = quoteText({ path: 'big.txt', start: 1, text });
     expect(quote.split('\n')[0]).toBe(`big.txt:1-${MAX_QUOTE_LINES}`);
     expect(quote.split('\n')).toHaveLength(MAX_QUOTE_LINES + 1);
   });
@@ -44,7 +45,7 @@ describe('quoteText', () => {
 
 describe('a message with quotes', () => {
   const prose = quoteText({ text: 'Why CSS variables?' });
-  const lines = quoteText({ path: 'src/styles/theme.css', start: 2, end: 3, text: '  --bg: #ffffff;\n  --fg: #111111;' });
+  const lines = quoteText({ path: 'src/styles/theme.css', start: 2, text: '  --bg: #ffffff;\n  --fg: #111111;' });
 
   it('puts each quote above the words, a block apart', () => {
     expect(messageWithQuotes([prose, lines], 'And not a context?')).toBe(
@@ -122,9 +123,22 @@ describe('quotes on their way to a message box', () => {
 });
 
 describe('the file viewer’s Quote', () => {
-  it('names the lines it holds, as a selection of a file does', async () => {
-    const { quoteLines } = await import('../src/web/lib/quote');
+  it('names the lines it holds, as a selection of a file does', () => {
     expect(quoteLines('src/app.ts', 7, 8, ['const a = 1;', 'const b = 2;'])).toBe('src/app.ts:7-8\n> const a = 1;\n> const b = 2;');
     expect(quoteLines('src/app.ts', 3, 3, ['  return x;'])).toBe('src/app.ts:3\n>   return x;');
+  });
+
+  it('holds every line its range names, a blank last one too, and comes back whole when a send fails', () => {
+    const quote = quoteLines('src/a.ts', 7, 8, ['  const a = 1;', '']);
+    expect(quote).toBe('src/a.ts:7-8\n>   const a = 1;\n>');
+    expect(quoteLabel(quote)).toBe('a.ts:7-8');
+    expect(splitQuotes(messageWithQuotes([quote], 'Why?'))).toEqual({ quotes: [quote], text: 'Why?' });
+  });
+
+  it('keeps the first lines of a long range, and names only those', () => {
+    const lines = Array.from({ length: MAX_QUOTE_LINES + 20 }, (_, i) => `line ${i + 1}`);
+    const quote = quoteLines('big.txt', 11, 10 + lines.length, lines);
+    expect(quote.split('\n')[0]).toBe(`big.txt:11-${10 + MAX_QUOTE_LINES}`);
+    expect(quote.split('\n')).toHaveLength(MAX_QUOTE_LINES + 1);
   });
 });

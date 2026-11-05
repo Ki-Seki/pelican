@@ -451,20 +451,37 @@ function readableSummary(summary: string): string {
     .trim();
 }
 
-/** A `!` command someone ran in the session, with its output. */
+/** How many of a long output's last lines a finished command shows, as much as its live card did. */
+const TAIL_LINES = 12;
+
+/** A command as a control names it: its first line, cut short. */
+const commandName = (command: string) => {
+  const first = command.trim().split('\n')[0] ?? '';
+  return first.length > 60 ? `${first.slice(0, 59)}…` : first;
+};
+
+/**
+ * A `!` command someone ran in the session, with its output. A long output shows its end, the
+ * result, as the command's live card did while it ran; Show all shows it from the start.
+ */
 function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const [all, setAll] = useState(false);
   const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
-  const long = output.split('\n').length > 14 || output.length > 1600;
+  const lines = output.split('\n');
+  const long = lines.length > 14 || output.length > 1600;
+  const clipped = long && !all;
   return (
     <div data-quotable className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
-        <span className="min-w-0 flex-1 break-all">{item.command}</span>
+        <span className="min-w-0 flex-1 break-words">{item.command}</span>
         {item.timestamp && <span className="shrink-0 font-sans text-[11px] text-faint">{clockTime(item.timestamp)}</span>}
       </div>
       {output && (
-        <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${long && !all ? 'max-h-60 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]' : ''}`}>{output}</pre>
+        // Clipped, its last lines sit at the bottom of the box, the start fading out above them.
+        <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${clipped ? 'flex max-h-60 flex-col justify-end overflow-hidden [mask-image:linear-gradient(to_top,black_75%,transparent)]' : ''}`}>
+          <span>{clipped ? lines.slice(-TAIL_LINES).join('\n') : output}</span>
+        </pre>
       )}
       {long && (
         <button type="button" aria-expanded={all} className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
@@ -501,14 +518,15 @@ function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShe
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex min-h-9 items-center gap-2 py-1 pr-1.5 pl-3 font-mono text-[12.5px]">
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
-        <span className="min-w-0 flex-1 break-all">{shell.command}</span>
+        <span className="min-w-0 flex-1 break-words">{shell.command}</span>
         {shell.done ? (
           <span className="shrink-0 pr-1.5 font-sans text-[11px] text-faint">{shell.done.code === null ? 'Stopped' : shell.done.code === 0 ? 'Done' : `Exit code ${shell.done.code}`}</span>
         ) : (
           <>
             <Loader2 className="size-3.5 shrink-0 animate-spin text-faint motion-reduce:animate-none" />
             <span className="shrink-0 font-sans text-[11px] text-faint tabular-nums">{duration(Math.max(0, now - shell.startedAt))}</span>
-            <button type="button" disabled={shell.stopping} onClick={stop} className="relative h-7 shrink-0 rounded-full px-2.5 font-sans text-[12px] text-muted after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg disabled:opacity-50">
+            {/* Named for its command: the turn's own Stop, by the message box, is another. */}
+            <button type="button" disabled={shell.stopping} onClick={stop} aria-label={`${shell.stopping ? 'Stopping' : 'Stop'} ${commandName(shell.command)}`} className="relative h-7 shrink-0 rounded-full px-2.5 font-sans text-[12px] text-muted after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg disabled:opacity-50">
               {shell.stopping ? 'Stopping' : 'Stop'}
             </button>
           </>

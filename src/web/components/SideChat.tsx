@@ -1,5 +1,5 @@
 import { SquarePen, X } from 'lucide-react';
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
 import { api, isDemoNote, isUnreachable } from '../lib/api';
@@ -8,12 +8,17 @@ import { newId } from '../lib/ids';
 import { composing, hasKeyboard, isApple } from '../lib/keyboard';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
-import { Composer } from './Composer';
+import { Composer, type ComposerDraft } from './Composer';
 import { MessageList } from './MessageList';
 import { Sheet } from './Sheet';
 
-/** From this width the side chat sits beside the conversation; on narrower screens, a sheet over it. */
-const BESIDE = '(min-width: 1280px)';
+/**
+ * From this width the side chat sits beside the conversation, as Changes and files does, and under
+ * the second the session list folds away while it does (styles.css); on narrower screens it is a
+ * sheet over the conversation.
+ */
+const BESIDE = '(min-width: 1024px)';
+const ROOMY = '(min-width: 1280px)';
 
 /** The keys that open and close it, as in Claude Desktop. */
 export const SIDE_CHAT_KEYS = isApple ? '⌘;' : 'Ctrl+;';
@@ -78,11 +83,21 @@ export type SideChatState = {
   open: boolean;
   /** Beside the conversation, where Changes and files sits when it is docked. */
   docked: boolean;
+  /** Docked on a screen too narrow for the session list as well: the list has folded away. */
+  folded: boolean;
   /** Opens it; a question is asked there at once. */
   show: (question?: string) => void;
   close: () => void;
+  /**
+   * Puts it away for what is asked for in its place, then does that: a file named in the
+   * conversation or in an answer, a turn's changes. Beside the conversation at once; a sheet first
+   * plays its way out, as it holds the rest of the page until it has gone.
+   */
+  makeWay: (then: () => void) => void;
   /** A question to ask as it opens, new each time (`key`). */
   question?: { text: string; key: number };
+  /** In the sheet, to know when the sheet has gone. */
+  sheet: RefObject<HTMLDivElement | null>;
 };
 
 /**
@@ -91,8 +106,9 @@ export type SideChatState = {
  * one at a time: opening it puts that pane aside, closing it brings the pane back, and asking for
  * the pane (its button, Cmd/Ctrl+Shift+D) closes the side chat.
  */
-export function useSideChat(available: boolean, pane: Pane): SideChatState {
+export function useSideChat(available: boolean, pane: Pane, keysBack?: () => void): SideChatState {
   const beside = useMedia(BESIDE);
+  const roomy = useMedia(ROOMY);
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState<{ text: string; key: number }>();
   // What had the keys when it opened, to have them again when it closes (a sheet does this itself).
@@ -111,19 +127,42 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
   const isOpen = available && open;
   const docked = isOpen && beside;
 
+  const sheet = useRef<HTMLDivElement>(null);
+  const shown = useRef({ isOpen, docked });
+  shown.current = { isOpen, docked };
+  const makeWay = useCallback((then: () => void) => {
+    const dialog = shown.current.isOpen && !shown.current.docked ? sheet.current?.closest('dialog') : null;
+    toggle(false);
+    if (dialog?.open) dialog.addEventListener('close', () => then(), { once: true });
+    else then();
+  }, [toggle]);
+
+  // Closed, the keys go back to what had them, or to the message box when that has gone (the
+  // session menu it was opened from).
+  const giveKeys = useRef(keysBack);
+  giveKeys.current = keysBack;
   useEffect(() => {
     if (open) return;
     const back = opener.current;
     opener.current = null;
     const lost = !document.activeElement || document.activeElement === document.body;
-    if (lost && back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
+    if (!lost || !back) return;
+    if (back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
+    else giveKeys.current?.();
   }, [open]);
 
   useEffect(() => {
     if (!available) return undefined;
     const onKey = (e: globalThis.KeyboardEvent) => {
       const mod = isApple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-      if (!mod || e.altKey || e.key !== ';' || e.repeat) return;
+      if (!mod || e.altKey || e.repeat) return;
+      if (e.key.toLowerCase() === 'k' && !e.shiftKey && docked && !roomy) {
+        // Finding a session needs the list, which the side chat has folded away: it goes, and the
+        // list comes back for the search (App focuses it).
+        toggle(false);
+        return;
+      }
+      if (e.key !== ';') return;
       // A sheet that is open keeps the keys, unless it is the side chat's own.
       if (!open && document.querySelector('dialog[open]')) return;
       e.preventDefault();
@@ -131,7 +170,7 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [available, open, toggle]);
+  }, [available, open, docked, roomy, toggle]);
 
   // Asked for while the side chat is beside the conversation, Changes and files takes its place.
   const { open: paneIsOpen, setOpen: setPaneOpen, dockable } = pane;
@@ -144,7 +183,7 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
     if (!paneIsOpen) setPaneOpen(true);
   }, [paneIsOpen, setPaneOpen, dockable, docked, toggle]);
 
-  return { open: isOpen, docked, show, close, ...(question ? { question } : {}) };
+  return { open: isOpen, docked, folded: docked && !roomy, show, close, makeWay, sheet, ...(question ? { question } : {}) };
 }
 
 const pendingMessage = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now(), pending: true });
@@ -174,7 +213,7 @@ export function SideChat({
   const busy = Boolean(side && view.run?.busy);
   const draftKey = `side:${sessionId}`;
   const [error, setError] = useState<{ text: string; note: boolean }>();
-  const [giveBack, setGiveBack] = useState<{ text: string; key: number }>();
+  const [giveBack, setGiveBack] = useState<ComposerDraft>();
   const asking = useRef(false);
 
   // Only the side chat's own conversation: the copy of the session's comes before its first
@@ -199,14 +238,14 @@ export function SideChat({
   const ask = async (text: string, mode: SendMode = 'steer') => {
     // The first question is still making the side chat: this one waits in the box.
     if (asking.current) {
-      setGiveBack({ text, key: Date.now() });
+      setGiveBack({ text, key: Date.now(), back: true });
       return;
     }
     setError(undefined);
     const uuid = newId();
     const giveItBack = (failure: unknown) => {
       setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
-      setGiveBack({ text, key: Date.now() });
+      setGiveBack({ text, key: Date.now(), back: true });
     };
     if (side) {
       // Its first question never reached the side chat (its Claude did not start): this one starts its conversation.
@@ -258,6 +297,15 @@ export function SideChat({
     setError(undefined);
   };
 
+  // Beside the conversation on a screen under 1280px, the session list makes way (styles.css).
+  useLayoutEffect(() => {
+    if (!state.docked) return undefined;
+    document.documentElement.dataset.pane = 'docked';
+    return () => {
+      delete document.documentElement.dataset.pane;
+    };
+  }, [state.docked]);
+
   const stop = () => side && void api.interrupt(side.id);
   const body = (
     <>
@@ -273,6 +321,7 @@ export function SideChat({
       )}
       <Composer
         side
+        atBottom={false}
         busy={busy}
         settings={settings}
         onSettings={() => {}}
@@ -344,7 +393,7 @@ export function SideChat({
         </div>
       )}
     >
-      <div className="-mx-2 -mb-2 flex h-full min-h-0 flex-col">{body}</div>
+      <div ref={state.sheet} className="-mx-2 -mb-2 flex h-full min-h-0 flex-col">{body}</div>
     </Sheet>
   );
 }

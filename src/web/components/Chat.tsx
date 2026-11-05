@@ -16,7 +16,7 @@ import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { addQuote } from '../lib/quote';
-import { commentsOf, dropComments, useComments, withComments } from '../lib/review';
+import { CommentsChat, commentsOf, putBackComments, takeComments, useComments, withComments } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
@@ -36,7 +36,7 @@ import {
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
-import { Composer, type ComposerHandle } from './Composer';
+import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
 import { StartIn } from './NewSession';
@@ -50,6 +50,7 @@ import { SideChat, useSideChat } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
+import { prefetchWorkspace } from './WorkspaceTabs';
 
 /**
  * /clear, /reset and /new, as in Claude Code: a fresh conversation in the same folder, going on
@@ -371,6 +372,10 @@ export function Chat({
   });
   const listed = queryClient.getQueryData<SessionSummary[]>(['sessions'])?.find((s) => s.id === sessionId);
   const session = detail?.session ?? listed;
+  // A side chat opened as a session of its own (from the list, a search, the usage page) is read
+  // only here too, as its Claude is: questions, without files, `!` or `/` commands, nor anything
+  // that changes files (Rewind, Edit, Commit and the like).
+  const sideChat = Boolean(session?.sideChatOf);
   const [carry] = useState(() => {
     const settings = sessionId ? undefined : carried.get(viewId);
     carried.delete(viewId);
@@ -385,7 +390,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] }>();
+  const [draft, setDraftText] = useState<ComposerDraft>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -479,11 +484,16 @@ export function Chat({
     }
   };
 
-  const send = async (text: string, attachments: Attachment[], mode: SendMode, trust?: TrustChoice) => {
+  /**
+   * Sends a message. `from`: the message box, whose words go back to it if the message does not go,
+   * and which takes the line comments along; Send now, the comments alone; or the chat itself
+   * (Retry, Compact, Cancel on a check-in), which leaves the box and the comments as they are.
+   */
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat', trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
-    if (sessionId && CLEAR.test(text) && cwd) {
+    if (sessionId && !sideChat && CLEAR.test(text) && cwd) {
       // Out of Bypass, the new conversation starts in the mode a new session does.
       const { permissionMode = 'default', ...rest } = settings;
       carried.set(`new:${cwd}`, permissionMode === 'bypassPermissions' ? rest : { ...rest, permissionMode });
@@ -493,8 +503,9 @@ export function Chat({
       return;
     }
     const uuid = newId();
-    // Line comments go with the next prompt, as in Claude Desktop; a command takes none.
-    const notes = cwd && !text.trimStart().startsWith('/') ? commentsOf(cwd) : [];
+    // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command
+    // takes none. Taken now, they go with this message only; they come back if it does not go.
+    const notes = from !== 'chat' && !text.trimStart().startsWith('/') ? takeComments(viewId) : [];
     const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
@@ -508,20 +519,23 @@ export function Chat({
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
-        clearDraft(viewId, text);
-        if (cwd) dropComments(cwd, notes);
+        if (from === 'box') clearDraft(viewId, text);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
-        clearDraft(viewId, text);
-        if (cwd) dropComments(cwd, notes);
+        if (from === 'box') clearDraft(viewId, text);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back and give it back to edit, files and all.
+      // Nothing reached Claude: take the message back. Its comments wait again; words from the box
+      // go back to it, files and all, above anything typed since. What the chat sent leaves the box be.
       removeLocalMessage(viewId, uuid);
+      putBackComments(viewId, notes);
+      const giveBack = () => {
+        if (from === 'box') setDraftText({ text, attachments, key: Date.now(), back: true });
+      };
       if (error instanceof ApiError && error.trust) {
         // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
         // the first answer counts: a double tap on the sheet must not start two Claudes.
@@ -533,13 +547,13 @@ export function Chat({
         };
         setTrustAsk({
           brings: error.trust.brings,
-          answer: (choice) => once(() => void send(text, attachments, mode, choice)),
-          cancel: () => once(() => setDraftText({ text, attachments, key: Date.now() })),
+          answer: (choice) => once(() => void send(text, attachments, mode, from, choice)),
+          cancel: () => once(giveBack),
         });
         return;
       }
       failed(error);
-      setDraftText({ text, attachments, key: Date.now() });
+      giveBack();
     }
   };
 
@@ -549,8 +563,11 @@ export function Chat({
   const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
-  // A side chat has none of its own; Changes and files and it take turns beside the conversation.
-  const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace);
+  // A side chat has none of its own; Changes and files and it take turns beside the conversation,
+  // one on screen at a time.
+  const composer = useRef<ComposerHandle>(null);
+  const side = useSideChat(Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
+  const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
@@ -583,21 +600,21 @@ export function Chat({
             settled = true;
           },
           cancel: () => {
-            if (!settled) setDraftText({ text: `!${command}`, key: Date.now() });
+            if (!settled) setDraftText({ text: `!${command}`, key: Date.now(), back: true });
             settled = true;
           },
         });
         return;
       }
       failed(error);
-      setDraftText({ text: `!${command}`, key: Date.now() });
+      setDraftText({ text: `!${command}`, key: Date.now(), back: true });
     }
   };
 
   // An API error the conversation ends on: its prompt goes again, with its pictures and files.
   const sendAgain = (prompt: Extract<Item, { kind: 'user' }>) => {
     setSendError(undefined);
-    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy), failed);
+    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy, 'chat'), failed);
   };
 
   // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
@@ -638,6 +655,13 @@ export function Chat({
     }
   };
 
+  // The pane's tabs load once the conversation is up, ready before they are asked for.
+  useEffect(() => {
+    if (!cwd) return undefined;
+    const timer = setTimeout(prefetchWorkspace, 1500);
+    return () => clearTimeout(timer);
+  }, [cwd]);
+
   // Files changed in the session's folder, for the badge on the Changes button: read when the chat
   // opens and as each turn ends; Changes and files reads it more often only while it is looked at.
   const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd) });
@@ -648,22 +672,25 @@ export function Chat({
     if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
     if (!busy && sessionId) void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
   }, [busy, cwd, sessionId, queryClient]);
-  // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
+  // Paths in the conversation, and in a side chat's answers, open their file in Changes and files,
+  // at their line; a turn's line its changes. The side chat makes way first, wherever it is.
   const { show: showWorkspace } = workspace;
-  // Line comments waiting to go with the next message.
-  const waitingComments = useComments(cwd ?? '');
+  const { makeWay } = side;
+  // Line comments waiting to go with the next message from this chat.
+  const waitingComments = useComments(viewId);
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
-    openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
-    openTurn: (uuid) => showWorkspace({ tab: 'changes', scope: uuid }),
+    openFile: (path, line) => makeWay(() => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) })),
+    openTurn: (uuid) => makeWay(() => showWorkspace({ tab: 'changes', scope: uuid })),
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
-  } : undefined, [cwd, showWorkspace, turnChanges]);
+  } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
 
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
     [sessionId, view.offset, view.messages, detail?.tasks],
   );
-  const showTasks = tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
+  // A side chat's tasks are the copy of its session's, not work of its own.
+  const showTasks = !sideChat && tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
 
   useEffect(() => setSessionTitle(title), [title]);
   useEffect(() => () => setSessionTitle(undefined), []);
@@ -699,7 +726,7 @@ export function Chat({
       if (e.key !== 'Escape' || e.defaultPrevented || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
       const target = e.target instanceof HTMLElement ? e.target : undefined;
       if (target && target !== document.body && !root.current?.contains(target)) return;
-      if (target?.matches('input, textarea, select, [contenteditable="true"]') && !target.matches('[aria-label="Message Claude"]')) return;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]') && !target.matches('[aria-label="Message Claude"], [aria-label="Side question"]')) return;
       e.preventDefault();
       void api.interrupt(sessionId);
     };
@@ -722,7 +749,6 @@ export function Chat({
   }, [sessionId, thought]);
 
   // Files dropped anywhere on the conversation go to the composer.
-  const composer = useRef<ComposerHandle>(null);
   const [dropping, setDropping] = useState(false);
   const dragDepth = useRef(0);
   const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
@@ -789,10 +815,11 @@ export function Chat({
 
   return (
     <PathLinksContext.Provider value={links}>
-    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
+    <CommentsChat.Provider value={viewId}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
-        {/* Also while Changes and files has folded the list away, beside the conversation. */}
-        {(!wide || workspace.folded) && (
+        {/* Also while Changes and files, or the side chat, has folded the list away beside the conversation. */}
+        {(!wide || workspace.folded || side.folded) && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
@@ -822,10 +849,10 @@ export function Chat({
             ref={workspace.toggle}
             type="button"
             aria-label="Changes and files"
-            aria-pressed={workspace.dockable ? workspace.open && !side.docked : undefined}
+            aria-pressed={workspace.dockable ? paneShown : undefined}
             title={`Changes and files (${PANE_KEYS})`}
-            onClick={() => workspace.setOpen(!workspace.open)}
-            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.docked && !side.docked ? 'bg-hover text-fg' : 'text-muted'}`}
+            onClick={() => (paneShown ? workspace.setOpen(false) : makeWay(() => workspace.show()))}
+            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.dockable && paneShown ? 'bg-hover text-fg' : 'text-muted'}`}
           >
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
@@ -849,8 +876,8 @@ export function Chat({
             cwd={cwd}
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
-            {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
-            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy) } : {})}
+            {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+            {...(sessionId ? { onRetry: sendAgain, ...(sideChat ? {} : { onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') }) } : {})}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -872,7 +899,7 @@ export function Chat({
         )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
-          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy)} />
+          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')} />
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
@@ -909,9 +936,9 @@ export function Chat({
             <NoteText text={sendError.text} />
           </Notice>
         )}
-        {waitingComments.length > 0 && !workspace.open && (
+        {waitingComments.length > 0 && !paneShown && (
           <div className="mx-auto mb-2 flex max-w-3xl">
-            <button type="button" onClick={() => workspace.show({ tab: 'changes' })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
+            <button type="button" onClick={() => makeWay(() => workspace.show({ tab: 'changes' }))} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
               <MessageSquare className="size-3.5 shrink-0 text-faint" />
               <span className="truncate">{waitingComments.length === 1 ? '1 comment goes with your next message' : `${waitingComments.length} comments go with your next message`}</span>
             </button>
@@ -932,16 +959,16 @@ export function Chat({
         settings={shown}
         onSettings={changeSettings}
         models={modelList?.models}
-        onSend={(text, attachments, mode) => void send(text, attachments, mode)}
-        {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
-        {...(sessionId && !session?.sideChatOf ? { onSideChat: side.show } : {})}
+        onSend={(text, attachments, mode) => void send(text, attachments, mode, 'box')}
+        {...(sessionId && !sideChat ? { onShell: (command: string) => void shell(command), onSideChat: side.show } : {})}
+        side={sideChat}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
         // On a computer the box takes the keys as soon as a chat opens. On a phone only a new
         // session, opened to type in, does: a session opened to read must not raise the keyboard
         // over the conversation.
         autoFocus={!sessionId || hasKeyboard()}
-        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
+        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sideChat ? 'Ask a side question' : sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
         {...(cwd ? { cwd } : {})}
@@ -956,13 +983,13 @@ export function Chat({
 
       {cwd && (
         <Workspace
-          open={workspace.open && !(side.docked && workspace.dockable)}
+          open={paneShown}
           docked={workspace.docked}
           busy={busy && permissions.length === 0}
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+          {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: (uuid: string) => setRewinding(uuid) }) } : {})}
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
             // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.
@@ -970,9 +997,10 @@ export function Chat({
             else setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
           onSendComments={() => {
-            if (commentsOf(cwd).length === 0) return;
+            // None waiting: there were none, or they are on their way (a second tap of Send now).
+            if (commentsOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
-            void send('', [], prefs.sendWhileBusy);
+            void send('', [], prefs.sendWhileBusy, 'comments');
           }}
         />
       )}
@@ -1004,7 +1032,7 @@ export function Chat({
           {...(machine ? { machine } : {})}
           thinking={thought}
           onRenamed={refresh}
-          {...(!session?.sideChatOf ? {
+          {...(!sideChat ? {
             onSideChat: () => {
               setMenuOpen(false);
               side.show();
@@ -1025,6 +1053,7 @@ export function Chat({
         />
       )}
     </div>
+    </CommentsChat.Provider>
     </PathLinksContext.Provider>
   );
 }

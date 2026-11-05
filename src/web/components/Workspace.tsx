@@ -7,14 +7,13 @@ import { api } from '../lib/api';
 import { baseName } from '../lib/format';
 import { closesPane, composing, isApple } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
-import { useComments } from '../lib/review';
+import { useComments, useCommentsChat } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
 import { SelectionFoot } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
-import { WorkspaceChanges } from './WorkspaceChanges';
-import { WorkspaceFiles } from './WorkspaceFiles';
+import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
 
 /**
  * From this width Changes and files sits beside the conversation instead of over it; under the
@@ -126,7 +125,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, onAddToMessage, onSendComments }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -139,13 +138,15 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   sessionId?: string;
   /** Rewind code: puts the files back as they were before a prompt (the chat asks first). */
   onRewind?: (uuid: string) => void;
+  /** Commit, Push and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
+  requests?: boolean;
   /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */
   /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
 }) {
-  const comments = useComments(cwd);
+  const comments = useComments(useCommentsChat(cwd));
   const commentsIn = useMemo(() => {
     const count = new Map<string, number>();
     for (const c of comments) count.set(c.path, (count.get(c.path) ?? 0) + 1);
@@ -229,7 +230,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           go={go}
           setScope={(to) => goTo(to, false)}
           {...(onRewind ? { onRewind } : {})}
-          onRequest={(text) => onAddToMessage(text, 'block')}
+          {...(requests ? { onRequest: (text: string) => onAddToMessage(text, 'block') } : {})}
         />
       )}
       {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}

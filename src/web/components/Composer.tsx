@@ -184,10 +184,11 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, o
 }
 
 /**
- * What Chat can do to the composer from outside: files dropped anywhere on the conversation, and
- * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts).
+ * What Chat can do to the composer from outside: files dropped anywhere on the conversation,
+ * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts), and
+ * giving the box the keys.
  */
-export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void };
+export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void; focus: () => void };
 
 /** A finished upload as it comes back from a saved draft: the file is on the server already. */
 const restored = (a: Attachment): Upload => ({
@@ -195,6 +196,27 @@ const restored = (a: Attachment): Upload => ({
 });
 
 const MODE_HINT: Record<SendMode, string> = { steer: 'Claude reads it at its next step', queue: 'Sent when this turn ends' };
+
+/**
+ * Gives the box the keys with `put`, now or, when a sheet still on its way out holds the rest of
+ * the page (the session menu, after its Side chat or Add to message), once it has gone and given
+ * the keys back to what opened it.
+ */
+function takeKeys(box: HTMLTextAreaElement | null, put: () => void): void {
+  put();
+  if (box && document.activeElement !== box) {
+    [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
+  }
+}
+
+/**
+ * Text to put in the box, a new `key` each time: a prompt to edit, a suggestion. `append` adds it
+ * after what is written; `block` too, on lines of its own (a request to Claude). `back`: a message
+ * that did not go, given back with its quotes and files: into an empty box as it was, else above
+ * what was typed since. A `!` command goes back only into an empty box: words typed under it would
+ * become part of the command.
+ */
+export type ComposerDraft = { text: string; key: number; append?: boolean; block?: boolean; back?: boolean; attachments?: Attachment[] };
 
 export function Composer({
   busy,
@@ -214,6 +236,7 @@ export function Composer({
   disabled,
   onSideChat,
   side = false,
+  atBottom = true,
   ref,
 }: {
   busy: boolean;
@@ -231,13 +254,7 @@ export function Composer({
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
   cwd?: string;
-  /**
-   * Text to put in the box, e.g. a prompt being edited, or one that failed to send (with its
-   * files); a new `key` puts it in again. `append` adds it after what is there; `block` too, on
-   * lines of its own (a quote, line comments, a request).
-   */
-  /** `block`: text that goes on lines of its own after what is written (a request to Claude). */
-  draft?: { text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] };
+  draft?: ComposerDraft;
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
@@ -247,6 +264,8 @@ export function Composer({
   onSideChat?: (question: string) => void;
   /** A side chat's own box: questions only, without files, settings, `!` or `/` commands. */
   side?: boolean;
+  /** At the bottom of the screen, clear of a phone's edge; a side chat's pane or sheet keeps clear of it itself. */
+  atBottom?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {
   const [saved] = useState(() => (draftKey && !draft ? loadDraft(draftKey) : undefined));
@@ -260,6 +279,7 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const chips = useRef<HTMLUListElement>(null);
   const listId = useId();
 
   const model = modelOf(models, settings);
@@ -303,9 +323,13 @@ export function Composer({
   useEffect(() => {
     if (!draft) return;
     // A message given back (its send failed) brings its quotes back above the box, before any added since.
-    const back = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
-    if (back.quotes.length > 0) setQuotes((list) => [...back.quotes, ...list.filter((q) => !back.quotes.includes(q))]);
-    const next = draft.block ? withQuote(text, draft.text) : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : back.text;
+    const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
+    if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
+    const typed = text.trim().length > 0;
+    const next = draft.block ? withQuote(text, draft.text)
+      : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
+        : draft.back && typed ? (given.text.startsWith('!') ? text : `${given.text.trimEnd()}\n\n${text}`)
+          : given.text;
     setText(next);
     // Its files come back too, beside any added since.
     const files = draft.attachments;
@@ -317,14 +341,7 @@ export function Composer({
       el.setSelectionRange(next.length, next.length);
       setCaret(next.length);
     };
-    requestAnimationFrame(() => {
-      put();
-      // The sheet that put it here (Add to message) may still be on its way out, holding the rest
-      // of the page; once it has gone, and given focus back to what opened it, the box takes it.
-      if (area.current && document.activeElement !== area.current) {
-        [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
-      }
-    });
+    requestAnimationFrame(() => takeKeys(area.current, put));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
 
@@ -405,9 +422,9 @@ export function Composer({
   }, [text, hint]);
 
   // On a phone too: a new session opens ready to type, with the keyboard up where the browser
-  // lets a page raise it.
+  // lets a page raise it. A side chat opened from the session menu has the keys once the menu has gone.
   useEffect(() => {
-    if (autoFocus) area.current?.focus();
+    if (autoFocus) takeKeys(area.current, () => area.current?.focus());
   }, [autoFocus]);
 
   const addFiles = (files: FileList | File[]) => {
@@ -424,10 +441,21 @@ export function Composer({
   useImperativeHandle(ref, () => ({
     addFiles,
     saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes),
+    focus: () => area.current?.focus({ preventScroll: true }),
   }));
 
   const forget = (u: Upload) => {
     if (u.preview?.startsWith('blob:')) URL.revokeObjectURL(u.preview);
+  };
+
+  /**
+   * A quote taken away. With the keys (or on a computer) they go on to the next quote, else to the
+   * box; a tap on a phone leaves them, so its keyboard stays down.
+   */
+  const removeQuote = (at: number, byKeys: boolean) => {
+    setQuotes((list) => list.filter((_, i) => i !== at));
+    if (!byKeys && !hasKeyboard()) return;
+    requestAnimationFrame(() => (chips.current?.querySelectorAll('button')[at] ?? area.current)?.focus({ preventScroll: true }));
   };
 
   const submit = () => {
@@ -531,8 +559,7 @@ export function Composer({
 
   return (
     // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
-    // A side chat's box sits in a pane or a sheet, which keeps clear of the phone's edge itself.
-    <div className={`${side ? 'pb-2' : 'pb-safe'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
+    <div className={`${atBottom ? 'pb-safe' : 'pb-2'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
       {showSuggestions && (
         <div
           id={listId}
@@ -565,7 +592,8 @@ export function Composer({
       )}
       <div className="mx-auto max-w-3xl rounded-[22px] border border-line bg-panel shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
         {quotes.length > 0 && (
-          <ul aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3">
+          // Scrolls sideways when the quotes do not fit, fading at the edge as the model row does.
+          <ul ref={chips} aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
             {quotes.map((quote, i) => {
               const label = quoteLabel(quote);
               return (
@@ -576,7 +604,7 @@ export function Composer({
                   <button
                     type="button"
                     aria-label={`Remove the quote ${label}`}
-                    onClick={() => setQuotes((list) => list.filter((_, j) => j !== i))}
+                    onClick={(e) => removeQuote(i, e.detail === 0)}
                     className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-1.5 hover:bg-hover hover:text-fg"
                   >
                     <X className="size-3.5" />

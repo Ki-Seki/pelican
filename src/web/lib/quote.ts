@@ -4,8 +4,8 @@
  * lines. Quotes wait above the message box and go above your words, each a block of its own.
  */
 
-/** What was selected: text from the conversation, or lines of a file, numbered as in the file. */
-export type Selection = { text: string } | { text: string; path: string; start: number; end?: number };
+/** What was selected: text from the conversation, or lines of a file from line `start` on, numbered as in the file. */
+export type Selection = { text: string } | { text: string; path: string; start: number };
 
 /** A file quote longer than this many lines keeps its first ones, and its range says so. */
 export const MAX_QUOTE_LINES = 200;
@@ -17,18 +17,19 @@ const HEADER = /^(\S(?:.*\S)?):(\d+)(?:-(\d+))?( \(removed\))?$/;
 const QUOTED = /^>( |$)/;
 const FENCE = /^\s*(```|~~~)/;
 
-const quoted = (lines: string[]) => lines.map((line) => (line ? `> ${line}` : '>')).join('\n');
+const quoted = (lines: readonly string[]) => lines.map((line) => (line ? `> ${line}` : '>')).join('\n');
 
 /**
  * The selection's lines. A file's are kept as they are, blank ones included, so they match their
- * numbers; text from the conversation loses the blank lines around it, and a run of them counts
- * as one. Indentation stays either way: output and code read by it.
+ * numbers, all but the line break a selection of whole lines ends with; text from the conversation
+ * loses the blank lines around it, and a run of them counts as one. Indentation stays either way:
+ * output and code read by it.
  */
 function linesOf(text: string, file: boolean): string[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd());
   if (file) {
     if (lines.length > 1 && lines.at(-1) === '') lines.pop();
-    return lines.some(Boolean) ? lines : [];
+    return lines;
   }
   const kept: string[] = [];
   for (const line of lines) {
@@ -39,35 +40,35 @@ function linesOf(text: string, file: boolean): string[] {
   return kept;
 }
 
+/** A quote's lines, past what a message can carry cut short at the end of a line. */
+const capped = (body: string) => (body.length > MAX_QUOTE_CHARS ? body.slice(0, MAX_QUOTE_CHARS).replace(/\n[^\n]*$/, '') : body);
+
 /**
- * The quote for a selection. A file's lines carry where they are (`src/app.ts:7-8`, or
- * `src/app.ts:7` for one line); text from the conversation is quoted as it reads. Empty when
- * nothing but space was selected.
+ * Lines of a file quoted under where they are (`src/app.ts:7-8`, or `src/app.ts:7` for one line),
+ * from line `start` on: the first ones when there are too many, and the range names exactly the
+ * lines the quote holds. Empty when they are all blank.
  */
-export function quoteText(selection: Selection): string {
-  const file = 'path' in selection;
-  let lines = linesOf(selection.text, file);
-  if (lines.length === 0) return '';
-  let cut = false;
-  if (file && lines.length > MAX_QUOTE_LINES) {
-    lines = lines.slice(0, MAX_QUOTE_LINES);
-    cut = true;
-  }
-  let body = quoted(lines);
-  if (body.length > MAX_QUOTE_CHARS) {
-    body = body.slice(0, MAX_QUOTE_CHARS).replace(/\n[^\n]*$/, '');
-    cut = true;
-  }
-  if (!file) return cut ? `${body}\n> …` : body;
-  // Cut short, the range names the lines the quote holds, not all those selected.
-  const end = cut ? selection.start + body.split('\n').length - 1 : selection.end ?? selection.start + lines.length - 1;
-  return `${selection.path}:${end > selection.start ? `${selection.start}-${end}` : selection.start}\n${body}`;
+function fileQuote(path: string, start: number, lines: readonly string[]): string {
+  if (!lines.some(Boolean)) return '';
+  const body = capped(quoted(lines.slice(0, MAX_QUOTE_LINES)));
+  const end = start + body.split('\n').length - 1;
+  return `${path}:${end > start ? `${start}-${end}` : start}\n${body}`;
 }
 
-/** A message with its quotes above the words, as Claude reads it: each block apart from the next. */
-export function messageWithQuotes(quotes: readonly string[], text: string): string {
-  return [...quotes.map((q) => q.trim()), text.trim()].filter(Boolean).join('\n\n');
+/**
+ * The quote for a selection. A file's lines carry where they are; text from the conversation is
+ * quoted as it reads. Empty when nothing but space was selected.
+ */
+export function quoteText(selection: Selection): string {
+  if ('path' in selection) return fileQuote(selection.path, selection.start, linesOf(selection.text, true));
+  const lines = linesOf(selection.text, false);
+  if (lines.length === 0) return '';
+  const body = quoted(lines);
+  return body.length > MAX_QUOTE_CHARS ? `${capped(body)}\n> …` : body;
 }
+
+// A message with its quotes above the words: lib/drafts has it, as it loads with the first screen.
+export { messageWithQuotes } from './drafts';
 
 /**
  * The quotes a message starts with, as messageWithQuotes put them there, and the words after
@@ -162,9 +163,13 @@ export function receiveQuotes(key: string, take: (quote: string) => void): () =>
   };
 }
 
-/** Lines `from` to `to` of a file (numbered from 1), quoted with where they are: the file viewer's Quote. */
+/**
+ * Lines `from` to `to` of a file (numbered from 1), quoted with where they are: the file viewer's
+ * Quote. They are the file's own lines, a blank last one too: there is no selection's line break
+ * to leave out, so the quote holds every line its range names.
+ */
 export function quoteLines(path: string, from: number, to: number, lines: readonly string[]): string {
-  return quoteText({ text: lines.join('\n'), path, start: from, end: to });
+  return fileQuote(path, from, lines.slice(0, Math.max(0, to - from + 1)).map((line) => line.trimEnd()));
 }
 
 /**

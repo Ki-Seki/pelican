@@ -333,31 +333,49 @@ async function checkDocked(browser, base, sessions) {
 }
 
 /**
- * The side chat, at the narrowest width it sits beside the conversation at: it opens with
- * Cmd/Ctrl+; and stays inside the window when the conversation holds a long line.
+ * The side chat, at the narrowest width it sits beside the conversation at, where the session list
+ * folds away for it: it opens with Cmd/Ctrl+;, stays inside the window when the conversation holds
+ * a long line, leaves the conversation room, and answers a question (the demo acts the answer out).
  */
 async function checkSideChat(browser, base, sessions) {
   const session = sessions.find((s) => !s.sideChatOf);
   if (!session) return;
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   const page = await context.newPage();
   watch(page, () => 'app, side chat');
   await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(300);
   await page.keyboard.press('ControlOrMeta+;');
-  await page.waitForTimeout(300);
-  const out = await page.evaluate(() => {
-    const pane = document.querySelector('aside[aria-label="Side chat"]');
-    if (!pane) return 'does not open with Cmd/Ctrl+;';
+  const pane = page.getByRole('complementary', { name: 'Side chat' });
+  if (!(await pane.waitFor({ timeout: 3000 }).then(() => true, () => false))) {
+    problems.push('app, side chat: does not open with Cmd/Ctrl+;');
+    await context.close();
+    return;
+  }
+  const found = await page.evaluate(() => {
+    const out = [];
+    const side = document.querySelector('aside[aria-label="Side chat"]');
     const column = document.querySelector('main .max-w-3xl');
     const probe = document.createElement('div');
     probe.className = 'truncate';
     probe.textContent = 'A very long line '.repeat(80);
     column?.append(probe);
-    const r = pane.getBoundingClientRect();
-    return r.right > innerWidth + 1 ? `ends ${Math.round(r.right - innerWidth)}px past the window` : '';
+    const r = side.getBoundingClientRect();
+    if (r.right > innerWidth + 1) out.push(`ends ${Math.round(r.right - innerWidth)}px past the window`);
+    const conversation = document.querySelector('main')?.getBoundingClientRect();
+    if (conversation && conversation.width - r.width < 320) out.push(`the conversation is ${Math.round(conversation.width - r.width)}px wide beside it`);
+    return out;
   });
-  if (out) problems.push(`app, side chat: ${out}`);
+  problems.push(...found.map((problem) => `app, side chat: ${problem}`));
+  const question = 'Why CSS variables, and not a context?';
+  const box = pane.getByRole('textbox', { name: 'Side question' });
+  await box.fill(question);
+  await box.press('Enter');
+  if (!(await pane.getByText(/answers here from the session so far/).first().waitFor({ timeout: 8000 }).then(() => true, () => false))) {
+    problems.push('app, side chat: a question gets no answer');
+  } else if (!(await pane.getByText(question).count())) {
+    problems.push('app, side chat: the question does not show above its answer');
+  }
   await context.close();
 }
 
