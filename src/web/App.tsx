@@ -17,6 +17,7 @@ import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
 import { forgetDrafts } from './lib/drafts';
 import { withMod } from './lib/keyboard';
+import { retried } from './lib/load';
 import { useMedia } from './lib/media';
 import {
   disableNotifications,
@@ -40,8 +41,6 @@ const loadSettings = () => import('./components/Settings');
 /** Loaded ahead of need; one that fails here is asked for again when it is needed. */
 const prefetch = (load: () => Promise<unknown>) => void load().catch(() => undefined);
 if (new URLSearchParams(location.search).has('s')) prefetch(loadChat);
-/** On a flaky link one request can drop: it is made once more, a moment later, before giving up. */
-const retried = <T,>(load: () => Promise<T>) => load().catch(() => new Promise((resolve) => setTimeout(resolve, 800)).then(load));
 const LazyChat = lazy(() => retried(loadChat).then((m) => ({ default: m.Chat })));
 const LazySettings = lazy(() => retried(loadSettings).then((m) => ({ default: m.SettingsSheet })));
 

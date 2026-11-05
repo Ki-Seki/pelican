@@ -8,6 +8,7 @@ import { qrSvg } from '../../shared/qr';
 import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
 import { hasKeyboard, MOD } from '../lib/keyboard';
+import { retried } from '../lib/load';
 import type { NotificationState } from '../lib/notifications';
 import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, VIEW_OPTIONS, type ViewMode } from '../lib/prefs';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
@@ -16,7 +17,7 @@ import { showShortcuts } from './Shortcuts';
 
 // The usage page loads once Settings is open, not with it: Settings shows sooner on a slow link.
 const loadUsage = () => import('./Usage');
-const UsageSheet = lazy(() => loadUsage().then((m) => ({ default: m.UsageSheet })));
+const UsageSheet = lazy(() => retried(loadUsage).then((m) => ({ default: m.UsageSheet })));
 
 const isLoopback = (host: string) => host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host.startsWith('127.');
 
