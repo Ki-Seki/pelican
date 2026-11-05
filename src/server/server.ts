@@ -9,6 +9,7 @@ import { app } from './app.js';
 import { loadAuth, signedIn } from './auth.js';
 import { config } from './config.js';
 import { connect, subscribe } from './feed.js';
+import { keepDays, sweepUploads } from './files.js';
 import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
@@ -25,6 +26,7 @@ const HEARTBEAT_MS = 25_000;
  * link): each update replaces the last, so only the newest is sent once the backlog is gone.
  */
 const MAX_BUFFERED = 256 * 1024;
+const DAY_MS = 24 * 3600_000;
 
 /** A client event, or undefined for anything else. */
 function clientEvent(text: string): ClientEvent | undefined {
@@ -182,6 +184,12 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
 
   const stopWatching = watchWaiting();
 
+  // Every attachment is saved for Claude to read; they go when Claude Code lets go of sessions.
+  const sweep = () => void keepDays().then((days) => sweepUploads(days * DAY_MS)).catch(() => undefined);
+  sweep();
+  const sweeping = setInterval(sweep, DAY_MS);
+  sweeping.unref();
+
   const shutdown = () => {
     closeAll();
     server.close();
@@ -192,6 +200,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
 
   const close = async () => {
     stopWatching();
+    clearInterval(sweeping);
     process.off('SIGINT', shutdown);
     process.off('SIGTERM', shutdown);
     for (const client of wss.clients) client.terminate();
