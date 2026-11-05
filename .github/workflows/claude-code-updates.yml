@@ -1,0 +1,64 @@
+name: Claude Code updates
+
+# Once a week, the issue "Claude Code updates to consider": what Claude Code and the Agent SDK have
+# released since the version Pelican pins, from scripts/upstream-report.mjs. Always the same issue,
+# edited: closed once Pelican pins the newest, reopened when something new arrives.
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  issue:
+    name: Keep the issue current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      # Nothing to install: the script uses Node alone.
+      - name: What is newer than the pinned Agent SDK
+        run: node scripts/upstream-report.mjs > "$RUNNER_TEMP/updates.md"
+      - name: Edit, open or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          title='Claude Code updates to consider'
+          body="$RUNNER_TEMP/updates.md"
+          # The one this workflow opened; an issue of the same name that someone else opened is
+          # left alone.
+          found=$(gh api -X GET search/issues -f q="repo:$repo is:issue author:app/github-actions in:title \"$title\"" -f sort=created -f order=desc \
+            --jq "[.items[] | select(.title == \"$title\")][0] // empty | \"\(.number) \(.state)\"")
+          number=${found% *}
+          state=${found#* }
+
+          if [ ! -s "$body" ]; then
+            if [ -n "$found" ] && [ "$state" = open ]; then
+              gh issue close "$number" --repo "$repo" --reason completed --comment "Nothing is newer than what Pelican pins."
+            fi
+            exit 0
+          fi
+          printf '\n%s\n' "Kept current each week by [Claude Code updates]($GITHUB_SERVER_URL/$repo/actions/workflows/claude-code-updates.yml)." >> "$body"
+          if [ -z "$found" ]; then
+            gh issue create --repo "$repo" --title "$title" --body-file "$body"
+          elif [ "$(gh issue view "$number" --repo "$repo" --json body --jq .body)" != "$(cat "$body")" ]; then
+            gh issue edit "$number" --repo "$repo" --body-file "$body"
+            # Closed by hand or by this workflow: something new is worth another look.
+            if [ "$state" != open ]; then gh issue reopen "$number" --repo "$repo"; fi
+          fi
