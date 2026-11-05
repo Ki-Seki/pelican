@@ -240,9 +240,6 @@ export async function folderTrusted(folder: string): Promise<boolean> {
   return claudeRanIn(dir);
 }
 
-const MAX_ITEM = 200;
-const MAX_ITEMS = 24;
-const short = (text: string) => (text.length > MAX_ITEM ? `${text.slice(0, MAX_ITEM - 1)}…` : text);
 const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
 /** Settings that run a command of the folder's choosing, as Claude Code's trust dialog lists them. */
@@ -553,8 +550,9 @@ export async function folderBrings(folder: string): Promise<string[]> {
   }
   if (spent(budget)) found.push('More commands, skills and agents than Pelican reads');
   if (top) found.push(...(await gitBrings(top)));
-  const unique = [...new Set(found.map(short))];
-  return unique.length > MAX_ITEMS ? [...unique.slice(0, MAX_ITEMS - 1), `and ${unique.length - MAX_ITEMS + 1} more`] : unique;
+  // Every item, each whole: the part of a command that matters can come after any amount of
+  // padding, or after any number of harmless items (the sheet scrolls).
+  return [...new Set(found)];
 }
 
 /**
