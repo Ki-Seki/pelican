@@ -105,6 +105,39 @@ describe('readHistory: messages sent mid-turn', () => {
   });
 });
 
+describe('readHistory: notes Claude Code adds to the conversation', () => {
+  it('keeps hook feedback, warnings and notices where they were said, under the id the run published them with', async () => {
+    const file = path.join(dir, 'notes.jsonl');
+    const at = () => new Date((clock += 1000)).toISOString();
+    await writeFile(file, [
+      say('u1', null, 'user', 'Delete the build folder'),
+      JSON.stringify({
+        uuid: 'a1', parentUuid: 'u1', type: 'assistant', timestamp: at(),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'rm -rf build' } }] },
+      }),
+      // A hook's message, as Claude Code records it, and its own notices.
+      JSON.stringify({
+        uuid: 'h1', parentUuid: 'a1', type: 'attachment', timestamp: at(),
+        attachment: { type: 'hook_system_message', content: 'rm -rf is blocked here\nuse the clean script', hookName: 'PreToolUse:Bash', toolUseID: 't1', hookEvent: 'PreToolUse' },
+      }),
+      JSON.stringify({ uuid: 'n1', parentUuid: 'h1', type: 'system', subtype: 'informational', level: 'warning', content: 'The hook took 9 s', isMeta: false, timestamp: at() }),
+      // The terminal shows 'info' lines only in its transcript view; the run does not publish them either.
+      JSON.stringify({ uuid: 'n2', parentUuid: 'n1', type: 'system', subtype: 'informational', level: 'info', content: 'Running hooks', isMeta: false, timestamp: at() }),
+      JSON.stringify({
+        uuid: 'r1', parentUuid: 'n2', type: 'user', timestamp: at(),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Blocked by hook', is_error: true }] },
+      }),
+      say('a2', 'r1', 'assistant', 'I used npm run clean instead.'),
+    ].join('\n') + '\n');
+    const messages = await readHistory(file);
+    expect(messages.map((m) => [m.uuid, m.role])).toEqual([['u1', 'user'], ['a1', 'assistant'], ['h1', 'system'], ['n1', 'system'], ['r1', 'user'], ['a2', 'assistant']]);
+    // In Claude Code's words, as the run shows them while the turn runs.
+    expect(messages[2]!.blocks).toEqual([{ type: 'text', text: 'PreToolUse:Bash says: rm -rf is blocked here\nPreToolUse:Bash says: use the clean script' }]);
+    expect(messages[3]!.blocks).toEqual([{ type: 'text', text: 'The hook took 9 s' }]);
+    expect(messages[3]!.timestamp).toBeTypeOf('number');
+  });
+});
+
 describe('readRecordedSettings', () => {
   it('keeps what the session last ran with: model, effort, speed, ultracode, permission mode', async () => {
     const { readRecordedSettings } = await import('../src/server/history');

@@ -154,15 +154,34 @@ function steeredMessage(row: Record<string, unknown>, uuid: string, address: Ima
   return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
 }
 
-/**
- * What Claude Code wrote into the conversation itself when a command ran in it locally (/cost,
- * /context): the command and its output. Shown as notes, never as prompts.
- */
-function localCommand(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
-  const text = row.type === 'system' && row.subtype === 'local_command' ? str(row.content) : undefined;
-  if (!text) return undefined;
+/** A line of Claude Code's own in the conversation, shown as a note, never as a prompt. */
+function noteOf(row: Record<string, unknown>, uuid: string, text: string | undefined): ChatMessage | undefined {
+  if (!text?.trim()) return undefined;
   const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
   return { uuid, role: 'system', blocks: [{ type: 'text', text }], ...(Number.isNaN(timestamp) ? {} : { timestamp }) };
+}
+
+/**
+ * What Claude Code wrote into the conversation itself when a command ran in it locally (/cost,
+ * /context): the command and its output.
+ */
+function localCommand(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+  return row.type === 'system' && row.subtype === 'local_command' ? noteOf(row, uuid, str(row.content)) : undefined;
+}
+
+/**
+ * Hook feedback (why a tool call was blocked), warnings and notices, as the run showed them while
+ * the turn ran, under the same id: without them here, a page that reads the transcript again once
+ * the turn ends would lose them. A hook's message is an attachment, which Claude Code says as
+ * "<hook> says: …" line by line; 'info' lines are the terminal's transcript view only.
+ */
+function notice(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+  if (row.type === 'system' && row.subtype === 'informational') return row.level === 'info' ? undefined : noteOf(row, uuid, str(row.content));
+  const hook = row.attachment as { type?: unknown; content?: unknown; hookName?: unknown } | undefined;
+  if (row.type !== 'attachment' || hook?.type !== 'hook_system_message' || !str(hook.content)) return undefined;
+  const lines = (text: string) => text.replace(/\r\n?|[\v\f\u0085\u2028\u2029]/g, '\n').split('\n');
+  const says = `${lines(str(hook.hookName) ?? '').join(' ')} says: `;
+  return noteOf(row, uuid, lines(str(hook.content)!).map((line) => says + line).join('\n'));
 }
 
 /** Adds one row, found `at` bytes into the file and `bytes` long. */
@@ -180,7 +199,7 @@ function addLine(t: Transcript, line: string, at: number, bytes: number): void {
   note(t.recorded, row);
   const turn = row.type === 'user' || row.type === 'assistant';
   const address = t.address?.(uuid);
-  const message = turn ? toChatMessage(row, address) : steeredMessage(row, uuid, address) ?? localCommand(row, uuid);
+  const message = turn ? toChatMessage(row, address) : steeredMessage(row, uuid, address) ?? localCommand(row, uuid) ?? notice(row, uuid);
   const weight = message ? weightOf(message.blocks) : 0;
   const existing = t.nodes.get(uuid);
   if (existing) {
