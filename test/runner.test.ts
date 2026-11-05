@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { Options, PermissionResult, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -646,6 +647,55 @@ describe('work that runs on its own', () => {
     await vi.waitFor(() => expect(state().context).toEqual({ percent: 12, tokens: 24_800, max: 200_000 }));
     expect(claude.called('getContextUsage')).toEqual([[{ detail: 'summary' }]]);
     expect(run.busy).toBe(false);
+  });
+});
+
+describe('a message sent while its Claude closes', () => {
+  // Claude idle for a while: the idle close may come while a message to it is on its way.
+  async function idle() {
+    const started = await start();
+    started.claude.say(init());
+    started.claude.say(result());
+    await vi.waitFor(() => expect(started.run.busy).toBe(false));
+    // Its transcript, where the session's folder is found when it is resumed.
+    const dir = path.join(scratch, 'claude', 'projects', folder.replace(/[^a-zA-Z0-9]/g, '-'));
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${started.sessionId}.jsonl`), `${JSON.stringify({
+      type: 'user', uuid: crypto.randomUUID(), parentUuid: null, sessionId: started.sessionId, cwd: folder,
+      timestamp: new Date(Date.now() - 60_000).toISOString(), message: { role: 'user', content: 'Fix the login test' },
+    })}\n`);
+    return started;
+  }
+
+  async function reachedAgain(sessionId: string, claude: FakeClaude, messages: () => ChatMessage[], uuid: string) {
+    await vi.waitFor(() => expect(claudes.at(-1)).not.toBe(claude));
+    const resumed = claudes.at(-1)!;
+    expect(resumed.options).toMatchObject({ resume: sessionId });
+    await vi.waitFor(() => expect(resumed.prompts.map((p) => p.uuid)).toEqual([uuid]));
+    expect(claude.prompts.map(textOf)).toEqual(['Fix the login test']);
+    // Shown once, as sent, and Claude is at work on it.
+    expect(messages().filter((m) => m.uuid === uuid)).toHaveLength(1);
+    expect(getRun(sessionId)?.busy).toBe(true);
+  }
+
+  it('closed while Pelican looks whether it is still current, goes to Claude resumed', async () => {
+    const { sessionId, claude, run, messages } = await idle();
+    const uuid = '00000000-0000-4000-8000-0000000000c1';
+    const sending = sendMessage({ sessionId }, { text: 'Are you there?', attachments: [], settings: {}, uuid });
+    run.close();
+    expect(await sending).toBe(sessionId);
+    await reachedAgain(sessionId, claude, messages, uuid);
+  });
+
+  it('closed while its settings are being applied, goes to Claude resumed', async () => {
+    FakeClaude.controlDelay = 100;
+    const { sessionId, claude, run, messages } = await idle();
+    const uuid = '00000000-0000-4000-8000-0000000000c2';
+    const sending = sendMessage({ sessionId }, { text: 'Are you there?', attachments: [], settings: { model: 'sonnet' }, uuid });
+    await vi.waitFor(() => expect(claude.called('setModel')).toHaveLength(1), { interval: 2 });
+    run.close();
+    expect(await sending).toBe(sessionId);
+    await reachedAgain(sessionId, claude, messages, uuid);
   });
 });
 

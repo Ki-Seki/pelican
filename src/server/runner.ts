@@ -107,6 +107,13 @@ export type SendInput = {
 
 type Prompt = { uuid: string; text: string; attachments: Attachment[] };
 
+/** The run closed while a message to it was on its way: it never reached Claude, and can go to another. */
+class RunClosed extends Error {
+  constructor() {
+    super('Claude Code stopped in this session');
+  }
+}
+
 /** What a user message holds, as the SDK types it, so an SDK change fails the typecheck here. */
 type UserContent = Exclude<Extract<SDKUserMessage['message'], { role: 'user' }>['content'], string>;
 
@@ -460,6 +467,8 @@ export class SessionRun {
     // In the same process Claude Code would go on under a new id, beside this session's.
     if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     await this.applySettings(input.settings);
+    // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
+    if (this.closed) throw new RunClosed();
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
     // Queued: not part of the conversation until the turn ends and Claude gets it.
     if (this.busy && input.mode === 'queue') {
@@ -473,6 +482,7 @@ export class SessionRun {
 
   private async deliver(prompt: Prompt, steer: boolean): Promise<void> {
     const content = await contentOf(prompt.text, prompt.attachments);
+    if (this.closed) throw new RunClosed();
     const message: SDKUserMessage = {
       type: 'user',
       uuid: prompt.uuid as UUID,
@@ -492,6 +502,8 @@ export class SessionRun {
     this.setBusy(true);
     const chat = toChatMessage({ type: 'user', uuid: prompt.uuid, message: { role: 'user', content } });
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
+    // Shown already: the Claude it goes to instead publishes it under the same id, which the feed has.
+    if (this.closed) throw new RunClosed();
     this.input.push(message);
   }
 
@@ -1052,8 +1064,11 @@ export class SessionRun {
         }
       }
     } catch (error) {
-      this.error = readableError((error as Error).message);
-      console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
+      // Closed here while what was queued went out: no error of Claude's.
+      if (!(error instanceof RunClosed)) {
+        this.error = readableError((error as Error).message);
+        console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
+      }
     } finally {
       // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
       const closedHere = this.closed;
@@ -1169,7 +1184,19 @@ async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
     if (runs.get(sessionId) === run) runs.delete(sessionId);
     return getRun(sessionId);
   }
-  return run;
+  // It may have closed while that was looked into (the idle close, an exit): then it is not current.
+  return run?.closed ? getRun(sessionId) : run;
+}
+
+/** Sends to a run that is there; false when it closed before the message reached it, for the caller to resume the session. */
+async function sentTo(run: SessionRun, input: SendInput): Promise<boolean> {
+  try {
+    await run.send(input);
+    return true;
+  } catch (error) {
+    if (error instanceof RunClosed) return false;
+    throw error;
+  }
 }
 
 /**
@@ -1181,20 +1208,14 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
   if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   if (target.sessionId) {
     const existing = await currentRun(target.sessionId);
-    if (existing) {
-      await existing.send(input);
-      return existing.sessionId;
-    }
+    if (existing && (await sentTo(existing, input))) return existing.sessionId;
     const info = await sessionInfo(target.sessionId);
     const cwd = info?.cwd ?? target.cwd;
     if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
     const launch = await launchFor(cwd);
     // Another request may have started one while this one looked the folder up.
     const started = getRun(target.sessionId);
-    if (started) {
-      await started.send(input);
-      return started.sessionId;
-    }
+    if (started && (await sentTo(started, input))) return started.sessionId;
     const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch);
     runs.set(run.sessionId, run);
     run.start();
