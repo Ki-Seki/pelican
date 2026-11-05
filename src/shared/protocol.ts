@@ -63,7 +63,92 @@ export type ToolResultBlock = {
   truncated?: boolean;
   /** The call was refused before it ran (by the user, a rule or auto mode), as the transcript records it. */
   denied?: boolean;
+  /** What a Workflow call launched, as Claude Code records it next to the result. */
+  workflow?: WorkflowLaunch;
 };
+
+/** The run a Workflow call started: its run id (the folder its agents write to) and its task. */
+export type WorkflowLaunch = {
+  runId?: string;
+  taskId?: string;
+  /** meta.name and meta.description of the script. */
+  name?: string;
+  summary?: string;
+  /** Launched in a cloud session instead (remote_launched): its address. */
+  sessionUrl?: string;
+  /** The copy of the script Claude Code kept for this run: its file name in the session's scripts folder. */
+  scriptFile?: string;
+};
+
+/**
+ * One agent of a workflow, as Claude Code reports it (a `workflow_agent` item of its progress).
+ * `start`: queued (`queuedAt` without `startedAt`) or just started; `progress`: running.
+ */
+export type WorkflowAgent = {
+  index: number;
+  label: string;
+  state: 'start' | 'progress' | 'done' | 'error';
+  phaseIndex?: number;
+  phaseTitle?: string;
+  agentId?: string;
+  agentType?: string;
+  isolation?: 'worktree' | 'remote';
+  model?: string;
+  /** The model it ran on instead, when Claude Code fell back to another. */
+  fallbackModel?: string;
+  /** Its context at its latest response (input, cache and output), as Claude Code counts it. */
+  tokens?: number;
+  toolCalls?: number;
+  durationMs?: number;
+  error?: string;
+  queuedAt?: number;
+  startedAt?: number;
+  lastProgressAt?: number;
+  attempt?: number;
+  lastAttemptReason?: 'stalled' | 'throttled' | 'user-retry';
+  skipped?: boolean;
+  blocked?: boolean;
+  /** Its result came back from the run's journal (a resumed run) instead of running again. */
+  cached?: boolean;
+  lastToolName?: string;
+  lastToolSummary?: string;
+  resultPreview?: string;
+  promptPreview?: string;
+};
+
+/** A phase of a workflow: from the script's `meta.phases` (with its detail), or one the run opened. */
+export type WorkflowPhase = { title: string; detail?: string };
+
+/**
+ * Claude Code's statuses for a workflow run, and `stopped`: it ended with the Claude Code that ran
+ * it, which left no word of its own about it.
+ */
+export type WorkflowStatus = 'running' | 'paused' | 'completed' | 'failed' | 'killed' | 'stopped';
+
+/** A workflow run as a page shows it, from the SDK's events, Claude Code's record of it, or its journal. */
+export type Workflow = {
+  runId?: string;
+  taskId?: string;
+  name?: string;
+  description?: string;
+  status: WorkflowStatus;
+  startedAt?: number;
+  durationMs?: number;
+  totalTokens?: number;
+  totalToolCalls?: number;
+  phases: WorkflowPhase[];
+  agents: WorkflowAgent[];
+  error?: string;
+  /** What the script returned, as text (JSON for a value), cut to a size a page can take. */
+  result?: string;
+  /** The script, when the call itself does not hold it (a run of a script file). */
+  script?: string;
+  /** live: this Pelican runs it (Stop works); record: Claude Code's record of the ended run; journal: the run's folder. */
+  source: 'live' | 'record' | 'journal';
+};
+
+/** One page of a workflow agent's own transcript, with its prompt and what it returned. */
+export type WorkflowAgentPage = MessagesPage & { prompt?: string; result?: string };
 export type Block = TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
 export type ChatMessage = {
@@ -203,6 +288,8 @@ export type RunState = {
   stopping?: boolean;
   /** What a running subagent or background task last reported, by the id of the tool call that started it. */
   progress?: Record<string, TaskProgress>;
+  /** Workflows Claude runs here, as Claude Code reports them, by the id of the Workflow call that started each. */
+  workflows?: Record<string, Workflow>;
   /** Check-ins Claude scheduled in this session (/loop, reminders): Claude stays running here for them. */
   scheduled?: ScheduledCheck[];
   /** The permission mode changed without being picked here: said once, until the next message. */
