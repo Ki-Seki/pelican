@@ -133,6 +133,9 @@ afterEach(async () => {
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
+  // Opened beside the conversation, Changes and files stays open from one session to the next, in
+  // memory as well as in storage: the next test starts with it closed, as a first visit does.
+  setPrefs({ workspacePane: false });
   Object.assign(server, { answers: [], hold: undefined, sent: [], shells: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address; one closed on a phone
   // goes back through the history a moment later, which must land before the next test begins.
