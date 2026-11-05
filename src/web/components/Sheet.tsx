@@ -1,8 +1,16 @@
 import { Check } from 'lucide-react';
-import { type ReactNode, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { type PointerEvent, type ReactNode, useId, useRef } from 'react';
 
-/** A bottom sheet on phones, a centered panel on wider screens. */
+import { Modal } from './Modal';
+
+/** Dragged down past this, or flicked faster than this (px per ms), a sheet closes; else it springs back. */
+const DISMISS_PX = 80;
+const FLICK = 0.5;
+
+/**
+ * A bottom sheet on phones, a centered panel on wider screens: a modal dialog (see Modal). On a
+ * phone its top can be dragged down to close it, as the sheets there can.
+ */
 export function Sheet({
   open, onClose, title, children, done, size = 'normal', header,
 }: {
@@ -16,41 +24,75 @@ export function Sheet({
   /** Shown under the title, outside the scrolling part. */
   header?: ReactNode;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const titleId = useId();
+  const panel = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ id: number; startY: number; lastY: number; lastT: number; speed: number; dy: number; moving: boolean } | undefined>(undefined);
 
-  if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6" onClick={onClose}>
-      <div className="animate-fade absolute inset-0 bg-black/30" />
-      <div
-        role="dialog"
-        aria-label={title}
-        className={`animate-sheet pb-safe relative flex w-full flex-col rounded-t-2xl border border-line bg-panel shadow-2xl sm:rounded-2xl ${size === 'large' ? 'h-[92dvh] max-w-3xl sm:h-[85dvh]' : 'max-h-[85dvh] max-w-md'}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="shrink-0 px-4 pt-2 pb-1">
-          <div className="mx-auto mb-2 h-1 w-9 rounded-full bg-line sm:hidden" />
-          <div className="flex min-h-8 items-center">
-            <div className="flex-1 text-[13px] font-medium text-muted">{title}</div>
-            {done && (
-              <button type="button" onClick={onClose} className="-my-1 h-8 rounded-full px-3 text-[14px] font-medium hover:bg-hover">
-                Done
-              </button>
-            )}
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || window.matchMedia('(min-width: 640px)').matches) return;
+    drag.current = { id: e.pointerId, startY: e.clientY, lastY: e.clientY, lastT: e.timeStamp, speed: 0, dy: 0, moving: false };
+  };
+  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    const el = panel.current;
+    if (!d || d.id !== e.pointerId || !el) return;
+    const dy = e.clientY - d.startY;
+    if (!d.moving) {
+      // A tap on Done stays a tap: only a move down starts a drag.
+      if (dy < 6) return;
+      d.moving = true;
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    if (e.timeStamp > d.lastT) d.speed = (e.clientY - d.lastY) / (e.timeStamp - d.lastT);
+    d.lastY = e.clientY;
+    d.lastT = e.timeStamp;
+    d.dy = Math.max(0, dy);
+    el.style.transition = 'none';
+    el.style.transform = `translateY(${d.dy}px)`;
+  };
+  const onPointerEnd = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    const el = panel.current;
+    drag.current = undefined;
+    if (!d?.moving || !el) return;
+    el.style.transition = '';
+    // From where the finger left it, the sheet goes on down; else back up.
+    if (e.type === 'pointerup' && (d.dy > DISMISS_PX || d.speed > FLICK)) onClose();
+    else el.style.transform = '';
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} labelledBy={titleId}>
+      <div className="flex h-full w-full items-end justify-center sm:items-center sm:p-6">
+        <div className="animate-fade absolute inset-0 bg-black/30 transition-opacity duration-200 group-data-closing/modal:opacity-0" onClick={onClose} />
+        <div
+          ref={panel}
+          className={`animate-sheet pb-safe relative flex w-full flex-col rounded-t-2xl border border-line bg-panel shadow-2xl transition-[translate,transform,opacity] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-closing/modal:translate-y-full motion-reduce:transition-none sm:rounded-2xl sm:group-data-closing/modal:translate-y-3 sm:group-data-closing/modal:opacity-0 ${size === 'large' ? 'h-[92%] max-w-3xl sm:h-[85%]' : 'max-h-[85%] max-w-md'}`}
+        >
+          <div className="shrink-0 px-4 pb-1">
+            <div
+              className="touch-none pt-2 select-none sm:touch-auto"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerEnd}
+              onPointerCancel={onPointerEnd}
+            >
+              <div className="mx-auto mb-2 h-1 w-9 rounded-full bg-line sm:hidden" />
+              <div className="flex min-h-8 items-center">
+                <h2 id={titleId} className="flex-1 text-[13px] font-medium text-muted">{title}</h2>
+                {done && (
+                  <button type="button" onClick={onClose} className="-my-1 h-8 rounded-full px-3 text-[14px] font-medium hover:bg-hover">
+                    Done
+                  </button>
+                )}
+              </div>
+            </div>
+            {header}
           </div>
-          {header}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">{children}</div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">{children}</div>
       </div>
-    </div>,
-    document.body,
+    </Modal>
   );
 }
 
@@ -79,6 +121,7 @@ export function SheetOption({
     <button
       type="button"
       onClick={onSelect}
+      data-autofocus={selected || undefined}
       className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-hover ${selected ? 'bg-hover' : ''} ${danger ? 'text-danger' : ''}`}
     >
       {icon && <span className="grid size-5 shrink-0 place-items-center text-muted">{icon}</span>}

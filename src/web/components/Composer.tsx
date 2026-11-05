@@ -1,16 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
-import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
+import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
-import { api } from '../lib/api';
+import { api, apiUrl, isDemoNote } from '../lib/api';
+import { loadDraft, useDraftSaver } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
+import { composing, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
 import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
 import { Sheet, SheetOption } from './Sheet';
 
-type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string };
+type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
+
+/**
+ * A touch target of about 44 px around a smaller control, so the composer keeps its looks and
+ * stays easy to hit on a phone.
+ */
+export const HIT = 'relative after:absolute after:-inset-1';
 
 /** Phone photos are large; send at most 2048 px on the long side. */
 async function shrinkImage(file: File): Promise<File> {
@@ -41,7 +49,7 @@ function Chip({ children, onClick, tone = 'plain', label }: { children: React.Re
       type="button"
       aria-label={label}
       onClick={onClick}
-      className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] whitespace-nowrap hover:bg-hover ${tone === 'warn' ? 'text-wait' : 'text-muted hover:text-fg'}`}
+      className={`relative flex h-8 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] whitespace-nowrap after:absolute after:-inset-y-1.5 after:inset-x-0 hover:bg-hover ${tone === 'warn' ? 'text-wait' : 'text-muted hover:text-fg'}`}
     >
       {children}
     </button>
@@ -171,6 +179,16 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
   }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading]);
 }
 
+/** What Chat can do to the composer from outside: files dropped anywhere on the conversation. */
+export type ComposerHandle = { addFiles: (files: FileList | File[]) => void };
+
+/** A finished upload as it comes back from a saved draft: the file is on the server already. */
+const restored = (a: Attachment): Upload => ({
+  key: a.id, name: a.name, size: a.size, attachment: a, ...(a.mime.startsWith('image/') ? { preview: apiUrl(`uploads/${encodeURIComponent(a.id)}`) } : {}),
+});
+
+const MODE_HINT: Record<SendMode, string> = { steer: 'Claude reads it at its next step', queue: 'Sent when this turn ends' };
+
 export function Composer({
   busy,
   settings,
@@ -184,7 +202,10 @@ export function Composer({
   autoFocus,
   cwd,
   draft,
+  draftKey,
+  trailing,
   disabled,
+  ref,
 }: {
   busy: boolean;
   settings: RunSettings;
@@ -203,16 +224,23 @@ export function Composer({
   cwd?: string;
   /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. `append` adds it after what is there. */
   draft?: { text: string; key: number; append?: boolean };
+  /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
+  draftKey?: string;
+  /** Shown before Send and Stop: the context meter, on a phone. */
+  trailing?: ReactNode;
   disabled?: boolean;
+  ref?: Ref<ComposerHandle>;
 }) {
-  const [text, setText] = useState(draft?.text ?? '');
+  const [saved] = useState(() => (draftKey && !draft ? loadDraft(draftKey) : undefined));
+  const [text, setText] = useState(draft?.text ?? saved?.text ?? '');
   const [caret, setCaret] = useState(0);
-  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
   const [highlight, setHighlight] = useState(0);
   const [dismissed, setDismissed] = useState<string>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const listId = useId();
 
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
@@ -221,6 +249,17 @@ export function Composer({
   const modes = offered.includes(permission) ? offered : [permission, ...offered];
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
+
+  // What is typed is kept per chat until it is sent; a send that fails gives it back as it was.
+  const draftSaver = useDraftSaver(draftKey);
+  const justSent = useRef(false);
+  useEffect(() => {
+    if (justSent.current) {
+      justSent.current = false;
+      return;
+    }
+    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])));
+  }, [text, uploads, draftSaver]);
 
   const trigger = useMemo(() => {
     const found = findTrigger(text, caret);
@@ -247,9 +286,15 @@ export function Composer({
 
   // While Claude works: Steer (Claude reads it at its next step) or Queue (after this turn). Remembered per message.
   const [mode, setMode] = useState<SendMode>(() => getPrefs().sendWhileBusy);
+  const [modeHint, setModeHint] = useState(false);
   useEffect(() => {
     if (!busy) setMode(getPrefs().sendWhileBusy);
   }, [busy]);
+  useEffect(() => {
+    if (!modeHint) return undefined;
+    const timer = setTimeout(() => setModeHint(false), 4000);
+    return () => clearTimeout(timer);
+  }, [modeHint, mode]);
   const shell = Boolean(onShell) && text.startsWith('!');
 
   // Dictation: what you say goes into the box, to read over before sending.
@@ -318,8 +363,13 @@ export function Composer({
       void shrinkImage(original)
         .then((file) => api.upload(file))
         .then((attachment) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, attachment, size: attachment.size } : u))))
-        .catch((error: Error) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, error: error.message } : u))));
+        .catch((error: Error) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, error: error.message, note: isDemoNote(error) } : u))));
     }
+  };
+  useImperativeHandle(ref, () => ({ addFiles }));
+
+  const forget = (u: Upload) => {
+    if (u.preview?.startsWith('blob:')) URL.revokeObjectURL(u.preview);
   };
 
   const submit = () => {
@@ -327,16 +377,21 @@ export function Composer({
     if (shell) {
       const command = text.slice(1).trim();
       if (!command) return;
+      draftSaver.now(`!${command}`, []);
       onShell!(command);
+      justSent.current = true;
       setText('');
       setCaret(0);
       return;
     }
     recognition.current?.stop();
-    onSend(text.trim(), uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), mode);
+    const attachments = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
+    draftSaver.now(text.trim(), attachments);
+    onSend(text.trim(), attachments, mode);
+    justSent.current = true;
     setText('');
     setCaret(0);
-    for (const u of uploads) if (u.preview) URL.revokeObjectURL(u.preview);
+    for (const u of uploads) forget(u);
     setUploads([]);
   };
 
@@ -353,13 +408,21 @@ export function Composer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // ⌘/Ctrl+Enter sends whatever the Enter key setting, list open or not.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (!composing(e.nativeEvent)) {
+        e.preventDefault();
+        submit();
+      }
+      return;
+    }
     if (showSuggestions && suggestions.length > 0) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         setHighlight((h) => (h + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
         return;
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing)) {
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !composing(e.nativeEvent))) {
         e.preventDefault();
         accept(suggestions[highlight] ?? suggestions[0]!);
         return;
@@ -370,7 +433,7 @@ export function Composer({
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && enterSends()) {
+    if (sendsMessage(e.nativeEvent, enterSends())) {
       e.preventDefault();
       submit();
     }
@@ -384,27 +447,32 @@ export function Composer({
     }
   };
 
-  const onDrop = (e: DragEvent) => {
-    if (e.dataTransfer.files.length > 0) {
-      e.preventDefault();
-      addFiles(e.dataTransfer.files);
-    }
-  };
-
   const set = (patch: Partial<RunSettings>) => onSettings({ ...settings, ...patch });
+  const failed = uploads.filter((u) => u.error);
+  const problems = [...new Set(failed.filter((u) => !u.note).map((u) => u.error!))];
+  const notes = [...new Set(failed.filter((u) => u.note).map((u) => u.error!))];
+  const listOpen = showSuggestions && suggestions.length > 0;
 
   return (
-    <div className="pb-safe relative shrink-0 px-3 pt-1" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
+    <div className="pb-safe relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg">
       {showSuggestions && (
-        <div className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-w-3xl overflow-hidden rounded-2xl border border-line bg-panel shadow-xl" role="listbox">
+        <div
+          id={listId}
+          role="listbox"
+          aria-label={trigger?.kind === 'command' ? 'Commands' : 'Files and agents'}
+          className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-w-3xl overflow-hidden rounded-2xl border border-line bg-panel shadow-xl"
+        >
           {suggesting && suggestions.length === 0 && <div className="flex justify-center py-3"><Loader2 className="size-4 animate-spin text-faint" /></div>}
           {suggestions.map((s, i) => {
             const Icon = s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : s.icon === 'agent' ? Bot : FileText;
             return (
               <button
                 key={s.key}
+                id={`${listId}-${i}`}
                 type="button"
                 role="option"
+                tabIndex={-1}
                 aria-selected={i === highlight}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => accept(s)}
@@ -423,21 +491,26 @@ export function Composer({
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pt-3">
             {uploads.map((u) => (
               <div key={u.key} className="relative shrink-0">
-                {u.preview ? (
-                  <img alt={u.name} src={u.preview} className="size-16 rounded-xl border border-line object-cover" />
-                ) : (
-                  <div className="flex h-16 w-36 flex-col justify-center gap-0.5 rounded-xl border border-line px-2.5">
-                    <div className="flex items-center gap-1.5 text-[12.5px]"><FileText className="size-3.5 shrink-0" /><span className="truncate">{u.name}</span></div>
-                    <div className="text-[11px] text-faint">{formatBytes(u.size)}</div>
-                  </div>
-                )}
+                <div className={u.error ? 'opacity-40' : ''}>
+                  {u.preview ? (
+                    <img alt={u.name} src={u.preview} className="size-16 rounded-xl border border-line object-cover" />
+                  ) : (
+                    <div className="flex h-16 w-36 flex-col justify-center gap-0.5 rounded-xl border border-line px-2.5">
+                      <div className="flex items-center gap-1.5 text-[12.5px]"><FileText className="size-3.5 shrink-0" /><span className="truncate">{u.name}</span></div>
+                      <div className="text-[11px] text-faint">{formatBytes(u.size)}</div>
+                    </div>
+                  )}
+                </div>
                 {!u.attachment && !u.error && <div className="absolute inset-0 grid place-items-center rounded-xl bg-panel/60"><Loader2 className="size-4 animate-spin" /></div>}
-                {u.error && <div className="absolute inset-0 grid place-items-center rounded-xl bg-panel/80 px-1 text-center text-[10px] text-danger">{u.error}</div>}
+                {u.error && !u.note && <span aria-hidden className="absolute bottom-1 left-1 grid size-4 place-items-center rounded-full bg-danger text-[11px] leading-none font-semibold text-white">!</span>}
                 <button
                   type="button"
                   aria-label={`Remove ${u.name}`}
-                  className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-fg text-bg"
-                  onClick={() => setUploads((list) => list.filter((x) => x.key !== u.key))}
+                  className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-fg text-bg after:absolute after:-inset-3"
+                  onClick={() => {
+                    forget(u);
+                    setUploads((list) => list.filter((x) => x.key !== u.key));
+                  }}
                 >
                   <X className="size-3" />
                 </button>
@@ -445,13 +518,20 @@ export function Composer({
             ))}
           </div>
         )}
+        {problems.length > 0 && <div className="px-4 pt-2 text-[12.5px] leading-snug text-danger">{problems.join(' · ')}</div>}
+        {notes.length > 0 && <div className="flex items-start gap-1.5 px-4 pt-2 text-[12.5px] leading-snug text-muted"><Info className="mt-px size-3.5 shrink-0" />{notes.join(' · ')}</div>}
         {dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-danger">{dictationError}</div>}
+        {busy && modeHint && !dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-muted">{MODE_HINT[mode]}</div>}
         <textarea
           ref={area}
           value={text}
           rows={1}
           disabled={disabled}
           placeholder={busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder}
+          aria-label="Message Claude"
+          aria-autocomplete={showSuggestions ? 'list' : undefined}
+          aria-controls={showSuggestions ? listId : undefined}
+          aria-activedescendant={listOpen ? `${listId}-${Math.min(highlight, suggestions.length - 1)}` : undefined}
           onChange={(e) => {
             setDictationError(undefined);
             setText(e.target.value);
@@ -461,13 +541,13 @@ export function Composer({
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onPaste={onPaste}
           onKeyDown={onKeyDown}
-          className={`block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50 ${shell ? 'font-mono text-[15px]' : ''}`}
+          className={`block max-h-[40dvh] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[16px] leading-6 outline-none placeholder:text-faint disabled:opacity-50 ${shell ? 'font-mono' : ''}`}
         />
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
           <button
             type="button"
             aria-label="Attach files"
-            className="grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg"
+            className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg`}
             onClick={() => picker.current?.click()}
           >
             <Paperclip className="size-[18px]" />
@@ -476,14 +556,15 @@ export function Composer({
             if (e.target.files) addFiles(e.target.files);
             e.target.value = '';
           }} />
-          {/* Model, effort and speed share one chip, so the row fits a phone; it scrolls with a fade if not. */}
+          {/* Model, effort and speed share one chip, so the row fits a phone; it scrolls with a fade if not,
+              with room above and below for the chips' touch area, which the scrolling would clip. */}
           {shell ? (
             <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-[12.5px] text-muted">
               <SquareTerminal className="size-3.5 shrink-0" />
-              <span className="truncate">Runs in the session’s folder; Claude sees the output with your next message</span>
+              <span className="truncate">Shell command</span>
             </div>
           ) : (
-          <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pr-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
+          <div className="no-scrollbar -my-1.5 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 pr-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
             <Chip label="Model, effort and speed" onClick={() => setSheet('model')}>
               <ModelSummary settings={settings} models={models} />
             </Chip>
@@ -496,24 +577,28 @@ export function Composer({
           {busy && canSend && !shell && (
             <button
               type="button"
-              onClick={() => setMode((m) => (m === 'steer' ? 'queue' : 'steer'))}
+              onClick={() => {
+                setMode((m) => (m === 'steer' ? 'queue' : 'steer'));
+                setModeHint(true);
+              }}
               title={mode === 'steer' ? 'Claude reads it at its next step. Tap to send it after this turn instead.' : 'Sent when this turn ends. Tap to send it at Claude’s next step instead.'}
-              className="h-8 shrink-0 rounded-full px-2 text-[12.5px] text-muted hover:bg-hover hover:text-fg"
+              className="relative h-8 shrink-0 rounded-full px-2 text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:bg-hover hover:text-fg"
             >
               {mode === 'steer' ? 'Steer' : 'Queue'}
             </button>
           )}
+          {trailing}
           {listening || (!busy && !canSend && !uploading && SpeechRecognition && !disabled) ? (
             <button
               type="button"
               aria-label={listening ? 'Stop dictation' : 'Dictate'}
               onClick={dictate}
-              className={`grid size-9 shrink-0 place-items-center rounded-full transition-colors ${listening ? 'bg-danger text-white' : 'text-muted hover:bg-hover hover:text-fg'}`}
+              className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full transition-colors ${listening ? 'bg-danger text-white' : 'text-muted hover:bg-hover hover:text-fg'}`}
             >
               {listening ? <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" /><Square className="relative size-3 fill-current" /></span> : <Mic className="size-[18px]" />}
             </button>
           ) : busy && !canSend ? (
-            <button type="button" aria-label={stopping ? 'Stopping' : 'Stop'} disabled={stopping} onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg disabled:opacity-40">
+            <button type="button" aria-label={stopping ? 'Stopping' : 'Stop'} title="Stop (Esc)" aria-keyshortcuts="Escape" disabled={stopping} onClick={onStop} className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg disabled:opacity-40`}>
               {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
             </button>
           ) : (
@@ -522,7 +607,7 @@ export function Composer({
               aria-label="Send"
               disabled={!canSend}
               onClick={submit}
-              className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg transition-opacity disabled:opacity-25"
+              className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg transition-opacity disabled:opacity-25`}
             >
               {shell ? <SquareTerminal className="size-[17px]" /> : <ArrowUp className="size-[18px]" />}
             </button>

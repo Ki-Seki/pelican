@@ -170,7 +170,7 @@ describe('the working line', () => {
     render(<MessageList sessionId="s" view={view({ run: run({ startedAt: Date.now() - 125_000 }) })} mode="normal" />);
     expect(screen.getByText('2m 05s')).toBeTruthy();
     cleanup();
-    const request = { id: 'p', sessionId: 's', toolName: 'Bash', input: {}, canRemember: false, createdAt: Date.now() - 20_000 };
+    const request = { id: 'p', sessionId: 's', toolName: 'Bash', input: {}, createdAt: Date.now() - 20_000 };
     render(<MessageList sessionId="s" view={view({ run: run({ startedAt: Date.now() - 125_000, permissions: [request] }) })} mode="normal" />);
     expect(screen.getByText('Waiting for you')).toBeTruthy();
     expect(screen.getByText('20s')).toBeTruthy();

@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
-import { useEffect, useSyncExternalStore } from 'react';
-import { createPortal } from 'react-dom';
+import { useSyncExternalStore } from 'react';
+
+import { Modal } from './Modal';
 
 let current: string | undefined;
 const listeners = new Set<() => void>();
@@ -19,22 +20,15 @@ export function Lightbox() {
     },
     () => current,
   );
-  useEffect(() => {
-    if (!src) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') openImage(undefined);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [src]);
-  if (!src) return null;
-  return createPortal(
-    <div className="animate-fade fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-3" onClick={() => openImage(undefined)}>
-      <img src={src} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
-      <button type="button" aria-label="Close" className="pt-safe absolute top-3 right-3 grid size-10 place-items-center rounded-full bg-white/10 text-white" onClick={() => openImage(undefined)}>
-        <X className="size-5" />
-      </button>
-    </div>,
-    document.body,
+  const close = () => openImage(undefined);
+  return (
+    <Modal open={Boolean(src)} onClose={close} label="Image">
+      <div className="animate-fade flex h-full w-full items-center justify-center bg-black/90 p-3 transition-opacity duration-200 group-data-closing/modal:opacity-0" onClick={close}>
+        <img src={src} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
+        <button type="button" aria-label="Close" data-autofocus className="pt-safe absolute top-3 right-3 grid size-11 place-items-center rounded-full bg-white/10 text-white" onClick={close}>
+          <X className="size-5" />
+        </button>
+      </div>
+    </Modal>
   );
 }

@@ -3,9 +3,10 @@ import { ChevronDown, GitBranch, ListFilter, Loader2, Plus, Search, Settings, X 
 import { memo, useEffect, useMemo, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
-import { api } from '../lib/api';
+import { api, isUnreachable } from '../lib/api';
 import { type Entry, fold, foldKey, single } from '../lib/fold';
 import { dayGroup, relativeTime } from '../lib/format';
+import { composing, MOD_ARIA } from '../lib/keyboard';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
 
@@ -258,8 +259,20 @@ export function SessionList({
         <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl bg-chip px-3">
           <Search className="size-4 shrink-0 text-faint" />
           <input
+            id="session-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            // ⌘K comes here (App); Enter opens the first match, Esc clears.
+            aria-keyshortcuts={`${MOD_ARIA}+K`}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && query) {
+                e.preventDefault();
+                setQuery('');
+              } else if (e.key === 'Enter' && query.trim() && !composing(e.nativeEvent)) {
+                const first = groups[0]?.entries[0]?.session;
+                if (first) onOpen(first.id);
+              }
+            }}
             placeholder="Search sessions"
             className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-faint"
           />
@@ -294,7 +307,8 @@ export function SessionList({
       {banner}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-6">
         {isLoading && <div className="flex justify-center py-16 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
-        {error && <div className="px-4 py-8 text-[13px] text-danger">{(error as Error).message}</div>}
+        {/* Out of reach, the line under the header says so (App). */}
+        {error && !isUnreachable(error) && <div className="px-4 py-8 text-[13px] text-danger">{(error as Error).message}</div>}
         {groups.map((group) => {
           const folded = collapsed.has(group.key);
           return (

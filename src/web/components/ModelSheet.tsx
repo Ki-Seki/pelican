@@ -37,6 +37,25 @@ export function ModelSheet({
   const set = (patch: Partial<RunSettings>) => onChange({ ...settings, ...patch });
   return (
     <Sheet open={open} onClose={onClose} title={title} done>
+      {/* The model first: the effort levels, fast mode and Ultracode depend on it, as in Claude Code's /model. */}
+      <SheetHeading>Model</SheetHeading>
+      {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
+      {models?.map((m) => (
+        <SheetOption
+          key={m.value}
+          label={m.label}
+          description={m.description}
+          selected={m.value === model?.value}
+          onSelect={() => onChange({
+            ...settings,
+            model: m.value,
+            effort: settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined,
+            fast: m.supportsFast ? settings.fast : false,
+            ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
+            ...(settings.permissionMode === 'auto' && m.supportsAuto === false ? { permissionMode: 'default' as const } : {}),
+          })}
+        />
+      ))}
       {efforts.length > 0 && (
         <>
           <SheetHeading>Reasoning effort</SheetHeading>
@@ -69,24 +88,6 @@ export function ModelSheet({
           onChange={(ultracode) => set({ ultracode })}
         />
       )}
-      <SheetHeading>Model</SheetHeading>
-      {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
-      {models?.map((m) => (
-        <SheetOption
-          key={m.value}
-          label={m.label}
-          description={m.description}
-          selected={m.value === model?.value}
-          onSelect={() => onChange({
-            ...settings,
-            model: m.value,
-            effort: settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined,
-            fast: m.supportsFast ? settings.fast : false,
-            ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
-            ...(settings.permissionMode === 'auto' && m.supportsAuto === false ? { permissionMode: 'default' as const } : {}),
-          })}
-        />
-      ))}
     </Sheet>
   );
 }

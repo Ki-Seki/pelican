@@ -1,20 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, ChevronUp, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO } from '../../shared/modes';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
-import { api, ApiError, apiUrl, type TrustChoice } from '../lib/api';
+import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
+import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
+import { useDemoNote } from '../lib/demo';
+import { clearDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
+import { composing } from '../lib/keyboard';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
+import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
 import {
   addLocalMessage,
   adoptView,
-  clearDraft,
-  getDraft,
   getView,
   loadLatest,
   removeLocalMessage,
@@ -22,12 +25,14 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
+import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
-import { Composer } from './Composer';
+import { Composer, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
+import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
-import { StatusBadge } from './SessionList';
+import { StatusBadge, StatusDot } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
@@ -66,8 +71,9 @@ function ContextMeter({ context, onClick }: { context: NonNullable<RunState['con
     <button
       type="button"
       onClick={onClick}
+      aria-label={`Context ${percent}% full`}
       title={`Context ${percent}% full: ${Math.round(context.tokens / 1000)}k of ${Math.round(context.max / 1000)}k tokens`}
-      className={`flex h-10 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] tabular-nums hover:bg-hover ${tone}`}
+      className={`relative flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] tabular-nums after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover ${tone}`}
     >
       <svg viewBox="0 0 18 18" className="size-[18px] -rotate-90">
         <circle cx="9" cy="9" r={r} fill="none" stroke="var(--line)" strokeWidth="2.5" />
@@ -81,6 +87,9 @@ function ContextMeter({ context, onClick }: { context: NonNullable<RunState['con
 const LIMIT_NAME: Record<string, string> = {
   five_hour: '5-hour', seven_day: 'weekly', seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet', overage: 'extra usage',
 };
+
+/** Whether a usage limit is reached, not only close: only that is shown as an error. */
+export const limitReached = (limits: UsageLimit[] | undefined) => Boolean(limits?.some((l) => l.status === 'rejected'));
 
 /** A usage limit worth knowing about now: reached, or close. */
 export function limitNotice(limits: UsageLimit[] | undefined): string | undefined {
@@ -104,28 +113,28 @@ function RewindSheet({ sessionId, uuid, cwd, onClose, onDone }: { sessionId: str
     gcTime: 0,
   });
   const [working, setWorking] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<{ text: string; note: boolean }>();
   const files = preview.data?.files ?? [];
   const rel = (file: string) => (cwd && file.startsWith(`${cwd}/`) ? file.slice(cwd.length + 1) : file);
   return (
     <Sheet open={Boolean(uuid)} onClose={onClose} title="Rewind code">
       <div className="px-3 pt-1 pb-3 text-[14px] leading-relaxed">
         {preview.isLoading && <div className="flex items-center gap-2 text-muted"><Loader2 className="size-4 animate-spin" /> Checking what changed since this prompt</div>}
-        {preview.error && <div className="text-danger">{(preview.error as Error).message}</div>}
+        {preview.error && <div className={isDemoNote(preview.error) ? 'text-muted' : 'text-danger'}><NoteText text={(preview.error as Error).message} /></div>}
         {preview.data && !preview.data.canRewind && (
           <div className="text-muted">{preview.data.error ?? 'Nothing to put back: Claude has not changed any files since this prompt.'}</div>
         )}
         {preview.data?.canRewind && files.length === 0 && <div className="text-muted">No files changed since this prompt.</div>}
         {preview.data?.canRewind && files.length > 0 && (
           <>
-            <p>Put {files.length === 1 ? 'this file' : `these ${files.length} files`} back the way they were before this prompt. The conversation stays as it is.</p>
+            <p>{files.length === 1 ? 'Put this file back as it was' : `Put these ${files.length} files back as they were`} before this prompt. The conversation stays as it is.</p>
             <ul className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-line px-3 py-1.5 font-mono text-[12px] text-muted">
               {files.map((file) => <li key={file} className="truncate py-0.5">{rel(file)}</li>)}
             </ul>
             {(preview.data.insertions || preview.data.deletions) ? (
               <div className="mt-1.5 font-mono text-[12px]"><span className="text-add">+{preview.data.insertions ?? 0}</span> <span className="text-del">−{preview.data.deletions ?? 0}</span> <span className="font-sans text-faint">lines change back</span></div>
             ) : null}
-            {error && <div className="mt-2 text-[13px] text-danger">{error}</div>}
+            {error && <div className={`mt-2 text-[13px] ${error.note ? 'text-muted' : 'text-danger'}`}><NoteText text={error.text} /></div>}
             <div className="mt-3 flex gap-2">
               <button
                 type="button"
@@ -135,8 +144,8 @@ function RewindSheet({ sessionId, uuid, cwd, onClose, onDone }: { sessionId: str
                   setWorking(true);
                   setError(undefined);
                   api.rewind(sessionId, uuid!, false)
-                    .then((result) => (result.canRewind ? onDone(result) : setError(result.error ?? 'Could not put the files back')))
-                    .catch((err: Error) => setError(err.message))
+                    .then((result) => (result.canRewind ? onDone(result) : setError({ text: result.error ?? 'Could not put the files back', note: false })))
+                    .catch((err: Error) => setError({ text: err.message, note: isDemoNote(err) }))
                     .finally(() => setWorking(false));
                 }}
               >
@@ -198,8 +207,8 @@ function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; t
         {task.description || 'Background task'}
         {task.summary && <span className="text-faint"> · {task.summary}</span>}
       </span>
-      {task.output && <button type="button" onClick={() => setReading(task)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Output</button>}
-      <button type="button" onClick={() => stop(task.id)} className="h-7 shrink-0 rounded-full px-2.5 text-[12px] hover:bg-hover hover:text-fg">Stop</button>
+      {task.output && <button type="button" onClick={() => setReading(task)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Output</button>}
+      <button type="button" onClick={() => stop(task.id)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Stop</button>
     </div>
   );
   // Claude stays running here for these; it says when the next one is due.
@@ -241,46 +250,70 @@ function BackgroundTasks({ sessionId, tasks, scheduled }: { sessionId: string; t
   );
 }
 
-/** Claude's task list, pinned above the composer while there is work left. */
+const TASK_ICON = {
+  completed: <CheckCircle2 className="size-3.5 shrink-0 text-live" />,
+  in_progress: <CircleDot className="size-3.5 shrink-0 text-run" />,
+  pending: <Circle className="size-3.5 shrink-0 text-faint" />,
+};
+
+/**
+ * Claude's task list, pinned above the composer while there is work left: the one live view of
+ * it. Opened, the bar itself grows into the list, rather than showing another copy of the task
+ * card the conversation may have just above.
+ */
 function TasksBar({ tasks }: { tasks: Todo[] }) {
   const [open, setOpen] = useState(false);
   const done = tasks.filter((t) => t.status === 'completed').length;
   const current = tasks.find((t) => t.status === 'in_progress');
   return (
-    <div className="mx-auto mb-2 max-w-3xl">
-      {open ? (
-        <div className="relative max-h-[40vh] overflow-y-auto overscroll-contain rounded-xl">
-          <TodoList input={{ todos: tasks }} />
-          <button type="button" aria-label="Hide tasks" onClick={() => setOpen(false)} className="absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg">
-            <ChevronDown className="size-4" />
-          </button>
-        </div>
-      ) : (
-        <button type="button" onClick={() => setOpen(true)} className="flex h-8 w-full items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted hover:text-fg">
-          <ListChecks className="size-3.5 shrink-0" />
-          <span className="shrink-0 tabular-nums">{done}/{tasks.length}</span>
-          <span className="min-w-0 flex-1 truncate">{current ? current.activeForm || current.content : done === tasks.length ? 'All done' : 'Tasks'}</span>
-        </button>
+    <div className={`mx-auto mb-2 max-w-3xl border border-line bg-panel ${open ? 'rounded-2xl' : 'rounded-full'}`}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="relative flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:text-fg">
+        <ListChecks className="size-3.5 shrink-0" />
+        <span className="shrink-0 tabular-nums">{done}/{tasks.length}</span>
+        <span className="min-w-0 flex-1 truncate">{open ? 'Tasks' : current ? current.activeForm || current.content : done === tasks.length ? 'All done' : 'Tasks'}</span>
+        {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronUp className="size-4 shrink-0" />}
+      </button>
+      {open && (
+        <ul className="max-h-[30vh] space-y-1 overflow-y-auto overscroll-contain px-3 pb-2.5 text-[13px] leading-snug">
+          {tasks.map((task, i) => (
+            <li key={i} className="flex items-start gap-2">
+              <span className="mt-px">{TASK_ICON[task.status] ?? TASK_ICON.pending}</span>
+              <span className={task.status === 'completed' ? 'text-faint line-through' : ''}>{task.status === 'in_progress' && task.activeForm ? task.activeForm : task.content}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
+/** The demo's note, with its way out on the site: a link to install. */
+function NoteText({ text }: { text: string }) {
+  const at = STATIC_DEMO ? text.indexOf('Install Pelican') : -1;
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <a href={INSTALL_URL} className="font-medium text-fg underline decoration-faint underline-offset-2">Install Pelican</a>
+      {text.slice(at + 'Install Pelican'.length)}
+    </>
+  );
+}
+
+/** A line above the composer. Red only for what went wrong; the demo's note and warnings are info. */
 function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error' | 'live'; children: React.ReactNode; onDismiss?: () => void }) {
   return (
     <div className={`mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-xl px-3 py-2 text-[12.5px] leading-snug ${tone === 'error' ? 'border border-line bg-panel text-danger' : 'text-muted'}`}>
       {tone === 'error' ? <TriangleAlert className="mt-px size-4 shrink-0" /> : tone === 'live' ? <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-live" /> : <Info className="mt-px size-3.5 shrink-0" />}
       <div className="min-w-0 flex-1">{children}</div>
       {onDismiss && (
-        <button type="button" aria-label="Dismiss" onClick={onDismiss} className="-my-0.5 grid size-6 shrink-0 place-items-center rounded-full text-faint hover:text-fg">
+        <button type="button" aria-label="Dismiss" onClick={onDismiss} className="relative -my-0.5 grid size-6 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2.5 hover:text-fg">
           <X className="size-3.5" />
         </button>
       )}
     </div>
   );
 }
-
-const DEMO_NOTE = 'This is the demo, so nothing runs. Start Pelican on your own computer to work with Claude.';
 
 export function Chat({
   sessionId,
@@ -335,10 +368,13 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [initialDraft] = useState(() => getDraft(viewId));
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean } | undefined>(() => (initialDraft ? { text: initialDraft.text, key: 1 } : undefined));
-  const [note, setNote] = useState(initialDraft?.note);
-  const [sendError, setSendError] = useState<string>();
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean }>();
+  const [note, setNote] = useState<string>();
+  // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
+  // do, or the computer out of reach (the line under the header says so too).
+  const [sendError, setSendError] = useState<{ text: string; note: boolean }>();
+  const failed = (error: unknown) => setSendError({ text: (error as Error).message, note: isDemoNote(error) || isUnreachable(error) });
+  const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   const [menuOpen, setMenuOpen] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
@@ -348,14 +384,15 @@ export function Chat({
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
 
-  useEffect(() => clearDraft(viewId), [viewId]);
-
   useEffect(() => {
-    if (!sessionId) return;
-    socket.subscribe(sessionId);
+    if (!sessionId) return undefined;
+    // The demo's server changes nothing; what changes here, the demo plays out in the page.
+    if (!demo) socket.subscribe(sessionId);
     void loadLatest(sessionId);
-    return () => socket.unsubscribe(sessionId);
-  }, [sessionId]);
+    return () => {
+      if (!demo) socket.unsubscribe(sessionId);
+    };
+  }, [sessionId, demo]);
 
   useEffect(() => {
     if (sessionId && detail) syncRun(sessionId, detail.run);
@@ -419,11 +456,7 @@ export function Chat({
   const send = async (text: string, attachments: Attachment[], mode: SendMode, trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
-    if (demo) {
-      setSendError(DEMO_NOTE);
-      setDraftText({ text, key: Date.now() });
-      return;
-    }
+    dismissDemoNote();
     if (sessionId && CLEAR.test(text) && cwd) {
       carried.set(`new:${cwd}`, withoutBypass(settings));
       onStartIn(cwd);
@@ -437,9 +470,11 @@ export function Chat({
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, settings);
+        clearDraft(viewId, text);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, settings);
+        clearDraft(viewId, text);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -452,7 +487,7 @@ export function Chat({
         setTrustAsk({ brings: error.trust.brings, answer: (choice) => void send(text, attachments, mode, choice), cancel: () => setDraftText({ text, key: Date.now() }) });
         return;
       }
-      setSendError((error as Error).message);
+      failed(error);
       setDraftText({ text, key: Date.now() });
     }
   };
@@ -462,22 +497,20 @@ export function Chat({
   const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const permissions = view.run?.permissions ?? [];
+  // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
+  const request = permissions[0];
   const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
 
   // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
   const shell = async (command: string) => {
     if (!sessionId) return;
     setSendError(undefined);
-    if (demo) {
-      setSendError(DEMO_NOTE);
-      setDraftText({ text: `!${command}`, key: Date.now() });
-      return;
-    }
     setRunning(command);
     try {
       await api.shell(sessionId, command);
+      clearDraft(viewId, `!${command}`);
     } catch (error) {
-      setSendError((error as Error).message);
+      failed(error);
       setDraftText({ text: `!${command}`, key: Date.now() });
     } finally {
       setRunning(undefined);
@@ -498,12 +531,8 @@ export function Chat({
   const edit = async (uuid: string, text: string, key: string, keepImages: number[]): Promise<boolean> => {
     if (!sessionId) return false;
     setSendError(undefined);
-    if (demo) {
-      setSendError(DEMO_NOTE);
-      return false;
-    }
     if (busy) {
-      setSendError('Stop Claude before editing an earlier prompt.');
+      setSendError({ text: 'Stop Claude before editing an earlier prompt.', note: false });
       return false;
     }
     try {
@@ -520,7 +549,7 @@ export function Chat({
       }
       return true;
     } catch (error) {
-      if (alive.current) setSendError((error as Error).message);
+      if (alive.current) failed(error);
       return false;
     }
   };
@@ -538,9 +567,91 @@ export function Chat({
   );
   const showTasks = tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
 
+  useEffect(() => setSessionTitle(title), [title]);
+  useEffect(() => () => setSessionTitle(undefined), []);
+
+  // Said to screen readers once per change: Claude asking for something, a reply, an error.
+  const reply = useMemo(() => {
+    for (let i = view.messages.length - 1; i >= 0; i -= 1) {
+      const message = view.messages[i]!;
+      if (message.role === 'user' && message.blocks.some((b) => b.type === 'text')) return undefined;
+      const text = message.role === 'assistant' ? message.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : '')).join('\n') : '';
+      if (text.trim()) return text;
+    }
+    return undefined;
+  }, [view.messages]);
+  const moment = useRef<ChatMoment | undefined>(undefined);
   useEffect(() => {
-    document.title = title ? `${title} · Pelican` : 'Pelican';
-  }, [title]);
+    const now: ChatMoment = { permissions, busy, ...(reply ? { reply } : {}), ...(view.run?.error ? { error: view.run.error } : {}) };
+    const before = moment.current;
+    moment.current = now;
+    const words = before && announcement(before, now, cwd);
+    if (words) announce(words);
+  });
+  useEffect(() => {
+    if (sendError) announce(sendError.text);
+  }, [sendError]);
+
+  // Esc stops Claude, as in Claude Code, when nothing else takes it: an open sheet, the / list,
+  // a field of its own (the reason for a Deny), or a part of the page outside this chat.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!busy || !sessionId) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
+      const target = e.target instanceof HTMLElement ? e.target : undefined;
+      if (target && target !== document.body && !root.current?.contains(target)) return;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]') && !target.matches('[aria-label="Message Claude"]')) return;
+      e.preventDefault();
+      void api.interrupt(sessionId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, sessionId]);
+
+  // Files dropped anywhere on the conversation go to the composer.
+  const composer = useRef<ComposerHandle>(null);
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const dropHandlers = {
+    onDragEnter: (e: DragEvent) => {
+      if (!carriesFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDropping(true);
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!carriesFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!carriesFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDropping(false);
+    },
+    onDrop: (e: DragEvent) => {
+      if (!carriesFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDropping(false);
+      composer.current?.addFiles(e.dataTransfer.files);
+    },
+  };
+
+  const offline = useOffline();
+  // Out of reach, App says so once for the whole page.
+  useEffect(() => {
+    if (view.error && offline !== 'unreachable') announce(view.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.error]);
+  const retry = () => {
+    retryNow(queryClient);
+    if (sessionId) void loadLatest(sessionId);
+  };
+  const context = view.run?.context;
+  const meter = context ? <ContextMeter context={context} onClick={() => setMenuOpen(true)} /> : undefined;
 
   const subtitle = useMemo(() => (cwd ? shortPath(cwd, home) : scratch ? 'A new folder in ~/scratch' : ''), [cwd, home, scratch]);
   const refresh = () => {
@@ -549,57 +660,81 @@ export function Chat({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div ref={root} className="relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto" {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {!wide && (
-          <button type="button" aria-label="Back to sessions" onClick={onBack} className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-hover">
+          <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => sessionId && setMenuOpen(true)}
-          className={`min-w-0 flex-1 rounded-lg px-2 py-1 text-left ${wide ? 'pl-3' : ''} ${sessionId ? '' : 'cursor-default'}`}
-        >
-          <div className="truncate text-[15px] font-medium">{title || ' '}</div>
-          <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
-            <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} />
-            <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
-            {session?.gitBranch && (
-              <span className="flex min-w-0 shrink items-center gap-0.5 truncate"><GitBranch className="size-3 shrink-0" />{session.gitBranch}</span>
-            )}
-          </div>
-        </button>
-        {/* On a phone the meter shows up once the context is filling; the session menu always has the number. */}
-        {view.run?.context && (wide || view.run.context.percent >= 60) && <ContextMeter context={view.run.context} onClick={() => setMenuOpen(true)} />}
+        <h2 className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => sessionId && setMenuOpen(true)}
+            aria-haspopup={sessionId ? 'dialog' : undefined}
+            className={`block w-full min-w-0 rounded-lg px-2 py-1 text-left ${wide ? 'pl-3' : ''} ${sessionId ? '' : 'cursor-default'}`}
+          >
+            <div className="truncate text-[15px] font-medium">{title || ' '}</div>
+            <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
+              {/* The list has room for "Working in Claude Desktop"; a phone's header, for the folder too. */}
+              {!wide && status === 'live' && session?.runningIn && !view.run ? (
+                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-live"><StatusDot status="live" />In {session.runningIn}</span>
+              ) : (
+                <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} />
+              )}
+              <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
+              {/* On a phone the line has room for the branch only when nothing else is going on; the session menu always has it. */}
+              {session?.gitBranch && (wide || status === 'idle') && (
+                <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
+              )}
+            </div>
+          </button>
+        </h2>
+        {/* On a phone the meter sits by Send once the context is filling; the session menu always has the number. */}
+        {wide && meter}
         {cwd && (
-          <button type="button" aria-label="Changes and files" onClick={() => setWorkspaceOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+          <button type="button" aria-label="Changes and files" onClick={() => setWorkspaceOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg">
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
           </button>
         )}
         {sessionId && (
-          <button type="button" aria-label="Session menu" onClick={() => setMenuOpen(true)} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+          <button type="button" aria-label="Session menu" onClick={() => setMenuOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg">
             <MoreHorizontal className="size-5" />
           </button>
         )}
       </header>
+      {/* Wide, the list beside says it; one line is enough. */}
+      {!wide && <OfflineLine state={offline} {...(machine ? { machine } : {})} onRetry={retry} />}
 
-      {sessionId || view.messages.length > 0 ? (
-        <MessageList sessionId={viewId} view={view} cwd={cwd} mode={viewOf(prefs, sessionId)} {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})} />
-      ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-          <div>
-            <div className="text-[17px] font-medium">What should Claude do?</div>
-            <div className="mt-1 font-mono text-[12.5px] text-faint">{subtitle}</div>
+      <div className="flex min-h-0 flex-1 flex-col [@media(max-height:380px)]:min-h-[80%]">
+        {sessionId || view.messages.length > 0 ? (
+          <MessageList
+            sessionId={viewId}
+            // Can't reach the computer: the line under the header says so, and offers to retry.
+            view={offline === 'unreachable' && view.error ? { ...view, error: undefined } : view}
+            cwd={cwd}
+            mode={viewOf(prefs, sessionId)}
+            {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+            <div>
+              <div className="text-[17px] font-medium">What should Claude do?</div>
+              <div className="mt-1 font-mono text-[12.5px] text-faint">{subtitle}</div>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <div className="shrink-0 px-3">
-        {permissions.map((request) => (
-          <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
-        ))}
+      {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view. */}
+      <div className="max-h-[55%] shrink-0 overflow-y-auto overscroll-contain px-3 [@media(max-height:600px)]:max-h-[40%] [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:overflow-visible">
+        {request && (
+          <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
+            {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
+            <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
+          </section>
+        )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
           <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} />
@@ -609,17 +744,15 @@ export function Chat({
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && !running && (
           <div className="mx-auto mb-2 flex max-w-3xl">
-            <button type="button" onClick={() => setDraftText({ text: view.run!.suggestion!, key: Date.now() })} className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted hover:bg-hover hover:text-fg">
+            <button type="button" onClick={() => setDraftText({ text: view.run!.suggestion!, key: Date.now() })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
               <CornerDownRight className="size-3.5 shrink-0 text-faint" />
               <span className="truncate">{view.run.suggestion}</span>
             </button>
           </div>
         )}
-        {limitNotice(limits) && <Notice tone="error">{limitNotice(limits)}</Notice>}
+        {limitNotice(limits) && <Notice tone={limitReached(limits) ? 'error' : 'info'}>{limitNotice(limits)}</Notice>}
         {session?.status === 'live' && !view.run && (
-          <Notice tone="live">
-            Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
-          </Notice>
+          <Notice tone="live">Sending here starts a second Claude on this conversation.</Notice>
         )}
         {session?.status === 'waiting' && session.runningIn && !view.run && (
           <Notice>
@@ -633,7 +766,7 @@ export function Chat({
             markTipSeen('open-elsewhere');
             setOpenElsewhereSeen(true);
           }}>
-            This session is also open in {session.openIn} (others may be too). Pelican catches up before it sends; {session.openIn} sees your messages once you reopen the session there.
+            Also open in {session.openIn}, which shows what you send here once you reopen the session there.
           </Notice>
         )}
         {modelList?.signedIn === false && (
@@ -645,7 +778,12 @@ export function Chat({
           <Notice onDismiss={() => setModeSeen(view.run?.modeChanged)}>{MODE_INFO[view.run.modeChanged].now}</Notice>
         )}
         {note && <Notice onDismiss={() => setNote(undefined)}>{note}</Notice>}
-        {sendError && <Notice tone="error" onDismiss={() => setSendError(undefined)}>{sendError}</Notice>}
+        {demoNote && <Notice onDismiss={dismissDemoNote}>{demoNote}</Notice>}
+        {sendError && (
+          <Notice tone={sendError.note ? 'info' : 'error'} onDismiss={() => setSendError(undefined)}>
+            <NoteText text={sendError.text} />
+          </Notice>
+        )}
         {sessionId && view.run?.queued && view.run.queued.length > 0 && (
           <QueuedStrip
             queued={view.run.queued}
@@ -656,6 +794,7 @@ export function Chat({
       </div>
 
       <Composer
+        ref={composer}
         busy={busy}
         settings={settings}
         onSettings={changeSettings}
@@ -664,11 +803,20 @@ export function Chat({
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
-        autoFocus={!sessionId || Boolean(initialDraft)}
+        // On a computer the box takes the keys as soon as a chat opens (the composer skips this on touch screens).
+        autoFocus
         placeholder={sessionId ? 'Reply to Claude' : 'Message Claude'}
+        draftKey={viewId}
+        {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
         {...(cwd ? { cwd } : {})}
         {...(draft ? { draft } : {})}
       />
+
+      {dropping && (
+        <div className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-faint bg-bg/85 text-[14px] text-muted">
+          Drop to attach
+        </div>
+      )}
 
       {cwd && (
         <Workspace
@@ -691,7 +839,7 @@ export function Chat({
           onDone={(result) => {
             setRewinding(undefined);
             const count = result.files?.length ?? 0;
-            setNote(`Put ${count} file${count === 1 ? '' : 's'} back the way they were before that prompt. The conversation is unchanged; to carry on from there too, use Edit and resend on it.`);
+            setNote(`Put ${count} file${count === 1 ? '' : 's'} back as they were before that prompt. The conversation stays as it is.`);
             void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
           }}
         />

@@ -1,14 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, MessageSquare, Plus } from 'lucide-react';
-import { type ComponentProps, lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { type ComponentProps, lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
+import { Announcer } from './components/Announcer';
 import { Lightbox } from './components/Lightbox';
 import { Login } from './components/Login';
+import { type Offline, OfflineLine, offlineWords, retryNow, useOffline } from './components/Offline';
 import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
+import { shortcutsShown, ShortcutsSheet, showShortcuts } from './components/Shortcuts';
+import { announce } from './lib/announce';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
+import { startDemo } from './lib/demo';
+import { forgetDrafts } from './lib/drafts';
+import { withMod } from './lib/keyboard';
 import {
   disableNotifications,
   enableNotifications,
@@ -19,6 +26,8 @@ import {
 import { applyTheme } from './lib/prefs';
 import { socket } from './lib/socket';
 import { STATIC_DEMO } from './lib/static-demo';
+import { setWaitingCount } from './lib/title';
+import { fitToVisibleViewport } from './lib/viewport';
 
 // The conversation (Markdown, code highlighting, diffs) and Settings load when first needed: the
 // first screen is the list, and a phone on a slow link shows it sooner without them. A link to a
@@ -84,6 +93,7 @@ export function App() {
     // Asked again rather than patched: how browsers sign in may have changed (a password set or removed).
     whenSignedOut(() => void queryClient.resetQueries({ queryKey: ['auth'] }));
   }, [queryClient]);
+  useEffect(() => fitToVisibleViewport(), []);
 
   if (auth.isPending) {
     return <div className="app-height flex items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>;
@@ -105,6 +115,7 @@ export function App() {
       <Main />
       <Lightbox />
       <PreviewOverlay />
+      <Announcer />
     </>
   );
 }
@@ -144,13 +155,58 @@ function Main() {
   const open = useCallback((id: string, replace = false) => navigate(`?s=${encodeURIComponent(id)}`, replace), [navigate]);
   useEffect(() => onNotificationOpen((id) => open(id)), [open]);
 
+  // Both demos act out what they can in the page (lib/demo).
+  useEffect(() => {
+    if (info?.demo) startDemo(info);
+  }, [info]);
+
+  // The tab says how many sessions need you, from whatever the list last knew.
+  const { data: sessions } = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, enabled: false });
+  const needYou = sessions?.filter((s) => s.status === 'waiting').length ?? 0;
+  useEffect(() => setWaitingCount(needYou), [needYou]);
+
+  // The computer out of reach, or live updates stopped: said in words, under the list's header.
+  const offline = useOffline(true);
+  const said = useRef<Offline>(undefined);
+  useEffect(() => {
+    if (offline && offline !== said.current) announce(`${offlineWords(offline, info?.machine)} Retrying.`);
+    else if (!offline && said.current) announce('Connected again.');
+    said.current = offline;
+  }, [offline, info?.machine]);
+
+  // ⌘K finds a session (on a phone the list comes first); ⌘/ lists the keys.
+  const chatOpen = Boolean(sessionId || isNew);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!withMod(e) || e.repeat) return;
+      const key = e.key.toLowerCase();
+      if (key === '/') {
+        e.preventDefault();
+        showShortcuts(!shortcutsShown());
+      } else if (key === 'k' && !document.querySelector('dialog[open]')) {
+        e.preventDefault();
+        if (!wide && chatOpen) navigate('');
+        setTimeout(() => {
+          const search = document.getElementById('session-search');
+          if (search instanceof HTMLInputElement) {
+            search.focus();
+            search.select();
+          }
+        }, 0);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide, chatOpen, navigate]);
+
   const toggleNotifications = () => {
     const next = notifications === 'on' ? disableNotifications() : enableNotifications();
     void next.then(setNotifications).catch((error: Error) => window.alert(`Could not turn on notifications: ${error.message}`));
   };
 
   const signOut = () => {
-    // A device signed out gets no more notifications: they tell what Claude is doing.
+    // A device signed out gets no more notifications (they tell what Claude is doing), and keeps no drafts.
+    forgetDrafts();
     void disableNotifications().catch(() => 'off').then(() => {
       setNotifications('off');
       return api.logout();
@@ -162,11 +218,16 @@ function Main() {
     });
   };
 
-  const banner = info?.demo ? (
-    <div data-demo-banner className="mx-3 mb-1 rounded-xl bg-chip px-3 py-2 text-[12.5px] leading-snug text-muted">
-      <span className="font-medium text-fg">Demo.</span> {STATIC_DEMO ? 'Pelican running in your browser, with made-up sessions; nothing you do here is sent anywhere.' : 'Sample sessions on a made-up machine; nothing you do here runs or changes anything.'}
-    </div>
-  ) : undefined;
+  const banner = (
+    <>
+      <OfflineLine state={offline} {...(info?.machine ? { machine: info.machine } : {})} onRetry={() => retryNow(queryClient)} />
+      {info?.demo && (
+        <div data-demo-banner className="mx-3 mb-1 rounded-xl bg-chip px-3 py-2 text-[12.5px] leading-snug text-muted">
+          <span className="font-medium text-fg">Demo.</span> {STATIC_DEMO ? 'Pelican running in your browser, with made-up sessions; nothing you do here is sent anywhere.' : 'Sample sessions on a made-up machine; nothing you do here runs or changes anything.'}
+        </div>
+      )}
+    </>
+  );
 
   const list = (
     <SessionList
@@ -247,6 +308,7 @@ function Main() {
           )}
         </main>
         {settings}
+        <ShortcutsSheet />
       </div>
     );
   }
@@ -254,6 +316,7 @@ function Main() {
     <div className="app-height overflow-hidden">
       {main ?? list}
       {settings}
+      <ShortcutsSheet />
     </div>
   );
 }
