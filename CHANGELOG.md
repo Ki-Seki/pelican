@@ -71,6 +71,8 @@ from every app.
 
 ### The conversation
 
+- An approval says Claude's few words on a command once, also when Claude Code passes them as its
+  own line too.
 - A failed request at the end of the conversation offers Retry, which sends the prompt again with
   its files, or Compact when the conversation is too long.
 - Scheduled check-ins have Cancel, which asks Claude to cancel them.

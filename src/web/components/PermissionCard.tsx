@@ -75,6 +75,9 @@ function useDecide(sessionId: string, request: PermissionRequest) {
   return { busy, error, decide };
 }
 
+/** Text as a reader compares it: case, spacing and a closing full stop aside. */
+const plainWords = (text: string) => text.replace(/\s+/g, ' ').trim().replace(/[.。]$/, '').toLowerCase();
+
 /** "Claude wants to run …", in Claude Code's own words when it gave them. */
 function headline(request: PermissionRequest, cwd: string | undefined): string {
   if (request.title) return request.title;
@@ -99,6 +102,10 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
   const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
   const hidden = [command, target, raw, head, about, server, always].some((text) => text?.hidden);
+  // Claude Code often passes the command's own few words as the request's line too: said once.
+  const shownTarget = target && (summary.prose || !command) ? target : undefined;
+  const repeats = (text?: string) => Boolean(about && text && plainWords(about.text) === plainWords(text));
+  const aboutShown = about && !repeats(shownTarget?.text) && !repeats(command?.text.split('\n')[0]) ? about : undefined;
 
   const allow = <Button kind={request.defaultToNo ? 'secondary' : 'primary'} disabled={busy} onClick={() => decide({ behavior: 'allow' })}>Allow</Button>;
   const deny = <Button kind={request.defaultToNo ? 'primary' : 'quiet'} disabled={busy} onClick={() => setDenying(true)}>Deny</Button>;
@@ -110,9 +117,9 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
       </div>
       {request.agent && <div className="mt-0.5 text-[12.5px] text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${request.agent} agent`}</div>}
       {server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {server.text}</div>}
-      {about && <div className="mt-1 text-[12.5px] leading-snug text-muted">{about.text}</div>}
+      {aboutShown && <div className="mt-1 text-[12.5px] leading-snug text-muted">{aboutShown.text}</div>}
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
-      {target && (summary.prose || !command) && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{target.text}</div>}
+      {shownTarget && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{shownTarget.text}</div>}
       {request.reason && <div className="mt-1 text-[12.5px] text-faint">{request.reason}</div>}
       <div className="mt-2 max-h-[34dvh] overflow-y-auto">
         {edit ? (
