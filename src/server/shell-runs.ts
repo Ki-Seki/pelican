@@ -72,6 +72,8 @@ async function turnOver(sessionId: string): Promise<void> {
  */
 async function record(sessionId: string, cwd: string, id: string, result: ShellResult): Promise<void> {
   await turnOver(sessionId);
+  // Pelican is closing its Claude processes: none is started again for this.
+  if (shuttingDown) return;
   const respond = result.endedBy === undefined && (await respondsToBashCommands(cwd));
   const run = await ensureRun(sessionId);
   // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
@@ -129,7 +131,10 @@ export function stopShell(sessionId: string, id: string): boolean {
   return true;
 }
 
+let shuttingDown = false;
+
 /** Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. */
 export function stopAllShells(): void {
+  shuttingDown = true;
   for (const entries of bySession.values()) for (const entry of entries.values()) if (!entry.shell.done) entry.run.stop();
 }

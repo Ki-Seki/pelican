@@ -77,7 +77,8 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
     }
   };
   const end = (by: NonNullable<ShellResult['endedBy']>) => {
-    if (done || endedBy) return;
+    // Once its shell has exited it is done: what it left in the background is meant to run on.
+    if (done || endedBy || child.exitCode !== null || child.signalCode !== null) return;
     endedBy = by;
     signal('SIGTERM');
     // What ignores the request still goes, also once the shell itself has exited.

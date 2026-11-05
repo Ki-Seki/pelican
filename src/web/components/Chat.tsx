@@ -12,8 +12,10 @@ import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
+import { cancelCheck, resend } from '../lib/next-steps';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
+import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
@@ -28,8 +30,6 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
-import { cancelCheck, resend } from '../lib/next-steps';
-import { addShell } from '../lib/shells';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';

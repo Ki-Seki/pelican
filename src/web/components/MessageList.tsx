@@ -6,12 +6,12 @@ import { api, apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
 import { composing } from '../lib/keyboard';
+import { promptBefore } from '../lib/next-steps';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
-import { promptBefore } from '../lib/next-steps';
 import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
@@ -468,9 +468,11 @@ function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShe
     return () => clearInterval(timer);
   }, [shell.done]);
   const output = useMemo(() => cleanOutput(shell.output).replace(/^\s*\n/, '').trimEnd(), [shell.output]);
+  // The end stays in view as output comes, unless the reader scrolled up in it to read.
   const body = useRef<HTMLPreElement>(null);
+  const following = useRef(true);
   useLayoutEffect(() => {
-    if (body.current) body.current.scrollTop = body.current.scrollHeight;
+    if (body.current && following.current) body.current.scrollTop = body.current.scrollHeight;
   }, [output]);
   const stop = () => {
     markStopping(sessionId, shell.id);
@@ -494,7 +496,16 @@ function LiveShellItem({ sessionId, shell }: { sessionId: string; shell: LiveShe
         )}
       </div>
       {output && (
-        <pre ref={body} className="max-h-60 overflow-y-auto overscroll-contain border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted">{output}</pre>
+        <pre
+          ref={body}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+          }}
+          className="max-h-60 overflow-y-auto overscroll-contain border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted"
+        >
+          {output}
+        </pre>
       )}
       {(shell.error || shell.done?.waiting || shell.truncated) && (
         <div className={`border-t border-line px-3 py-1.5 text-[12px] ${shell.error ? 'text-danger' : 'text-faint'}`}>
