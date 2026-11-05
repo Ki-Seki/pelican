@@ -500,8 +500,19 @@ export function Chat({
       // Nothing reached Claude: take the message back and give the text back to edit.
       removeLocalMessage(viewId, uuid);
       if (error instanceof ApiError && error.trust) {
-        // The folder has programs of its own and nobody trusted it: ask, then send it again.
-        setTrustAsk({ brings: error.trust.brings, answer: (choice) => void send(text, attachments, mode, choice), cancel: () => setDraftText({ text, key: Date.now() }) });
+        // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
+        // the first answer counts: a double tap on the sheet must not start two Claudes.
+        let settled = false;
+        const once = (then: () => void) => {
+          if (settled) return;
+          settled = true;
+          then();
+        };
+        setTrustAsk({
+          brings: error.trust.brings,
+          answer: (choice) => once(() => void send(text, attachments, mode, choice)),
+          cancel: () => once(() => setDraftText({ text, key: Date.now() })),
+        });
         return;
       }
       failed(error);

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment, RunState, SessionSummary } from '../src/shared/protocol';
@@ -78,6 +78,7 @@ beforeAll(() => {
   };
 });
 
+const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 
 afterEach(() => {
@@ -92,6 +93,12 @@ const session = () => wrap(<Chat sessionId={SESSION} home="/home/me" machine="st
 const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
 const loaded = () => screen.findAllByText('Clean up the build');
+const untrusted = () => new ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: PreToolUse (.claude/settings.json)'] });
+
+function sendText(text: string) {
+  fireEvent.change(box(), { target: { value: text } });
+  fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+}
 
 describe('opening a chat', () => {
   it('puts the keys in the message box on a computer', async () => {
@@ -108,5 +115,21 @@ describe('opening a chat', () => {
     cleanup();
     fresh();
     expect(document.activeElement).toBe(box());
+  });
+});
+
+describe('a folder nobody trusted', () => {
+  it('starts Claude once, however often Trust and start is tapped', async () => {
+    server.answers.push(untrusted());
+    session();
+    await loaded();
+    sendText('Run the tests');
+    const option = await screen.findByText('Trust and start');
+    fireEvent.click(option);
+    // The second tap of a double tap, on the sheet on its way out.
+    fireEvent.click(option);
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(server.sent.map((body) => body.trust)).toEqual([undefined, 'trusted']);
   });
 });
