@@ -404,6 +404,32 @@ describe('/clear', () => {
   });
 });
 
+describe('a new session, once its first message starts it', () => {
+  it('takes what waits above its box along: the session it was for shows it, the next new session in the folder does not', async () => {
+    server.answers = [new Error('Can’t reach studio'), undefined];
+    const view = fresh();
+    const release = holdNextSend();
+    sendText('/init');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: 'then explain the layout' } });
+    release();
+    await waitFor(() => expect(waiting()).toEqual(['/init']));
+    sendText('then explain the layout');
+    await waitFor(() => expect(loadDraft(CREATED)).toMatchObject({ text: '', held: [{ text: '/init' }] }));
+    expect(server.sent.map((body) => body.text)).toEqual(['/init', 'then explain the layout']);
+    view.unmount();
+    expect(loadDraft(`new:${CWD}`)).toBeUndefined();
+    // The session it started, as App opens it.
+    session(CREATED);
+    await loaded();
+    expect(waiting()).toEqual(['/init']);
+    cleanup();
+    fresh();
+    expect(waiting()).toEqual([]);
+    expect(box().value).toBe('');
+  });
+});
+
 describe('a new session moved to another folder before it starts', () => {
   it('takes what is typed, and the mode picked, along', async () => {
     const onStartIn = vi.fn();

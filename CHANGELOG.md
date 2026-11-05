@@ -115,9 +115,9 @@ from every app.
 - A message that does not go comes back to the message box, files and all, above anything typed
   since. A `!` or `/` command comes back only into an empty box: with words or files there, which
   would change it, it waits above the box, Not sent, with Put back, as does a message, with its
-  files, that comes back while a command is typed, also across reloads. Put back brings its words
-  and files back together. One sent for you (Send now, Compact, Retry, Cancel) leaves the box as it
-  is.
+  files, that comes back while a command is typed, also across reloads, and in a new session it
+  goes on with the session once that starts. Put back brings its words and files back together.
+  One sent for you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
   files.
 - Side chat in the session menu leaves the keys in the side chat's box. Quotes that do not fit above
