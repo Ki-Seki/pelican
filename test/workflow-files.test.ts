@@ -298,3 +298,60 @@ describe('the workflow routes', () => {
     expect(view.script).toBeUndefined();
   });
 });
+
+describe('the workflow routes, asked by anything but the page', () => {
+  let id: string;
+  beforeAll(async () => {
+    id = newSession();
+    await transcript(id, [call('toolu_g', { script: META }), launched('toolu_g', 'wf_3d3d3d3d-333', 'w20')]);
+    await put(id, 'subagents/workflows/wf_3d3d3d3d-333/journal.jsonl', '{"type":"started","key":"v2:a","agentId":"a1","label":"x"}\n');
+  });
+
+  it('refuse a request without sign-in, without the mark, from another site or for another host', async () => {
+    for (const url of [`/api/sessions/${id}/workflows`, `/api/sessions/${id}/workflows/toolu_g`, `/api/sessions/${id}/workflows/toolu_g/agents/a1`]) {
+      expect([url, (await ask(url, { authorization: '' })).status]).toEqual([url, 401]);
+      expect([url, (await ask(url, { 'x-pelican': '' })).status]).toEqual([url, 403]);
+      expect([url, (await ask(url, { 'sec-fetch-site': 'cross-site' })).status]).toEqual([url, 403]);
+      expect([url, (await ask(url, { host: 'evil.example' })).status]).toEqual([url, 403]);
+    }
+  });
+
+  it('take no encoded separators, backslashes, NULs, double encoding or look-alikes for ids', async () => {
+    for (const url of [
+      `/api/sessions/${id}/workflows/toolu_g%5C..%5Cx`,
+      `/api/sessions/${id}/workflows/toolu_g%00`,
+      `/api/sessions/${id}/workflows/toolu_g%252F..`,
+      `/api/sessions/${id}/workflows/toolu_g/agents/a1%00`,
+      `/api/sessions/${id}/workflows/toolu_g/agents/%2E%2E`,
+      `/api/sessions/${id}/workflows/toolu_g/agents/a%E2%81%84b`,
+      `/api/sessions/${id}/workflows/toolu_%C9%A1`,
+      `/api/sessions/${id.toUpperCase()}x/workflows/toolu_g`,
+    ]) {
+      expect([url, (await ask(url)).status]).toEqual([url, 404]);
+    }
+  });
+
+  it('read nothing of another session: not its run by its id, nor its agents by an id that climbs out', async () => {
+    const other = newSession();
+    await transcript(other, [call('toolu_o', { script: META }), launched('toolu_o', 'wf_4e4e4e4e-444', 'w21')]);
+    await put(other, 'workflows/wf_4e4e4e4e-444.json', JSON.stringify({ runId: 'wf_4e4e4e4e-444', taskId: 'w21', status: 'completed', workflowName: 'OTHER-SECRET', workflowProgress: [] }));
+    await put(other, 'subagents/workflows/wf_4e4e4e4e-444/agent-a9.meta.json', JSON.stringify({ description: 'OTHER-SECRET' }));
+    const mine = newSession();
+    await transcript(mine, [call('toolu_m', { script: META }), launched('toolu_m', 'wf_4e4e4e4e-444', 'w22')]);
+    await put(mine, 'subagents/workflows/wf_4e4e4e4e-444/journal.jsonl', `${JSON.stringify({ type: 'started', key: 'v2:a', agentId: `x/../../../../../${other}/subagents/workflows/wf_4e4e4e4e-444/agent-a9` })}\n`);
+    expect(await (await ask(`/api/sessions/${mine}/workflows/toolu_m`)).text()).not.toContain('OTHER-SECRET');
+    expect((await ask(`/api/sessions/${mine}/workflows/toolu_o`)).status).toBe(404);
+  });
+
+  it('read no script copy or journal that is a link out of the session’s folder', async () => {
+    const linked = newSession();
+    await transcript(linked, [call('toolu_s', { scriptPath: '/x/workflows/scripts/demo-review-wf_5f5f5f5f-555.js' }), launched('toolu_s', 'wf_5f5f5f5f-555', 'w23')]);
+    await writeFile(path.join(outside, 'secret.js'), META.replace('demo-review', 'LINK-SECRET'));
+    await writeFile(path.join(outside, 'journal.jsonl'), '{"type":"started","key":"v2:a","agentId":"a1","label":"LINK-SECRET"}\n');
+    await mkdir(path.join(folder(linked), 'workflows', 'scripts'), { recursive: true });
+    await mkdir(path.join(folder(linked), 'subagents', 'workflows', 'wf_5f5f5f5f-555'), { recursive: true });
+    await symlink(path.join(outside, 'secret.js'), path.join(folder(linked), 'workflows', 'scripts', 'demo-review-wf_5f5f5f5f-555.js'));
+    await symlink(path.join(outside, 'journal.jsonl'), path.join(folder(linked), 'subagents', 'workflows', 'wf_5f5f5f5f-555', 'journal.jsonl'));
+    expect(await (await ask(`/api/sessions/${linked}/workflows/toolu_s`)).text()).not.toContain('LINK-SECRET');
+  });
+});
