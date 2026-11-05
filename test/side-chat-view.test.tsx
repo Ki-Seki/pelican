@@ -334,7 +334,7 @@ describe('a side chat opened as a session of its own (from the list, a search, t
   it('is read only here too: questions, and nothing that runs commands or changes files', async () => {
     computer(1440);
     setPrefs({ workspacePane: true });
-    server.git = { repo: true, branch: 'feat/x', base: 'main', files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
+    server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
     server.after = [tasks];
     // The session itself, for comparison: its own box, its tasks, Commit and Create PR, Rewind and Edit.
     history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
