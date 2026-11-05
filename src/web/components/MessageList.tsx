@@ -327,6 +327,14 @@ function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
   if (item.tone === 'output') {
     return <pre className="max-h-60 overflow-auto rounded-lg bg-chip px-3 py-2 font-mono text-[12px] whitespace-pre-wrap text-muted">{item.text}</pre>;
   }
+  if (item.tone === 'error') {
+    return (
+      <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        <span className="whitespace-pre-wrap">{item.text}</span>
+      </div>
+    );
+  }
   return (
     <div className="text-[13px] text-muted">
       <button type="button" className="flex min-h-7 items-center gap-2 text-left hover:text-fg" onClick={() => setOpen((v) => !v)}>
@@ -471,6 +479,9 @@ export function MessageList({
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
   const lastPrompt = [...items].reverse().find((i) => i.kind === 'user' && !i.command)?.key;
+  // A failed turn's error, said once: the conversation may already end on Claude Code's note of it.
+  const lastItem = items.at(-1);
+  const endsOnError = lastItem?.kind === 'notice' && lastItem.tone === 'error';
 
   // Older messages are about to go in above: note where the reader is before the page changes,
   // so the same lines stay on screen. (The browser's own scroll anchoring is off for this list.)
@@ -598,7 +609,7 @@ export function MessageList({
               }
             })}
             {busy && view.run && <LiveOutput run={view.run} cwd={cwd} />}
-            {!busy && view.run?.error && (
+            {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                 <span className="whitespace-pre-wrap">{view.run.error}</span>

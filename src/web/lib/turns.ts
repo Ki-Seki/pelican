@@ -1,3 +1,4 @@
+import { plainError } from '../../shared/errors';
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
 
 export type ToolCall = {
@@ -26,7 +27,7 @@ export type Item =
     steered?: boolean;
   }
   | { kind: 'assistant'; key: string; parts: Part[]; timestamp?: number; model?: string }
-  | { kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
+  | { kind: 'notice'; key: string; tone: 'output' | 'task' | 'interrupt' | 'info' | 'error'; text: string; detail?: string }
   | { kind: 'compact'; key: string; summary: string }
   | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; timestamp?: number }
   | { kind: 'day'; key: string; timestamp: number };
@@ -109,6 +110,23 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       continue;
     }
     if (message.meta) continue;
+    // Lines Claude Code adds itself (a local command and its output, hook feedback): notes, never prompts.
+    if (message.role === 'system') {
+      const classified = classifyUserText(message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+      if (!classified) continue;
+      if (classified.kind === 'user' && !classified.command) push({ kind: 'notice', key: message.uuid, tone: 'info', text: classified.text });
+      else if (classified.kind === 'user') push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) }, message.timestamp);
+      else if (classified.kind === 'notice') push({ ...classified, key: message.uuid });
+      turn = undefined;
+      continue;
+    }
+    // A failed API call is not Claude's reply: one line saying what went wrong, in plain words.
+    if (message.apiError) {
+      const text = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim();
+      push({ kind: 'notice', key: message.uuid, tone: 'error', text: plainError(text) ?? text });
+      turn = undefined;
+      continue;
+    }
     if (message.role === 'user') {
       const texts = message.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : ''));
       const images = message.blocks.filter((b): b is ImageBlock => b.type === 'image');

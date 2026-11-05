@@ -76,6 +76,8 @@ export type ChatMessage = {
   steered?: boolean;
   /** The id the sending client gave this message, when the transcript row has its own. */
   sourceUuid?: string;
+  /** Not Claude's reply: Claude Code's note that the API call failed (overloaded, too long, signed out). */
+  apiError?: boolean;
 };
 
 export type MessagesPage = {

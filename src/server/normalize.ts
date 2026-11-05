@@ -125,6 +125,8 @@ export function toChatMessage(raw: Raw): ChatMessage | undefined {
   if (type === 'assistant') {
     if (typeof message.model === 'string') out.model = message.model;
     if (typeof message.id === 'string') out.messageId = message.id;
+    // Claude Code notes a failed API call as a reply of its own (in the stream: an `error` on a synthetic message).
+    if (raw.isApiErrorMessage === true || (typeof raw.error === 'string' && message.model === '<synthetic>')) out.apiError = true;
   }
   // Text Claude Code adds itself (an image's scale note, skill text) is meta in the transcript
   // and synthetic in the live stream; either way it is not something you typed.
