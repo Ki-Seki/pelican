@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { memo, useEffect, useMemo, useState } from 'react';
 
 import { api } from '../lib/api';
+import { duration } from '../lib/format';
 import { useSessionId } from '../lib/session-context';
+import { useSessionView } from '../lib/store';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
 import { buildItems, resultImages, resultText, type ToolCall } from '../lib/turns';
 import { Diff, diffStats } from './Diff';
@@ -143,6 +145,16 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
       {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} /> : null))}
     </div>
   );
+}
+
+/** What a running subagent is doing, as Claude Code reports it: its summary or last tool, its steps, its time. */
+function AgentProgress({ toolUseId }: { toolUseId: string }) {
+  const report = useSessionView(useSessionId()).run?.progress?.[toolUseId];
+  if (!report) return null;
+  const steps = report.toolUses ? `${report.toolUses} ${report.toolUses === 1 ? 'step' : 'steps'}` : undefined;
+  const parts = [report.summary ?? report.lastTool, steps, report.durationMs ? duration(report.durationMs) : undefined].filter(Boolean);
+  if (parts.length === 0) return null;
+  return <div className="-mt-1 mb-1 ml-5.5 truncate text-[12px] text-faint">{parts.join(' · ')}</div>;
 }
 
 /** A page or a picture Claude wrote, worth seeing rendered rather than as code. */
@@ -341,6 +353,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
           <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
         </span>
       </button>
+      {pending && running && (call.name === 'Agent' || call.name === 'Task') && <AgentProgress toolUseId={call.id} />}
       {open && (
         <div className="animate-fade mt-1 mb-2 ml-5.5">
           {summary.note && <div className="mb-1.5 text-[12px] text-faint">{summary.note}</div>}

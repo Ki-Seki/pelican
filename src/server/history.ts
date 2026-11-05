@@ -1,5 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 
+import { isPermissionMode } from '../shared/modes.js';
 import type { ChatMessage, RecordedSettings } from '../shared/protocol.js';
 import { toChatMessage } from './normalize.js';
 
@@ -66,8 +67,6 @@ function empty(ino: number): Transcript {
   };
 }
 
-const MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
-
 /** Keeps the settings a row shows the session ran with: the latest row wins. */
 function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
   if (row.type === 'assistant') {
@@ -77,8 +76,8 @@ function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
     const speed = str((row.message as { usage?: { speed?: unknown } } | undefined)?.usage?.speed);
     if (speed) recorded.fast = speed === 'fast';
     recorded.ultracode ??= false;
-  } else if (row.type === 'user' && str(row.permissionMode) && MODES.has(str(row.permissionMode)!)) {
-    recorded.permissionMode = str(row.permissionMode) as RecordedSettings['permissionMode'];
+  } else if (row.type === 'user' && isPermissionMode(row.permissionMode)) {
+    recorded.permissionMode = row.permissionMode;
   } else if (row.type === 'attachment') {
     const kind = str((row.attachment as { type?: unknown } | undefined)?.type) ?? '';
     // Claude Code notes ultracode turning on (and off) as attachments.
@@ -102,6 +101,17 @@ function steeredMessage(row: Record<string, unknown>, uuid: string): ChatMessage
   return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
 }
 
+/**
+ * What Claude Code wrote into the conversation itself when a command ran in it locally (/cost,
+ * /context): the command and its output. Shown as notes, never as prompts.
+ */
+function localCommand(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+  const text = row.type === 'system' && row.subtype === 'local_command' ? str(row.content) : undefined;
+  if (!text) return undefined;
+  const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+  return { uuid, role: 'system', blocks: [{ type: 'text', text }], ...(Number.isNaN(timestamp) ? {} : { timestamp }) };
+}
+
 function addLine(t: Transcript, line: string): void {
   // Rows that take part in the conversation carry a uuid; skip the rest (titles, costs, requests) unparsed.
   if (line.length < 2 || line.charCodeAt(0) !== 123 || !line.includes('"uuid"')) return;
@@ -115,7 +125,7 @@ function addLine(t: Transcript, line: string): void {
   if (!uuid || row.isSidechain === true) return;
   note(t.recorded, row);
   const turn = row.type === 'user' || row.type === 'assistant';
-  const message = turn ? toChatMessage(row) : steeredMessage(row, uuid);
+  const message = turn ? toChatMessage(row) : steeredMessage(row, uuid) ?? localCommand(row, uuid);
   const existing = t.nodes.get(uuid);
   if (existing) {
     existing.message = message;

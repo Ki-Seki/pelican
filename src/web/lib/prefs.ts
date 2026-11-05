@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-import type { PermissionMode, RunSettings } from '../../shared/protocol';
+import type { RunSettings } from '../../shared/protocol';
 
 const SETTINGS_KEY = 'pelican:settings';
 const PREFS_KEY = 'pelican:prefs';
@@ -24,7 +24,8 @@ const write = (key: string, value: unknown) => {
 
 /**
  * What a new session starts with, set in Settings (a choice in a session stays in that session);
- * remembered per browser. The permission mode is not among them: new work asks first.
+ * remembered per browser. The permission mode is not among them: it comes from Claude Code's own
+ * settings (permissions.defaultMode, read by the server), else new work asks first.
  */
 export function loadDefaults(): RunSettings {
   const raw = read<Partial<RunSettings>>(SETTINGS_KEY, {});
@@ -155,14 +156,6 @@ export function enterSends(): boolean {
   if (prefs.enterToSend === 'never') return false;
   return !window.matchMedia('(pointer: coarse)').matches;
 }
-
-export const PERMISSION_MODES: Array<{ value: PermissionMode; label: string; short: string; description: string }> = [
-  { value: 'default', label: 'Ask before acting', short: 'Ask', description: 'Approve each edit and command' },
-  { value: 'acceptEdits', label: 'Accept edits', short: 'Edits', description: 'Edit files freely, ask before commands' },
-  { value: 'plan', label: 'Plan first', short: 'Plan', description: 'Read and plan; no changes until you approve' },
-  { value: 'auto', label: 'Auto', short: 'Auto', description: 'Claude decides what needs your approval' },
-  { value: 'bypassPermissions', label: 'Bypass permissions', short: 'Bypass', description: 'Never ask. Use with care' },
-];
 
 export const EFFORT_LABELS: Record<string, string> = {
   low: 'Low',

@@ -2,10 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUp, Bot, FileText, Folder, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type DragEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { Agent, Attachment, Command, ModelOption, PermissionMode, RunSettings, SendMode } from '../../shared/protocol';
+import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
+import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { enterSends, getPrefs, PERMISSION_MODES } from '../lib/prefs';
+import { enterSends, getPrefs } from '../lib/prefs';
 import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
 import { Sheet, SheetOption } from './Sheet';
 
@@ -132,7 +133,8 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
     queryKey: ['completions', cwd],
     queryFn: () => api.completions(cwd!),
     enabled: Boolean(cwd) && Boolean(trigger),
-    staleTime: 10 * 60_000,
+    // Claude Code finds skills as it works; a running session answers at once.
+    staleTime: 60_000,
   });
   const files = useQuery({
     queryKey: ['files', cwd, fileQuery],
@@ -177,6 +179,7 @@ export function Composer({
   onSend,
   onShell,
   onStop,
+  stopping,
   placeholder = 'Message Claude',
   autoFocus,
   cwd,
@@ -191,6 +194,9 @@ export function Composer({
   /** Runs a `!` command in the session's folder; without it, `!` is ordinary text. */
   onShell?: (command: string) => void;
   onStop: () => void;
+  /** Stop was asked for and the turn is ending. */
+  stopping?: boolean;
+  /** What the empty box says while Claude is idle; while it works, the box says where a message goes. */
   placeholder?: string;
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
@@ -209,8 +215,10 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null);
 
   const model = modelOf(models, settings);
-  const modes = PERMISSION_MODES.filter((m) => m.value !== 'auto' || model?.supportsAuto !== false);
-  const permission = PERMISSION_MODES.find((m) => m.value === (settings.permissionMode ?? 'default')) ?? PERMISSION_MODES[0]!;
+  const permission = settings.permissionMode ?? 'default';
+  // The session's own mode is listed even when it is not offered (Don't ask), so the list says where it is.
+  const offered = OFFERED_MODES.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
+  const modes = offered.includes(permission) ? offered : [permission, ...offered];
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
 
@@ -443,7 +451,7 @@ export function Composer({
           value={text}
           rows={1}
           disabled={disabled}
-          placeholder={placeholder}
+          placeholder={busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder}
           onChange={(e) => {
             setDictationError(undefined);
             setText(e.target.value);
@@ -480,8 +488,8 @@ export function Composer({
               <ModelSummary settings={settings} models={models} />
             </Chip>
             <span aria-hidden className="h-3.5 w-px shrink-0 bg-line" />
-            <Chip label="Permission mode" tone={permission.value === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
-              {permission.short}
+            <Chip label="Permission mode" tone={permission === 'bypassPermissions' ? 'warn' : 'plain'} onClick={() => setSheet('mode')}>
+              {MODE_INFO[permission].short}
             </Chip>
           </div>
           )}
@@ -505,8 +513,8 @@ export function Composer({
               {listening ? <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" /><Square className="relative size-3 fill-current" /></span> : <Mic className="size-[18px]" />}
             </button>
           ) : busy && !canSend ? (
-            <button type="button" aria-label="Stop" onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg">
-              <Square className="size-3.5 fill-current" />
+            <button type="button" aria-label={stopping ? 'Stopping' : 'Stop'} disabled={stopping} onClick={onStop} className="grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg disabled:opacity-40">
+              {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
             </button>
           ) : (
             <button
@@ -526,8 +534,8 @@ export function Composer({
 
       <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
         {modes.map((m) => (
-          <SheetOption key={m.value} label={m.label} description={m.description} selected={m.value === permission.value} onSelect={() => {
-            set({ permissionMode: m.value as PermissionMode });
+          <SheetOption key={m} label={MODE_INFO[m].label} description={MODE_INFO[m].description} selected={m === permission} onSelect={() => {
+            if (OFFERED_MODES.includes(m)) set({ permissionMode: m });
             setSheet(undefined);
           }} />
         ))}

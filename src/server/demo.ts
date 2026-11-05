@@ -378,7 +378,7 @@ export function demoRunState(sessionId: string): RunState | undefined {
         old_string: '      <FontSizePicker />\n    </Section>',
         new_string: '      <FontSizePicker />\n      <ThemeToggle value={theme} onChange={setTheme} />\n    </Section>',
       },
-      canRemember: true,
+      always: 'Allow all edits this session',
       createdAt: Date.now() - 20_000,
     }],
     context: { percent: 31, tokens: 62_000, max: 200_000 },

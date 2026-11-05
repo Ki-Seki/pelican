@@ -1,9 +1,10 @@
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import { filterEscalatingDefaultMode, query, resolveSettings } from '@anthropic-ai/claude-agent-sdk';
+import type { AccountInfo, AgentInfo, McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SettingSource, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
+import { isPermissionMode, type PermissionMode } from '../shared/modes.js';
 import type { Account, Agent, Command, McpServer, ModelOption, PlanUsage } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
@@ -82,9 +83,31 @@ function toOption(info: ModelInfo): ModelOption {
   };
 }
 
-export type ModelList = { models: ModelOption[]; signedIn: boolean | null; account?: Account };
+export type ModelList = { models: ModelOption[]; signedIn: boolean | null; account?: Account; version?: string };
 
 let cache: { at: number; value: ModelList } | undefined;
+
+/**
+ * Whether Claude Code has a way to call the API. Signed out, it still names the first-party API
+ * as its provider, and its token source as 'none'; a third-party provider (Bedrock, Vertex, a
+ * gateway) signs in outside Claude Code, so it counts as signed in.
+ */
+export function signedInFrom(account: AccountInfo): boolean {
+  const some = (value: string | undefined) => Boolean(value && value !== 'none');
+  return Boolean(account.email || account.subscriptionType || some(account.apiKeySource) || some(account.tokenSource)
+    || (account.apiProvider && account.apiProvider !== 'firstParty'));
+}
+
+/**
+ * Claude Code failing to start, in Pelican's words: the SDK's own text names an option of the
+ * SDK, not the setting a Pelican user has.
+ */
+export function startError(text: string): string | undefined {
+  const missing = text.match(/(?:native binary|Claude Code executable) not found at (.+?)\. (?:Please|Is)/);
+  if (!missing && !/native binary not found|Claude Code executable not found/.test(text)) return undefined;
+  const at = missing?.[1] ? ` at ${missing[1]}` : '';
+  return `Pelican could not find Claude Code${at}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or reinstall Pelican.`;
+}
 
 /**
  * The models this account can use, with their effort levels and fast-mode
@@ -94,9 +117,9 @@ export async function listModels(): Promise<ModelList> {
   if (config.demo) return { models: DEMO_MODELS, signedIn: true, account: { email: 'you@example.com', plan: 'max' } };
   if (cache && Date.now() - cache.at < TTL_MS) return cache.value;
   const asking = probe('models', os.homedir(), async (q) => {
-    const models = (await q.supportedModels()).map(toOption);
-    const account = await q.accountInfo().catch(() => undefined);
-    const signedIn = account ? Boolean(account.email || account.tokenSource || account.apiKeySource || account.apiProvider) : null;
+    const init = await q.initializationResult();
+    const models = init.models.map(toOption);
+    const account: AccountInfo | undefined = init.account;
     const who: Account | undefined = account?.email || account?.organization || account?.subscriptionType
       ? {
         ...(account.email ? { email: account.email } : {}),
@@ -104,7 +127,12 @@ export async function listModels(): Promise<ModelList> {
         ...(account.subscriptionType ? { plan: account.subscriptionType } : {}),
       }
       : undefined;
-    return { models, signedIn, ...(who ? { account: who } : {}) };
+    return {
+      models,
+      signedIn: account ? signedInFrom(account) : null,
+      ...(who ? { account: who } : {}),
+      ...(init.claude_code_version ? { version: init.claude_code_version } : {}),
+    };
   })
     .then((value) => {
       cache = { at: Date.now(), value };
@@ -114,8 +142,47 @@ export async function listModels(): Promise<ModelList> {
     return await asking;
   } catch (error) {
     if (cache) return cache.value;
-    throw error;
+    const readable = startError((error as Error).message);
+    throw readable ? new Error(readable) : error;
   }
+}
+
+/** The model list as last read, without starting Claude Code to read it. */
+export const knownModels = (): ModelOption[] | undefined => (config.demo ? DEMO_MODELS : cache?.value.models);
+
+/** Whether the account pays through a Claude plan (Pro, Max, Team…), as last read; then dollar costs mean nothing to it. */
+export const onSubscription = (): boolean => Boolean(cache?.value.account?.plan);
+
+/**
+ * Claude Code's state on this machine for a line at start-up: its version and whether it is
+ * signed in, or why it cannot start.
+ */
+export async function claudeCodeStatus(): Promise<{ version?: string; signedIn: boolean | null } | { error: string }> {
+  try {
+    const list = await listModels();
+    return { signedIn: list.signedIn, ...(list.version ? { version: list.version } : {}) };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+/**
+ * The mode new sessions start in, as Claude Code decides it from the settings: the folder's own
+ * once Claude has run there (an escalating mode only from the user's own files, as Claude Code
+ * does), else the user's. Bypass is left out: Pelican enters it only when it is picked.
+ * Reading settings starts nothing.
+ */
+export async function defaultMode(cwd?: string): Promise<PermissionMode | undefined> {
+  if (config.demo) return undefined;
+  const dir = cwd ? await realpath(cwd).catch(() => undefined) : undefined;
+  const read = async (settingSources: SettingSource[]) => {
+    const resolved = await resolveSettings({ cwd: dir ?? os.homedir(), settingSources });
+    return filterEscalatingDefaultMode(resolved).permissions?.defaultMode;
+  };
+  const trusted = dir ? await claudeRanIn(dir) : false;
+  const mode = (await read(trusted ? ['user', 'project', 'local'] : ['user']).catch(() => undefined))
+    ?? (trusted ? await read(['user']).catch(() => undefined) : undefined);
+  return isPermissionMode(mode) && mode !== 'bypassPermissions' ? mode : undefined;
 }
 
 const DEMO_COMMANDS: Command[] = [
@@ -128,6 +195,31 @@ const DEMO_AGENTS: Agent[] = [{ name: 'code-reviewer', description: 'Reviews a c
 export type Completions = { commands: Command[]; agents: Agent[] };
 const completionCache = new Map<string, { at: number; value: Completions }>();
 
+/**
+ * Commands whose screen is Claude Code's terminal; a phone has nowhere to show them. Claude Code
+ * names more in each session's start (`terminal_slash_commands`), which runs add here.
+ */
+const terminalCommands = new Set(['exit', 'quit', 'statusline', 'terminal-setup', 'theme', 'doctor', 'color', 'focus', 'vim', 'keybindings', 'ide']);
+
+export function noteTerminalCommands(names: string[]): void {
+  for (const name of names) terminalCommands.add(name);
+}
+
+/** The commands and agents Claude Code lists, in the app's terms, without the terminal's own. */
+export function toCompletions(commands: SlashCommand[], agents: AgentInfo[]): Completions {
+  return {
+    commands: commands
+      .filter((c) => !terminalCommands.has(c.name))
+      .map((c) => ({ name: c.name, description: c.description ?? '', argumentHint: c.argumentHint ?? '' })),
+    agents: agents.map((a) => ({ name: a.name, description: a.description ?? '' })),
+  };
+}
+
+/** A folder's list changed (Claude Code found skills while it worked there): asked again next time. */
+export async function forgetCompletions(cwd: string): Promise<void> {
+  completionCache.delete(await realpath(cwd).catch(() => cwd));
+}
+
 /** Slash commands (built-in, the project's and the user's, skills) and subagents available in a folder. */
 export async function listCompletions(cwd: string): Promise<Completions> {
   if (config.demo) return { commands: DEMO_COMMANDS, agents: DEMO_AGENTS };
@@ -136,10 +228,7 @@ export async function listCompletions(cwd: string): Promise<Completions> {
   if (cached && Date.now() - cached.at < TTL_MS) return cached.value;
   const value = await probe('completions', dir, async (q) => {
     const [commands, agents] = await Promise.all([q.supportedCommands(), q.supportedAgents().catch(() => [])]);
-    return {
-      commands: commands.map((c: SlashCommand) => ({ name: c.name, description: c.description ?? '', argumentHint: c.argumentHint ?? '' })),
-      agents: agents.map((a) => ({ name: a.name, description: a.description ?? '' })),
-    };
+    return toCompletions(commands, agents);
   });
   completionCache.set(dir, { at: Date.now(), value });
   return value;

@@ -7,7 +7,8 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { Attachment, ChatMessage, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import { isPermissionMode } from '../shared/modes.js';
+import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -16,10 +17,10 @@ import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
+import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, replaceLastTurn, runState, runStatus, sendMessage } from './runner.js';
+import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
@@ -182,9 +183,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
 
 type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
 
-const PERMISSION_MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
-const permissionMode = (value: unknown): PermissionMode | undefined =>
-  (PERMISSION_MODES as unknown[]).includes(value) ? (value as PermissionMode) : undefined;
+const permissionMode = (value: unknown) => (isPermissionMode(value) ? value : undefined);
 
 /** The settings a request may carry, and only those, each of its own type. */
 function cleanSettings(raw: unknown): RunSettings {
@@ -462,7 +461,17 @@ app.get('/api/models', async (c) => c.json(await listModels()));
 app.get('/api/commands', async (c) => {
   const cwd = await folderOf(c);
   if (!cwd) return c.json({ commands: [], agents: [] });
-  return c.json(await listCompletions(cwd));
+  // A Claude running there knows its list as it is now, and asking it starts nothing.
+  const live = await runIn(cwd)?.completions().catch(() => undefined);
+  return c.json(live ?? await listCompletions(cwd));
+});
+
+/** What a new session in a folder starts with, from the user's Claude Code settings (no folder: a scratch session). */
+app.get('/api/defaults', async (c) => {
+  const asked = c.req.query('cwd');
+  const cwd = asked ? await checkedFolder(asked) : undefined;
+  if (asked && !cwd) return c.json({ error: 'No such folder' }, 404);
+  return c.json({ permissionMode: (await defaultMode(cwd)) ?? null });
 });
 
 /** What `/usage` shows in Claude Code: asked of claude.ai when Settings opens, kept a minute. */
@@ -576,6 +585,19 @@ app.post('/api/sessions/:id/mcp/:name', async (c) => {
 app.post('/api/sessions/:id/tasks/:task/stop', async (c) => {
   await getRun(c.req.param('id'))?.stopTask(c.req.param('task'));
   return c.json({ ok: true });
+});
+
+/** The end of what a background command printed, read while it runs. */
+app.get('/api/sessions/:id/tasks/:task/output', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Claude is not running in this session' }, 409);
+  return c.json(await run.taskOutput(c.req.param('task')));
+});
+
+/** Takes back a prompt waiting for the turn to end, before Claude gets it. */
+app.delete('/api/sessions/:id/queued/:uuid', (c) => {
+  const ok = getRun(c.req.param('id'))?.unqueue(c.req.param('uuid')) ?? false;
+  return ok ? c.json({ ok }) : c.json({ error: 'That message is no longer waiting' }, 409);
 });
 
 app.get('/api/sessions/:id/sent', async (c) => {
