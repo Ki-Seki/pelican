@@ -493,8 +493,23 @@ describe('settings', () => {
     expect(claude.called('applyFlagSettings')).toEqual([[{ effortLevel: 'max', ultracode: true, enableWorkflows: true }], [{ fastMode: true }]]);
     expect(claude.called('setPermissionMode')).toEqual([['plan']]);
     // Unchanged settings send nothing again.
-    await run.updateSettings({ model: 'sonnet' });
+    await run.updateSettings({ model: 'sonnet', effort: 'max', ultracode: true, fast: true, permissionMode: 'plan' });
     expect(claude.called('setModel')).toHaveLength(1);
+    expect(claude.called('applyFlagSettings')).toHaveLength(2);
+    expect(claude.called('setPermissionMode')).toHaveLength(1);
+  });
+
+  it('Default effort picked mid-turn reaches Claude at once, and the run says Default too', async () => {
+    const { run, claude, state } = await start('Go', { model: 'default', effort: 'high' });
+    // The page sends all its settings: Default effort is no effort at all.
+    const picked = { model: 'default', fast: false, ultracode: false, permissionMode: 'default' as const };
+    await run.updateSettings(picked);
+    expect(claude.called('applyFlagSettings')).toEqual([[{ effortLevel: null, ultracode: false }]]);
+    expect(state().settings).toEqual(picked);
+    // The next message carries the same: nothing to apply again.
+    await run.send({ text: 'More', attachments: [], settings: picked });
+    expect(claude.called('applyFlagSettings')).toHaveLength(1);
+    expect(state().settings.effort).toBeUndefined();
   });
 
   it('follow Claude Code: a mode it switched to shows, said once, and picking Manual again reaches it', async () => {

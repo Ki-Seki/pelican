@@ -611,12 +611,17 @@ export class SessionRun {
   /**
    * Settings picked here, applied to Claude now: from its next step, also mid-turn. A mode picked
    * here (`pick`) is always sent, even when Pelican thinks Claude is in it already.
+   *
+   * They are all the settings the page has: one left out is its default (Default effort is no
+   * effort at all), which Claude gets and the run then says it has. Only the mode stays as it is
+   * when none is given, as Claude Code changes it too.
    */
   async applySettings(next: RunSettings, pick = false): Promise<void> {
     const q = this.q;
     if (!q) return;
     const prev = this.settings;
-    this.settings = { ...prev, ...next };
+    const mode = next.permissionMode ?? prev.permissionMode;
+    this.settings = { ...next, ...(mode ? { permissionMode: mode } : {}) };
     if (next.permissionMode) this.modeChanged = undefined;
     if (next.permissionMode === 'plan' && prev.permissionMode !== 'plan') this.modeBeforePlan = prev.permissionMode ?? 'default';
     this.applying += 1;
@@ -644,9 +649,9 @@ export class SessionRun {
     this.emit();
   }
 
-  /** Settings changed in the composer, applied to Claude now: from its next step, also mid-turn. */
+  /** Settings changed in the composer, all of them, applied to Claude now: from its next step, also mid-turn. */
   async updateSettings(next: RunSettings): Promise<void> {
-    await this.applySettings({ ...this.settings, ...next });
+    await this.applySettings(next);
     this.emit();
   }
 
