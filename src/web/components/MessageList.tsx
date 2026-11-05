@@ -501,7 +501,7 @@ function useSavedOutput(sessionId: string | undefined, name: string | undefined)
  * A `!` command someone ran in the session, with its output. A long output shows its end, the
  * result, as the command's live card did while it ran; Show all shows it from the start, and for
  * one Claude Code saved to a file (too long for the conversation), all of it, from that file, a
- * page at a time.
+ * page at a time. One that failed or was stopped says so where its live card said how it ended.
  */
 function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>; sessionId: string | undefined }) {
   const [all, setAll] = useState(false);
@@ -518,6 +518,7 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 break-words">{item.command}</span>
+        {item.ended && <span className="shrink-0 font-sans text-[11px] text-faint">{item.ended === 'stopped' ? 'Stopped' : 'Failed'}</span>}
         {item.timestamp && <span className="shrink-0 font-sans text-[11px] text-faint">{clockTime(item.timestamp)}</span>}
       </div>
       {output && (

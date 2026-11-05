@@ -50,8 +50,11 @@ export type Item =
     workflow?: WorkflowNotice;
   }
   | { kind: 'compact'; key: string; summary: string }
-  /** `saved`: the file Claude Code saved all of a long output in, by its name in the session's tool-results folder. */
-  | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; saved?: string; timestamp?: number }
+  /**
+   * `saved`: the file Claude Code saved all of a long output in, by its name in the session's
+   * tool-results folder. `ended`: the record says it did not go well, as Claude Code's does.
+   */
+  | { kind: 'shell'; key: string; command: string; stdout: string; stderr: string; saved?: string; ended?: ShellEnd; timestamp?: number }
   | { kind: 'day'; key: string; timestamp: number };
 
 const tag = (text: string, name: string) => {
@@ -80,12 +83,17 @@ export function cleanOutput(text: string): string {
 }
 /* eslint-enable no-control-regex */
 
+/** How a `!` command's record says it ended, when not well: it failed, or Pelican stopped it. */
+export type ShellEnd = 'failed' | 'stopped';
+
+type Recorded = { stdout: string; stderr: string; saved?: string; ended?: ShellEnd };
+
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
   | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string; task?: TaskNotice }
-  | { kind: 'shell'; command: string; stdout: string; stderr: string; saved?: string }
+  | ({ kind: 'shell'; command: string } & Recorded)
   /** The output of the `!` command just before, in a message of its own, as Claude Code writes it. */
-  | { kind: 'shell-output'; stdout: string; stderr: string; saved?: string };
+  | ({ kind: 'shell-output' } & Recorded);
 
 /**
  * The files sent with a prompt, out of its text. Pelican tells Claude where they are in an
@@ -138,13 +146,19 @@ function shellOutput(raw: string): { text: string; saved?: string } {
 
 /**
  * The output of a `!` command's record, as the card shows it: Claude Code's word that a command
- * printed nothing is for Claude, and the card shows nothing in its place.
+ * printed nothing is for Claude, and the card shows nothing in its place. How it ended, as the
+ * record tells it: Claude Code's bash mode puts the output of one that went well under stdout, or
+ * its word that it printed none, and that of one that failed under stderr, with stdout empty; one
+ * Pelican stopped says so at its end.
  */
-function shellRecord(text: string): { stdout: string; stderr: string; saved?: string } {
-  const stdout = shellOutput(tag(text, 'bash-stdout') ?? '');
-  const stderr = shellOutput(tag(text, 'bash-stderr') ?? '');
+function shellRecord(text: string): Recorded {
+  const out = tag(text, 'bash-stdout');
+  const err = tag(text, 'bash-stderr');
+  const stdout = shellOutput(out ?? '');
+  const stderr = shellOutput(err ?? '');
   const saved = stdout.saved ?? stderr.saved;
-  return { stdout: stdout.text === '(Bash completed with no output)' ? '' : stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}) };
+  const ended: ShellEnd | undefined = err === undefined || out ? undefined : /(?:^|\n)\(stopped(?: after [^)\n]+)?\)$/.test(stderr.text) ? 'stopped' : 'failed';
+  return { stdout: stdout.text === '(Bash completed with no output)' ? '' : stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}), ...(ended ? { ended } : {}) };
 }
 
 /** Splits what Claude Code wraps in tags out of a user message's text. */
@@ -262,6 +276,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
           last.stdout = classified.stdout;
           last.stderr = classified.stderr;
           if (classified.saved) last.saved = classified.saved;
+          if (classified.ended) last.ended = classified.ended;
         }
       } else {
         // A workflow's end goes into its card; here a line names it and leads there. One from a
