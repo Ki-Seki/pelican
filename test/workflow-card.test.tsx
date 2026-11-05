@@ -52,9 +52,14 @@ const runWith = (workflow: Workflow): RunState => ({
 });
 
 function show(messages: ChatMessage[], mode: 'normal' | 'thinking' | 'verbose' = 'normal') {
-  const view: SessionView = { messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MessageList sessionId={SESSION} view={view} mode={mode} /></QueryClientProvider>);
+  const tree = (list: ChatMessage[]) => {
+    const view: SessionView = { messages: list, offset: 0, total: list.length, loaded: true, loadingOlder: false };
+    return <QueryClientProvider client={client}><MessageList sessionId={SESSION} view={view} mode={mode} /></QueryClientProvider>;
+  };
+  const shown = render(tree(messages));
+  /** The same page, its conversation grown. */
+  return { ...shown, again: (list: ChatMessage[]) => shown.rerender(tree(list)) };
 }
 
 const card = () => screen.getByRole('region', { name: 'Workflow demo-review' });
@@ -128,8 +133,9 @@ describe('a Workflow call', () => {
     act(() => setRun(SESSION, runWith(live({ status: 'killed', durationMs: 170_000, agents: [agent(1, 'Review', 'done'), agent(2, 'Review', 'error', { error: 'Stopped because the workflow was stopped' })] }))));
     await waitFor(() => expect(card().textContent).toContain('Stopped'));
     expect(screen.queryByRole('button', { name: 'Stop this workflow' })).toBeNull();
-    // An agent the stop cut short is stopped, not failed.
-    expect(within(phases()!).getByText('Stopped:')).toBeTruthy();
+    // An agent the stop cut short is stopped, not failed; so is its phase.
+    expect(within(phases()!).getByRole('button', { name: /^Stopped: review:2, / })).toBeTruthy();
+    expect(within(phases()!).getByRole('button', { name: 'Stopped: Review, 1 of 2 done' })).toBeTruthy();
   });
 
   it('says it failed, and why', async () => {
@@ -143,7 +149,7 @@ describe('a Workflow call', () => {
     vi.spyOn(api, 'workflow').mockResolvedValue({ ...RECORD, status: 'stopped', source: 'journal', agents: [agent(1, 'Review', 'progress')] });
     show([call(), launched()], 'verbose');
     await waitFor(() => expect(card().textContent).toContain('Stopped'));
-    expect(within(phases()!).getByText('Stopped:')).toBeTruthy();
+    expect(within(phases()!).getByRole('button', { name: /^Stopped: review:1, / })).toBeTruthy();
   });
 
   it('that did not compile says so, and asks the server for nothing', () => {
@@ -220,5 +226,174 @@ describe('a workflow asking to run', () => {
     expect(document.body.textContent).not.toContain('export const meta');
     fireEvent.click(screen.getByRole('button', { name: 'View raw script' }));
     expect(document.body.textContent).toContain('export const meta');
+  });
+});
+
+describe('a run this Pelican ran, once it lets the run go', () => {
+  it('never goes back to what the card read before its live report came', async () => {
+    // The page loaded its messages before its run state: the card asked the server once.
+    const early: Workflow = { ...live({ totalTokens: 50_000 }), agents: [agent(1, 'Review', 'progress', { startedAt: Date.now() - 60_000 }), agent(2, 'Review', 'start', { queuedAt: Date.now() - 60_000 })] };
+    const answers = vi.spyOn(api, 'workflow').mockResolvedValueOnce(early);
+    const { again } = show([call(), launched()], 'verbose');
+    await waitFor(() => expect(card().textContent).toContain('50k tokens'));
+    // Then its run state came, and it ran to its end here.
+    const ended = live({ status: 'completed', durationMs: 361_250, totalTokens: 412_300, agents: [agent(1, 'Review', 'done'), agent(2, 'Review', 'done')] });
+    act(() => setRun(SESSION, runWith(ended)));
+    again([call(), launched(), said('n1', noticeOf('completed', USAGE))]);
+    await waitFor(() => expect(card().textContent).toContain('412.3k tokens'));
+    // Two minutes on, Pelican lets its live copy go; the card asks the server again, still on its way.
+    answers.mockImplementation(() => new Promise(() => undefined));
+    act(() => setRun(SESSION, { ...runWith(ended), workflows: {} }));
+    expect(card().textContent).toContain('412.3k tokens');
+    expect(card().textContent).toContain('2 of 2 done');
+  });
+});
+
+describe('a running workflow on a computer', () => {
+  it('keeps open the phase at work, and the agent the reader opened in it, when that phase is done', async () => {
+    wide = true;
+    vi.spyOn(api, 'workflowAgent').mockResolvedValue({ messages: [], total: 0, offset: 0, prompt: 'Review the server.' });
+    setRun(SESSION, runWith(live({ agents: [agent(1, 'Review', 'progress', { startedAt: Date.now() - 60_000, lastProgressAt: Date.now() })] })));
+    show([call(), launched()], 'normal');
+    fireEvent.click(header());
+    fireEvent.click(within(phases()!).getByText('review:1'));
+    await waitFor(() => expect(screen.getByText('Prompt')).toBeTruthy());
+    // The agent finishes, and with it the phase; the run goes on to Verify, which opens too.
+    act(() => setRun(SESSION, runWith(live({ agents: [agent(1, 'Review', 'done', { durationMs: 61_000 }), agent(2, 'Verify', 'progress', { startedAt: Date.now() })] }))));
+    expect(screen.getByText('Prompt')).toBeTruthy();
+    expect(within(phases()!).getByText('verify:2')).toBeTruthy();
+  });
+
+  it('says to a screen reader what its grid shows: agents that failed or stalled', () => {
+    setRun(SESSION, runWith(live({ agents: [agent(1, 'Review', 'error', { error: 'API Error: 529' }), agent(2, 'Review', 'progress', { startedAt: Date.now() - 300_000, lastProgressAt: Date.now() - 120_000 })] })));
+    show([call(), launched()], 'normal');
+    expect(header().getAttribute('aria-label')).toMatch(/0\/2 agents, 30k tokens, 1 failed, 1 stalled$/);
+  });
+});
+
+describe('a paused run', () => {
+  it('is not running, as the CLI tells it: its time stops, its agents stopped, and it can still be stopped', () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setRun(SESSION, runWith(live({ status: 'paused', durationMs: 600_000, agents: [agent(1, 'Review', 'done', { durationMs: 1000 }), agent(2, 'Review', 'progress', { startedAt: Date.now() - 500_000, lastProgressAt: Date.now() - 400_000 })] })));
+      show([call(), launched()], 'verbose');
+      const before = card().textContent;
+      expect(before).toContain('Paused');
+      expect(before).toContain('10m 0s');
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(card().textContent).toBe(before);
+      expect(within(phases()!).getByRole('button', { name: /^Stopped: review:2, / })).toBeTruthy();
+      expect(card().textContent).toContain('Not run: Verify, Report');
+      expect(screen.queryByRole('img', { name: /agents done/ })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stop this workflow' })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('a run that ended before any agent started', () => {
+  it('says so in Desktop’s words, with the plan it had', async () => {
+    vi.spyOn(api, 'workflow').mockResolvedValue({ ...RECORD, status: 'failed', durationMs: 400, agents: [], totalTokens: 0, error: 'TypeError: phases is not iterable', result: undefined });
+    show([call(), launched()], 'verbose');
+    await waitFor(() => expect(card().textContent).toContain('Failed before any agents started'));
+    expect(card().textContent).toContain('TypeError: phases is not iterable');
+    expect(card().textContent).toContain('Review — one agent per area');
+  });
+});
+
+describe('a run’s result', () => {
+  it('shows as code, also when it was cut short, never as Markdown', async () => {
+    const { resultMarkdown } = await import('../src/web/lib/workflows');
+    // What the server sends of a long one: laid out, cut where a line ends, with what was left out.
+    const value = [{ findings: Array.from({ length: 240 }, (_, i) => ({ title: `Finding ${i}: \`a_${i}.ts\` skips the *owner* check when __proto__ is set` })) }];
+    const full = JSON.stringify(value, null, 2);
+    const cut = `${full.slice(0, full.lastIndexOf('\n', 16 * 1024))}\n... (truncated 3000 chars)`;
+    for (const text of [cut, `${full.slice(0, 16 * 1024)}\n…`, '[{"verdicts":[{"finding":"x"', JSON.stringify(value)]) expect(resultMarkdown(text).startsWith('```json\n')).toBe(true);
+    // An agent's own words stay words, also in brackets; a string Claude Code wrote as JSON is its text.
+    expect(resultMarkdown('[harness: subagent output matched an instruction-shaped pattern] All clear.')).toBe('[harness: subagent output matched an instruction-shaped pattern] All clear.');
+    expect(resultMarkdown('**All clear.**')).toBe('**All clear.**');
+    expect(resultMarkdown('"All clear."')).toBe('All clear.');
+  });
+});
+
+describe('a Workflow card, read', () => {
+  it('folds a long description to two lines, and shows its name and description whole once opened', () => {
+    const long = 'Review every route of the server and every page of the client, then have a skeptic check each finding, then fix what holds up, with a test for each fix';
+    show([call('toolu_w', { script: META.replace('Review the demo app, then check each finding', long) }), launched()], 'normal');
+    const description = within(card()).getByText(long);
+    // line-clamp sets how it is shown itself: a class that shows it as a block would undo the clamp.
+    expect(description.className.split(' ')).toContain('line-clamp-2');
+    expect(description.className.split(' ')).not.toContain('block');
+    fireEvent.click(header());
+    expect(within(card()).getByText(long).className).not.toContain('line-clamp');
+    expect(within(card()).getByText('demo-review').className).not.toContain('truncate');
+  });
+
+  it('takes the focus when the line about its end leads to it', async () => {
+    show([call(), launched(), said('n1', noticeOf('completed', USAGE))]);
+    const line = screen.getByRole('button', { name: /Workflow demo-review completed/ });
+    line.focus();
+    fireEvent.click(line);
+    await waitFor(() => expect(document.activeElement).toBe(header()));
+  });
+
+  it('whose meta holds an escape no string could hold still shows, as a call Claude Code did not launch', async () => {
+    const { describeTool } = await import('../src/web/lib/tools');
+    const script = "export const meta = {\n  name: 'tidy',\n  description: 'Tidy \\u{-1} up',\n  phases: [{ title: 'Tidy' }],\n}\nreturn 1\n";
+    expect(() => describeTool('Workflow', { script })).not.toThrow();
+    show([call('toolu_bad', { script }), { uuid: 'r', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 'toolu_bad', is_error: true, content: 'Workflow script has a syntax error and was not launched:\nInvalid Unicode escape sequence' }] }], 'verbose');
+    const refused = screen.getByRole('region', { name: 'Workflow tidy' });
+    expect(refused.textContent).toContain('Not launched');
+    expect(refused.textContent).toContain('Invalid Unicode escape sequence');
+  });
+});
+
+describe('a run whose every field is hostile', () => {
+  const X = '<img src=x onerror="window.__pwned=1"><script>window.__pwned=1</script>';
+  const LINK = '[open](javascript:window.__pwned=1) ![p](https://tracker.example/p.png) <a href="javascript:window.__pwned=1">a</a>';
+  const SCRIPT = `export const meta = {\n  name: 'n',\n  description: 'desc ${X}',\n  phases: [{ title: 'P ${X}', detail: 'D ${X}' }],\n}\n// \`\`\`\n</code></pre>${X}\nreturn 1\n`;
+
+  it('shows every field as text: no element, handler or script link of its own', async () => {
+    wide = true;
+    vi.spyOn(api, 'workflow').mockResolvedValue({
+      runId: 'wf_7c2e4a10-9b3', taskId: 'w1', name: `name ${X}`, description: `desc ${X}`, status: 'failed', durationMs: 1000, source: 'record',
+      error: `error ${X}`, result: `result ${X} ${LINK}`, script: SCRIPT, phases: [{ title: `P ${X}`, detail: `D ${X}` }],
+      agents: [
+        { index: 1, label: `label ${X}`, phaseTitle: `P ${X}`, state: 'done', agentId: 'a1', model: `m ${X}`, agentType: `t ${X}`, resultPreview: `rp ${X} ${LINK}`, promptPreview: `pp ${X}` },
+        { index: 2, label: `label2 ${X}`, phaseTitle: `P ${X}`, state: 'error', agentId: 'a2', error: `agent error ${X}` },
+      ],
+    });
+    vi.spyOn(api, 'workflowAgent').mockResolvedValue({
+      messages: [
+        { uuid: 's1', role: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `echo ${X}`, description: `d ${X}` } }] },
+        { uuid: 's2', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 't1', content: `${X} ${LINK}` }] },
+      ],
+      total: 2, offset: 0, prompt: `prompt ${X}`, result: `result ${X} ${LINK}`,
+    });
+    show([
+      call('toolu_w', { scriptPath: '/x/workflows/scripts/n-wf_7c2e4a10-9b3.js' }),
+      { uuid: 'r', role: 'user', timestamp: at + 1000, blocks: [{ type: 'tool_result', tool_use_id: 'toolu_w', content: 'Workflow launched in background.', workflow: { runId: 'wf_7c2e4a10-9b3', taskId: 'w1', name: `n ${X}`, summary: `s ${X}`, sessionUrl: 'javascript:alert(1)' } }] },
+      said('n', '<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>toolu_w</tool-use-id>\n<output-file>/o</output-file>\n<status>failed</status>\n<summary>Dynamic workflow "x" failed: &lt;img src=x onerror=alert(1)&gt;</summary>\n<result>&lt;script&gt;alert(1)&lt;/script&gt;</result>\n</task-notification>'),
+    ], 'verbose');
+    await waitFor(() => expect(phases()).not.toBeNull());
+    for (const row of within(phases()!).getAllByRole('button', { name: /label/ })) fireEvent.click(row);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Prompt' })).toHaveLength(2));
+    for (const button of screen.getAllByRole('button', { name: 'Prompt' })) fireEvent.click(button);
+    expect(document.body.textContent).toContain('prompt <img');
+    // The script, then the result: one at a time.
+    fireEvent.click(screen.getByRole('button', { name: 'Script' }));
+    expect(document.body.textContent).toContain('</code></pre><img');
+    const scriptOpen = document.body.innerHTML;
+    fireEvent.click(screen.getByRole('button', { name: 'Result' }));
+    expect(document.body.textContent).toContain('<script>window.__pwned=1</script>');
+    expect(scriptOpen).not.toMatch(/<(img|script)[\s>]/);
+    expect(document.querySelectorAll('script, iframe, object, embed')).toHaveLength(0);
+    expect([...document.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([]);
+    expect([...document.querySelectorAll('*')].flatMap((e) => [...e.attributes].filter((a) => /^on/i.test(a.name)).map((a) => a.name))).toEqual([]);
+    expect([...document.querySelectorAll('[href]')].map((a) => a.getAttribute('href')).filter((h) => /^\s*javascript:/i.test(h ?? ''))).toEqual([]);
+    expect((window as { __pwned?: number }).__pwned).toBeUndefined();
   });
 });

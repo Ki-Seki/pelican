@@ -4,7 +4,7 @@ import type {
   Block, ChatMessage, MessagesPage, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
 import { currentTasks, type Todo } from '../../shared/tasks';
-import { isRunning } from '../../shared/workflows';
+import { isLive } from '../../shared/workflows';
 import { shortTitle } from '../../shared/titles';
 import { answerLocally, ApiError } from './api';
 import { newId } from './ids';
@@ -277,7 +277,7 @@ function stopTask(sessionId: string, taskId: string): { ok: boolean } {
   if (!run?.tasks?.some((t) => t.id === taskId)) return { ok: true };
   const { tasks, ...rest } = run;
   const left = tasks.filter((t) => t.id !== taskId);
-  const workflows = rest.workflows && Object.fromEntries(Object.entries(rest.workflows).map(([call, w]) => [call, w.taskId === taskId && isRunning(w.status) ? stopped(w) : w]));
+  const workflows = rest.workflows && Object.fromEntries(Object.entries(rest.workflows).map(([call, w]) => [call, w.taskId === taskId && isLive(w.status) ? stopped(w) : w]));
   runAs(sessionId, { ...(left.length > 0 ? { ...rest, tasks: left } : rest), ...(workflows ? { workflows } : {}) });
   return { ok: true };
 }

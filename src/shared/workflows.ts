@@ -182,9 +182,12 @@ class Literal {
       case 'x': return String.fromCharCode(hex(2));
       case 'u': {
         if (this.text[this.at] !== '{') return String.fromCharCode(hex(4));
+        // `\u{1F600}`: one to six hex digits, no sign, no more than the last code point.
         const end = this.text.indexOf('}', this.at);
-        const code = end > this.at + 1 && end - this.at <= 7 ? parseInt(this.text.slice(this.at + 1, end), 16) : NaN;
-        if (!Number.isInteger(code) || code > 0x10ffff) this.fail();
+        const digits = end < 0 ? '' : this.text.slice(this.at + 1, end);
+        if (!/^[0-9a-fA-F]{1,6}$/.test(digits)) this.fail();
+        const code = parseInt(digits, 16);
+        if (code > 0x10ffff) this.fail();
         this.at = end + 1;
         return String.fromCodePoint(code);
       }
@@ -220,18 +223,18 @@ function metaOf(value: unknown): WorkflowMeta | undefined {
 
 /**
  * The meta a workflow script starts with, read as a literal and never run; undefined when the
- * script does not start with one Claude Code would take.
+ * script does not start with one Claude Code would take. The script is whatever Claude wrote, so
+ * nothing in it may throw: a call that shows nothing is better than a session that cannot be read.
  */
 export function parseMeta(script: string): WorkflowMeta | undefined {
-  const reader = new Literal(script.slice(0, META_MAX));
   try {
+    const reader = new Literal(script.slice(0, META_MAX));
     if (!reader.word('export') || !reader.word('const') || !reader.word('meta')) return undefined;
     reader.expect('=');
     reader.space();
     return metaOf(reader.value());
-  } catch (error) {
-    if (error instanceof NotALiteral) return undefined;
-    throw error;
+  } catch {
+    return undefined;
   }
 }
 
@@ -257,14 +260,19 @@ export function scriptName(file: string): string {
  * workflow's name, or the script file it runs. A meta still streaming in gives what it has so far.
  */
 export function workflowOf(input: Record<string, unknown>): { name?: string; description?: string; meta?: WorkflowMeta; file?: string } {
-  const script = str(input.script);
-  const file = str(input.scriptPath);
-  const meta = script ? parseMeta(script) : undefined;
-  // A meta not written out yet: its first fields, as far as they came.
-  const partial = script && !meta;
-  const name = meta?.name ?? (partial ? partialField(script, 'name') : undefined) ?? str(input.name) ?? (file ? scriptName(file) : undefined);
-  const description = meta?.description ?? (partial ? partialField(script, 'description') : undefined);
-  return { ...(name ? { name } : {}), ...(description ? { description } : {}), ...(meta ? { meta } : {}), ...(file ? { file } : {}) };
+  try {
+    const script = str(input.script);
+    const file = str(input.scriptPath);
+    const meta = script ? parseMeta(script) : undefined;
+    // A meta not written out yet: its first fields, as far as they came.
+    const partial = script && !meta;
+    const name = meta?.name ?? (partial ? partialField(script, 'name') : undefined) ?? str(input.name) ?? (file ? scriptName(file) : undefined);
+    const description = meta?.description ?? (partial ? partialField(script, 'description') : undefined);
+    return { ...(name ? { name } : {}), ...(description ? { description } : {}), ...(meta ? { meta } : {}), ...(file ? { file } : {}) };
+  } catch {
+    // Pages render this from what Claude wrote: it never takes them down.
+    return {};
+  }
 }
 
 // ---- What a call launched, and how it ended ---------------------------------------------------
@@ -357,8 +365,14 @@ export function parseTaskNotice(text: string): TaskNotice | undefined {
 
 // ---- Agents and phases, by Claude Code's rules ------------------------------------------------
 
-/** A run that is still going: its agents may still start, run and end. */
-export const isRunning = (status: WorkflowStatus) => status === 'running' || status === 'paused';
+/**
+ * A run at work: its agents run, its time counts. Only `running`, as in the CLI's run view: a pause
+ * aborts the run (its agents stop with it), and a wait at a usage limit stays `running`.
+ */
+export const isRunning = (status: WorkflowStatus) => status === 'running';
+
+/** A run that has not ended: one paused can still be stopped, and may yet be saved as it ends. */
+export const isLive = (status: WorkflowStatus) => status === 'running' || status === 'paused';
 
 /** What Claude Code calls an agent's state: the CLI's run view, and its words for it. */
 export type AgentStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'blocked' | 'stopped';
@@ -400,38 +414,69 @@ export type PhaseGroup = {
   failed: number;
 };
 
+const norm = (text: string) => text.trim().toLowerCase();
+
+/** The CLI's match of a phase to a group of agents: the same title in any case, or one a prefix of the other. */
 const same = (a: string, b: string) => {
-  const x = a.trim().toLowerCase();
-  const y = b.trim().toLowerCase();
+  const x = norm(a);
+  const y = norm(b);
   return x.length > 0 && y.length > 0 && (x.startsWith(y) || y.startsWith(x));
 };
 
 /**
- * The run's phases in order, each with its agents, as the CLI groups them: the script's phases
- * first, matched to the phases agents name by title (any case, either a prefix of the other), then
- * phases only the run opened, then agents of no phase, as "Agents" (Desktop's "Other agents" when
- * there are phases). An agent naming no title is in "Phase N".
+ * A phase the run opened (a `workflow_phase` item), added after the script's own unless one of
+ * those is it already: a phase the CLI would show as that one is not listed twice.
+ */
+export function addPhase(phases: WorkflowPhase[], title: string): void {
+  if (!phases.some((p) => same(p.title, title))) phases.push({ title });
+}
+
+/**
+ * The run's phases in order, each with its agents, as the CLI groups them (its run view): agents
+ * by the phase they were started in (its index, else its title), each group matched to one of the
+ * script's phases at most, in order, the same title first and then a prefix either way. Groups no
+ * phase took follow, then agents of no phase, as "Agents" (Desktop's "Other agents" when there
+ * are phases). A group with no title of its own is "Phase N".
  */
 export function phaseGroups(workflow: Pick<Workflow, 'phases' | 'agents' | 'status'>): PhaseGroup[] {
-  const groups: PhaseGroup[] = workflow.phases.map((phase) => ({ ...phase, agents: [], status: 'pending', done: 0, failed: 0 }));
-  let loose: PhaseGroup | undefined;
+  type Run = { title: string; agents: WorkflowAgent[]; order: number };
+  const runs = new Map<string, Run>();
+  const unphased: WorkflowAgent[] = [];
   for (const agent of [...workflow.agents].sort((a, b) => a.index - b.index)) {
-    const title = agent.phaseTitle?.trim() || (agent.phaseIndex !== undefined ? `Phase ${agent.phaseIndex}` : undefined);
-    let group = title ? groups.find((g) => same(g.title, title)) : undefined;
-    if (!group && title) {
-      group = { title, agents: [], status: 'pending', done: 0, failed: 0 };
-      groups.push(group);
+    const title = agent.phaseTitle?.trim();
+    const key = agent.phaseIndex !== undefined ? `#${agent.phaseIndex}` : title ? `=${norm(title)}` : undefined;
+    if (!key) {
+      unphased.push(agent);
+      continue;
     }
-    if (!group) {
-      loose ??= { title: 'Agents', agents: [], status: 'pending', done: 0, failed: 0 };
-      group = loose;
+    let run = runs.get(key);
+    if (!run) {
+      run = { title: title || `Phase ${agent.phaseIndex}`, agents: [], order: agent.phaseIndex ?? Number.POSITIVE_INFINITY };
+      runs.set(key, run);
     }
-    group.agents.push({ ...agent, status: agentStatus(agent, workflow.status) });
+    run.agents.push(agent);
   }
-  if (loose) {
-    if (groups.length > 0) loose.title = 'Other agents';
-    groups.push(loose);
-  }
+  // In the order the run first used them: by index, then those only a title names.
+  const ordered = [...runs.values()].sort((a, b) => a.order - b.order);
+  const taken = new Set<Run>();
+  const matched = new Map<number, Run>();
+  const take = (fits: (run: Run, title: string) => boolean) => workflow.phases.forEach((phase, i) => {
+    if (matched.has(i)) return;
+    const run = ordered.find((r) => !taken.has(r) && fits(r, phase.title));
+    if (run) {
+      taken.add(run);
+      matched.set(i, run);
+    }
+  });
+  take((run, title) => norm(run.title) === norm(title));
+  take((run, title) => same(run.title, title));
+  const tag = (agents: WorkflowAgent[]) => agents.map((agent) => ({ ...agent, status: agentStatus(agent, workflow.status) }));
+  const group = (title: string, agents: WorkflowAgent[], detail?: string): PhaseGroup => ({
+    title, ...(detail ? { detail } : {}), agents: tag(agents), status: 'pending', done: 0, failed: 0,
+  });
+  const groups: PhaseGroup[] = workflow.phases.map((phase, i) => group(phase.title, matched.get(i)?.agents ?? [], phase.detail));
+  for (const run of ordered) if (!taken.has(run)) groups.push(group(run.title, run.agents));
+  if (unphased.length > 0) groups.push(group(groups.length > 0 ? 'Other agents' : 'Agents', unphased));
   const running = isRunning(workflow.status);
   for (const group of groups) {
     group.done = group.agents.filter((a) => a.status === 'done').length;
@@ -497,11 +542,16 @@ export function durationText(ms: number): string {
 /** Claude Code's mark for a workflow larger than most: past 25 agents or 1.5M tokens. */
 export const isLarge = (agents: number, tokens: number) => agents > 25 || tokens > 1_500_000;
 
-/** The time an agent took, or has taken so far. */
-export function agentTime(agent: WorkflowAgent, now = Date.now()): number | undefined {
+/**
+ * The time an agent took, or has taken so far while it runs. One the run's end stopped ran until
+ * it was last heard from: its time does not count on.
+ */
+export function agentTime(agent: WorkflowAgent, status: AgentStatus, now = Date.now()): number | undefined {
   if (agent.durationMs !== undefined) return agent.durationMs;
-  if (agent.startedAt === undefined || agent.state === 'done' || agent.state === 'error') return undefined;
-  return Math.max(0, now - agent.startedAt);
+  if (agent.startedAt === undefined) return undefined;
+  if (status === 'running') return Math.max(0, now - agent.startedAt);
+  if (status === 'stopped' && agent.lastProgressAt !== undefined) return Math.max(0, agent.lastProgressAt - agent.startedAt);
+  return undefined;
 }
 
 /** The sum of the agents' tokens, as Claude Code totals a run while it runs. */

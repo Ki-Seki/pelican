@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WorkflowAgent } from '../src/shared/protocol';
 import {
-  agentStatus, durationText, launchOf, parseMeta, parseTaskNotice, phaseGroups, scriptName, tokensText, unframedPrompt, workflowOf,
+  agentStatus, agentTime, durationText, launchOf, parseMeta, parseTaskNotice, phaseGroups, scriptName, tokensText, unframedPrompt, workflowOf,
 } from '../src/shared/workflows';
 
 const META = `export const meta = {
@@ -54,6 +54,16 @@ describe('a workflow script’s meta', () => {
     expect(parseMeta('export const meta = { name: "unclosed')).toBeUndefined();
     expect(parseMeta('export const meta = { name: "line\nbreak" }')).toBeUndefined();
     expect(parseMeta('')).toBeUndefined();
+  });
+
+  it('is no literal for an escape no string could hold, and never throws: the script is whatever Claude wrote', () => {
+    // `\u{-1}` once reached String.fromCodePoint, and its RangeError took the whole session's page down.
+    for (const bad of ['\\u{-1}', '\\u{+41}', '\\u{}', '\\u{ 41}', '\\u{1234567}', '\\u{110000}', '\\u{41']) {
+      const script = `export const meta = {\n  name: 'tidy',\n  description: 'Tidy ${bad} up',\n  phases: [{ title: 'Tidy' }],\n}\nreturn 1\n`;
+      expect([bad, parseMeta(script)]).toEqual([bad, undefined]);
+      expect(() => workflowOf({ script })).not.toThrow();
+    }
+    expect(parseMeta("export const meta = { name: 'a\\u{41}\\u{1F600}\\u{10FFFF}' }")?.name).toBe('aA😀\u{10FFFF}');
   });
 
   it('is looked for in the start of a script only, and nested only so deep', () => {
@@ -141,28 +151,61 @@ describe('agents and phases, by the CLI’s rules', () => {
     expect(agentStatus(agent(1, { state: 'error', error: '[x] blocked by safety classifier: no', blocked: true }), 'running')).toBe('blocked');
   });
 
-  it('groups agents into the script’s phases in order, by title as the run names them, then the rest', () => {
+  it('groups agents by the phase they ran in, each group under one of the script’s phases, in order, then the rest', () => {
     const groups = phaseGroups({
       status: 'running',
       phases: [{ title: 'Review', detail: 'one agent per area' }, { title: 'Verify' }, { title: 'Report' }],
       agents: [
-        agent(3, { phaseTitle: 'verify', state: 'progress' }),
-        agent(1, { phaseTitle: 'Review all', state: 'done' }),
-        agent(2, { phaseTitle: 'Review', state: 'error', error: 'API Error' }),
-        agent(4, { phaseTitle: 'Cleanup', state: 'done' }),
+        agent(3, { phaseIndex: 2, phaseTitle: 'verify', state: 'progress' }),
+        agent(1, { phaseIndex: 1, phaseTitle: 'Review', state: 'done' }),
+        agent(2, { phaseIndex: 1, phaseTitle: 'Review', state: 'error', error: 'API Error' }),
+        agent(4, { phaseIndex: 4, phaseTitle: 'Cleanup', state: 'done' }),
         agent(5, { phaseIndex: 7, state: 'done' }),
         agent(6, { state: 'done' }),
       ],
     });
-    expect(groups.map((g) => [g.title, g.agents.map((a) => a.index), g.status, g.done, g.failed])).toEqual([
-      ['Review', [1, 2], 'failed', 1, 1],
-      ['Verify', [3], 'running', 0, 0],
-      ['Report', [], 'pending', 0, 0],
-      ['Cleanup', [4], 'done', 1, 0],
-      ['Phase 7', [5], 'done', 1, 0],
-      ['Other agents', [6], 'done', 1, 0],
+    expect(groups.map((g) => [g.title, g.detail, g.agents.map((a) => a.index), g.status, g.done, g.failed])).toEqual([
+      ['Review', 'one agent per area', [1, 2], 'failed', 1, 1],
+      ['Verify', undefined, [3], 'running', 0, 0],
+      ['Report', undefined, [], 'pending', 0, 0],
+      ['Cleanup', undefined, [4], 'done', 1, 0],
+      ['Phase 7', undefined, [5], 'done', 1, 0],
+      ['Other agents', undefined, [6], 'done', 1, 0],
     ]);
     expect(phaseGroups({ status: 'completed', phases: [], agents: [agent(1, { state: 'done' })] }).map((g) => g.title)).toEqual(['Agents']);
+  });
+
+  it('gives each group of agents to one phase only: the same title first, then one a prefix of the other', () => {
+    const titles = (phases: string[], agents: WorkflowAgent[]) =>
+      phaseGroups({ status: 'completed', phases: phases.map((title) => ({ title })), agents }).map((g) => [g.title, g.agents.map((a) => a.label)]);
+    // Phases whose titles share a start: each keeps its own agents.
+    expect(titles(['Review', 'Review fixes'], [
+      agent(1, { label: 'review:server', phaseIndex: 1, phaseTitle: 'Review', state: 'done' }),
+      agent(2, { label: 'review:client', phaseIndex: 1, phaseTitle: 'Review', state: 'done' }),
+      agent(3, { label: 'fix:server', phaseIndex: 2, phaseTitle: 'Review fixes', state: 'done' }),
+    ])).toEqual([['Review', ['review:server', 'review:client']], ['Review fixes', ['fix:server']]]);
+    // Only the later one has agents yet: they are its, not the first's.
+    expect(titles(['Review', 'Review fixes'], [agent(1, { label: 'fix:server', phaseIndex: 2, phaseTitle: 'Review fixes', state: 'done' })]))
+      .toEqual([['Review', []], ['Review fixes', ['fix:server']]]);
+    // A phase the run named a little apart is the script's, as the CLI matches it.
+    expect(titles(['Review'], [agent(1, { label: 'review:server', phaseIndex: 2, phaseTitle: 'Review all', state: 'done' })])).toEqual([['Review', ['review:server']]]);
+    // Agents the journal names by title only are grouped by it, in any case.
+    expect(titles(['Review', 'Verify'], [
+      agent(1, { label: 'a', phaseTitle: 'review', state: 'done' }),
+      agent(2, { label: 'b', phaseTitle: 'Verify', state: 'done' }),
+      agent(3, { label: 'c', phaseTitle: 'Review', state: 'done' }),
+    ])).toEqual([['Review', ['a', 'c']], ['Verify', ['b']]]);
+  });
+
+  it('stops the agents of a paused run, as the CLI does: a pause ends the run', () => {
+    // The CLI's run view counts only a running run as running.
+    expect(agentStatus(agent(1, { state: 'progress', startedAt: Date.now() - 60_000 }), 'paused')).toBe('stopped');
+    expect(agentStatus(agent(1, { state: 'start', queuedAt: 1, startedAt: undefined }), 'paused')).toBe('stopped');
+    expect(phaseGroups({ status: 'paused', phases: [{ title: 'Audit' }], agents: [agent(1, { phaseTitle: 'Audit', state: 'progress' })] })[0]!.status).toBe('stopped');
+    // Its time stops where it was last heard from.
+    expect(agentTime(agent(1, { startedAt: 1000, lastProgressAt: 61_000 }), 'stopped', 10_000_000)).toBe(60_000);
+    expect(agentTime(agent(1, { startedAt: 1000 }), 'running', 61_000)).toBe(60_000);
+    expect(agentTime(agent(1, { startedAt: 1000 }), 'stopped', 61_000)).toBeUndefined();
   });
 
   it('writes tokens and times as Claude Code does', () => {

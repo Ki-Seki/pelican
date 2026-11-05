@@ -69,14 +69,22 @@ export function fenced(code: string, language: string): string {
   return `${fence}${language}\n${code.replace(/\n$/, '')}\n${fence}`;
 }
 
-/** A result as a page shows it: JSON pretty, in a code block; anything else as Markdown. */
+/** The start of JSON: an array or object laid out over lines, or one whose first key or item begins. */
+const JSON_START = /^(?:[[{][ \t]*\r?\n|\{\s*["}]|\[\s*[[{"\]])/;
+
+/**
+ * A result as a page shows it: JSON pretty, in a code block, also when it was cut short (Claude
+ * Code and Pelican cut long results), never read as Markdown; a string Claude Code wrote as JSON
+ * as its text; anything else, an agent's own words, as Markdown.
+ */
 export function resultMarkdown(text: string): string {
   const trimmed = text.trim();
-  if (/^[[{]/.test(trimmed)) {
+  if (/^[[{"]/.test(trimmed)) {
     try {
-      return fenced(JSON.stringify(JSON.parse(trimmed), null, 2), 'json');
+      const value: unknown = JSON.parse(trimmed);
+      return typeof value === 'string' ? value : fenced(JSON.stringify(value, null, 2), 'json');
     } catch {
-      // Not whole JSON (a result cut short): as it is.
+      if (JSON_START.test(trimmed)) return fenced(trimmed, 'json');
     }
   }
   return trimmed;
