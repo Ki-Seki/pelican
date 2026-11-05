@@ -526,13 +526,14 @@ async function gitBrings(top: string): Promise<string[]> {
 }
 
 /**
- * What the folder brings: read from its files, nothing run. Settings and MCP servers of the folder
- * and its parents up to the repository's top (Claude Code reads the project's from there), never
- * those of the home folder, which are the user's own; and what the repository's git config runs.
+ * What the folder brings: read from its files, nothing run. Settings, MCP servers, commands,
+ * skills and agents of the folder and its parents up to the repository's top (Claude Code reads
+ * the project's from there), never those of the home folder, which are the user's own (by either
+ * of its paths: the folder's is a real one); and what the repository's git config runs.
  */
 export async function folderBrings(folder: string): Promise<string[]> {
   const dir = await real(folder);
-  const home = os.homedir();
+  const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
   const found: string[] = [];
   // A file of the folder's that is not a regular file is not read, and is asked about instead.
@@ -542,7 +543,7 @@ export async function folderBrings(folder: string): Promise<string[]> {
     return value;
   };
   const budget = budgetFor();
-  for (let d = dir; d !== home; d = path.dirname(d)) {
+  for (let d = dir; !homes.has(d); d = path.dirname(d)) {
     for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await json(path.join(d, '.claude', name))));
     found.push(...fromMcp(await json(path.join(d, '.mcp.json'))));
     found.push(...(await fromClaudeFolder(d, dir, budget)));

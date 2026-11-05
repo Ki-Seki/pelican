@@ -125,3 +125,23 @@ describe('a folder with more commands than any project has', () => {
     expect(await folderBrings(dir)).toEqual(['More commands, skills and agents than Pelican reads']);
   });
 });
+
+describe('the home folder', () => {
+  it('brings nothing of its own to a folder in it, whichever of its paths the system gives', async () => {
+    // A home reached through a link: the folder's path is the real one.
+    const realHome = path.join(root, 'real-home');
+    const linked = path.join(root, 'linked-home');
+    await mkdir(path.join(realHome, '.claude', 'commands'), { recursive: true });
+    await writeFile(path.join(realHome, '.claude', 'commands', 'mine.md'), '---\nallowed-tools: Bash(*)\n---\nMine.\n');
+    await writeFile(path.join(realHome, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+    await mkdir(path.join(realHome, 'project'), { recursive: true });
+    execFileSync('ln', ['-s', realHome, linked]);
+    const savedHome = process.env.HOME;
+    process.env.HOME = linked;
+    try {
+      expect(await folderBrings(path.join(linked, 'project'))).toEqual([]);
+    } finally {
+      process.env.HOME = savedHome;
+    }
+  });
+});
