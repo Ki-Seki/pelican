@@ -113,13 +113,12 @@ from every app.
   named for it.
 - Claude's answer to a background task's note shows after the note, not in the reply before it.
 - A message that does not go comes back to the message box, files and all, above anything typed
-  since. A `!` or `/` command comes back only into an empty box: with words or files there, which
-  would change it, it waits above the box, Not sent, with Put back, as does a message, with its
-  files, that comes back while a command is typed, also across reloads, and in a new session it
-  goes on with the session once that starts. Put back brings its words and files back together,
-  or, where they cannot share the box with what is there, swaps the two: what was in the box waits
-  in its place, Set aside. One sent for you (Send now, Compact, Retry, Cancel) leaves the box as it
-  is.
+  since. A `!` or `/` command comes back only into an empty box; with words or files there, it
+  waits above the box, Not sent, with Put back, as does a message, files and all, that comes back
+  while a command is typed. What waits stays across reloads, and in a new session goes on with the
+  session once it starts. Put back brings words and files back together, or, where they cannot
+  share the box, swaps them with what is there, which waits in its place, Set aside. One sent for
+  you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
   files.
 - Side chat in the session menu leaves the keys in the side chat's box, which, beside the
