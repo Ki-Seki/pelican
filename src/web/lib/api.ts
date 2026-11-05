@@ -18,6 +18,7 @@ import type {
   RunState,
   SendMode,
   ServerInfo,
+  SessionChanges,
   SessionSummary,
   ShellResult,
   TaskOutput,
@@ -237,6 +238,14 @@ export const api = {
   file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>
     request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
+  /** Which of these paths (at most 50) are files in the folder. */
+  exists: (cwd: string, paths: string[]) =>
+    request<{ paths: string[] }>(`exists?cwd=${encodeURIComponent(cwd)}${paths.map((p) => `&p=${encodeURIComponent(p)}`).join('')}`).then((r) => r.paths),
+  /** What each turn of a session changed (T1, T2…), from Claude Code's records of its edits. */
+  changes: (id: string) => request<SessionChanges>(`sessions/${encodeURIComponent(id)}/changes`),
+  /** One turn's diff of one file. */
+  turnDiff: (id: string, turn: string, path: string) =>
+    request<{ diff: string }>(`sessions/${encodeURIComponent(id)}/changes?turn=${encodeURIComponent(turn)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   /** Makes a folder inside `parent` and says where it is. */

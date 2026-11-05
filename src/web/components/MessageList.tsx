@@ -1,11 +1,12 @@
-import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, Brain, ChevronRight, Copy, FileDiff, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
+import type { ImageBlock, PartialBlock, RunState, TurnChanges } from '../../shared/protocol';
 import { apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
 import { composing } from '../lib/keyboard';
+import { usePathLinks } from '../lib/path-links';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
@@ -99,6 +100,23 @@ function TurnFooter({ text, timestamp, stats }: { text?: string; timestamp?: num
         </span>
       )}
     </div>
+  );
+}
+
+/** Under a turn that changed files: how many, with the lines, opening that turn's changes. */
+function TurnFiles({ turn }: { turn: TurnChanges }) {
+  const openTurn = usePathLinks()?.openTurn;
+  if (!openTurn) return null;
+  const added = turn.files.reduce((sum, f) => sum + f.added, 0);
+  const removed = turn.files.reduce((sum, f) => sum + f.removed, 0);
+  return (
+    <button type="button" onClick={() => openTurn(turn.uuid)} className="-mt-2 flex min-h-8 items-center gap-1.5 rounded-md text-[12.5px] text-muted hover:text-fg">
+      <FileDiff className="size-3.5 shrink-0" />
+      <span>{turn.files.length === 1 ? '1 file changed' : `${turn.files.length} files changed`}</span>
+      {added > 0 && <span className="font-mono text-[11.5px] text-add">+{added}</span>}
+      {removed > 0 && <span className="font-mono text-[11.5px] text-del">−{removed}</span>}
+      <ChevronRight className="size-3.5 shrink-0 text-faint" />
+    </button>
   );
 }
 
@@ -571,6 +589,30 @@ export function MessageList({
   // When the running turn began, for a run that does not say: the prompt that started it.
   const promptAt = items.findLast((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user' && !i.steered)?.timestamp;
 
+  // The files each prompt's turn changed, said under the last of Claude's answers to it.
+  const turns = usePathLinks()?.turns;
+  const changedUnder = useMemo(() => {
+    const byPrompt = new Map((turns ?? []).map((turn) => [turn.uuid, turn]));
+    const under = new Map<string, TurnChanges>();
+    let prompt: string | undefined;
+    let answer: string | undefined;
+    const close = () => {
+      const turn = prompt ? byPrompt.get(prompt) : undefined;
+      if (turn && answer) under.set(answer, turn);
+    };
+    for (const item of items) {
+      if (item.kind === 'user' && !item.steered) {
+        close();
+        prompt = item.key;
+        answer = undefined;
+      } else if (item.kind === 'assistant') {
+        answer = item.key;
+      }
+    }
+    close();
+    return under;
+  }, [items, turns]);
+
   /**
    * After anything that changes the list's size or position: back to the end while following,
    * and the jump button whenever there is more below. The position is noted before the browser
@@ -714,17 +756,22 @@ export function MessageList({
                   return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
                 case 'shell':
                   return <ShellItem key={item.key} item={item} />;
-                case 'assistant':
+                case 'assistant': {
+                  const running = busy && item.key === lastAssistant;
+                  const changed = running ? undefined : changedUnder.get(item.key);
                   return (
-                    <AssistantTurn
-                      key={item.key}
-                      item={item}
-                      cwd={cwd}
-                      view={mode}
-                      running={busy && item.key === lastAssistant}
-                      {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
-                    />
+                    <Fragment key={item.key}>
+                      <AssistantTurn
+                        item={item}
+                        cwd={cwd}
+                        view={mode}
+                        running={running}
+                        {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
+                      />
+                      {changed && <TurnFiles turn={changed} />}
+                    </Fragment>
                   );
+                }
                 case 'notice':
                   return mode === 'summary' && item.tone === 'output' ? null : <Notice key={item.key} item={item} />;
                 case 'compact':

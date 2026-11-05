@@ -29,7 +29,8 @@ import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTask
 import { runCommand } from './shell.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
-import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
+import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
+import { sessionChanges, turnDiff } from './changes.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { transcriptImage } from './history.js';
@@ -603,6 +604,36 @@ app.get('/api/file', async (c) => {
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
   return c.json(await readProjectFile(cwd, file));
+});
+
+/**
+ * Which of the paths named in the conversation are files in the folder (`p`, repeated, at most
+ * 50): the links in a reply and in a step open only those. Stats files; runs nothing.
+ */
+app.get('/api/exists', async (c) => {
+  const cwd = await folderOf(c);
+  if (!cwd) return c.json({ paths: [] });
+  const asked = c.req.queries('p') ?? [];
+  if (asked.length > EXISTS_MAX) return c.json({ error: `At most ${EXISTS_MAX} paths at a time` }, 400);
+  return c.json({ paths: await existingFiles(cwd, asked) });
+});
+
+/**
+ * What each turn of a session changed (T1, T2…), from Claude Code's records of its edits: no git,
+ * so in any folder. With `turn` and `path`, that turn's diff of that file.
+ */
+app.get('/api/sessions/:id/changes', async (c) => {
+  const id = c.req.param('id');
+  const file = await transcriptPath(id);
+  if (!file) return c.json({ turns: [], lines: {} });
+  const cwd = (await sessionInfo(id))?.cwd;
+  const turn = c.req.query('turn');
+  const target = c.req.query('path');
+  if (turn !== undefined || target !== undefined) {
+    if (!turn || !target || target.length > 4096) return c.json({ error: 'Which turn and file?' }, 400);
+    return c.json({ diff: await turnDiff(file, cwd, turn, target) });
+  }
+  return c.json(await sessionChanges(file, cwd));
 });
 
 app.post('/api/sessions/:id/shell', async (c) => {

@@ -12,6 +12,7 @@ import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
+import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { loadDefaults, markSeen, markTipSeen, newSessionDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
@@ -602,9 +603,20 @@ export function Chat({
   // opens and as each turn ends; Changes and files reads it more often only while it is looked at.
   const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd) });
   const changes = git?.repo ? git.files.length : 0;
+  // What each turn changed, from Claude Code's records: for the line under a turn, and Show in Changes.
+  const { data: turnChanges } = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: Boolean(sessionId), staleTime: 30_000 });
   useEffect(() => {
     if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
-  }, [busy, cwd, queryClient]);
+    if (!busy && sessionId) void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
+  }, [busy, cwd, sessionId, queryClient]);
+  // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
+  const { show: showWorkspace } = workspace;
+  const links = useMemo<PathLinks | undefined>(() => cwd ? {
+    cwd,
+    openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
+    openTurn: (uuid) => showWorkspace({ tab: 'changes', scope: uuid }),
+    ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
+  } : undefined, [cwd, showWorkspace, turnChanges]);
 
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
@@ -721,6 +733,7 @@ export function Chat({
   };
 
   return (
+    <PathLinksContext.Provider value={links}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {/* Also while Changes and files has folded the list away, beside the conversation. */}
@@ -932,5 +945,6 @@ export function Chat({
         />
       )}
     </div>
+    </PathLinksContext.Provider>
   );
 }

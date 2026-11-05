@@ -82,6 +82,11 @@ for (const session of sessions) {
   await save(`sessions/${q(session.id)}`);
   await save(`sessions/${q(session.id)}/messages?limit=120`);
   await save(`sessions/${q(session.id)}/mcp`);
+  // What each turn changed, and each turn's diff of each of its files.
+  const changes = await save(`sessions/${q(session.id)}/changes`);
+  for (const turn of changes?.turns ?? []) {
+    for (const file of turn.files) await save(`sessions/${q(session.id)}/changes?turn=${q(turn.uuid)}&path=${q(file.path)}`);
+  }
   if (session.cwd) folders.add(session.cwd);
 }
 for (const cwd of folders) {

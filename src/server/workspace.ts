@@ -172,6 +172,29 @@ export async function gitDiff(cwd: string, file: string): Promise<string> {
   return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n… (diff cut short)` : diff;
 }
 
+/** At most this many paths are looked up at once (links in a reply), each this long at most. */
+export const EXISTS_MAX = 50;
+
+/**
+ * Which of `paths` are files in the session's folder: relative, with no `..`, a real path inside
+ * the folder's, and a regular file (not a folder, a pipe or a device). For the links in a reply:
+ * a path that is not there gets none. Nothing is read, nothing runs.
+ */
+export async function existingFiles(cwd: string, paths: readonly string[]): Promise<string[]> {
+  const root = await realpath(cwd);
+  const found = await Promise.all(paths.slice(0, EXISTS_MAX).map(async (relative) => {
+    if (!relative || relative.length > 1024 || path.isAbsolute(relative)) return undefined;
+    try {
+      const real = await realpath(inside(cwd, relative));
+      if (!within(root, real)) return undefined;
+      return (await stat(real)).isFile() ? relative : undefined;
+    } catch {
+      return undefined;
+    }
+  }));
+  return found.filter((p): p is string => Boolean(p));
+}
+
 const HIDDEN = new Set(['.git', 'node_modules', '.DS_Store']);
 
 /** One folder of the session's tree: folders first, then files. */

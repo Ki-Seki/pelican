@@ -272,6 +272,19 @@ export type UsageLimit = {
 export type Account = { email?: string; organization?: string; plan?: string };
 
 export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
+
+/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it. */
+export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as the turn left it. */ line?: number };
+
+/**
+ * One prompt that led Claude to edit files, as Claude Code's /diff offers it: T1, T2… in order.
+ * `uuid` is the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so
+ * Rewind code can put them back.
+ */
+export type TurnChanges = { uuid: string; n: number; text: string; at?: number; files: TurnFile[]; checkpoint: boolean };
+
+/** What each turn changed; `lines`, for each edit's tool call, the line its change starts at. */
+export type SessionChanges = { turns: TurnChanges[]; lines: Record<string, number> };
 export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; ahead?: number; behind?: number; files: GitFile[] };
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };

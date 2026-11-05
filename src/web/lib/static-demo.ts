@@ -48,6 +48,13 @@ export async function staticRequest(base: URL, path: string, init?: RequestInit)
   if (init?.method && init.method !== 'GET') throw new DemoRefusal(DEMO_NOTE);
   generatedAt ??= fetch(new URL('data/meta.json', base)).then((r) => r.json()).then((m: { generatedAt: number }) => m.generatedAt);
   const [query, params] = path.split('?');
+  // Which files are there, for links in the conversation: from the folder's whole list, saved.
+  if (query === 'exists') {
+    const asked = new URLSearchParams(params);
+    const listing = await fetch(new URL(`data/${requestKey(`files?cwd=${encodeURIComponent(asked.get('cwd') ?? '')}&q=`)}.json`, base));
+    const files = listing.ok ? ((await listing.json()) as { files?: string[] }).files ?? [] : [];
+    return { paths: asked.getAll('p').filter((p) => files.includes(p)) };
+  }
   // A file search the build did not save: filter the full list here.
   let wanted = path;
   let search: string | undefined;
