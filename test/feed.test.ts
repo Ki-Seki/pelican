@@ -2,11 +2,11 @@ import { appendFile, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ServerEvent } from '../src/shared/protocol';
 import { config } from '../src/server/config';
-import { feedFor, subscribe } from '../src/server/feed';
+import { feedCount, feedFor, subscribe } from '../src/server/feed';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 
 let dir: string;
@@ -92,6 +92,27 @@ describe('a session’s feed', () => {
     } finally {
       unsubscribe();
       await chmod(file, 0o644);
+    }
+  });
+
+  it('is let go once nobody watches and nothing waits for a late subscriber', async () => {
+    const id = '0f0f0f0f-0000-4000-8000-000000000003';
+    await transcript(id, say('u1', null, 'user', 'hello'));
+    const before = feedCount();
+    subscribe(id, () => undefined)();
+    expect(feedCount()).toBe(before);
+    // Published with nobody watching (a new session's first prompt): kept for a page that subscribes late.
+    await feedFor(id).publish({ uuid: 'p9', role: 'user', blocks: [{ type: 'text', text: 'first' }] });
+    const late: ServerEvent[] = [];
+    subscribe(id, (event) => late.push(event))();
+    expect(delivered(late)).toEqual(['p9']);
+    expect(feedCount()).toBe(before + 1);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      expect(feedFor(id).idle).toBe(true);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

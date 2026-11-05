@@ -133,7 +133,7 @@ const AssistantTurn = memo(function AssistantTurn({
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
           <button key={seg.key} type="button" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
-            <img alt="" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
+            <img alt="" loading="lazy" decoding="async" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
           </button>
         ),
       )}
@@ -182,7 +182,7 @@ const UserBubble = memo(function UserBubble({
               <RemoteImage key={i} src={imageSrc(image)} />
             ) : (
               <button key={i} type="button" onClick={() => openImage(imageSrc(image))}>
-                <img alt="" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
+                <img alt="" loading="lazy" decoding="async" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
               </button>
             ),
           )}
@@ -247,7 +247,7 @@ function EditPrompt({ text, images, last, onCancel, onSend }: {
   const [value, setValue] = useState(text);
   // Positions among all the prompt's images, as the server counts them; only those held in the
   // transcript (not a link to one elsewhere) can go along.
-  const carried = images.flatMap((image, i) => (image.source.type === 'base64' ? [i] : []));
+  const carried = images.flatMap((image, i) => (image.source.type === 'base64' || image.source.url.startsWith('api/sessions/') ? [i] : []));
   const [kept, setKept] = useState(carried);
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);

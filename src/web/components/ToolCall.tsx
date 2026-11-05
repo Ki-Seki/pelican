@@ -9,7 +9,7 @@ import { buildItems, resultImages, resultText, type ToolCall } from '../lib/turn
 import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
-import { Markdown } from './Markdown';
+import { loadsInPlace, Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
@@ -53,13 +53,13 @@ function Images({ call }: { call: ToolCall }) {
     <div className="flex flex-wrap gap-2">
       {images.map((image, i) => {
         const source = image.source;
-        if (image.omitted || source.type !== 'base64') {
+        const src = source.type === 'base64' ? `data:${source.media_type};base64,${source.data}` : source.url;
+        if (image.omitted || !loadsInPlace(src)) {
           return <div key={i} className="rounded-md bg-chip px-2 py-1 text-[11px] text-faint">Image not shown</div>;
         }
-        const src = `data:${source.media_type};base64,${source.data}`;
         return (
           <button key={i} type="button" onClick={() => openImage(src)}>
-            <img alt="" className="max-h-64 max-w-full rounded-lg border border-line" src={src} />
+            <img alt="" loading="lazy" decoding="async" className="max-h-64 max-w-full rounded-lg border border-line" src={src} />
           </button>
         );
       })}

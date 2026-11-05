@@ -7,6 +7,11 @@ import { transcriptPath } from './transcripts.js';
 export type Listener = (event: ServerEvent) => void;
 
 const POLL_MS = 1000;
+/**
+ * How long a published message waits for a client that subscribes late (a new session's first
+ * prompt, sent before the page could subscribe). Later ones come from the transcript.
+ */
+const RECENT_MS = 2 * 60_000;
 
 /**
  * Delivers one session's messages to the clients viewing it.
@@ -21,7 +26,7 @@ class Feed {
   readonly listeners = new Set<Listener>();
   private delivered = new Set<string>();
   /** Recently published messages, replayed to a client that subscribes late (a new session's first prompt). */
-  private recent: ChatMessage[] = [];
+  private recent: Array<{ message: ChatMessage; at: number }> = [];
   /** Ids last read from the file; one that disappears means the conversation was rewound. */
   private fromFile = new Set<string>();
   private primed?: Promise<void>;
@@ -89,7 +94,7 @@ class Feed {
       await this.prime().catch((error: unknown) => this.failed(error));
       if (this.delivered.has(message.uuid)) return;
       this.delivered.add(message.uuid);
-      this.recent.push(message);
+      this.recent.push({ message, at: Date.now() });
       if (this.recent.length > 40) this.recent.shift();
       this.broadcast({ type: 'message', sessionId: this.sessionId, message });
     } finally {
@@ -97,12 +102,20 @@ class Feed {
     }
   }
 
-  get hasRecent(): boolean {
+  /** Whether it still holds messages for a late subscriber; older ones are let go. */
+  hasRecent(now = Date.now()): boolean {
+    this.recent = this.recent.filter((r) => now - r.at < RECENT_MS);
     return this.recent.length > 0;
   }
 
   replayRecent(listener: Listener): void {
-    for (const message of this.recent) listener({ type: 'message', sessionId: this.sessionId, message });
+    if (!this.hasRecent()) return;
+    for (const { message } of this.recent) listener({ type: 'message', sessionId: this.sessionId, message });
+  }
+
+  /** Nobody watches, nothing is on its way, nothing waits for a late subscriber: it can go. */
+  get idle(): boolean {
+    return this.listeners.size === 0 && this.publishing === 0 && !this.hasRecent();
   }
 
   watch(): void {
@@ -220,8 +233,18 @@ export function subscribe(sessionId: string, listener: Listener): () => void {
     feed.listeners.delete(listener);
     if (feed.listeners.size > 0) return;
     feed.unwatch();
-    // Nobody watches and no run has published into it: forget it, so feeds do not pile up
-    // for every session ever opened. A run's feed stays, for a client that comes back to it.
-    if (!feed.hasRecent && feed.publishing === 0 && feeds.get(sessionId) === feed) feeds.delete(sessionId);
+    // Forgotten once idle, so feeds do not pile up for every session ever opened or run. A run
+    // that publishes again gets a new one, which reads the transcript first like any other.
+    if (feed.idle && feeds.get(sessionId) === feed) feeds.delete(sessionId);
   };
 }
+
+/** Feeds of runs that published with nobody watching go too, once their messages are old. */
+function sweep(): void {
+  for (const [sessionId, feed] of feeds) if (feed.idle) feeds.delete(sessionId);
+}
+
+setInterval(sweep, 60_000).unref();
+
+/** How many feeds are kept, for tests. */
+export const feedCount = () => feeds.size;

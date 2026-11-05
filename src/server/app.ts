@@ -26,6 +26,7 @@ import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { transcriptImage } from './history.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { claudeRanIn } from './trust.js';
 
@@ -66,9 +67,10 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-/** What the page loads without fetch, so it cannot mark: an uploaded image, a download. */
+/** What the page loads without fetch, so it cannot mark: an uploaded image, a picture in a message, a download. */
 const unmarked = (c: Context) => c.req.method === 'GET'
-  && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path));
+  && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path)
+    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path));
 
 /** The Origin header as an origin (`null`, garbage and missing are none). */
 function originOf(header: string | undefined): string | undefined {
@@ -643,6 +645,14 @@ app.post('/api/uploads', async (c) => {
   return c.json({ attachment: await saveUpload(file) });
 });
 
+/** What a file the page loads by address may do: show as itself, nothing more, and only here. */
+const INERT = {
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
 app.get('/api/uploads/:id', async (c) => {
   const found = await readUpload(c.req.param('id'));
   if (!found) return c.notFound();
@@ -652,10 +662,29 @@ app.get('/api/uploads/:id', async (c) => {
   return c.body(new Uint8Array(found.data), 200, {
     'Content-Type': found.attachment.mime,
     'Cache-Control': 'private, max-age=86400',
-    'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
-    'X-Frame-Options': 'SAMEORIGIN',
+    ...INERT,
     ...(image ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.attachment.name)}` }),
+  });
+});
+
+/** The picture types Claude takes; nothing else a transcript holds is sent as an image. */
+const PICTURES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * A picture a message holds (a screenshot, an image sent with a prompt): pages carry its address
+ * instead of the data, so a page of messages stays small and a picture loads only when shown.
+ * The same message and position always hold the same picture, so browsers keep it.
+ */
+app.get('/api/sessions/:id/images/:uuid/:n', async (c) => {
+  const n = Number(c.req.param('n'));
+  const file = await transcriptPath(c.req.param('id'));
+  if (!file || !Number.isSafeInteger(n)) return c.json({ error: 'No such picture' }, 404);
+  const image = await transcriptImage(file, c.req.param('uuid'), n);
+  if (!image || !PICTURES.has(image.mediaType)) return c.json({ error: 'No such picture' }, 404);
+  return c.body(new Uint8Array(image.data), 200, {
+    'Content-Type': image.mediaType,
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    ...INERT,
   });
 });
 
