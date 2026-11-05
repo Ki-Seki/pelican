@@ -133,7 +133,7 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
-          <button key={seg.key} type="button" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
+          <button key={seg.key} type="button" aria-label="Open image" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
             <img alt="" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
           </button>
         ),
@@ -182,7 +182,7 @@ const UserBubble = memo(function UserBubble({
             image.omitted ? null : !loadsInPlace(imageSrc(image)) ? (
               <RemoteImage key={i} src={imageSrc(image)} />
             ) : (
-              <button key={i} type="button" onClick={() => openImage(imageSrc(image))}>
+              <button key={i} type="button" aria-label="Open image" onClick={() => openImage(imageSrc(image))}>
                 <img alt="" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
               </button>
             ),

@@ -130,3 +130,18 @@ describe('following the end of the conversation', () => {
   });
 });
 
+describe('code in a reply', () => {
+  it('has its copy button in a bar of its own, not over the code', () => {
+    const html = renderToStaticMarkup(<Markdown text={'```python\nprint("hi")\n```'} />);
+    const pre = html.slice(html.indexOf('<pre'), html.indexOf('</pre>'));
+    expect(pre).not.toContain('aria-label="Copy"');
+    expect(html.indexOf('aria-label="Copy"')).toBeLessThan(html.indexOf('<pre'));
+    expect(html).toContain('python');
+  });
+
+  it('names a picture’s button', () => {
+    const html = renderToStaticMarkup(<Markdown text={'![the chart](api/uploads/a)\n\n![](api/uploads/b)'} />);
+    expect(html).toContain('aria-label="the chart"');
+    expect(html).toContain('aria-label="Open image"');
+  });
+});

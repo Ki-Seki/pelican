@@ -58,7 +58,7 @@ function Images({ call }: { call: ToolCall }) {
         }
         const src = `data:${source.media_type};base64,${source.data}`;
         return (
-          <button key={i} type="button" onClick={() => openImage(src)}>
+          <button key={i} type="button" aria-label="Open image" onClick={() => openImage(src)}>
             <img alt="" className="max-h-64 max-w-full rounded-lg border border-line" src={src} />
           </button>
         );
