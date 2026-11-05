@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, MessageSquare, Plus } from 'lucide-react';
-import { type ComponentProps, lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
 import { Announcer } from './components/Announcer';
@@ -10,6 +10,7 @@ import { type Offline, OfflineLine, offlineWords, retryNow, useOffline } from '.
 import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
+import { Sheet } from './components/Sheet';
 import { shortcutsShown, ShortcutsSheet, showShortcuts } from './components/Shortcuts';
 import { announce } from './lib/announce';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
@@ -32,17 +33,57 @@ import { fitToVisibleViewport } from './lib/viewport';
 
 // The conversation (Markdown, code highlighting, diffs) and Settings load when first needed: the
 // first screen is the list, and a phone on a slow link shows it sooner without them. A link to a
-// session starts loading the conversation at once; otherwise it loads once the list is up.
+// session starts loading the conversation at once; otherwise both load once the list is up.
 const loadChat = () => import('./components/Chat');
-if (new URLSearchParams(location.search).has('s')) void loadChat();
-const LazyChat = lazy(() => loadChat().then((m) => ({ default: m.Chat })));
-const LazySettings = lazy(() => import('./components/Settings').then((m) => ({ default: m.SettingsSheet })));
+const loadSettings = () => import('./components/Settings');
+/** Loaded ahead of need; one that fails here is asked for again when it is needed. */
+const prefetch = (load: () => Promise<unknown>) => void load().catch(() => undefined);
+if (new URLSearchParams(location.search).has('s')) prefetch(loadChat);
+/** On a flaky link one request can drop: it is made once more, a moment later, before giving up. */
+const retried = <T,>(load: () => Promise<T>) => load().catch(() => new Promise((resolve) => setTimeout(resolve, 800)).then(load));
+const LazyChat = lazy(() => retried(loadChat).then((m) => ({ default: m.Chat })));
+const LazySettings = lazy(() => retried(loadSettings).then((m) => ({ default: m.SettingsSheet })));
+
+/**
+ * A part of the page whose code did not arrive (the connection dropped as it was fetched): in its
+ * place, a way to load the page again. React keeps a failed load, so only a reload brings it back;
+ * without this the whole page went blank, and an app on the home screen has no reload button.
+ */
+class Loaded extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  override render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+function NotLoaded() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <p className="text-[14px] text-muted">This part of Pelican did not load.</p>
+      <button type="button" onClick={() => location.reload()} className="h-10 rounded-full bg-fg px-4 text-[14px] font-medium text-bg">
+        Reload
+      </button>
+    </div>
+  );
+}
+
 const Chat = (props: ComponentProps<typeof LazyChat>) => (
-  <Suspense fallback={<div className="flex h-full items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>}>
-    <LazyChat {...props} />
-  </Suspense>
+  <Loaded fallback={<NotLoaded />}>
+    <Suspense fallback={<div className="flex h-full items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>}>
+      <LazyChat {...props} />
+    </Suspense>
+  </Loaded>
 );
-const SettingsSheet = (props: ComponentProps<typeof LazySettings>) => <Suspense fallback={null}><LazySettings {...props} /></Suspense>;
+const SettingsSheet = (props: ComponentProps<typeof LazySettings>) => (
+  <Loaded fallback={<Sheet open={props.open} onClose={props.onClose} title="Settings"><NotLoaded /></Sheet>}>
+    <Suspense fallback={null}><LazySettings {...props} /></Suspense>
+  </Loaded>
+);
 
 /**
  * Routes live in the query string (`?s=<id>`, `?new`, `?new&cwd=<path>`): the
@@ -129,6 +170,9 @@ function Main() {
   const [connected, setConnected] = useState(socket.connected);
   const [notifications, setNotifications] = useState<NotificationState>('off');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings is there from the first time it opens: until then the list needs nothing of it.
+  const [settingsUsed, setSettingsUsed] = useState(false);
+  if (settingsOpen && !settingsUsed) setSettingsUsed(true);
 
   useEffect(() => socket.onConnection(setConnected), []);
   useEffect(() => {
@@ -139,7 +183,10 @@ function Main() {
     void queryClient.prefetchQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000 });
   }, [queryClient]);
   useEffect(() => {
-    const timer = setTimeout(() => void loadChat(), 1500);
+    const timer = setTimeout(() => {
+      prefetch(loadChat);
+      prefetch(loadSettings);
+    }, 1500);
     return () => clearTimeout(timer);
   }, []);
 
@@ -280,7 +327,7 @@ function Main() {
     );
   }
 
-  const settings = (
+  const settings = settingsUsed && (
     <SettingsSheet
       open={settingsOpen}
       onClose={() => setSettingsOpen(false)}
