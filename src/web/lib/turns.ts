@@ -242,7 +242,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
       } else if (classified.kind === 'shell') {
         push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) });
         // A record of the CLI's older shape holds its output with the command.
-        if (classified.stdout || classified.stderr || classified.saved) withOutput.add(message.uuid);
+        if (texts.some((t) => /<bash-std(?:out|err)>/.test(t))) withOutput.add(message.uuid);
         turn = undefined;
       } else if (classified.kind === 'shell-output') {
         // It goes with its command; on its own, it is nothing to show.

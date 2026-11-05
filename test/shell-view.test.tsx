@@ -165,6 +165,8 @@ describe('a running command', () => {
   it('that printed nothing shows the command alone; its record keeps Claude Code’s words for Claude', () => {
     const record = [user('r12', '<bash-input>touch a.txt</bash-input>'), user('o12', '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')];
     expect(buildItems(record)).toEqual([{ kind: 'shell', key: 'r12', command: 'touch a.txt', stdout: '', stderr: '' }]);
+    // Its output came, though it shows nothing: a stray one after it is not its.
+    expect(buildItems([...record, user('x12', '<bash-stdout>stray</bash-stdout><bash-stderr></bash-stderr>')])).toEqual(buildItems(record));
     const { container } = render(<MessageList sessionId="s12" view={view(record)} mode="normal" />);
     expect(screen.getByText('touch a.txt')).toBeTruthy();
     expect(screen.queryByText(/completed with no output/)).toBeNull();
