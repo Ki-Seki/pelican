@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- New sessions start at High effort until you pick another in Settings (New sessions start with >
+  Model); picking Default there leaves the effort to Claude Code, as before. Sessions that already
+  ran keep what they ran with, and a model without effort levels gets none.
+- The website's phone pictures show the whole screen, the message box included.
+- qrcode-generator 2 and esbuild 0.28 (the QR codes are the same, checked bit for bit).
+
 ## 0.3.0
 
 Every Claude Code session on your computer, on your phone. This release follows a ten-angle audit
