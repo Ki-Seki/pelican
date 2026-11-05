@@ -573,6 +573,14 @@ function changed(record: FileRecord): void {
   saveTimer.unref?.();
 }
 
+let warned = false;
+/** Said once: a state folder that cannot be written to would otherwise say so every few seconds. */
+function warnOnce(error: unknown): void {
+  if (warned) return;
+  warned = true;
+  console.warn('[pelican] could not keep usage figures in the state folder:', (error as Error).message);
+}
+
 async function writeAtomically(file: string, text: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -590,7 +598,7 @@ async function saveShards(): Promise<void> {
       else await writeAtomically(shardOf(dir), JSON.stringify({ v: RECORD_VERSION, dir, records: kept.map(serialize) }));
     } catch (error) {
       dirty.add(dir);
-      console.warn('[pelican] could not keep usage figures:', (error as Error).message);
+      warnOnce(error);
     }
   }
 }
@@ -719,12 +727,13 @@ async function saveOwn(): Promise<void> {
     await writeAtomically(ownFile(), JSON.stringify(await own));
   } catch (error) {
     ownChanged = true;
-    console.warn('[pelican] could not keep usage figures:', (error as Error).message);
+    warnOnce(error);
   }
 }
 
 function ownSoon(): void {
   ownChanged = true;
+  ownVersion += 1;
   ownTimer ??= setTimeout(() => {
     ownTimer = undefined;
     void saveOwn();
@@ -923,8 +932,25 @@ export function distinctLimits(hits: Array<[number, LimitKind]>): Array<{ kind: 
 
 export type SummaryInput = { range: UsageRange; now: number; titles: Titles; statsCache?: StatsCache | undefined };
 
+/** Lets the server answer other requests between parts of a long piece of work. */
+const breather = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Summaries worked out from records that have not changed since, for half a minute (titles can change). */
+const summaries = new Map<string, { at: number; summary: UsageSummary }>();
+let ownVersion = 0;
+
 /** Everything the page shows for a period, from what has been read so far. */
-export async function summarize({ range, now, titles, statsCache: cache }: SummaryInput): Promise<UsageSummary> {
+export async function summarize(input: SummaryInput): Promise<UsageSummary> {
+  const key = `${version}:${ownVersion}:${input.range}:${utcDay(input.now)}:${input.statsCache?.through ?? '-'}`;
+  const known = summaries.get(key);
+  if (known && input.now - known.at < 30_000) return { ...known.summary, progress: usageProgress() };
+  const summary = await workOut(input);
+  if (summaries.size > 8) summaries.clear();
+  summaries.set(key, { at: input.now, summary });
+  return summary;
+}
+
+async function workOut({ range, now, titles, statsCache: cache }: SummaryInput): Promise<UsageSummary> {
   const { order, skip } = owners();
   const mine = await ownRecord();
   // As /stats does, Claude Code's own record counts for everything; the last 7 or 30 days come from the transcripts.
@@ -954,7 +980,14 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
   const unpriced = new Set<string>();
   let firstTokens: number | undefined;
 
+  let work = 0;
   for (const r of order) {
+    // A home with a million replies takes a while to add up: other requests go on meanwhile.
+    work += r.keys.length;
+    if (work > 50_000) {
+      work = 0;
+      await breather();
+    }
     const mask = skip.get(r);
     const pelican = r.session in mine.sessions;
     const cwd = projectOfFolder(mainOf.get(r.session)?.cwd ?? r.cwd ?? r.dir);
@@ -1143,6 +1176,7 @@ export function resetUsage(): void {
   loaded = undefined;
   own = undefined;
   ownChanged = false;
+  summaries.clear();
   ownership = undefined;
   waitingSince.clear();
   scannedOnce = false;
