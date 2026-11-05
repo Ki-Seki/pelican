@@ -19,5 +19,7 @@ Object.assign(process.env, {
   GIT_CONFIG_GLOBAL: os.devNull,
   GIT_CONFIG_NOSYSTEM: '1',
 });
+// Whatever launchd job started the tests, a server they start is none, and asks launchd nothing.
+delete process.env.XPC_SERVICE_NAME;
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));

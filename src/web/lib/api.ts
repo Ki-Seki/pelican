@@ -17,6 +17,7 @@ import type {
   RewindResult,
   RunSettings,
   RunState,
+  SavedOutputPage,
   SendMode,
   ServerInfo,
   SessionChanges,
@@ -230,6 +231,9 @@ export const api = {
   setMcp: (id: string, name: string, change: { enabled?: boolean; reconnect?: boolean }) =>
     send<{ servers: McpServer[] }>('POST', `sessions/${encodeURIComponent(id)}/mcp/${encodeURIComponent(name)}`, change),
   stopTask: (id: string, task: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/stop`),
+  /** A page of an output Claude Code saved in place of one too long for the conversation (a long `!` command's), by its file's name. */
+  savedOutput: (id: string, name: string, from = 0) =>
+    request<SavedOutputPage>(`sessions/${encodeURIComponent(id)}/tool-results/${encodeURIComponent(name)}?from=${from}`),
   /** The end of what a background command printed. */
   taskOutput: (id: string, task: string) => request<TaskOutput>(`sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/output`),
   /** Takes back a prompt waiting for the turn to end. */

@@ -96,16 +96,18 @@ describe('changes per turn, from Claude Code’s records', () => {
     // The question in between changed nothing: it keeps its number, as in Claude Code's /diff.
     expect(turns.map((t) => [t.n, t.text])).toEqual([[1, 'Add a dark theme with a toggle'], [3, 'The text is too dim in the dark'], [4, '/review the theme']]);
     expect(turns[0]!.uuid).toBe(ids.first);
+    // A new file counts as /diff counts it: each piece of its text between newlines.
     expect(turns[0]!.files).toEqual([
       { path: 'src/theme.css', added: 5, removed: 0, line: 5 },
-      { path: 'src/Toggle.tsx', added: 1, removed: 0, created: true, line: 1 },
+      { path: 'src/Toggle.tsx', added: 2, removed: 0, created: true, line: 1 },
     ]);
     // A file Claude edited twice in one turn counts each edit's lines, as /diff does.
     const second = turns[1]!.files;
     expect(second.find((f) => f.path === 'src/theme.css')).toMatchObject({ added: 2, removed: 2 });
     expect(second.find((f) => f.path === 'src/App.tsx')).toMatchObject({ added: 2, removed: 1 });
     expect(second.find((f) => f.path === '/elsewhere/notes.md')).toMatchObject({ added: 1, removed: 1 });
-    expect(second.find((f) => f.path === 'a.ipynb')).toMatchObject({ added: 2, removed: 1 });
+    // A notebook's cells are not in /diff's turns, nor here.
+    expect(second.some((f) => f.path === 'a.ipynb')).toBe(false);
     expect(second.some((f) => f.path.includes('held'))).toBe(false);
     expect(turns.flatMap((t) => t.files).some((f) => f.path === 'README.md')).toBe(false);
     expect(turns.map((t) => t.checkpoint)).toEqual([true, true, true]);
@@ -131,7 +133,7 @@ describe('changes per turn, from Claude Code’s records', () => {
     t.lines[0] = JSON.stringify({ ...first, parentUuid: last.uuid });
     await appendFile(file, `${t.lines.join('\n')}\n`);
     const { turns } = await sessionChanges(file, cwd);
-    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 2, removed: 0, created: true }] });
+    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 3, removed: 0, created: true }] });
   });
 });
 
@@ -159,6 +161,80 @@ describe('turn numbers, as Claude Code’s /diff gives them', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
+  });
+});
+
+describe('turns as Claude Code’s /diff cuts the conversation into them', () => {
+  let work: string;
+  beforeAll(async () => {
+    work = await mkdtemp(path.join(os.tmpdir(), 'pelican-turn-cuts-'));
+  });
+  afterAll(() => rm(work, { recursive: true, force: true }));
+  const changesOf = async (t: ReturnType<typeof transcript>) => {
+    const out = path.join(work, `${randomUUID()}.jsonl`);
+    await writeFile(out, `${t.lines.join('\n')}\n`);
+    return { file: out, ...(await sessionChanges(out, path.join(work, 'app'))) };
+  };
+
+  it('give the edits Claude makes in answer to a ! command to that command, numbered by its output, as /diff does', async () => {
+    const t = transcript(path.join(work, 'app'));
+    t.prompt('Fix the failing tests', false);
+    t.reply('Run them and I will look.');
+    // As typed: Claude Code writes the command into its row without escaping it.
+    const command = t.user('<bash-input>npm test -- --grep "dark" && echo ok</bash-input>');
+    t.user('<bash-stdout>FAIL theme.test.ts</bash-stdout><bash-stderr></bash-stderr>');
+    t.tool('Edit', { file_path: `${work}/app/theme.css` }, edit(`${work}/app/theme.css`, 'a\nb\n', 'a\nB\n'));
+    t.reply('Fixed.');
+    // Named as the conversation shows it, without the note Claude Code put in it for Claude.
+    const next = t.prompt('<system-reminder>The user is on a phone.</system-reminder>\nThanks, now the toggle');
+    t.tool('Edit', { file_path: `${work}/app/Toggle.tsx` }, edit(`${work}/app/Toggle.tsx`, 'x\n', 'y\n'));
+    const { turns, file: out } = await changesOf(t);
+    // The prompt is 1, the command 2, its output 3 (where /diff starts the turn Claude answers in), the next prompt 4.
+    expect(turns.map((turn) => [turn.uuid, turn.n, turn.text])).toEqual([[command, 3, '!npm test -- --grep "dark" && echo ok'], [next, 4, 'Thanks, now the toggle']]);
+    expect(turns[0]!.files).toMatchObject([{ path: 'theme.css', added: 1, removed: 1 }]);
+    expect(await turnDiff(out, path.join(work, 'app'), command, 'theme.css')).toContain('+B');
+  });
+
+  it('give the edits after a background task’s note to that note, as /diff does', async () => {
+    const t = transcript(path.join(work, 'app'));
+    t.prompt('Build it in the background', false);
+    t.reply('Started.');
+    const note = t.user('<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command "npm run build" completed (exit code 0)</summary>\n</task-notification>');
+    t.tool('Edit', { file_path: `${work}/app/dist.txt` }, edit(`${work}/app/dist.txt`, 'a\n', 'b\n'));
+    const { turns } = await changesOf(t);
+    expect(turns.map((turn) => [turn.uuid, turn.n, turn.text])).toEqual([[note, 2, 'Background command "npm run build" completed (exit code 0)']]);
+  });
+
+  it('do not count a prompt that is only a picture, which /diff does not, and its edits go with the turn before it', async () => {
+    const picture = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+    const t = transcript(path.join(work, 'app'));
+    t.user([picture] as unknown as string);
+    t.reply('That is the settings page.');
+    const first = t.prompt('Make the toggle bigger');
+    t.tool('Edit', { file_path: `${work}/app/Toggle.tsx` }, edit(`${work}/app/Toggle.tsx`, 'a\n', 'b\n'));
+    t.user([picture] as unknown as string);
+    t.tool('Edit', { file_path: `${work}/app/theme.css` }, edit(`${work}/app/theme.css`, 'a\n', 'b\n'));
+    const second = t.prompt('And the text');
+    t.tool('Edit', { file_path: `${work}/app/theme.css` }, edit(`${work}/app/theme.css`, 'b\n', 'c\n'));
+    const { turns } = await changesOf(t);
+    expect(turns.map((turn) => [turn.uuid, turn.n, turn.files.map((f) => f.path)])).toEqual([[first, 1, ['Toggle.tsx', 'theme.css']], [second, 2, ['theme.css']]]);
+  });
+
+  it('count a new file’s lines as /diff does, each piece of its text between newlines, and an edit that changed nothing not at all', async () => {
+    const t = transcript(path.join(work, 'app'));
+    const prompt = t.prompt('Add a toggle');
+    t.tool('Write', { file_path: `${work}/app/Toggle.tsx` }, { type: 'create', filePath: `${work}/app/Toggle.tsx`, content: 'export const Toggle = () => null;\n', structuredPatch: [], originalFile: null });
+    t.tool('Write', { file_path: `${work}/app/b.txt` }, { type: 'create', filePath: `${work}/app/b.txt`, content: '1\n2', structuredPatch: [], originalFile: null });
+    // Written over with the same text: no patch, so no change.
+    t.tool('Write', { file_path: `${work}/app/same.txt` }, { type: 'update', filePath: `${work}/app/same.txt`, content: 'a\n', structuredPatch: [], originalFile: 'a\n' });
+    const { turns, file: out } = await changesOf(t);
+    expect(turns[0]!.files).toEqual([
+      { path: 'Toggle.tsx', added: 2, removed: 0, created: true, line: 1 },
+      { path: 'b.txt', added: 2, removed: 0, created: true, line: 1 },
+    ]);
+    // The diff shows what the count counts, as /diff's turn view does.
+    const added = parseDiff(await turnDiff(out, path.join(work, 'app'), prompt, 'Toggle.tsx')).filter((l) => l.kind === 'add').map((l) => l.text);
+    expect(added).toEqual(['export const Toggle = () => null;', '']);
   });
 });
 

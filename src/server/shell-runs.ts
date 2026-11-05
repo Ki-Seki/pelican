@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import type { LiveShell, ServerEvent, ShellResult } from '../shared/protocol.js';
+import type { LiveShell, ServerEvent } from '../shared/protocol.js';
 import { feedFor } from './feed.js';
 import { ensureRun, getRun } from './runner.js';
-import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, startCommand } from './shell.js';
+import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, type ShellResult, startCommand } from './shell.js';
 
 /**
  * The `!` commands running in each session, shown to its pages as their output comes, and added to
@@ -81,15 +81,20 @@ async function turnOver(sessionId: string): Promise<void> {
  * writes it, and Claude answers it then.
  */
 async function record(sessionId: string, cwd: string, id: string, result: ShellResult): Promise<void> {
-  await turnOver(sessionId);
-  // Pelican is closing its Claude processes: none is started again for this.
-  if (shuttingDown) return;
-  const settings = await bashModeSettings(cwd);
-  const respond = result.endedBy === undefined && settings.respond;
-  const toClaude = await forClaude(sessionId, result, settings.inlineMax);
-  const run = await ensureRun(sessionId);
-  // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
-  await run.appendShell(toClaude, respond && !run.busy, id);
+  try {
+    await turnOver(sessionId);
+    // Pelican is closing its Claude processes: none is started again for this.
+    if (shuttingDown) return;
+    const settings = await bashModeSettings(cwd);
+    const respond = result.endedBy === undefined && settings.respond;
+    const toClaude = await forClaude(sessionId, result, settings.inlineMax);
+    const run = await ensureRun(sessionId);
+    // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
+    await run.appendShell(toClaude, respond && !run.busy, id);
+  } finally {
+    // What was kept of its output past the start (a file with no name) goes once it is recorded.
+    result.output.release();
+  }
 }
 
 /**
@@ -143,23 +148,57 @@ export function stopShell(sessionId: string, id: string): boolean {
 }
 
 let shuttingDown = false;
+/** Pelican was told twice to stop (a second Ctrl+C): what still runs ends now. */
+let hurried = false;
 
-/** How long the commands still running get to end when Pelican shuts down, before they are made to. */
-const SHUTDOWN_GRACE_MS = 1500;
+/**
+ * How long the `!` commands still running get to tidy up when Pelican shuts down, before they are
+ * made to end: 15 seconds. docker compose gives its containers 10 to stop (Claude Code's own bash
+ * mode gives a command 1.5). Under systemd that is well inside the 90 seconds it waits for a
+ * service (TimeoutStopSec), and past them it ends every process of the service itself. launchd
+ * waits only as long as the job says (ExitTimeOut: 20 for Pelican's login item, 5 where unset),
+ * then ends Pelican alone, and once Pelican has gone nothing would end them: see shutdownGrace.
+ */
+export const SHUTDOWN_GRACE_MS = 15_000;
+
+/**
+ * The time to tidy up, inside what launchd allows when it stops Pelican (`exitTimeoutS`, see
+ * launchdExitTimeout): a second and a half before its end, for Pelican to end what is left and exit.
+ */
+export const shutdownGrace = (exitTimeoutS?: number) => (exitTimeoutS === undefined
+  ? SHUTDOWN_GRACE_MS
+  : Math.max(1000, Math.min(SHUTDOWN_GRACE_MS, exitTimeoutS * 1000 - 1500)));
 /** How often it looks whether they have. */
 const SHUTDOWN_LOOK_MS = 50;
 
+const running = () => [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
+
+/** How many `!` commands are running now, in every session. */
+export const runningShells = () => running().length;
+
+/** Ends at once what stopAllShells still gives time to: Pelican was told to stop again. */
+export function hurryShells(): void {
+  hurried = true;
+}
+
 /**
  * Pelican is shutting down: what still runs ends with it, as a `!` command ends with the CLI. Each
- * is asked to end (SIGTERM: a dev server or a test runner tidies up), and given a moment; then what
- * is left of any of them is made to (SIGKILL), while Pelican is still there to do it. Settles once
- * nothing of them runs.
+ * is asked to end (SIGTERM: a dev server or docker compose tidies up), unless it has been already
+ * (`asked`: systemd stopping the service asks every process of it at once, and a second request
+ * makes docker compose stop its containers in a hurry), and given time; then what is left of any
+ * of them is made to (SIGKILL), while Pelican is still there to do it. Settles once nothing of
+ * them runs.
  */
-export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS): Promise<void> {
+export async function stopAllShells(graceMs = SHUTDOWN_GRACE_MS, { asked = false } = {}): Promise<void> {
   shuttingDown = true;
-  const running = [...bySession.values()].flatMap((entries) => [...entries.values()]).filter((entry) => !entry.shell.done);
-  for (const entry of running) entry.run.stop();
+  hurried = false;
+  const entries = running();
+  for (const entry of entries) entry.run.ask(!asked);
   const until = Date.now() + graceMs;
-  while (running.some((entry) => entry.run.alive()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
-  for (const entry of running) entry.run.kill();
+  const left = () => entries.some((entry) => entry.run.alive());
+  while (!hurried && left() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
+  for (const entry of entries) entry.run.kill();
+  // Made to end, they are gone in a moment; that moment is waited for.
+  const gone = Date.now() + 1000;
+  while (left() && Date.now() < gone) await new Promise((resolve) => setTimeout(resolve, SHUTDOWN_LOOK_MS));
 }

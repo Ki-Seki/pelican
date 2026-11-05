@@ -1,7 +1,7 @@
 import { ArrowDown, Brain, ChevronRight, Copy, FileDiff, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import type { ImageBlock, LiveShell, PartialBlock, RunState, TurnChanges } from '../../shared/protocol';
+import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
@@ -13,7 +13,7 @@ import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
-import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
+import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PromptBody, QuoteAction } from './Quotes';
@@ -461,15 +461,49 @@ const commandName = (command: string) => {
 };
 
 /**
- * A `!` command someone ran in the session, with its output. A long output shows its end, the
- * result, as the command's live card did while it ran; Show all shows it from the start.
+ * All of a long output Claude Code saved in a file in place of the conversation (`name`, in the
+ * session's tool-results folder), read once it is asked for (`sessionId` set), a page at a time.
  */
-function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
+function useSavedOutput(sessionId: string | undefined, name: string | undefined) {
+  const [pages, setPages] = useState<SavedOutputPage[]>([]);
+  const [state, setState] = useState<'idle' | 'loading' | 'failed'>('idle');
+  const load = useCallback((from: number) => {
+    if (!sessionId || !name) return;
+    setState('loading');
+    api.savedOutput(sessionId, name, from).then((page) => {
+      setPages((all) => ((all.length === 0 ? page.from === 0 : all.at(-1)?.next === page.from) ? [...all, page] : all));
+      setState('idle');
+    }, () => setState('failed'));
+  }, [sessionId, name]);
+  const asked = Boolean(sessionId && name);
+  useEffect(() => {
+    if (asked && pages.length === 0 && state === 'idle') load(0);
+  }, [asked, pages.length, state, load]);
+  const next = pages.at(-1)?.next;
+  return {
+    text: pages.length > 0 ? pages.map((page) => page.text).join('') : undefined,
+    more: next !== undefined ? () => { if (state !== 'loading') load(next); } : undefined,
+    loading: state === 'loading',
+    failed: state === 'failed',
+  };
+}
+
+/**
+ * A `!` command someone ran in the session, with its output. A long output shows its end, the
+ * result, as the command's live card did while it ran; Show all shows it from the start, and for
+ * one Claude Code saved to a file (too long for the conversation), all of it, from that file, a
+ * page at a time.
+ */
+function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>; sessionId: string | undefined }) {
   const [all, setAll] = useState(false);
-  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
-  const lines = output.split('\n');
-  const long = lines.length > 14 || output.length > 1600;
+  const saved = useSavedOutput(all ? sessionId : undefined, item.saved);
+  const recorded = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
+  const whole = useMemo(() => (saved.text === undefined ? undefined : cleanOutput(saved.text).replace(/^\s*\n/, '').trimEnd()), [saved.text]);
+  const output = all && whole !== undefined ? whole : recorded;
+  const lines = recorded.split('\n');
+  const long = Boolean(item.saved) || lines.length > 14 || recorded.length > 1600;
   const clipped = long && !all;
+  const foot = 'border-t border-line py-1.5 text-[12px] text-faint hover:text-fg';
   return (
     <div data-quotable className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
@@ -480,13 +514,23 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
       {output && (
         // Clipped, its last lines sit at the bottom of the box, the start fading out above them.
         <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${clipped ? 'flex max-h-60 flex-col justify-end overflow-hidden [mask-image:linear-gradient(to_top,black_75%,transparent)]' : ''}`}>
-          <span>{clipped ? lines.slice(-TAIL_LINES).join('\n') : output}</span>
+          <span>{clipped ? output.split('\n').slice(-TAIL_LINES).join('\n') : output}</span>
         </pre>
       )}
+      {all && item.saved && (saved.failed || (saved.loading && whole === undefined)) && (
+        <div className="border-t border-line px-3 py-1.5 text-[12px] text-faint">{saved.failed ? 'The saved output is gone; this is its start' : 'Reading the saved output…'}</div>
+      )}
       {long && (
-        <button type="button" aria-expanded={all} className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
-          {all ? 'Show less' : 'Show all'}
-        </button>
+        <div className="flex">
+          <button type="button" aria-expanded={all} className={`flex-1 ${foot}`} onClick={() => setAll((v) => !v)}>
+            {all ? 'Show less' : 'Show all'}
+          </button>
+          {all && saved.more && (
+            <button type="button" disabled={saved.loading} className={`flex-1 border-l ${foot} disabled:opacity-50`} onClick={saved.more}>
+              Show more
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -673,29 +717,9 @@ export function MessageList({
   // When the running turn began, for a run that does not say: the prompt that started it.
   const promptAt = items.findLast((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user' && !i.steered)?.timestamp;
 
-  // The files each prompt's turn changed, said under the last of Claude's answers to it.
+  // The files each turn changed, said under the last of Claude's answers in it.
   const turns = usePathLinks()?.turns;
-  const changedUnder = useMemo(() => {
-    const byPrompt = new Map((turns ?? []).map((turn) => [turn.uuid, turn]));
-    const under = new Map<string, TurnChanges>();
-    let prompt: string | undefined;
-    let answer: string | undefined;
-    const close = () => {
-      const turn = prompt ? byPrompt.get(prompt) : undefined;
-      if (turn && answer) under.set(answer, turn);
-    };
-    for (const item of items) {
-      if (item.kind === 'user' && !item.steered) {
-        close();
-        prompt = item.key;
-        answer = undefined;
-      } else if (item.kind === 'assistant') {
-        answer = item.key;
-      }
-    }
-    close();
-    return under;
-  }, [items, turns]);
+  const changedUnder = useMemo(() => filesChangedUnder(items, turns ?? []), [items, turns]);
 
   /**
    * After anything that changes the list's size or position: back to the end while following,
@@ -840,7 +864,7 @@ export function MessageList({
                 case 'user':
                   return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
                 case 'shell':
-                  return live.has(item.key) ? null : <ShellItem key={item.key} item={item} />;
+                  return live.has(item.key) ? null : <ShellItem key={item.key} item={item} sessionId={sessionId} />;
                 case 'assistant': {
                   const running = busy && item.key === lastAssistant;
                   const changed = running ? undefined : changedUnder.get(item.key);

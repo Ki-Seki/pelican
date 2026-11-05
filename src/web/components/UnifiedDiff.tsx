@@ -1,5 +1,6 @@
 import { useId, useMemo, useRef, useState } from 'react';
 
+import { headerOnly } from '../lib/diff-header';
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
 import { type CodeLine, commentKey, type DiffLine, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments, useCommentsChat } from '../lib/review';
@@ -19,7 +20,12 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
   const lines = useMemo(() => parseDiff(diff), [diff]);
   if (!diff.trim()) return <div className="px-3 py-6 text-center text-[13px] text-faint">No changes in this file</div>;
   if (/^Binary files /m.test(diff)) return <div className="px-3 py-6 text-center text-[13px] text-faint">A binary file changed</div>;
-  if (lines.length === 0) return <pre className="px-3 py-6 font-mono text-[12px] whitespace-pre-wrap text-faint">{diff}</pre>;
+  if (lines.length === 0) {
+    // A file renamed whole, or one whose mode alone changed: git's header says so, in its own terms.
+    const said = headerOnly(diff);
+    if (said) return <div className="px-3 py-6 text-center text-[13px] break-words text-faint">{said}</div>;
+    return <pre className="px-3 py-6 font-mono text-[12px] whitespace-pre-wrap text-faint">{diff}</pre>;
+  }
   return <DiffLines lines={lines} path={path} cwd={cwd} />;
 }
 

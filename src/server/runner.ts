@@ -33,7 +33,6 @@ import type {
   ScheduledCheck,
   SendMode,
   SessionStatus,
-  ShellResult,
   TaskOutput,
   TaskProgress,
 } from '../shared/protocol.js';
@@ -48,7 +47,7 @@ import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { answerable, notify } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
-import { bashModeMessages } from './shell.js';
+import { bashModeMessages, type ForClaude } from './shell.js';
 import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
@@ -561,7 +560,7 @@ export class SessionRun {
    * Claude answers it, as the CLI's Claude does; without, Claude keeps it for later and the caveat
    * before it says so. `uuid`: the id of the message holding the command.
    */
-  async appendShell(result: ShellResult, respond: boolean, uuid: string = randomUUID()): Promise<void> {
+  async appendShell(result: ForClaude, respond: boolean, uuid: string = randomUUID()): Promise<void> {
     if (this.closed) throw new RunClosed();
     const parts = bashModeMessages(result, respond);
     const messages = parts.map(({ text, meta }, i): SDKUserMessage => ({

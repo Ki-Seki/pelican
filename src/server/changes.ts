@@ -1,20 +1,24 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { type Hunk, lineDiff, splitLines, toHunks, unifiedDiff } from '../shared/line-diff.js';
+import { type Hunk, unifiedDiff } from '../shared/line-diff.js';
 import type { ChatMessage, SessionChanges, TurnChanges, TurnFile } from '../shared/protocol.js';
 import { readHistory } from './history.js';
 import { openRegular } from './open.js';
 
 /**
  * What each turn of a session changed, as Claude Code's /diff shows it in its turn views: from
- * Claude's own file edits as the transcript records them (each Edit, MultiEdit, Write and
- * NotebookEdit result carries a structured patch), not from git, so it works in any folder and
- * runs nothing. A change Claude made through a command shows only in git's views, as in the CLI.
- * Turns are the prompts that led Claude to edit files, numbered as /diff numbers them: by the
- * prompt's place among the conversation's prompts, so one that changed nothing leaves a gap. A
- * turn's diff of a file is each of its edits' patches in turn, and its counts their lines added
- * up, as in /diff.
+ * Claude's own file edits as the transcript records them (each Edit, MultiEdit and Write result
+ * carries a structured patch, or a new file's text), not from git, so it works in any folder and
+ * runs nothing. A change Claude made through a command shows only in git's views, as in the CLI;
+ * so does a notebook's, which /diff's turns leave out too.
+ *
+ * Turns are cut and numbered as /diff cuts and numbers them: each row it counts as a prompt (a
+ * typed one, a `/` or `!` command and their output, a background task's note, the summary a
+ * compaction left) starts one, numbered by its place among them, and holds the edits that follow
+ * it up to the next. So a prompt that changed nothing leaves a gap, and what Claude does in answer
+ * to a `!` command is that command's turn. A turn's diff of a file is each of its edits' patches
+ * in turn, and its counts their lines added up, as in /diff.
  *
  * The transcript is read the way history.ts reads it: incrementally, parsing only the rows that
  * matter here (edit results, checkpoints and prompts); an edit's patch is read again from its row
@@ -49,40 +53,36 @@ const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
 /** What one tool result says it did to one file. */
 type Recorded = { file: string; hunks: Hunk[]; created: boolean };
 
-function hunksOf(value: unknown): Hunk[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const hunks: Hunk[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw) || !Array.isArray(raw.lines)) return undefined;
-    const numbers = [raw.oldStart, raw.oldLines, raw.newStart, raw.newLines];
-    if (!numbers.every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) return undefined;
-    hunks.push({ oldStart: raw.oldStart as number, oldLines: raw.oldLines as number, newStart: raw.newStart as number, newLines: raw.newLines as number, lines: raw.lines.filter((l): l is string => typeof l === 'string') });
-  }
-  return hunks;
+/**
+ * A structured patch's hunks, as /diff reads them: each with its start lines and its lines, the
+ * rest left out. The line counts git puts in a hunk's header are worked out where missing.
+ */
+function hunksOf(value: unknown): Hunk[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): Hunk[] => {
+    if (!isRecord(raw) || typeof raw.oldStart !== 'number' || typeof raw.newStart !== 'number' || !Array.isArray(raw.lines)) return [];
+    const lines = raw.lines.filter((l): l is string => typeof l === 'string');
+    const count = (n: unknown, mark: string) => (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : lines.filter((l) => !l.startsWith(mark)).length);
+    return [{ oldStart: raw.oldStart, oldLines: count(raw.oldLines, '+'), newStart: raw.newStart, newLines: count(raw.newLines, '-'), lines }];
+  });
 }
 
 /**
- * The file edit a tool result records (`toolUseResult` on its row), in Claude Code's shapes: Edit
- * and MultiEdit (a patch and the file before it), Write (a new file's text, or a patch), and
- * NotebookEdit (a cell's source before and after). Edits held for review (`staged`) changed
- * nothing; anything else is not an edit.
+ * The file edit a tool result records (`toolUseResult` on its row), as Claude Code's /diff reads
+ * it: a file's path and a patch (Edit, MultiEdit, Write over a file), or for a new file with no
+ * patch, its text, every piece of it between newlines an added line (`a\n` is two, as /diff counts
+ * it). Edits held for review (`staged`), a patch that changed nothing and anything else are no edit.
  */
 export function recordedEdit(result: unknown): Recorded | undefined {
   if (!isRecord(result) || result.staged === true) return undefined;
-  const notebook = str(result.notebook_path);
-  if (notebook) {
-    if (typeof result.new_source !== 'string' || str(result.error)) return undefined;
-    const ops = lineDiff(splitLines(str(result.old_source) ?? ''), splitLines(result.edit_mode === 'delete' ? '' : result.new_source));
-    return ops ? { file: notebook, hunks: toHunks(ops), created: false } : undefined;
-  }
   const file = str(result.filePath);
   if (!file) return undefined;
-  if (result.type === 'create' && typeof result.content === 'string') {
-    const ops = lineDiff([], splitLines(result.content));
-    return { file, hunks: ops ? toHunks(ops) : [], created: true };
-  }
+  const created = result.type === 'create';
   const hunks = hunksOf(result.structuredPatch);
-  return hunks ? { file, hunks, created: false } : undefined;
+  if (hunks.length > 0) return { file, hunks, created };
+  if (!created || typeof result.content !== 'string') return undefined;
+  const lines = result.content.split('\n');
+  return { file, hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((line) => `+${line}`) }], created };
 }
 
 function counts(hunks: readonly Hunk[]): { added: number; removed: number } {
@@ -208,37 +208,61 @@ async function scanned(file: string, cwd: string | undefined): Promise<Scan> {
   return next;
 }
 
-/** Whether a message of the conversation is a prompt someone typed or a command they ran. */
-function promptOf(message: ChatMessage): string | undefined {
-  if (message.role !== 'user' || message.meta || message.compactSummary || message.steered || message.parentToolUseId) return undefined;
-  if (message.blocks.some((b) => b.type === 'tool_result')) return undefined;
-  const text = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-  const images = message.blocks.some((b) => b.type === 'image');
-  if (!isPrompt(text) && !images) return undefined;
-  const command = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1];
-  const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1];
-  const words = command ? `${command} ${args ?? ''}` : text.replace(/(?:^|\n\n)Attached files:\n[\s\S]*$/, '');
-  return words.replace(/\s+/g, ' ').trim() || (images ? 'An image' : '');
-}
-
 /**
- * Whether Claude Code's /diff counts a message as a prompt, numbering turns by it (its diff
- * panel's own test): a user row with text in it and no tool result, not one Claude Code added
- * itself. A `!` command, its output, a `/` command and its output count, and so does the summary
- * a compaction left.
+ * Whether Claude Code's /diff counts a message as a prompt, starting a turn there and numbering it
+ * by it (its diff panel's own test): a user row with text in it and no tool result, not one Claude
+ * Code added itself. A `!` command and its output, a `/` command and its output, a background
+ * task's note and the summary a compaction left count; a picture sent without words does not.
  */
 function countsAsPrompt(message: ChatMessage): boolean {
   return message.role === 'user' && !message.meta && !message.steered && !message.parentToolUseId
     && !message.blocks.some((b) => b.type === 'tool_result') && message.blocks.some((b) => b.type === 'text' && b.text !== '');
 }
 
-type Turn = { uuid: string; n: number; text: string; at?: number; rows: Array<{ uuid: string; row: EditRow }> };
+const words = (text: string) => text.replace(/\s+/g, ' ').trim();
+const tagged = (text: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1];
 
 /**
- * The conversation as it stands (its current branch), cut into prompts with the edit rows of
- * each, numbered by the prompt's place among the conversation's prompts as /diff counts them
- * (an image sent without words counts too, being a turn here). /diff sees only what followed the
- * last compaction and numbers from there; here, where the turns before it show too, the count
+ * A turn's name, from the row that starts it, in the words the conversation shows for that row: a
+ * prompt's words, a command as it was typed (`/review the theme`, `!npm test`), a background
+ * task's note.
+ */
+function nameOf(message: ChatMessage, text: string): string {
+  if (message.compactSummary) return 'Context compacted';
+  const command = tagged(text, 'command-name');
+  if (command) return words(`${command} ${tagged(text, 'command-args') ?? ''}`);
+  if (isPrompt(text)) {
+    const typed = words(text.replace(/(?:^|\n\n)Attached files:\n[\s\S]*$/, ''));
+    if (typed) return typed;
+    const files = [...text.matchAll(/^- .+ \((.+)\)$/gm)].map((m) => m[1]);
+    return files.length > 0 ? files.join(', ') : 'Attached files';
+  }
+  const bash = tagged(text, 'bash-input');
+  if (bash !== undefined) return `!${bash.trim()}`;
+  if (/^\s*<task-notification>/.test(text)) return words(tagged(text, 'summary') ?? '') || 'Background task update';
+  if (/^\s*\[Request interrupted/.test(text)) return 'Interrupted';
+  if (/^\s*<(?:bash-stdout|bash-stderr|local-command-stdout|local-command-stderr)>/.test(text)) return 'Command output';
+  return 'Claude Code';
+}
+
+/** What a row is to the turn it may start: a command whose output row comes next, or that output. */
+function partOf(text: string): 'bash' | 'bash-output' | 'command' | 'command-output' | undefined {
+  if (/^\s*<bash-input>/.test(text)) return 'bash';
+  if (/^\s*<(?:bash-stdout|bash-stderr)>/.test(text)) return 'bash-output';
+  if (/<command-name>/.test(text) && !NOT_TYPED.test(text)) return 'command';
+  if (/^\s*<(?:local-command-stdout|local-command-stderr)>/.test(text)) return 'command-output';
+  return undefined;
+}
+
+type Turn = { uuid: string; n: number; text: string; at?: number; rows: Array<{ uuid: string; row: EditRow }>; awaits?: 'bash-output' | 'command-output' };
+
+/**
+ * The conversation as it stands (its current branch), cut into turns where /diff cuts it: at each
+ * row it counts as a prompt (countsAsPrompt), numbered by that row's place among them, each with
+ * the edit rows up to the next. A command and its output are two such rows, and /diff gives what
+ * Claude does in answer to the output the output's number; here that turn is the command's, named
+ * and kept (for Rewind) by the row that holds the command. /diff sees only what followed the last
+ * compaction and numbers from its summary; here, where the turns before it show too, the count
  * runs on through it. `ownOnly`: without the rows copied from another session (a side chat's).
  */
 function turnsOf(messages: readonly ChatMessage[], scan: Scan, ownOnly: boolean): Turn[] {
@@ -247,10 +271,25 @@ function turnsOf(messages: readonly ChatMessage[], scan: Scan, ownOnly: boolean)
   let place = 0;
   for (const message of messages) {
     if (ownOnly && scan.copied.has(message.uuid)) continue;
-    const text = promptOf(message);
-    if (text !== undefined || countsAsPrompt(message)) place += 1;
-    if (text !== undefined) {
-      turn = { uuid: message.uuid, n: place, text, ...(message.timestamp ? { at: message.timestamp } : {}), rows: [] };
+    if (countsAsPrompt(message)) {
+      place += 1;
+      // As the conversation shows the row: without the notes Claude Code puts in it for Claude.
+      const text = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+      const part = partOf(text);
+      if (turn && part && turn.awaits === part && turn.rows.length === 0) {
+        // The output of the command just before: the turn Claude answers it in, the command's.
+        turn.n = place;
+        delete turn.awaits;
+        continue;
+      }
+      turn = {
+        uuid: message.uuid,
+        n: place,
+        text: nameOf(message, text),
+        ...(message.timestamp ? { at: message.timestamp } : {}),
+        rows: [],
+        ...(part === 'bash' ? { awaits: 'bash-output' as const } : part === 'command' ? { awaits: 'command-output' as const } : {}),
+      };
       turns.push(turn);
       continue;
     }

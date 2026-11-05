@@ -237,26 +237,12 @@ export type RecordedSettings = { model?: string; effort?: string; fast?: boolean
 /** While Claude works, a new message joins the turn at Claude's next step (steer) or waits for the turn to end (queue). */
 export type SendMode = 'steer' | 'queue';
 
-/** A `!` command run in the session's folder, once it is done; it goes into the conversation as Claude Code's bash mode writes it. */
-export type ShellResult = {
-  command: string;
-  /** What it printed, stdout and stderr together as they came, as Claude Code's bash mode takes them; up to a limit (`truncated` past it). */
-  output: string;
-  /** Exit code; null when it did not finish on its own (see `endedBy`). */
-  code: number | null;
-  durationMs: number;
-  truncated?: boolean;
-  /** It left a process running in the background (`npm run dev &`), which goes on after it. */
-  background?: boolean;
-  /** Ended by Stop, or by Pelican once it ran past the limit (`limitMs`), rather than on its own. */
-  endedBy?: 'stop' | 'limit';
-  /** The limit it ran under, for saying it when it was hit. */
-  limitMs?: number;
-  /** How much of the output Claude gets in the conversation: Claude Code's `bashOutputMaxChars`. */
-  inlineMax?: number;
-  /** Where all of the output was saved when it was more than that, as Claude Code saves it (the session's tool-results folder). */
-  savedTo?: string;
-};
+/**
+ * A page of an output Claude Code saved in a session's tool-results folder in place of one too
+ * long for the conversation: `text` from `from` bytes in, `size` the file's in bytes, `next`
+ * where the next page starts, while there is more.
+ */
+export type SavedOutputPage = { text: string; from: number; size: number; next?: number };
 
 /**
  * A `!` command still running, as its output comes. Its record in the conversation has the same

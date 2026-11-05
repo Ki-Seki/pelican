@@ -128,4 +128,48 @@ describe('a running command', () => {
     expect(screen.getByText('Exit code 1')).toBeTruthy();
     expect(screen.getByText('Goes into the conversation when Claude’s turn ends')).toBeTruthy();
   });
+
+  it('once recorded, a long output Claude Code saved to a file shows its start, and Show all reads all of it from that file, a page at a time', async () => {
+    const pages = [
+      { text: `${Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n')}\n`, from: 0, size: 400_000, next: 262_100 },
+      { text: 'line 31\nTests 120 passed\n', from: 262_100, size: 400_000 },
+    ];
+    const read = vi.spyOn(api, 'savedOutput').mockImplementation(async (_id, _name, from) => pages.find((page) => page.from === from)!);
+    const file = '/home/me/.claude/projects/-work/5e25f65d-1b8b-4490-a3d3-43540da07ef3/tool-results/b1b2gp6fw.txt';
+    const persisted = `<persisted-output>\nOutput too large (390.6KB). Full output saved to: ${file}\n\nPreview (first 2KB):\nline 1\nline 2\n...\n</persisted-output>`;
+    const record = [user('r10', '<bash-input>cat big.log</bash-input>'), user('o10', `<bash-stdout>${persisted}</bash-stdout><bash-stderr></bash-stderr>`)];
+    render(<MessageList sessionId="s10" view={view(record)} mode="normal" />);
+    // What Claude got: the start, and Claude Code's line saying where all of it is.
+    const raw = { normalizer: (text: string) => text };
+    expect(screen.getByText(/line 2\n\.\.\.\nOutput too large \(390\.6KB\)\. Full output saved to:/, raw)).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+    // By the file's name alone; the server knows the session's folder.
+    expect(read).toHaveBeenCalledWith('s10', 'b1b2gp6fw.txt', 0);
+    expect(await screen.findByText(/^line 1\nline 2\nline 3\n[\s\S]*line 30$/, raw)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText(/line 30\nline 31\nTests 120 passed$/, raw)).toBeTruthy();
+    expect(read).toHaveBeenLastCalledWith('s10', 'b1b2gp6fw.txt', 262_100);
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+  });
+
+  it('says so when the saved copy is gone, and shows the start Claude got', async () => {
+    vi.spyOn(api, 'savedOutput').mockRejectedValue(new Error('That output is no longer saved'));
+    const persisted = '<persisted-output>\nOutput too large (39.1KB). Full output saved to: /x/tool-results/b1b2gp6fw.txt\n\nPreview (first 2KB):\nfirst line\n...\n</persisted-output>';
+    render(<MessageList sessionId="s11" view={view([user('r11', '<bash-input>cat big.log</bash-input>'), user('o11', `<bash-stdout>${persisted}</bash-stdout><bash-stderr></bash-stderr>`)])} mode="normal" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(await screen.findByText('The saved output is gone; this is its start')).toBeTruthy();
+    expect(screen.getByText(/first line/)).toBeTruthy();
+  });
+
+  it('that printed nothing shows the command alone; its record keeps Claude Code’s words for Claude', () => {
+    const record = [user('r12', '<bash-input>touch a.txt</bash-input>'), user('o12', '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')];
+    expect(buildItems(record)).toEqual([{ kind: 'shell', key: 'r12', command: 'touch a.txt', stdout: '', stderr: '' }]);
+    // Its output came, though it shows nothing: a stray one after it is not its.
+    expect(buildItems([...record, user('x12', '<bash-stdout>stray</bash-stdout><bash-stderr></bash-stderr>')])).toEqual(buildItems(record));
+    const { container } = render(<MessageList sessionId="s12" view={view(record)} mode="normal" />);
+    expect(screen.getByText('touch a.txt')).toBeTruthy();
+    expect(screen.queryByText(/completed with no output/)).toBeNull();
+    expect(container.querySelector('pre')).toBeNull();
+  });
 });

@@ -7,13 +7,14 @@ from every app.
 
 ### Highlights
 
-- **Changes and files.** See what each turn changed (T1, T2…, numbered and counted as Claude Code's
-  `/diff` does, from its own record, so also outside git), what is uncommitted, or everything since
-  your branch split from main, with diffs, and Rewind code where Claude Code kept a checkpoint.
-  Search the folder by name or in the text, and read a file with line numbers, Markdown and HTML
-  previewed. A file a step names, or a `path:line` in a reply, opens at its line, and under a turn
-  that edited files "3 files changed" opens them. On a phone it is a view of its own that the back
-  gesture steps through; on a computer it sits beside the conversation from 1024px wide.
+- **Changes and files.** See what each turn changed (T1, T2…, numbered and counted as Claude
+  Code's `/diff` does until a compaction, from its own record, so also outside git), what is
+  uncommitted, or everything since your branch split from main, with diffs, and Rewind code where
+  Claude Code kept a checkpoint. Search the folder by name or in the text, and read a file with
+  line numbers, Markdown and HTML previewed. A file a step names, or a `path:line` in a reply,
+  opens at its line, and under a turn that edited files "3 files changed" opens them. On a phone
+  it is a view of its own that the back gesture steps through; on a computer it sits beside the
+  conversation from 1024px wide.
 - **Side chats.** `/btw`, Cmd/Ctrl+; or Side chat in the session menu asks something on the side,
   as in Claude Desktop. Claude answers from a read-only copy of the session (Read, Grep and Glob,
   no MCP servers, never Bypass), and is told so with each question, as in Desktop. Nothing goes
@@ -46,14 +47,24 @@ from every app.
   opens in Normal.
 - A `!` command may run 30 minutes instead of two, and Claude answers it when it ends, which is a
   turn like a prompt. A command you stop gets no answer, and one still running when Pelican stops
-  ends with it.
-- Claude gets a `!` command's output as in the terminal: stdout and stderr together, up to 30,000
-  characters or what `bashOutputMaxChars` sets, instead of up to 200,000 of each. A longer one is
-  saved whole in the session's `tool-results` folder, where Claude Code saves one, and Claude gets
-  its start and where it is; the conversation shows the same, also for a command run in the
-  terminal.
-- A renamed file's diff shows the rename and what changed in it, instead of the whole file as new.
-- Push and Create PR, on the branch line, show only where the repository has a remote.
+  gets up to 15 seconds to tidy up, then ends with it; Ctrl+C again ends it at once. Under launchd
+  it gets what the login item leaves: `pelican service install` now asks launchd for 20 seconds,
+  where it gave 5.
+- Claude gets a `!` command's output as Claude Code's bash mode gives it, byte for byte for one
+  that ends on its own: stdout and stderr together in the order they were written, up to 30,000
+  bytes or what `bashOutputMaxChars` sets, instead of up to 200,000 characters of each. A longer
+  one that went well is saved in the session's `tool-results` folder, where Claude Code saves
+  one, up to its 64MB, and Claude gets its start and where it is; a failed one is cut there.
+  Exit code 1 from grep, diff, test or find is an answer, not a failure, and the record no longer
+  adds the exit code, or that something runs on in the background, as Claude Code's adds neither.
+- What Claude changes in answer to a `!` command is that command's turn in Changes, as in `/diff`;
+  a picture sent without words starts no turn, and a new file's lines count as `/diff` counts them.
+  After a compaction `/diff` numbers from 1 again, while Pelican, which shows the turns before it,
+  counts on.
+- A renamed file's diff shows the rename and what changed in it, instead of the whole file as new;
+  one renamed whole says "Renamed from …, unchanged".
+- Push and Create PR, on the branch line, show only where the repository has a remote with an
+  address, not one git's system config names alone, as Homebrew's does on some Macs.
 - Changes and files docks from 1024px wide instead of 1440px; below 1280px the session list folds
   away while it is open, and Cmd/Ctrl+K brings it back.
 - Cmd/Ctrl+\ closes Changes and files when pressed in it, as it closes the side chat and as Close
@@ -85,7 +96,10 @@ from every app.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
 - A finished `!` command shows the end of its output, as it did while it ran; Show all shows the
-  start. A running one's Stop is named for it.
+  start, and for one too long for the conversation all of it, from the file Claude Code saved it
+  in, a page at a time. One that printed nothing shows the command alone. A running one's Stop is
+  named for it.
+- Claude's answer to a background task's note shows after the note, not in the reply before it.
 - A message that does not go comes back to the message box above anything typed since; one sent
   for you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
@@ -114,6 +128,8 @@ from every app.
 - Changes and files reads only regular files inside the session's folder, links followed and
   checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
   config, an empty environment, no git and no links followed.
+- Show all on a long `!` command reads the file Claude Code saved its output in by that file's
+  name alone, from the session's own `tool-results` folder, through no link.
 - A page in Files runs its scripts only after Run, and again only after another Run once it has
   been rewritten; a page opened straight from another file never starts running.
 - A side chat only reads, asks for nothing, and takes no `/` or `!` commands. A side chat branched

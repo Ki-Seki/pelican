@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  cannotInstall, installService, LABEL, launchdPlist, logFile, plistFile, restartService, type Run, serviceEnvironment, type ServiceContext,
+  askedBySystemd, cannotInstall, installService, LABEL, LAUNCHD_EXIT_TIMEOUT_S, launchdExitTimeout, launchdPlist, logFile, plistFile, restartService, type Run, serviceEnvironment, type ServiceContext,
   serviceState, stableNode, systemdUnit, uninstallService, unitFile,
 } from '../src/server/service';
 
@@ -106,6 +106,8 @@ describe('on macOS', () => {
     expect(plist).toContain('<key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/bin:/bin</string>');
     expect(plist).toContain(`<string>${logFile(ctx.home)}</string>`);
     expect(plist).toContain('<key>SuccessfulExit</key>\n    <false/>');
+    // Time for ! commands to tidy up when launchd stops it, where launchd would give 5 seconds.
+    expect(plist).toContain('<key>ExitTimeOut</key>\n  <integer>20</integer>');
     expect(plist).not.toContain('sk-secret');
     expect(plist).not.toContain('UNRELATED');
     expect((await stat(plistFile(ctx.home))).mode & 0o777).toBe(0o600);
@@ -186,6 +188,37 @@ describe('on Linux', () => {
     const ctx = await context('linux');
     answers['systemctl --user show-environment'] = { code: 1 };
     expect(await cannotInstall(ctx)).toMatch(/systemd is not running/);
+  });
+});
+
+describe('how long launchd waits for Pelican to stop', () => {
+  it('is what launchctl says of the job that started it, launchd’s 5 seconds where unsaid, and nothing outside launchd', async () => {
+    const ctx = await context('darwin', { env: { XPC_SERVICE_NAME: LABEL } });
+    answers['launchctl print'] = { code: 0, stdout: `gui/501/${LABEL} = {\n\tactive count = 1\n\texit timeout = 20\n\tpid = 4242\n}\n` };
+    expect(await launchdExitTimeout(ctx)).toBe(20);
+    expect(calls).toEqual([`launchctl print gui/501/${LABEL}`]);
+    answers['launchctl print'] = { code: 113 };
+    expect(await launchdExitTimeout(ctx)).toBe(LAUNCHD_EXIT_TIMEOUT_S);
+    // A terminal, an app, Linux, no job: launchd does not stop it.
+    calls = [];
+    for (const [platform, env] of [['darwin', { XPC_SERVICE_NAME: '0' }], ['darwin', { XPC_SERVICE_NAME: 'application.com.apple.Terminal.1234.1235' }], ['darwin', {}], ['linux', { XPC_SERVICE_NAME: LABEL }]] as const) {
+      expect(await launchdExitTimeout(await context(platform, { env }))).toBeUndefined();
+    }
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('a stop from systemd', () => {
+  it('is a SIGTERM to Pelican started by systemd as a service, which asked its ! commands too', async () => {
+    const ctx = await context('linux');
+    const service = { INVOCATION_ID: '8d2e3c' };
+    expect(askedBySystemd('SIGTERM', service, () => 'systemd')).toBe(true);
+    // Ctrl+C, a terminal's Pelican (which may have the variable from a terminal that is a service), kill by hand.
+    expect(askedBySystemd('SIGINT', service, () => 'systemd')).toBe(false);
+    expect(askedBySystemd('SIGTERM', service, () => 'zsh')).toBe(false);
+    expect(askedBySystemd('SIGTERM', {}, () => 'systemd')).toBe(false);
+    // The unit Pelican writes keeps systemd's default, which signals every process of the service.
+    expect(systemdUnit(ctx)).not.toMatch(/KillMode/);
   });
 });
 

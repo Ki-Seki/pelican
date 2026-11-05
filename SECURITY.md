@@ -96,7 +96,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   never runs in Pelican's page. Search runs the ripgrep inside Claude Code's own binary, by its
   full path, with no config file, an empty environment, no git and no links followed (or a scan
   in Node where that is not there), within limits on files, lines, time and output. What a turn
-  changed is read from Claude Code's transcript, not from git, so it shows in any folder.
+  changed is read from Claude Code's transcript, not from git, so it shows in any folder. Show all
+  on a long `!` command reads the file Claude Code saved its output in, by that file's name alone,
+  never a path, from that session's own `tool-results` folder: a regular file reached through no
+  link.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.
