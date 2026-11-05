@@ -996,14 +996,14 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
   const counted = (day: number) => !statsCache || day > statsCache.through;
   const active = new Set<number>();
   let sessionCount = 0;
-  let longest: { id: string; ms: number } | undefined;
+  let longest: { id: string; ms: number; at: number } | undefined;
   for (const [id, r] of mainOf) {
     for (const day of r.days) if (day >= from && day <= to && counted(day)) active.add(day);
     if (r.first === undefined || r.last === undefined) continue;
     const started = utcDay(r.first);
     if (started < from || started > to || !counted(started)) continue;
     sessionCount += 1;
-    if (!longest || r.last - r.first > longest.ms) longest = { id, ms: r.last - r.first };
+    if (!longest || r.last - r.first > longest.ms) longest = { id, ms: r.last - r.first, at: r.first };
   }
   if (statsCache) {
     for (const [day, entry] of statsCache.days) {
@@ -1012,7 +1012,7 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
       if (entry.active) active.add(day);
     }
     const theirs = statsCache.longest;
-    if (theirs && (!longest || theirs.ms > longest.ms)) longest = { id: theirs.id, ms: theirs.ms };
+    if (theirs && (!longest || theirs.ms > longest.ms)) longest = { id: theirs.id, ms: theirs.ms, at: theirs.at * DAY };
   }
   const { current, longest: longestStreak } = streaks(active, from, to);
 
@@ -1069,7 +1069,8 @@ export async function summarize({ range, now, titles, statsCache: cache }: Summa
       days: to - from + 1,
       currentStreak: current,
       longestStreak,
-      ...(longest && longest.ms > 0 ? { longest: { id: longest.id, title: title(longest.id), ms: longest.ms } } : {}),
+      // A session whose transcript is gone (Claude Code's own record) has no title, only its day.
+      ...(longest && longest.ms > 0 ? { longest: { id: longest.id, ms: longest.ms, at: longest.at, ...(named.has(longest.id) ? { title: title(longest.id) } : {}) } } : {}),
       ...(range === 'all' && statsCache?.first !== undefined && firstData !== undefined && statsCache.first < firstData ? { since: dayString(statsCache.first) } : {}),
     },
     limits: distinctLimits(hits),

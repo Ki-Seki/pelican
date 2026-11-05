@@ -120,7 +120,7 @@ describe('usage from transcripts', () => {
     expect(s.tokens.cacheRead).toBe(300);
     expect(s.activity.sessions).toBe(1);
     // The subagent row at 12:00 is not the session's own: it lasted from 10:00:00 to 10:00:05.
-    expect(s.activity.longest).toEqual({ id: MAIN, title: 'Session 1111', ms: 5000 });
+    expect(s.activity.longest).toEqual({ id: MAIN, title: 'Session 1111', ms: 5000, at: Date.parse('2026-11-05T10:00:00Z') });
     expect(s.progress.files).toBe(3);
     const files = await sessionFiles(MAIN, mainFile(MAIN));
     expect(files.map((f) => path.basename(f.file)).sort()).toEqual([`${MAIN}.jsonl`, 'agent-a1.jsonl', 'agent-b2.jsonl']);
@@ -279,7 +279,7 @@ describe('usage from transcripts', () => {
     const cache = await readStatsCache();
     const all = await sum('all', cache);
     expect(all.from).toBe('2026-10-01');
-    expect(all.activity).toMatchObject({ sessions: 2 + 1 + 3 + 1, activeDays: 4, longestStreak: 2, currentStreak: 2, longest: { id: 'old', ms: 9_000_000 } });
+    expect(all.activity).toMatchObject({ sessions: 2 + 1 + 3 + 1, activeDays: 4, longestStreak: 2, currentStreak: 2, longest: { id: 'old', ms: 9_000_000, at: Date.parse('2026-10-01') } });
     expect(all.activity.since).toBe('2026-10-01');
     // Tokens come from the transcripts alone: the first one is from November 4.
     expect(all.tokensSince).toBe('2026-11-04');

@@ -103,7 +103,14 @@ function Figures({ summary, showCost, onOpenSession }: { summary: UsageSummary; 
         <Tile label="Active days" value={summary.activity.activeDays.toLocaleString('en')} sub={`of ${summary.activity.days.toLocaleString('en')}`} />
         <Tile label="Current streak" value={days(summary.activity.currentStreak)} />
         <Tile label="Longest streak" value={days(summary.activity.longestStreak)} />
-        {summary.activity.longest && <Tile label="Longest session" value={span(summary.activity.longest.ms)} sub={summary.activity.longest.title} wide />}
+        {summary.activity.longest && (
+          <Tile
+            label="Longest session"
+            value={span(summary.activity.longest.ms)}
+            sub={summary.activity.longest.title ?? `on ${new Date(summary.activity.longest.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
+            wide
+          />
+        )}
       </dl>
 
       {notes.length > 0 && (

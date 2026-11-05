@@ -151,7 +151,8 @@ export type UsageSummary = {
     days: number;
     currentStreak: number;
     longestStreak: number;
-    longest?: { id: string; title: string; ms: number };
+    /** `at`: when it started; `title` when the session is still on this computer. */
+    longest?: { id: string; title?: string; ms: number; at: number };
     /** The first day of activity anyone recorded, when Claude Code's own stats go back further than the transcripts. */
     since?: string;
   };
