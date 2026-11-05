@@ -143,6 +143,8 @@ export type RunState = {
   /** Folder the session runs in. */
   cwd: string;
   busy: boolean;
+  /** When the running turn began, ms since epoch; present while busy. */
+  startedAt?: number;
   settings: RunSettings;
   permissions: PermissionRequest[];
   partial: PartialBlock[];

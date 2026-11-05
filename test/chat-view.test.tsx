@@ -163,6 +163,26 @@ describe('a prompt', () => {
   });
 });
 
+describe('the working line', () => {
+  const run = (extra: Partial<RunState>): RunState => ({ sessionId: 's', cwd: '/p', busy: true, settings: {}, permissions: [], partial: [], ...extra });
+
+  it('counts from when the turn began, or from when Claude asked', () => {
+    render(<MessageList sessionId="s" view={view({ run: run({ startedAt: Date.now() - 125_000 }) })} mode="normal" />);
+    expect(screen.getByText('2m 05s')).toBeTruthy();
+    cleanup();
+    const request = { id: 'p', sessionId: 's', toolName: 'Bash', input: {}, canRemember: false, createdAt: Date.now() - 20_000 };
+    render(<MessageList sessionId="s" view={view({ run: run({ startedAt: Date.now() - 125_000, permissions: [request] }) })} mode="normal" />);
+    expect(screen.getByText('Waiting for you')).toBeTruthy();
+    expect(screen.getByText('20s')).toBeTruthy();
+  });
+
+  it('falls back to the prompt that started the turn', () => {
+    const messagesNow: ChatMessage[] = [{ uuid: 'u', role: 'user', blocks: [{ type: 'text', text: 'Go' }], timestamp: Date.now() - 7000 }];
+    render(<MessageList sessionId="s" view={view({ messages: messagesNow, run: run({}) })} mode="normal" />);
+    expect(screen.getByText('7s')).toBeTruthy();
+  });
+});
+
 const tool = (name: string, input: Record<string, unknown>, content?: string, isError = false, extra: Partial<ToolCall> = {}): ToolCall => ({
   id: 't', name, input, ...(content !== undefined ? { result: { type: 'tool_result', tool_use_id: 't', content, ...(isError ? { is_error: true } : {}) } } : {}), ...extra,
 });

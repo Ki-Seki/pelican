@@ -480,14 +480,16 @@ function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Reco
   }
 }
 
-function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
+function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: number }) {
   const [now, setNow] = useState(Date.now());
-  const [since] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
   const hasText = run.partial.some((b) => b.type === 'text' && b.text);
+  // How long Claude has waited for you, or worked on this turn, as the terminal counts it; not
+  // since this page opened. With neither known, no number.
+  const start = run.permissions[0]?.createdAt ?? run.startedAt ?? since;
   return (
     <div>
       {run.partial.map((block, i) => {
@@ -516,7 +518,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
                 : run.activity?.kind === 'retrying' ? `The API is busy; trying again (${run.activity.attempt} of ${run.activity.max})`
                   : 'Working'}
           </span>
-          <span className="text-faint tabular-nums">{duration(now - since)}</span>
+          {start !== undefined && <span className="text-faint tabular-nums">{duration(Math.max(0, now - start))}</span>}
         </div>
       )}
     </div>
@@ -548,6 +550,8 @@ export function MessageList({
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
   const lastPrompt = [...items].reverse().find((i) => i.kind === 'user' && !i.command)?.key;
+  // When the running turn began, for a run that does not say: the prompt that started it.
+  const promptAt = items.findLast((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user' && !i.steered)?.timestamp;
 
   /**
    * After anything that changes the list's size or position: back to the end while following,
@@ -711,7 +715,7 @@ export function MessageList({
                   return null;
               }
             })}
-            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} />}
+            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} {...(promptAt ? { since: promptAt } : {})} />}
             {!busy && view.run?.error && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />

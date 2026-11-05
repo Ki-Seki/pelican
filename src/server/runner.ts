@@ -99,6 +99,8 @@ function readableError(text: string): string {
 
 export class SessionRun {
   busy = false;
+  /** When the running turn began: the chat counts its time from here, not from when it was opened. */
+  private startedAt?: number;
   closed = false;
   error?: string;
   lastActive = Date.now();
@@ -183,6 +185,7 @@ export class SessionRun {
       sessionId: this.sessionId,
       cwd: this.cwd,
       busy: this.busy,
+      ...(this.busy && this.startedAt ? { startedAt: this.startedAt } : {}),
       settings: this.settings,
       permissions: [...this.permissions.values()].map((p) => p.request),
       partial: this.partial.slice(this.completedBlocks).filter(Boolean),
@@ -233,6 +236,7 @@ export class SessionRun {
     if (this.busy === busy) return;
     this.busy = busy;
     this.lastActive = Date.now();
+    this.startedAt = busy ? this.lastActive : undefined;
     if (!busy) {
       this.partial = [];
       this.completedBlocks = 0;
