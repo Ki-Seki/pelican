@@ -68,9 +68,9 @@ export const DEMO_REPLY = STATIC_DEMO
 
 export const DEMO_STEER = 'In your own Pelican, Claude would read this at its next step.';
 
-/** What Claude says after the step that was waiting for you, for the edits the demo knows. */
+/** What Claude says after the step that was waiting for you, by request id (the server's demoRunState). */
 const AFTER: Record<string, string> = {
-  'demo-permission': 'The toggle is in place, next to the font size picker. Next I would remember the choice, so the theme stays after a reload.',
+  'demo-permission': 'The toggle is in place, next to the font size picker. Next I’d remember the choice, so the theme stays after a reload. The demo stops here.',
 };
 
 const FILE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);

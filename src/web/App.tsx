@@ -87,8 +87,6 @@ export function App() {
   }
   if (auth.data?.required && !auth.data.signedIn) {
     return (
-      <>
-      <Announcer />
       <Login
         mode={auth.data.mode}
         onSignedIn={() => {
@@ -97,7 +95,6 @@ export function App() {
           socket.reconnect();
         }}
       />
-      </>
     );
   }
   return (
@@ -152,7 +149,7 @@ function Main() {
   useEffect(() => setWaitingCount(needYou), [needYou]);
 
   // The computer out of reach, or live updates stopped: said in words, under the list's header.
-  const offline = useOffline();
+  const offline = useOffline(true);
   const said = useRef<Offline>(undefined);
   useEffect(() => {
     if (offline && offline !== said.current) announce(`${offlineWords(offline, info?.machine)} Retrying.`);

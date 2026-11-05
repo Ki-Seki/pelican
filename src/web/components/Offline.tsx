@@ -11,8 +11,11 @@ const PROBE_MS = 5000;
 /** unreachable: requests fail too (asleep, offline) · stale: requests work, live updates do not. */
 export type Offline = 'unreachable' | 'stale' | undefined;
 
-/** Whether the computer answers, and whether live updates arrive. */
-export function useOffline(): Offline {
+/**
+ * Whether the computer answers, and whether live updates arrive. The one caller with `probe`
+ * (App) asks the server now and then while something is down, so the words say which.
+ */
+export function useOffline(probe = false): Offline {
   const reachable = useReachable();
   const [connected, setConnected] = useState(socket.connected);
   const [down, setDown] = useState(false);
@@ -25,13 +28,12 @@ export function useOffline(): Offline {
     const timer = setTimeout(() => setDown(true), GRACE_MS);
     return () => clearTimeout(timer);
   }, [connected]);
-  // While something is down, ask the server now and then, so the words say which.
   useEffect(() => {
-    if (!down && reachable) return undefined;
+    if (!probe || (!down && reachable)) return undefined;
     void api.probe();
     const timer = setInterval(() => void api.probe(), PROBE_MS);
     return () => clearInterval(timer);
-  }, [down, reachable]);
+  }, [probe, down, reachable]);
   if (!reachable) return 'unreachable';
   return down ? 'stale' : undefined;
 }

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { MOD } from '../lib/keyboard';
-import { usePrefs } from '../lib/prefs';
+import { enterSends, usePrefs } from '../lib/prefs';
 import { Sheet, SheetHeading } from './Sheet';
 
 let shown = false;
@@ -43,12 +43,13 @@ export function ShortcutsSheet() {
     },
     () => shown,
   );
-  // This list opens from a keyboard, so on a computer: Auto means Enter sends.
-  const enterSends = usePrefs().enterToSend !== 'never';
+  usePrefs();
+  // The composer's own rule: Auto sends on Enter where the pointer is fine (not an iPad with a keyboard).
+  const enter = enterSends();
   return (
     <Sheet open={open} onClose={() => showShortcuts(false)} title="Keyboard shortcuts" done>
-      <Row label="Send" keys={enterSends ? ['Enter'] : [MOD, 'Enter']} {...(enterSends ? { or: [MOD, 'Enter'] } : {})} />
-      <Row label="New line" keys={enterSends ? ['Shift', 'Enter'] : ['Enter']} />
+      <Row label="Send" keys={enter ? ['Enter'] : [MOD, 'Enter']} {...(enter ? { or: [MOD, 'Enter'] } : {})} />
+      <Row label="New line" keys={enter ? ['Shift', 'Enter'] : ['Enter']} />
       <Row label="Stop Claude" keys={['Esc']} />
       <Row label="Search sessions" keys={[MOD, 'K']} />
       <Row label="Close a sheet" keys={['Esc']} />

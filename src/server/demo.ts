@@ -370,6 +370,7 @@ export function demoRunState(sessionId: string): RunState | undefined {
     settings: { model: 'default', effort: 'high', permissionMode: 'default' },
     partial: [],
     permissions: [{
+      // The web app's demo (src/web/lib/demo.ts) plays out Allow on this id with a reply of its own.
       id: 'demo-permission',
       sessionId,
       toolName: 'Edit',
