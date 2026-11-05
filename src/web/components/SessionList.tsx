@@ -93,7 +93,7 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
     <a
       href={sessionHref(session.id)}
       aria-label={rowName(session, unread, showProject)}
-      aria-describedby={session.preview ? preview : undefined}
+      aria-describedby={session.stopped || session.preview ? preview : undefined}
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       className={`relative block rounded-xl px-3 py-2.5 transition-colors ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
@@ -104,7 +104,10 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
         <div className={`line-clamp-2 min-w-0 flex-1 text-[15px] leading-snug ${unread ? 'font-semibold' : ''}`}>{session.title}</div>
         <span className="shrink-0 pt-0.5 text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
       </div>
-      {session.preview && <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
+      {/* A turn that ended on an error has no reply to show: why it stopped, quietly. */}
+      {session.stopped ? (
+        <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-faint">Stopped: {session.stopped}</div>
+      ) : session.preview && <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
       <div className="mt-1 flex items-center gap-2 text-[12.5px] text-muted">
         <StatusBadge status={session.status} runningIn={session.runningIn} />
         {showProject && <Where session={session} />}

@@ -723,6 +723,7 @@ export function Chat({
             // Can't reach the computer: the line under the header says so, and offers to retry.
             view={offline === 'unreachable' && view.error ? { ...view, error: undefined } : view}
             cwd={cwd}
+            {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
             {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
           />

@@ -35,6 +35,11 @@ export type SessionSummary = {
   runningIn?: string;
   /** Start of Claude's latest reply. */
   preview?: string;
+  /**
+   * The latest turn ended on an error Claude Code noted in place of a reply, in a few words ("not
+   * signed in"): the list shows that, not the error's text as Claude's reply.
+   */
+  stopped?: string;
 };
 
 export type TextBlock = { type: 'text'; text: string; truncated?: boolean };
@@ -81,6 +86,8 @@ export type ChatMessage = {
   sourceUuid?: string;
   /** Not Claude's reply: Claude Code's note that the API call failed (overloaded, too long, signed out). */
   apiError?: boolean;
+  /** Claude Code's code for that failure, when it gave one (`authentication_failed`, `overloaded`…). */
+  error?: string;
 };
 
 export type MessagesPage = {

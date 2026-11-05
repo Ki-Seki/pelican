@@ -1,4 +1,4 @@
-import { plainError } from '../../shared/errors';
+import { errorLine } from '../../shared/errors';
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
 import { todosOf } from '../../shared/tasks';
 
@@ -135,8 +135,11 @@ function classifyUserText(raw: string): Classified | undefined {
 
 const dayOf = (ms: number) => new Date(ms).toDateString();
 
-/** Groups a conversation into what the chat shows: prompts, Claude's turns, and notices. */
-export function buildItems(messages: ChatMessage[]): Item[] {
+/**
+ * Groups a conversation into what the chat shows: prompts, Claude's turns, and notices.
+ * `machine`: the computer Claude Code runs on, named where an error line says what to do there.
+ */
+export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   const results = new Map<string, ToolResultBlock>();
   for (const message of messages) {
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block);
@@ -181,7 +184,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
     // A failed API call is not Claude's reply: one line saying what went wrong, in plain words.
     if (message.apiError) {
       const text = message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n').trim();
-      push({ kind: 'notice', key: message.uuid, tone: 'error', text: plainError(text) ?? text });
+      push({ kind: 'notice', key: message.uuid, tone: 'error', text: errorLine(text, machine, message.error) ?? text });
       turn = undefined;
       continue;
     }

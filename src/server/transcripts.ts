@@ -2,6 +2,7 @@ import { readdir, stat } from 'node:fs/promises';
 import readline from 'node:readline';
 import path from 'node:path';
 
+import { stoppedBecause } from '../shared/errors.js';
 import { config } from './config.js';
 import { openRegular } from './open.js';
 
@@ -105,16 +106,29 @@ export function plainText(markdown: string): string {
 /** A code span, or emphasis around words: `**`, `__`, `*` or `_`, closed before a space, punctuation or the end. */
 const INLINE = /(`+)([^`]*?)\1|(^|[\s(])(\*\*|__|\*|_)(?![*_\s])(.*?[^*_\s])\4(?=$|\s|[).,;:!?](?:\s|$))/gm;
 
-/** Text blocks of an assistant row, as one line for a session-list preview. */
-function replyText(row: { message?: { content?: unknown } }): string | undefined {
+/** The text blocks of a row's message, joined. */
+function textOf(row: { message?: { content?: unknown } }): string {
   const content = row.message?.content;
-  if (!Array.isArray(content)) return undefined;
-  const text = plainText(content
+  if (!Array.isArray(content)) return '';
+  return content
     .filter((b): b is { type: string; text: string } => b?.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text)
-    .join('\n\n'));
+    .join('\n\n');
+}
+
+/** Text blocks of an assistant row, as one line for a session-list preview. */
+function replyText(row: { message?: { content?: unknown } }): string | undefined {
+  const text = plainText(textOf(row));
   return text ? text.slice(0, 160) : undefined;
 }
+
+type Row = {
+  type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown; forkedFrom?: unknown;
+  message?: { content?: unknown; model?: unknown }; isApiErrorMessage?: unknown; error?: unknown;
+};
+
+/** Claude Code's note that the API call failed, written as a reply of its own (in the stream: an `error` on a synthetic message). */
+const apiError = (row: Row) => row.isApiErrorMessage === true || (typeof row.error === 'string' && row.message?.model === '<synthetic>');
 
 /**
  * The last user or assistant row, read backwards from the end: its time, the
@@ -126,6 +140,8 @@ function replyText(row: { message?: { content?: unknown } }): string | undefined
  */
 export type LastTurn = {
   time: number; cwd?: string; gitBranch?: string; preview?: string;
+  /** The latest turn ended on an API error Claude Code noted in place of a reply: why, in a few words. */
+  stopped?: string;
   /** The row was copied from another session by a fork (it carries `forkedFrom`): nothing ran here then. */
   copied?: boolean;
   /** After its last turn the session went on in another one (a background session handed off). */
@@ -178,9 +194,7 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
         // Past the last turn, only rows with text matter: a reply, or the prompt that started the turn.
         if (found && !line.includes('"type":"text"') && !line.includes('"content":"')) continue;
         try {
-          const row = JSON.parse(line) as {
-            type?: string; timestamp?: string; isSidechain?: boolean; cwd?: unknown; gitBranch?: unknown; message?: { content?: unknown }; forkedFrom?: unknown;
-          };
+          const row = JSON.parse(line) as Row;
           if ((row.type !== 'user' && row.type !== 'assistant') || row.isSidechain || typeof row.timestamp !== 'string') continue;
           if (!found) {
             const time = Date.parse(row.timestamp);
@@ -195,9 +209,11 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
             foundAt = end;
           }
           if (row.type === 'assistant') {
+            // Not Claude's words: the list says why the turn stopped instead.
+            if (apiError(row)) return { ...found, stopped: stoppedBecause(textOf(row), typeof row.error === 'string' ? row.error : undefined) };
             const preview = replyText(row);
             if (preview) return { ...found, preview };
-          } else if (found && row.type === 'user' && typeof (row.message as { content?: unknown })?.content === 'string') {
+          } else if (found && row.type === 'user' && typeof row.message?.content === 'string') {
             // Reached the prompt before any reply text: the turn has said nothing yet.
             return found;
           }

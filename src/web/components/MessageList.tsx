@@ -535,16 +535,18 @@ function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: 
 }
 
 export function MessageList({
-  sessionId, view, cwd, mode, onEdit, onRewind,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind,
 }: {
   sessionId: string;
   view: SessionView;
   cwd?: string;
+  /** The computer Claude Code runs on, for error lines that say what to do there. */
+  machine?: string;
   mode: ViewMode;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
 }) {
-  const items = useMemo(() => buildItems(view.messages), [view.messages]);
+  const items = useMemo(() => buildItems(view.messages, machine), [view.messages, machine]);
   // The prompt this browser sent last, while it is on its way: sending always brings the end into view.
   const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
   const lastSending = useRef<string | undefined>(undefined);

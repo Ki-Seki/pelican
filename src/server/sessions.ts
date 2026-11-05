@@ -63,7 +63,7 @@ async function summarize(
     ...(cwd && folderKind(cwd) === 'scratch' ? { scratch: true } : {}),
     ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
     ...(runningIn ? { runningIn } : {}),
-    ...(lastTurn?.preview ? { preview: lastTurn.preview } : {}),
+    ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
     ...(archived.has(info.sessionId) ? { archived: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
