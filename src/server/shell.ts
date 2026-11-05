@@ -31,7 +31,7 @@ const KILL_AFTER_MS = 2000;
  * mode measures it: its `bashOutputMaxChars` setting, 30,000 unless set, held to 4,000 to 128,000.
  */
 export const INLINE_BYTES = { standard: 30_000, least: 4_000, most: 128_000 };
-/** How much of a longer output Claude Code saves to a file: 64 MB, past which it says it cut it. */
+/** How much of a longer output Claude Code saves to a file: 64 MB, from which on it says it cut it. */
 export const SAVED_BYTES = 64 * 1024 * 1024;
 /** How much of an output saved to a file Claude Code shows Claude in its place, in characters. */
 const PREVIEW_CHARS = 2_000;
@@ -399,7 +399,7 @@ function trimmed(text: string): string {
 
 /**
  * What Claude Code puts in the conversation in place of an output too long to go there, word for
- * word: where all of it was saved and how big it is (past 64 MB, that only the first 64 MB were
+ * word: where all of it was saved and how big it is (from 64 MB on, that only the first 64 MB were
  * saved), then its start as Claude would have had it, up to 2KB, ending with a line when one ends
  * past halfway. As in Claude Code, the start is not escaped.
  */
@@ -461,7 +461,7 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const NAME_LETTERS = '0123456789abcdefghijklmnopqrstuvwxyz';
 
 /** A session's tool-results folder, where Claude Code saves what is too long for the conversation: beside its transcript. */
-export async function toolResultsFolder(sessionId: string): Promise<string | undefined> {
+async function toolResultsFolder(sessionId: string): Promise<string | undefined> {
   if (!SESSION_ID.test(sessionId)) return undefined;
   const transcript = await transcriptPath(sessionId);
   return transcript ? path.join(path.dirname(transcript), sessionId, 'tool-results') : undefined;
