@@ -106,7 +106,7 @@ export type SideChatState = {
  * one at a time: opening it puts that pane aside, closing it brings the pane back, and asking for
  * the pane (its button, Cmd/Ctrl+Shift+D) closes the side chat.
  */
-export function useSideChat(available: boolean, pane: Pane): SideChatState {
+export function useSideChat(available: boolean, pane: Pane, keysBack?: () => void): SideChatState {
   const beside = useMedia(BESIDE);
   const roomy = useMedia(ROOMY);
   const [open, setOpen] = useState(false);
@@ -137,12 +137,18 @@ export function useSideChat(available: boolean, pane: Pane): SideChatState {
     else then();
   }, [toggle]);
 
+  // Closed, the keys go back to what had them, or to the message box when that has gone (the
+  // session menu it was opened from).
+  const giveKeys = useRef(keysBack);
+  giveKeys.current = keysBack;
   useEffect(() => {
     if (open) return;
     const back = opener.current;
     opener.current = null;
     const lost = !document.activeElement || document.activeElement === document.body;
-    if (lost && back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
+    if (!lost || !back) return;
+    if (back instanceof HTMLElement && back.isConnected) back.focus({ preventScroll: true });
+    else giveKeys.current?.();
   }, [open]);
 
   useEffect(() => {

@@ -184,10 +184,11 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, o
 }
 
 /**
- * What Chat can do to the composer from outside: files dropped anywhere on the conversation, and
- * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts).
+ * What Chat can do to the composer from outside: files dropped anywhere on the conversation,
+ * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts), and
+ * giving the box the keys.
  */
-export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void };
+export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void; focus: () => void };
 
 /** A finished upload as it comes back from a saved draft: the file is on the server already. */
 const restored = (a: Attachment): Upload => ({
@@ -195,6 +196,18 @@ const restored = (a: Attachment): Upload => ({
 });
 
 const MODE_HINT: Record<SendMode, string> = { steer: 'Claude reads it at its next step', queue: 'Sent when this turn ends' };
+
+/**
+ * Gives the box the keys with `put`, now or, when a sheet still on its way out holds the rest of
+ * the page (the session menu, after its Side chat or Add to message), once it has gone and given
+ * the keys back to what opened it.
+ */
+function takeKeys(box: HTMLTextAreaElement | null, put: () => void): void {
+  put();
+  if (box && document.activeElement !== box) {
+    [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
+  }
+}
 
 /**
  * Text to put in the box, a new `key` each time: a prompt to edit, a suggestion. `append` adds it
@@ -324,14 +337,7 @@ export function Composer({
       el.setSelectionRange(next.length, next.length);
       setCaret(next.length);
     };
-    requestAnimationFrame(() => {
-      put();
-      // The sheet that put it here (Add to message) may still be on its way out, holding the rest
-      // of the page; once it has gone, and given focus back to what opened it, the box takes it.
-      if (area.current && document.activeElement !== area.current) {
-        [...document.querySelectorAll('dialog[open]')].at(-1)?.addEventListener('close', put, { once: true });
-      }
-    });
+    requestAnimationFrame(() => takeKeys(area.current, put));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
 
@@ -412,9 +418,9 @@ export function Composer({
   }, [text, hint]);
 
   // On a phone too: a new session opens ready to type, with the keyboard up where the browser
-  // lets a page raise it.
+  // lets a page raise it. A side chat opened from the session menu has the keys once the menu has gone.
   useEffect(() => {
-    if (autoFocus) area.current?.focus();
+    if (autoFocus) takeKeys(area.current, () => area.current?.focus());
   }, [autoFocus]);
 
   const addFiles = (files: FileList | File[]) => {
@@ -431,6 +437,7 @@ export function Composer({
   useImperativeHandle(ref, () => ({
     addFiles,
     saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes),
+    focus: () => area.current?.focus({ preventScroll: true }),
   }));
 
   const forget = (u: Upload) => {

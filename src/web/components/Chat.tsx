@@ -560,7 +560,8 @@ export function Chat({
   const workspace = useWorkspacePane(Boolean(cwd));
   // A side chat has none of its own; Changes and files and it take turns beside the conversation,
   // one on screen at a time.
-  const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace);
+  const composer = useRef<ComposerHandle>(null);
+  const side = useSideChat(Boolean(sessionId) && !session?.sideChatOf, workspace, () => composer.current?.focus());
   const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
@@ -735,7 +736,6 @@ export function Chat({
   }, [sessionId, thought]);
 
   // Files dropped anywhere on the conversation go to the composer.
-  const composer = useRef<ComposerHandle>(null);
   const [dropping, setDropping] = useState(false);
   const dragDepth = useRef(0);
   const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes('Files');

@@ -73,6 +73,13 @@ beforeAll(() => {
     this.removeAttribute('open');
     setTimeout(() => this.dispatchEvent(new Event('close')), 0);
   };
+  // As in a browser: behind an open modal dialog, or in an inert one, nothing takes focus.
+  const focus = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function focusUnlessInert(this: HTMLElement, options?: FocusOptions) {
+    const top = [...document.querySelectorAll('dialog[open]')].at(-1);
+    if (this.closest('[inert]') || (top && !top.contains(this))) return;
+    focus.call(this, options);
+  };
 });
 
 const { Chat } = await import('../src/web/components/Chat');
@@ -158,6 +165,19 @@ describe('the side chat', () => {
     type('Side question', 'Where are the logs?');
     await waitFor(() => expect(server.side).toHaveLength(2));
     expect(server.sent).toEqual([]);
+  });
+
+  it('opened from the session menu on a computer, has the keys once the menu has gone; closed, they go to the message box', async () => {
+    computer(1280);
+    session();
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Side question')));
+    fireEvent.keyDown(screen.getByLabelText('Side question'), { key: 'Escape' });
+    expect(pane()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText('Message Claude'));
   });
 
   it('takes the place of Changes and files beside the conversation, which comes back when it closes or is asked for', async () => {
