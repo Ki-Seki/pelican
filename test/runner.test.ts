@@ -135,6 +135,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
 
 const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, oneLine, runTasks, startSideChat } = await import('../src/server/runner');
 const { sideChatPrompt } = await import('../src/server/side-chat');
+const { fork } = await import('../src/server/actions');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
@@ -994,6 +995,16 @@ describe('side chats', () => {
     expect(again.options).toMatchObject({ resume: side, tools: ['Read', 'Grep', 'Glob'], strictMcpConfig: true, permissionMode: 'dontAsk', allowDangerouslySkipPermissions: false });
     await settle();
     expect(again.prompts.map(textOf)).toEqual([sideChatPrompt('And where is it kept?')]);
+  });
+
+  it('branched from one of their questions (an earlier prompt edited), go on as side chats', async () => {
+    const parent = await session();
+    const side = await startSideChat(parent.id, { text: 'Why CSS variables?', settings: {} });
+    getRun(side)!.close();
+    await settle();
+    const branch = await fork(side);
+    await sendMessage({ sessionId: branch }, { text: 'Why not classes?', attachments: [], settings: { permissionMode: 'acceptEdits' } });
+    expect(claudes.at(-1)!.options).toMatchObject({ resume: branch, tools: ['Read', 'Grep', 'Glob'], permissionMode: 'dontAsk', allowDangerouslySkipPermissions: false });
   });
 });
 

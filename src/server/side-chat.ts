@@ -1,8 +1,9 @@
+import path from 'node:path';
+
 import type { CanUseTool, Options } from '@anthropic-ai/claude-agent-sdk';
 
 import type { RunSettings } from '../shared/protocol.js';
-import { sessionInfo, sessionTitle } from './sessions.js';
-import { firstTurnSession, transcriptPath } from './transcripts.js';
+import { everTitled, firstTurnSession, transcriptPath } from './transcripts.js';
 
 /**
  * Side chats, as Claude Desktop has them ("Ask a side question without derailing the session"):
@@ -66,17 +67,29 @@ export function sideChatSettings(settings: RunSettings): RunSettings {
 /** A / command, which a side chat does not take: one could run what the folder brings. */
 export const SIDE_CHAT_COMMAND = /^\/[\w:.-]+(?:\s|$)/;
 
+/** How many copies of copies are followed back to the session they all start from. */
+const COPIES_FOLLOWED = 8;
+
 /**
- * The session a side chat copies; undefined for any other session. A side chat is a session with
- * Desktop's title whose transcript starts as a copy of another (transcripts.ts, firstTurnSession),
- * as the session list tells them.
+ * The session a transcript's side chat copies; undefined for any other transcript. A side chat
+ * starts as a copy of another session (transcripts.ts, firstTurnSession) and was titled "Side
+ * chat" under its own id, wherever in the file: after it, Claude Code writes the title it resumed
+ * with, the session's own, when its Claude exits, as it does in most of Claude Desktop's. A copy
+ * of a side chat (a branch from one of its questions) is a side chat of the same session.
  */
+export async function sideChatSource(file: string, followed = 0): Promise<string | undefined> {
+  const from = await firstTurnSession(file);
+  if (!from || from === path.basename(file, '.jsonl')) return undefined;
+  const copied = followed < COPIES_FOLLOWED ? await transcriptPath(from) : undefined;
+  const outer = copied ? await sideChatSource(copied, followed + 1) : undefined;
+  if (outer) return outer;
+  return (await everTitled(file, SIDE_CHAT_TITLE)) ? from : undefined;
+}
+
+/** The session a side chat copies, as the session list tells them; undefined for any other session. */
 export async function sideChatOf(sessionId: string): Promise<string | undefined> {
-  const info = await sessionInfo(sessionId);
-  if (!info || sessionTitle(info) !== SIDE_CHAT_TITLE) return undefined;
   const file = await transcriptPath(sessionId);
-  const from = file ? await firstTurnSession(file) : undefined;
-  return from && from !== sessionId ? from : undefined;
+  return file ? sideChatSource(file) : undefined;
 }
 
 export const isSideChat = async (sessionId: string): Promise<boolean> => Boolean(await sideChatOf(sessionId));

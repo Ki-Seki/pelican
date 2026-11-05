@@ -12,7 +12,8 @@ import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
-import { firstTurnSession, forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
+import { sideChatSource } from './side-chat.js';
+import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
 /** How much background work runs in a session this app runs (runner's runTasks). */
@@ -61,9 +62,8 @@ async function summarize(
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
   const title = sessionTitle(info, lastTurn?.summarized) ?? 'Untitled session';
-  // Claude Desktop's side chats: a copy of a conversation with a question or two of its own.
-  const copiedFrom = file && title === 'Side chat' ? await firstTurnSession(file) : undefined;
-  const sideChatOf = copiedFrom && copiedFrom !== info.sessionId ? copiedFrom : undefined;
+  // Side chats, Claude Desktop's and Pelican's: a copy of a conversation with a question or two of its own.
+  const sideChatOf = fresh ? fresh.sideChatOf : file ? await sideChatSource(file) : undefined;
   return {
     id: info.sessionId,
     title,
@@ -89,8 +89,11 @@ async function summarize(
 const defined = <T extends object>(value: T): Partial<T> =>
   Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
 
-/** A transcript as the list last saw it: its size and time then, and what the SDK made of it (null: nothing to list). */
-type Seen = { id: string; file: string; size: number; mtimeMs: number; info: SDKSessionInfo | null; continuedIn?: string };
+/**
+ * A transcript as the list last saw it: its size and time then, what the SDK made of it (null:
+ * nothing to list), and the session it is a side chat of.
+ */
+type Seen = { id: string; file: string; size: number; mtimeMs: number; info: SDKSessionInfo | null; continuedIn?: string; sideChatOf?: string };
 
 /** Every transcript the list has seen, by path. */
 const seen = new Map<string, Seen>();
@@ -129,7 +132,8 @@ async function refresh(): Promise<SDKSessionInfo[]> {
     const dir = seen.get(entry.file)?.info?.cwd ?? turn?.cwd;
     const info = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
       ?? await getSessionInfo(entry.id).catch(() => undefined);
-    seen.set(entry.file, { ...entry, info: info ?? null, ...(turn?.continuedIn ? { continuedIn: turn.continuedIn } : {}) });
+    const sideChatOf = info ? await sideChatSource(entry.file) : undefined;
+    seen.set(entry.file, { ...entry, info: info ?? null, ...(turn?.continuedIn ? { continuedIn: turn.continuedIn } : {}), ...(sideChatOf ? { sideChatOf } : {}) });
   })));
   files.clear();
   for (const entry of seen.values()) {

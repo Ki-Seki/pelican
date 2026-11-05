@@ -91,6 +91,75 @@ describe('a side chat', () => {
     const branch = await fork(id(1));
     expect(await isSideChat(branch)).toBe(false);
   });
+
+  it('branched from one of its questions, stays a side chat of the same session', async () => {
+    const side = await fork(id(1), undefined, SIDE_CHAT_TITLE);
+    // Claude Code names the branch "Side chat (fork)", and its rows name the side chat they came from.
+    const branch = await fork(side);
+    expect((await getSessionInfo(branch, { dir: folder }))?.customTitle).toBe('Side chat (fork)');
+    expect(await sideChatOf(branch)).toBe(id(1));
+  });
+});
+
+describe('Claude Desktop’s side chats, as they are left on disk', () => {
+  /**
+   * The session's rows copied with their ids, its title rows too, then the side chat's own: Desktop
+   * titles it "Side chat", the question and answer, and, when its Claude exits, Claude Code writes
+   * the title it resumed with, the session's.
+   */
+  const desktopSideChat = (side: string, parent: string, between: object[] = []) => jsonl([
+    ...conversation(parent, folder),
+    { type: 'agent-name', agentName: 'Add a dark theme', sessionId: parent },
+    { type: 'custom-title', customTitle: 'Side chat', sessionId: side },
+    { type: 'user', uuid: row(side, 3), parentUuid: row(parent, 2), sessionId: side, cwd: folder, timestamp: at(5), message: { role: 'user', content: 'Why variables?' } },
+    {
+      type: 'assistant', uuid: row(side, 4), parentUuid: row(side, 3), sessionId: side, cwd: folder, timestamp: at(4),
+      message: { id: 'msg_4', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'One set of values serves both themes.' }] },
+    },
+    ...between,
+    { type: 'custom-title', customTitle: 'Add a dark theme', sessionId: side },
+    { type: 'agent-name', agentName: 'Add a dark theme', sessionId: side },
+    { type: 'mode', mode: 'normal', sessionId: side },
+  ]);
+
+  it('stay folded under their session once Claude Code has titled them as the session again, not listed as a second one', async () => {
+    const side = id(4);
+    await writeFile(path.join(project, `${side}.jsonl`), desktopSideChat(side, id(1)));
+    await refreshTranscriptIndex();
+    expect(await sideChatOf(side)).toBe(id(1));
+    expect(await isSideChat(side)).toBe(true);
+    const listed = await listSummaries(() => undefined);
+    // Titled as Claude Code titles it, and said to be a side chat of the session.
+    expect(listed.find((s) => s.id === side)).toMatchObject({ title: 'Add a dark theme', sideChatOf: id(1) });
+    expect(listed.filter((s) => !s.sideChatOf && s.title === 'Add a dark theme').map((s) => s.id)).toEqual([id(1)]);
+  });
+
+  it('are told apart by their own "Side chat" title wherever it is: after a long side conversation too', async () => {
+    const side = id(5);
+    const long = Array.from({ length: 3 }, (_, n) => ({
+      type: 'assistant', uuid: row(side, 10 + n), parentUuid: row(side, 4), sessionId: side, cwd: folder, timestamp: at(3),
+      message: { id: `msg_${10 + n}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'x'.repeat(800_000) }] },
+    }));
+    await writeFile(path.join(project, `${side}.jsonl`), desktopSideChat(side, id(1), long));
+    await refreshTranscriptIndex();
+    expect(await sideChatOf(side)).toBe(id(1));
+    expect((await listSummaries(() => undefined)).find((s) => s.id === side)?.sideChatOf).toBe(id(1));
+  });
+
+  it('a copy that holds a "Side chat" title only among the rows it copied is none', async () => {
+    // A session that was itself titled "Side chat", copied: the title is the session's, not the copy's.
+    const named = id(6);
+    const copy = id(7);
+    await writeFile(path.join(project, `${named}.jsonl`), jsonl([{ type: 'custom-title', customTitle: 'Side chat', sessionId: named }, ...conversation(named, folder).slice(1)]));
+    await writeFile(path.join(project, `${copy}.jsonl`), jsonl([
+      { type: 'custom-title', customTitle: 'Side chat', sessionId: named },
+      ...conversation(named, folder).slice(1),
+      { type: 'custom-title', customTitle: 'Try it another way', sessionId: copy },
+    ]));
+    await refreshTranscriptIndex();
+    expect(await sideChatOf(copy)).toBeUndefined();
+    expect((await listSummaries(() => undefined)).find((s) => s.id === copy)?.sideChatOf).toBeUndefined();
+  });
 });
 
 describe('what a side chat runs with', () => {

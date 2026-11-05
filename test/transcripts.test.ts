@@ -1,10 +1,10 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { firstTurnSession, readLastTurn } from '../src/server/transcripts';
+import { everTitled, firstTurnSession, readLastTurn, TITLE_READ } from '../src/server/transcripts';
 
 let dir: string;
 beforeAll(async () => {
@@ -107,5 +107,50 @@ describe('firstTurnSession', () => {
       row({ type: 'user', sessionId: 'forked', forkedFrom: { sessionId: 'parent', messageUuid: 'm1' }, message: { role: 'user', content: 'from the parent' }, timestamp: '2026-11-02T09:00:00Z' }),
     ]);
     expect(await firstTurnSession(copy)).toBe('forked');
+  });
+});
+
+describe('everTitled', () => {
+  const title = (sessionId: string, customTitle = 'Side chat') => row({ type: 'custom-title', customTitle, sessionId });
+  const turn = (sessionId: string, content: string) => row({ type: 'user', sessionId, message: { role: 'user', content }, timestamp: '2026-11-02T09:00:00Z' });
+
+  it('finds a title given under the file’s own id anywhere in it, not one copied with another session’s rows', async () => {
+    // Claude Desktop's side chat once its Claude has exited: the title it resumed with comes last.
+    const side = await write('titled.jsonl', [title('parent', 'Add a dark theme'), turn('parent', 'Add a dark theme'), title('titled'), turn('titled', 'Why?'), title('titled', 'Add a dark theme')]);
+    expect(await everTitled(side, 'Side chat')).toBe(true);
+    expect(await everTitled(side, 'Add a dark theme')).toBe(true);
+    // A session titled "Side chat" itself, copied: its row names that session, not the copy.
+    const copied = await write('copied.jsonl', [title('parent'), turn('parent', 'Hi'), title('copied', 'Branch')]);
+    expect(await everTitled(copied, 'Side chat')).toBe(false);
+    // Text that only names such a row is no row.
+    const named = await write('named.jsonl', [turn('named', JSON.stringify({ type: 'custom-title', customTitle: 'Side chat', sessionId: 'named' }))]);
+    expect(await everTitled(named, 'Side chat')).toBe(false);
+    expect(await everTitled(path.join(dir, 'missing.jsonl'), 'Side chat')).toBe(false);
+  });
+
+  it('reads a long file in parts: past a line far too long to be a title, and a title across two parts', async () => {
+    // A line longer than a part, then rows up to just before where the second part ends, and the title across it.
+    const long = turn('parts', 'x'.repeat(TITLE_READ + 1000));
+    const filler = (bytes: number) => row({ type: 'progress', data: 'y'.repeat(bytes - row({ type: 'progress', data: '' }).length - 1) });
+    const before = Buffer.byteLength(`${long}\n`);
+    const file = await write('parts.jsonl', [long, filler(2 * TITLE_READ - 10 - before), title('parts'), turn('parts', 'And then?')]);
+    expect(await everTitled(file, 'Side chat')).toBe(true);
+    const none = await write('parts-none.jsonl', [long, filler(2 * TITLE_READ - 10 - before), title('parts-none', 'Other')]);
+    expect(await everTitled(none, 'Side chat')).toBe(false);
+  });
+
+  it('reads on as the file grows, a row still being written included, and from the start once it is rewritten', async () => {
+    const file = await write('grows.jsonl', [turn('grows', 'Hi')]);
+    expect(await everTitled(file, 'Side chat')).toBe(false);
+    const row = title('grows');
+    await appendFile(file, row.slice(0, 20));
+    expect(await everTitled(file, 'Side chat')).toBe(false);
+    await appendFile(file, `${row.slice(20)}\n`);
+    expect(await everTitled(file, 'Side chat')).toBe(true);
+    // Rewritten, shorter: what was read before does not count.
+    const other = await write('rewritten.jsonl', [turn('rewritten', 'x'.repeat(500)), title('rewritten', 'Other')]);
+    expect(await everTitled(other, 'Side chat')).toBe(false);
+    await writeFile(other, `${title('rewritten')}\n`);
+    expect(await everTitled(other, 'Side chat')).toBe(true);
   });
 });

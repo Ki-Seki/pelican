@@ -48,6 +48,12 @@ from every app.
 - Commit, Push and Create PR, on the branch line, put a request to Claude in the message box, so
   your rules, hooks and attribution apply. Pelican runs no git that changes anything.
 
+### Sessions and the list
+
+- Claude Desktop's side chats stay folded under their session also once Claude Code has given
+  them the session's title again, as it does when their Claude exits; most showed as more sessions
+  with that title.
+
 ### The conversation
 
 - A failed request at the end of the conversation offers Retry, which sends the prompt again with
@@ -67,7 +73,8 @@ from every app.
 - Changes and files reads only regular files inside the session's folder, links followed and
   checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
   config, an empty environment, no git and no links followed.
-- A side chat only reads, asks for nothing, and takes no `/` or `!` commands.
+- A side chat only reads, asks for nothing, and takes no `/` or `!` commands. A side chat branched
+  from one of its questions is one too.
 - Notification buttons go through the same checks as the page, and Allow is offered only for what
   the notification shows in full: a command on one line, without hidden characters, that runs as
   shown.
