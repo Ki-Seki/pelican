@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment, RunState, SessionSummary } from '../src/shared/protocol';
@@ -33,6 +33,10 @@ vi.mock('../src/web/lib/api', async (original) => {
       usage: async () => [],
       defaults: async () => ({ permissionMode: null }),
       completions: async () => ({ commands: [], agents: [] }),
+      projects: async () => [
+        { path: '/code/app', name: 'app', lastActivity: Date.now() - 60_000, sessions: 2 },
+        { path: '/code/site', name: 'site', lastActivity: Date.now() - 120_000, sessions: 1 },
+      ],
       git: async () => ({ repo: false }),
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...server.session },
@@ -182,5 +186,35 @@ describe('/clear', () => {
     expect(loadDraft(SESSION)).toBeUndefined();
     session();
     expect(box().value).toBe('');
+  });
+});
+
+describe('a new session moved to another folder before it starts', () => {
+  it('takes what is typed, and the mode picked, along', async () => {
+    const onStartIn = vi.fn();
+    wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={onStartIn} />);
+    fireEvent.change(box(), { target: { value: 'A long prompt I wrote before noticing the folder was wrong' } });
+    fireEvent.click(screen.getByLabelText('Permission mode'));
+    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Plan'));
+    fireEvent.click(screen.getByLabelText(`Folder: ${CWD}`));
+    fireEvent.click(await screen.findByText('site'));
+    expect(onStartIn).toHaveBeenCalledWith({ cwd: '/code/site' });
+    cleanup();
+    expect(loadDraft(`new:${CWD}`)).toBeUndefined();
+    wrap(<Chat newCwd="/code/site" home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    expect(box().value).toBe('A long prompt I wrote before noticing the folder was wrong');
+    await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Plan'));
+  });
+
+  it('never takes Bypass along: in the other folder it starts as a new session there does', async () => {
+    wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    fireEvent.click(screen.getByLabelText('Permission mode'));
+    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Bypass permissions'));
+    expect(screen.getByLabelText('Permission mode').textContent).toBe('Bypass');
+    fireEvent.click(screen.getByLabelText(`Folder: ${CWD}`));
+    fireEvent.click(await screen.findByText('site'));
+    cleanup();
+    wrap(<Chat newCwd="/code/site" home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Auto'));
   });
 });

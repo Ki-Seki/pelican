@@ -8,7 +8,7 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
-import { clearDraft } from '../lib/drafts';
+import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
@@ -700,6 +700,20 @@ export function Chat({
     void queryClient.invalidateQueries({ queryKey: ['sessions'] });
   };
 
+  // Another folder picked for a new session before it starts: what is typed goes along, and so
+  // do the settings picked here; the mode only when one was picked, and never Bypass, which was
+  // picked for the other folder.
+  const startIn = (start: Start) => {
+    const next = `new:${'scratch' in start ? 'scratch' : start.cwd}`;
+    composer.current?.saveDraft();
+    moveDraft(viewId, next);
+    if (chosen.current) {
+      const { permissionMode, ...rest } = settings;
+      carried.set(next, modePicked && permissionMode && permissionMode !== 'bypassPermissions' ? { ...rest, permissionMode } : rest);
+    }
+    onStartIn(start);
+  };
+
   return (
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
@@ -765,7 +779,7 @@ export function Chat({
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
             <div className="min-w-0 max-w-full">
               <div className="text-[17px] font-medium">What should Claude do?</div>
-              <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={onStartIn} />
+              <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={startIn} />
             </div>
           </div>
         )}

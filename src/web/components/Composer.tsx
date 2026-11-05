@@ -178,8 +178,11 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined): 
   }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading]);
 }
 
-/** What Chat can do to the composer from outside: files dropped anywhere on the conversation. */
-export type ComposerHandle = { addFiles: (files: FileList | File[]) => void };
+/**
+ * What Chat can do to the composer from outside: files dropped anywhere on the conversation, and
+ * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts).
+ */
+export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void };
 
 /** A finished upload as it comes back from a saved draft: the file is on the server already. */
 const restored = (a: Attachment): Upload => ({
@@ -378,7 +381,10 @@ export function Composer({
         .catch((error: Error) => setUploads((list) => list.map((u) => (u.key === key ? { ...u, error: error.message, note: isDemoNote(error) } : u))));
     }
   };
-  useImperativeHandle(ref, () => ({ addFiles }));
+  useImperativeHandle(ref, () => ({
+    addFiles,
+    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : []))),
+  }));
 
   const forget = (u: Upload) => {
     if (u.preview?.startsWith('blob:')) URL.revokeObjectURL(u.preview);
