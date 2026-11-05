@@ -79,7 +79,7 @@ pelican</code></pre>
 
       <h3 id="claude-code">Which Claude Code runs</h3>
       <p>Pelican runs the Claude Code its Agent SDK brings, at the version Pelican was tested with: the SDK is pinned, and the package ships the exact dependency tree its tests ran on. The start banner says which Claude Code runs and whether it is signed in; if it is not, <code>pelican login</code> signs it in with Claude Code’s own login. Settings › About shows the version too, and <code>pelican --version</code> prints the versions of Pelican, Claude Code, the Agent SDK and Node on one line, the line to put in a bug report.</p>
-      <p>Each Pelican release moves to the newest Agent SDK once the tests pass, so updating Pelican is how its Claude Code gets updated. When the <code>claude</code> in your terminal is newer, Pelican says so. To run that one instead, start Pelican with <code>PELICAN_CLAUDE_PATH="$(command -v claude)"</code>.</p>
+      <p>Each Pelican release moves to the newest Agent SDK once the tests pass, so updating Pelican is how its Claude Code gets updated. When the <code>claude</code> in your terminal is newer, the start banner and Settings › About say so. To run that one instead, start Pelican with <code>PELICAN_CLAUDE_PATH="$(command -v claude)"</code>.</p>
 
       <h3 id="running">Keep it running</h3>
       <p>Pelican only answers while it runs. This keeps it running in the background: it starts when you log in, and again if it stops.</p>
@@ -117,7 +117,7 @@ pelican phone</code></pre>
       <h2>Using Pelican</h2>
 
       <h3 id="sessions">Sessions</h3>
-      <p>The list shows every Claude Code session on the computer, whichever app started it: the terminal, Claude Desktop, VS Code or Pelican. A dot marks what changed since you last looked, and a bar marks the session that is open. A session’s title is the name you gave it or Claude Code’s summary of it; without either, its first prompt, cut to about one line. The browser tab shows the open session and how many sessions need you.</p>
+      <p>The list shows every Claude Code session on the computer, whichever app started it: the terminal, Claude Desktop, VS Code or Pelican. A dot marks what changed since you last looked, and a bar marks the session that is open. A session’s title is the name you gave it or the one Claude Code wrote; without one, the text of a prompt, cut to one line. The browser tab shows the open session and how many sessions need you.</p>
       <p>Search covers titles, folders and the latest reply. Filter by project; sessions started without a project share one <b>Scratch</b> filter, and runs in the system’s temp folder (usually started by another session) stay out of <b>All</b> unless the list’s options say otherwise. Group by time or by project, with detailed or compact rows, from the button next to the search. Long lists load as you scroll, and a row opens in a new tab with ⌘-click (Ctrl-click).</p>
       <p>A session whose turn is over but whose background tasks still run shows how many, as <b>2 tasks</b> with a steady dot, among the active ones; it says <b>Working</b> again when Claude takes up what they found. A session Claude Code stopped before it could reply says why instead of a reply, such as <b>Stopped: not signed in</b>.</p>
       <p>To archive a session, swipe its row left on a phone, or use the archive button that shows when you point at it on a computer; Undo shows for five seconds. Archived sessions wait under <b>Archived</b>, in the list’s options, to be unarchived the same way. Archiving takes a session off the list and changes nothing else; it is Pelican’s own, apart from Claude Desktop’s.</p>
@@ -153,7 +153,7 @@ pelican phone</code></pre>
           <tr><td>Bypass permissions</td><td>Runs everything without asking. Only for a machine that holds nothing you would miss.</td></tr>
         </tbody>
       </table>
-      <p>New sessions start in the mode picked under Settings › New sessions start with: Manual, Accept edits, Plan or Auto. Until you pick one there, they start in the <code>permissions.defaultMode</code> of your Claude Code settings (a folder’s own settings count once Claude has worked there), and otherwise in Auto, or in Manual where the model has no Auto. Bypass is never a default: pick it in the session itself. A branch, or an earlier prompt you edit, starts in that default too, never in Bypass.</p>
+      <p>New sessions start in the mode picked in this browser under Settings › New sessions start with: Manual, Accept edits, Plan or Auto. Until you pick one there, they start in the <code>permissions.defaultMode</code> of your Claude Code settings (a folder’s own settings count once Claude has worked there), and otherwise in Auto, or in Manual where the model has no Auto. Bypass is never a default: pick it in the session itself. A branch, an edited earlier prompt or a <code>/clear</code> of a session in Bypass starts in that default too, not in Bypass.</p>
       <p>A session in Claude Code’s Don’t ask mode keeps it and shows it; Pelican does not offer it. When the mode changes without being picked in Pelican, for example when Claude leaves Plan, a short line in the conversation says so.</p>
 
       <h3 id="working">While Claude works</h3>
