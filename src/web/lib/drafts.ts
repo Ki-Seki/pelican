@@ -14,11 +14,17 @@ const KEEP = 50;
 const MAX_TEXT = 100_000;
 
 /**
- * `quotes`: those waiting above the message box (lib/quote), which go above the words when sent.
- * `held`: what came back from a send that failed but could not share the box with what was typed
- * since (a `!` or `/` command, or a message beside one), waiting above the box to be put back.
+ * What waits above the message box to be put back: a message that came back from a send that
+ * failed but could not share the box with what was there (a `!` or `/` command, or a message
+ * beside one), its words and its files.
  */
-export type Draft = { text: string; attachments?: Attachment[]; quotes?: string[]; held?: string[]; at: number };
+export type Held = { text: string; attachments?: Attachment[] };
+
+/**
+ * `quotes`: those waiting above the message box (lib/quote), which go above the words when sent.
+ * `held`: what waits above the box to be put back.
+ */
+export type Draft = { text: string; attachments?: Attachment[]; quotes?: string[]; held?: Held[]; at: number };
 
 /**
  * A message with its quotes above the words, as Claude reads it: each block apart from the next.
@@ -60,16 +66,31 @@ function writeAll(all: Record<string, Draft>): void {
 /** The texts of a list kept in storage, without anything else that may be there. */
 const texts = (list: unknown): string[] => (Array.isArray(list) ? list.filter((q): q is string => typeof q === 'string' && q.trim().length > 0) : []);
 
+const isAttachment = (a: unknown): a is Attachment =>
+  Boolean(a) && typeof a === 'object' && ['id', 'name', 'mime', 'path'].every((key) => typeof (a as Record<string, unknown>)[key] === 'string') && typeof (a as Attachment).size === 'number';
+
+/**
+ * What waits to be put back, as kept in storage, without anything else that may be there: words,
+ * files, or both. A text alone is one kept by Pelican before waiting messages kept their files.
+ */
+const helds = (list: unknown): Held[] => (Array.isArray(list) ? list.flatMap((h: unknown) => {
+  const entry = typeof h === 'string' ? { text: h } : h as Partial<Held> | null;
+  if (!entry || typeof entry.text !== 'string') return [];
+  const attachments = Array.isArray(entry.attachments) ? entry.attachments.filter(isAttachment) : [];
+  if (!entry.text.trim() && attachments.length === 0) return [];
+  return [{ text: entry.text, ...(attachments.length > 0 ? { attachments } : {}) }];
+}) : []);
+
 export function loadDraft(viewId: string): Draft | undefined {
   const draft = readAll()[viewId];
   if (!draft || typeof draft.text !== 'string') return undefined;
   const { quotes, held, ...rest } = draft;
   const keptQuotes = texts(quotes);
-  const keptHeld = texts(held);
+  const keptHeld = helds(held);
   return { ...rest, ...(keptQuotes.length > 0 ? { quotes: keptQuotes } : {}), ...(keptHeld.length > 0 ? { held: keptHeld } : {}) };
 }
 
-export function saveDraft(viewId: string, text: string, attachments: Attachment[] = [], quotes: string[] = [], held: string[] = []): void {
+export function saveDraft(viewId: string, text: string, attachments: Attachment[] = [], quotes: string[] = [], held: Held[] = []): void {
   const all = readAll();
   if (!text.trim() && attachments.length === 0 && quotes.length === 0 && held.length === 0) {
     if (!(viewId in all)) return;
@@ -79,7 +100,7 @@ export function saveDraft(viewId: string, text: string, attachments: Attachment[
       text: text.slice(0, MAX_TEXT),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(quotes.length > 0 ? { quotes: quotes.map((q) => q.slice(0, MAX_TEXT)) } : {}),
-      ...(held.length > 0 ? { held: held.map((h) => h.slice(0, MAX_TEXT)) } : {}),
+      ...(held.length > 0 ? { held: held.map((h) => ({ ...h, text: h.text.slice(0, MAX_TEXT) })) } : {}),
       at: Date.now(),
     };
   }
@@ -97,7 +118,7 @@ export function clearDraft(viewId: string, sent?: string): void {
   const draft = all[viewId];
   if (!draft) return;
   const quotes = Array.isArray(draft.quotes) ? draft.quotes : [];
-  const held = texts(draft.held);
+  const held = helds(draft.held);
   if (sent === undefined || messageWithQuotes(quotes, draft.text) === sent.trim()) {
     if (sent !== undefined && held.length > 0) all[viewId] = { text: '', held, at: draft.at };
     else delete all[viewId];
@@ -131,10 +152,10 @@ export function forgetDrafts(): void {
  * goes to the background (a phone may drop a background tab without warning). `now` saves at once:
  * a message on its way is its chat's draft until the send went through.
  */
-type Saving = (text: string, attachments: Attachment[], quotes?: string[], held?: string[]) => void;
+type Saving = (text: string, attachments: Attachment[], quotes?: string[], held?: Held[]) => void;
 
 export function useDraftSaver(viewId: string | undefined, wait = 300): { save: Saving; now: Saving } {
-  const pending = useRef<{ text: string; attachments: Attachment[]; quotes: string[]; held: string[] } | undefined>(undefined);
+  const pending = useRef<{ text: string; attachments: Attachment[]; quotes: string[]; held: Held[] } | undefined>(undefined);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const id = useRef(viewId);
   id.current = viewId;
@@ -146,12 +167,12 @@ export function useDraftSaver(viewId: string | undefined, wait = 300): { save: S
       pending.current = undefined;
       if (next && id.current) saveDraft(id.current, next.text, next.attachments, next.quotes, next.held);
     },
-    save: (text: string, attachments: Attachment[], quotes: string[] = [], held: string[] = []) => {
+    save: (text: string, attachments: Attachment[], quotes: string[] = [], held: Held[] = []) => {
       pending.current = { text, attachments, quotes, held };
       clearTimeout(timer.current);
       timer.current = setTimeout(saver.current.flush, wait);
     },
-    now: (text: string, attachments: Attachment[], quotes: string[] = [], held: string[] = []) => {
+    now: (text: string, attachments: Attachment[], quotes: string[] = [], held: Held[] = []) => {
       pending.current = { text, attachments, quotes, held };
       saver.current.flush();
     },

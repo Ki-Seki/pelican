@@ -5,7 +5,7 @@ import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useE
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api, apiUrl, isDemoNote } from '../lib/api';
-import { loadDraft, useDraftSaver } from '../lib/drafts';
+import { type Held, loadDraft, useDraftSaver } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
 import { composing, hasKeyboard, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
@@ -219,22 +219,40 @@ export type ComposerDraft = { text: string; key: number; append?: boolean; block
 /** A `!` or `/` command: the whole box is the command, so it shares the box with nothing. */
 const isCommand = (text: string) => /^\s*[!/]/.test(text);
 
+/** What the box holds, or what comes back to it: words, and whether files go with them. */
+type Content = { text: string; files: boolean };
+
 /**
- * Where the words of a message that did not go go back to (its quotes and files go back above
- * the box in any case): into an empty box as they were, else above what was typed since, a blank
- * line apart. A command never shares the box: words typed under it would become part of it (its
- * arguments, or more of the shell command), and words above it would make it a message. Then it,
- * or the message that came back while one is typed, waits above the box (`held`), to be put back.
+ * Where a message that did not go goes back to (its quotes go back above the box in any case):
+ * into an empty box as it was, else above what is there, a blank line apart, its files beside
+ * those there. A command never shares the box, with words or with files: words typed under it
+ * would become part of it (its arguments, or more of the shell command), words above it would make
+ * it a message, and files would go with it as a list after it. Then it, or the message that comes
+ * back while one is typed, waits above the box with its files (`held`), to be put back.
  */
-function givenBack(typed: string, back: string): { text: string; held?: string } {
-  if (!back.trim()) return { text: typed };
-  if (!typed.trim()) return { text: back };
-  if (isCommand(back) || isCommand(typed)) return { text: typed, held: back };
-  return { text: `${back.trimEnd()}\n\n${typed}` };
+function givenBack(box: Content, back: Content): { text: string; held?: boolean } {
+  const words = back.text.trim();
+  if (!words && !back.files) return { text: box.text };
+  const typed = box.text.trim().length > 0;
+  if ((typed || box.files) && (isCommand(back.text) || isCommand(box.text))) return { text: box.text, held: true };
+  if (!words) return { text: box.text };
+  return { text: typed ? `${back.text.trimEnd()}\n\n${box.text}` : back.text };
 }
 
 /** How a text waiting to be put back is shown: its first line. */
 const firstLine = (text: string) => text.trim().split('\n')[0]!;
+
+/** A text waiting to be put back, in a few words: its first line, and the files that go with it. */
+function heldWords(held: Held): { words: string; files: string } {
+  const names = (held.attachments ?? []).map((a) => a.name);
+  return { words: held.text.trim() ? firstLine(held.text) : '', files: names.length > 1 ? `${names.length} files` : names[0] ?? '' };
+}
+
+const sameHeld = (a: Held, b: Held) =>
+  a.text === b.text && (a.attachments ?? []).map((f) => f.id).join('\n') === (b.attachments ?? []).map((f) => f.id).join('\n');
+
+/** Files that come back, before those in the box already. */
+const withFiles = (list: Upload[], files: Attachment[]): Upload[] => [...files.map(restored), ...list.filter((u) => !files.some((a) => a.id === u.attachment?.id))];
 
 export function Composer({
   busy,
@@ -292,8 +310,8 @@ export function Composer({
   const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
   // Quotes of what was selected (lib/quote), above the box until they go above the words.
   const [quotes, setQuotes] = useState<string[]>(() => saved?.quotes ?? []);
-  // What came back from a send that failed but could not share the box (givenBack).
-  const [held, setHeld] = useState<string[]>(() => saved?.held ?? []);
+  // What came back from a send that failed but could not share the box (givenBack), files and all.
+  const [held, setHeld] = useState<Held[]>(() => saved?.held ?? []);
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
   const [highlight, setHighlight] = useState(0);
   const [dismissed, setDismissed] = useState<string>();
@@ -345,16 +363,20 @@ export function Composer({
     // A message given back (its send failed) brings its quotes back above the box, before any added since.
     const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
     if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
-    const back = draft.back ? givenBack(text, given.text) : undefined;
+    const files = draft.attachments ?? [];
+    const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: given.text, files: files.length > 0 }) : undefined;
     const next = draft.block ? withQuote(text, draft.text)
       : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
         : back ? back.text
           : given.text;
     setText(next);
-    if (back?.held) setHeld((list) => (list.includes(back.held!) ? list : [...list, back.held!]));
-    // Its files come back too, beside any added since.
-    const files = draft.attachments;
-    if (files?.length) setUploads((list) => [...files.map(restored), ...list.filter((u) => !files.some((a) => a.id === u.attachment?.id))]);
+    // Its files come back too: waiting with its words, or beside any added since.
+    if (back?.held) {
+      const waiting: Held = { text: given.text, ...(files.length > 0 ? { attachments: files } : {}) };
+      setHeld((list) => (list.some((h) => sameHeld(h, waiting)) ? list : [...list, waiting]));
+    } else if (files.length > 0) {
+      setUploads((list) => withFiles(list, files));
+    }
     const put = () => {
       const el = area.current;
       if (!el) return;
@@ -480,15 +502,26 @@ export function Composer({
   };
 
   /**
-   * Puts a text that waited back in the box, by the rule it came back by: above what is typed, or,
-   * where one of the two is a command, in its place, what was typed waiting where it was.
+   * Puts a text that waited back in the box, its files with it, by the rule it came back by: above
+   * what is typed, or, where one of the two is a command, in its place, what was in the box, words
+   * and files, waiting where it was. A file still on its way waits for Put back, as it does for Send.
    */
   const putBack = (at: number) => {
     const back = held[at];
-    if (back === undefined) return;
-    const joined = givenBack(text, back);
-    const next = joined.held ? back : joined.text;
-    setHeld((list) => (joined.held ? list.map((h, i) => (i === at ? text : h)) : list.filter((_, i) => i !== at)));
+    if (back === undefined || uploading) return;
+    const files = back.attachments ?? [];
+    const joined = givenBack({ text, files: uploads.some((u) => !u.error) }, { text: back.text, files: files.length > 0 });
+    const next = joined.held ? back.text : joined.text;
+    if (joined.held) {
+      const attached = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
+      const aside: Held = { text, ...(attached.length > 0 ? { attachments: attached } : {}) };
+      for (const u of uploads) if (u.attachment) forget(u);
+      setHeld((list) => list.map((h, i) => (i === at ? aside : h)));
+      setUploads((list) => [...files.map(restored), ...list.filter((u) => !u.attachment)]);
+    } else {
+      setHeld((list) => list.filter((_, i) => i !== at));
+      if (files.length > 0) setUploads((list) => withFiles(list, files));
+    }
     setText(next);
     requestAnimationFrame(() => {
       const el = area.current;
@@ -691,17 +724,23 @@ export function Composer({
         )}
         {problems.length > 0 && <div className="px-4 pt-2 text-[12.5px] leading-snug text-danger">{problems.join(' · ')}</div>}
         {notes.length > 0 && <div className="flex items-start gap-1.5 px-4 pt-2 text-[12.5px] leading-snug text-muted"><Info className="mt-px size-3.5 shrink-0" />{notes.join(' · ')}</div>}
-        {held.map((h, i) => (
-          <div key={`${i}:${h}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
-            <span title={h} className="min-w-0 flex-1 truncate">Not sent: <span className={`text-fg ${isCommand(h) ? 'font-mono text-[12px]' : ''}`}>{firstLine(h)}</span></span>
-            <button type="button" onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover">
-              Put back
-            </button>
-            <button type="button" aria-label={`Discard ${firstLine(h).slice(0, 60)}`} onClick={(e) => discard(i, e.detail === 0)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg">
-              <X className="size-3.5" />
-            </button>
-          </div>
-        ))}
+        {held.map((h, i) => {
+          const { words, files } = heldWords(h);
+          return (
+            <div key={`${i}:${h.text}:${files}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
+              <span title={[h.text.trim(), ...(h.attachments ?? []).map((a) => a.name)].filter(Boolean).join('\n')} className="min-w-0 flex-1 truncate">
+                Not sent: <span className={`text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
+                {words && files && <span className="text-faint"> · {files}</span>}
+              </span>
+              <button type="button" disabled={uploading} onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover disabled:opacity-40">
+                Put back
+              </button>
+              <button type="button" aria-label={`Discard ${(words || files).slice(0, 60)}`} onClick={(e) => discard(i, e.detail === 0)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          );
+        })}
         {dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-danger">{dictationError}</div>}
         {busy && modeHint && !dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-muted">{MODE_HINT[mode]}</div>}
         <textarea
