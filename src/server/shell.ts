@@ -1,12 +1,15 @@
 import { spawn } from 'node:child_process';
-import { realpath } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ShellResult } from '../shared/protocol.js';
+import { transcriptPath } from './transcripts.js';
 import { launchFor } from './trust.js';
 
-/** What a command may print, per stream, before the rest is left out; the command runs on. */
+/** What a command may print before the rest is left out; the command runs on. */
 export const MAX_OUTPUT = 200_000;
 /**
  * How long a command may run. Its output shows as it comes and Stop ends it, so this only ends
@@ -59,8 +62,7 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
   const limitMs = options.limitMs ?? MAX_RUN_MS;
   const shell = process.env.SHELL || '/bin/bash';
   const started = Date.now();
-  let stdout = '';
-  let stderr = '';
+  let output = '';
   let truncated = false;
   let done = false;
   let endedBy: ShellResult['endedBy'];
@@ -90,26 +92,24 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
     // What ignores the request still goes, also once the shell itself has exited.
     setTimeout(() => signal('SIGKILL'), KILL_AFTER_MS).unref();
   };
-  // Up to the limit, and nothing past it held even for a moment: a command can print gigabytes.
-  const keep = (current: string, text: string) => {
-    const room = MAX_OUTPUT - current.length;
-    if (text.length <= room) return current + text;
-    truncated = true;
-    return room > 0 ? current + text.slice(0, room) : current;
+  // stdout and stderr together, as they come, as Claude Code's bash mode keeps them. Up to the
+  // limit, and nothing past it held even for a moment: a command can print gigabytes.
+  const take = (text: string) => {
+    if (done) return;
+    const room = MAX_OUTPUT - output.length;
+    if (text.length <= room) {
+      output += text;
+    } else {
+      truncated = true;
+      if (room > 0) output += text.slice(0, room);
+    }
+    options.onOutput?.(text);
   };
   // Decoded as a stream, so a character split between two reads stays whole.
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (text: string) => {
-    if (done) return;
-    stdout = keep(stdout, text);
-    options.onOutput?.(text);
-  });
-  child.stderr.on('data', (text: string) => {
-    if (done) return;
-    stderr = keep(stderr, text);
-    options.onOutput?.(text);
-  });
+  child.stdout.on('data', take);
+  child.stderr.on('data', take);
   const timer = setTimeout(() => end('limit'), limitMs);
   let drain: NodeJS.Timeout | undefined;
   const finish = (code: number | null, error?: Error) => {
@@ -120,8 +120,7 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
     const background = groups && !endedBy && child.pid !== undefined && running(child.pid);
     settle({
       command,
-      stdout,
-      stderr: error ? `${stderr}${error.message}` : stderr,
+      output: error ? `${output}${error.message}` : output,
       code: endedBy ? null : code,
       durationMs: Date.now() - started,
       ...(truncated ? { truncated: true } : {}),
@@ -154,12 +153,76 @@ const count = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
 const spoken = (ms: number) => (ms >= 60_000 ? count(Math.round(ms / 60_000), 'minute') : count(Math.max(1, Math.round(ms / 1000)), 'second'));
 
 /** What the output alone does not say: how the command ended, and whether some was left out. */
-function notes(result: ShellResult): string {
+function notes(result: ShellResult, leftOut: boolean): string {
   const said = result.endedBy === 'stop' ? '(stopped)'
     : result.endedBy === 'limit' ? `(stopped after ${spoken(result.limitMs ?? MAX_RUN_MS)})`
       : result.code !== null && result.code !== 0 ? `(exit code ${result.code})`
         : result.background ? '(still running in the background)' : '';
-  return [said, result.truncated ? '(the rest of the output was left out)' : ''].filter(Boolean).map((note) => `\n${note}`).join('');
+  return [said, leftOut ? '(the rest of the output was left out)' : ''].filter(Boolean).map((note) => `\n${note}`).join('');
+}
+
+/**
+ * How much of a command's output Claude gets in the conversation, as Claude Code's bash mode gives
+ * it: its `bashOutputMaxChars` setting, 30,000 characters unless set, held to 4,000 to 128,000.
+ */
+export const INLINE_CHARS = { standard: 30_000, least: 4_000, most: 128_000 };
+/** How much of an output saved to a file Claude Code shows Claude in its place. */
+const PREVIEW_CHARS = 2_000;
+
+const inlineChars = (setting: unknown) => (typeof setting === 'number' && Number.isInteger(setting) && setting > 0
+  ? Math.min(INLINE_CHARS.most, Math.max(INLINE_CHARS.least, setting))
+  : INLINE_CHARS.standard);
+
+/** A command that went well, as Claude Code's bash mode tells them apart: it ended on its own, with 0. */
+const succeeded = (result: ShellResult) => result.code === 0 && !result.endedBy;
+
+/** The first `end` characters, a character Unicode writes as two kept whole. */
+function head(text: string, end: number): string {
+  const at = Math.min(end, text.length);
+  const code = text.charCodeAt(at - 1);
+  return text.slice(0, at < text.length && code >= 0xd800 && code <= 0xdbff ? at - 1 : at);
+}
+
+/** Sizes as Claude Code says them: 2KB, 97.7KB, 1.2MB, characters counted as bytes. */
+function sizeText(size: number): string {
+  const kb = size / 1024;
+  if (kb < 1) return `${size} bytes`;
+  if (kb < 1024) return `${kb.toFixed(1).replace(/\.0$/, '')}KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1).replace(/\.0$/, '')}MB`;
+  return `${(mb / 1024).toFixed(1).replace(/\.0$/, '')}GB`;
+}
+
+/**
+ * What Claude Code puts in the conversation in place of an output too long to go there, word for
+ * word: where all of it was saved, and its start, up to 2KB, ending with a line when one ends past
+ * halfway. As in Claude Code, the start is not escaped. `cut`: Pelican kept only its first part.
+ */
+function persistedOutput(output: string, file: string, cut: boolean): string {
+  const saved = cut
+    ? `Output exceeded the ${sizeText(MAX_OUTPUT)} persist limit; only the first ${sizeText(MAX_OUTPUT)} were saved to: ${file}`
+    : `Output too large (${sizeText(output.length)}). Full output saved to: ${file}`;
+  const more = output.length > PREVIEW_CHARS;
+  const line = output.slice(0, PREVIEW_CHARS).lastIndexOf('\n');
+  const preview = more ? head(output, line > PREVIEW_CHARS / 2 ? line : PREVIEW_CHARS) : output;
+  return `<persisted-output>\n${saved}\n\nPreview (first ${sizeText(PREVIEW_CHARS)}):\n${preview}${more ? '\n...\n' : '\n'}</persisted-output>`;
+}
+
+/**
+ * The output as Claude Code's bash mode puts it in the conversation. A command that went well: in
+ * `<bash-stdout>`, blank lines at its start and space at its end trimmed, or Claude Code's word
+ * that it printed nothing; longer than Claude gets inline, Claude Code's preview of the file that
+ * holds all of it (`savedTo`). One that failed or was stopped: in `<bash-stderr>` as it came, cut
+ * at that length. Escaped so it cannot end its tags, with Pelican's notes on how it ended after it.
+ */
+function outputText(result: ShellResult): string {
+  const tags = (stdout: string, stderr: string) => `<bash-stdout>${stdout}</bash-stdout><bash-stderr>${stderr}</bash-stderr>`;
+  if (succeeded(result) && result.savedTo) return tags(persistedOutput(result.output, result.savedTo, result.truncated === true), escape(notes(result, false)));
+  const max = result.inlineMax ?? INLINE_CHARS.standard;
+  const shown = head(result.output, max);
+  const said = escape(notes(result, shown.length < result.output.length || result.truncated === true));
+  if (succeeded(result)) return tags(escape(shown.replace(/^(\s*\n)+/, '').trimEnd() || '(Bash completed with no output)'), said);
+  return tags('', escape(shown) + said);
 }
 
 /**
@@ -171,29 +234,56 @@ export const BASH_CAVEAT = '<local-command-caveat>The command below was run dire
 /**
  * A command and its output as Claude Code's bash mode adds them to the conversation, so the CLI
  * and Desktop show Pelican's the same way, and the other way round: the command as typed, then
- * its output, escaped so it cannot end its tags, with the caveat first when Claude is not to answer.
+ * its output (outputText), with the caveat first when Claude is not to answer.
  */
 export function bashModeMessages(result: ShellResult, respond: boolean): Array<{ text: string; meta?: true }> {
   return [
     ...(respond ? [] : [{ text: BASH_CAVEAT, meta: true as const }]),
     { text: `<bash-input>${result.command}</bash-input>` },
-    { text: `<bash-stdout>${escape(result.stdout)}</bash-stdout><bash-stderr>${escape(result.stderr + notes(result))}</bash-stderr>` },
+    { text: outputText(result) },
   ];
 }
 
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NAME_LETTERS = '0123456789abcdefghijklmnopqrstuvwxyz';
+
 /**
- * Whether Claude answers a `!` command, as the CLI decides it: unless `respondToBashCommands` is
- * false in the settings Claude Code runs with in this folder (the user's own only, where the
- * folder's are not used). Reading settings runs nothing.
+ * A command's result as it goes to Claude, as Claude Code's bash mode sends it: inline up to
+ * `inlineMax` characters; past that, for one that went well, all of it saved where Claude Code
+ * saves it, in the session's tool-results folder beside its transcript, under a name of Claude
+ * Code's kind (`b` and eight letters or digits). Written once, never over a file already there;
+ * when it cannot be, Claude gets the start inline and is told the rest was left out.
  */
-export async function respondsToBashCommands(cwd: string): Promise<boolean> {
+export async function forClaude(sessionId: string, result: ShellResult, inlineMax: number): Promise<ShellResult> {
+  const out: ShellResult = { ...result, inlineMax };
+  if (!succeeded(result) || result.output.length <= inlineMax || !SESSION_ID.test(sessionId)) return out;
+  const transcript = await transcriptPath(sessionId);
+  if (!transcript) return out;
+  try {
+    const dir = path.join(path.dirname(transcript), sessionId, 'tool-results');
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `b${[...randomBytes(8)].map((byte) => NAME_LETTERS[byte % NAME_LETTERS.length]).join('')}.txt`);
+    await writeFile(file, result.output, { flag: 'wx', mode: 0o600 });
+    return { ...out, savedTo: file };
+  } catch {
+    return out;
+  }
+}
+
+/**
+ * How Claude Code's bash mode treats a command in this folder, from the settings Claude Code runs
+ * with there (the user's own only, where the folder's are not used): whether Claude answers it,
+ * unless `respondToBashCommands` is false, and how much of its output Claude gets inline
+ * (`bashOutputMaxChars`). Reading settings runs nothing.
+ */
+export async function bashModeSettings(cwd: string): Promise<{ respond: boolean; inlineMax: number }> {
   try {
     const { settingSources } = await launchFor(cwd);
     const dir = await realpath(cwd).catch(() => cwd);
     const { effective } = await resolveSettings({ cwd: dir, settingSources });
-    return effective.respondToBashCommands !== false;
+    return { respond: effective.respondToBashCommands !== false, inlineMax: inlineChars(effective.bashOutputMaxChars) };
   } catch {
-    // Settings that cannot be read, or an SDK without the call: Claude Code's default.
-    return true;
+    // Settings that cannot be read, or an SDK without the call: Claude Code's defaults.
+    return { respond: true, inlineMax: INLINE_CHARS.standard };
   }
 }

@@ -49,6 +49,14 @@ describe('buildItems: ! commands', () => {
     const items = buildItems([user('b1', '<bash-input>ls &amp; pwd</bash-input><bash-stdout>a.txt\n&lt;dir&gt;</bash-stdout><bash-stderr></bash-stderr>')]);
     expect(items).toMatchObject([{ kind: 'shell', command: 'ls & pwd', stdout: 'a.txt\n<dir>', stderr: '' }]);
   });
+
+  it('shows an output too long for the conversation as the start Claude got and where all of it is, not Claude Code’s wrapper', () => {
+    const file = '/home/me/.claude/projects/-work/5e25f65d-1b8b-4490-a3d3-43540da07ef3/tool-results/b1b2gp6fw.txt';
+    // As Claude Code's bash mode writes it, the CLI's or Pelican's: the start is not escaped.
+    const saved = `<bash-stdout><persisted-output>\nOutput too large (97.7KB). Full output saved to: ${file}\n\nPreview (first 2KB):\n<x> &amp; y\n...\n</persisted-output></bash-stdout><bash-stderr></bash-stderr>`;
+    const items = buildItems([user('b1', '<bash-input>cat big.log</bash-input>'), user('b2', saved)]);
+    expect(items).toMatchObject([{ kind: 'shell', command: 'cat big.log', stdout: `<x> &amp; y\n...\nOutput too large (97.7KB). Full output saved to: ${file}`, stderr: '' }]);
+  });
 });
 
 describe('toChatMessage', () => {

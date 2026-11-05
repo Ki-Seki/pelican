@@ -240,8 +240,8 @@ export type SendMode = 'steer' | 'queue';
 /** A `!` command run in the session's folder, once it is done; it goes into the conversation as Claude Code's bash mode writes it. */
 export type ShellResult = {
   command: string;
-  stdout: string;
-  stderr: string;
+  /** What it printed, stdout and stderr together as they came, as Claude Code's bash mode takes them; up to a limit (`truncated` past it). */
+  output: string;
   /** Exit code; null when it did not finish on its own (see `endedBy`). */
   code: number | null;
   durationMs: number;
@@ -252,6 +252,10 @@ export type ShellResult = {
   endedBy?: 'stop' | 'limit';
   /** The limit it ran under, for saying it when it was hit. */
   limitMs?: number;
+  /** How much of the output Claude gets in the conversation: Claude Code's `bashOutputMaxChars`. */
+  inlineMax?: number;
+  /** Where all of the output was saved when it was more than that, as Claude Code saves it (the session's tool-results folder). */
+  savedTo?: string;
 };
 
 /**

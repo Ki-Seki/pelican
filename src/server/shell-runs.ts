@@ -3,13 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { LiveShell, ServerEvent, ShellResult } from '../shared/protocol.js';
 import { feedFor } from './feed.js';
 import { ensureRun, getRun } from './runner.js';
-import { MAX_OUTPUT, respondsToBashCommands, startCommand, type CommandRun } from './shell.js';
+import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, startCommand } from './shell.js';
 
 /**
  * The `!` commands running in each session, shown to its pages as their output comes, and added to
- * the conversation once done, as Claude Code's bash mode adds them. Then Claude answers, as in the
- * CLI, unless the user's settings say not to (`respondToBashCommands: false`), or the command did
- * not finish on its own (Stop, the time limit).
+ * the conversation once done, as Claude Code's bash mode adds them: inline up to its limit, past it
+ * saved to a file Claude gets the start of. Then Claude answers, as in the CLI, unless the user's
+ * settings say not to (`respondToBashCommands: false`), or the command did not finish on its own
+ * (Stop, the time limit).
  */
 
 /** Output goes to the pages at most this often. */
@@ -83,10 +84,12 @@ async function record(sessionId: string, cwd: string, id: string, result: ShellR
   await turnOver(sessionId);
   // Pelican is closing its Claude processes: none is started again for this.
   if (shuttingDown) return;
-  const respond = result.endedBy === undefined && (await respondsToBashCommands(cwd));
+  const settings = await bashModeSettings(cwd);
+  const respond = result.endedBy === undefined && settings.respond;
+  const toClaude = await forClaude(sessionId, result, settings.inlineMax);
   const run = await ensureRun(sessionId);
   // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
-  await run.appendShell(result, respond && !run.busy, id);
+  await run.appendShell(toClaude, respond && !run.busy, id);
 }
 
 /**
