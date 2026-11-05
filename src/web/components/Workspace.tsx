@@ -234,9 +234,11 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       )}
     </div>
   );
-  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop.
+  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop. Keys pressed in a
+  // sheet opened from here reach this too (React passes them up its own tree): those are the sheet's.
+  const own = (e: React.KeyboardEvent) => e.currentTarget.contains(e.target as Node);
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.defaultPrevented || composing(e.nativeEvent) || comments.length === 0 || !onSendComments) return;
+    if (!own(e) || e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.defaultPrevented || composing(e.nativeEvent) || comments.length === 0 || !onSendComments) return;
     e.preventDefault();
     onSendComments();
   };
@@ -279,7 +281,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       tabIndex={-1}
       onKeyDown={(e) => {
         onKeyDown(e);
-        if (e.key === 'Escape' && !e.defaultPrevented && !composing(e.nativeEvent)) {
+        if (own(e) && e.key === 'Escape' && !e.defaultPrevented && !composing(e.nativeEvent)) {
           e.preventDefault();
           onClose();
         }
@@ -297,13 +299,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       </div>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-4">{body}</div>
       {footer}
-      {needsYou && (
-        <button type="button" onClick={onClose} className="pb-safe flex min-h-12 w-full shrink-0 items-center gap-2.5 border-t border-line bg-panel px-4 pt-2 text-left text-[14px]">
-          <span className="size-2 shrink-0 rounded-full bg-wait" />
-          <span className="min-w-0 flex-1 truncate">{needsYou}</span>
-          <ChevronRight className="size-4 shrink-0 text-faint" />
-        </button>
-      )}
+      {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
+      <div aria-live="polite" className="shrink-0">
+        {needsYou && (
+          <button type="button" onClick={onClose} className="pb-safe flex min-h-12 w-full items-center gap-2.5 border-t border-line bg-panel px-4 pt-2 text-left text-[14px]">
+            <span className="size-2 shrink-0 rounded-full bg-wait" />
+            <span className="min-w-0 flex-1 truncate">{needsYou}</span>
+            <ChevronRight className="size-4 shrink-0 text-faint" />
+          </button>
+        )}
+      </div>
     </div>
     </SendComments.Provider>,
     document.body,

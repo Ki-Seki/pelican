@@ -83,6 +83,18 @@ describe('what Changes shows', () => {
     expect(onRewind).toHaveBeenCalledWith('p1');
   });
 
+  it('lets Esc in a sheet opened from it close that sheet only', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    const onClose = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }));
+    const sheet = screen.getAllByRole('dialog').at(-1)!;
+    fireEvent.keyDown(within(sheet).getAllByRole('button')[0]!, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Changes and files' }), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('on a phone, says at its foot that Claude waits for an answer, which leads back to the conversation', async () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onClose = vi.fn();
