@@ -107,7 +107,7 @@ function Figures({ summary, showCost, onOpenSession }: { summary: UsageSummary; 
           <Tile
             label="Longest session"
             value={span(summary.activity.longest.ms)}
-            sub={summary.activity.longest.title ?? `on ${new Date(summary.activity.longest.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
+            sub={summary.activity.longest.title ?? `on ${new Date(summary.activity.longest.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })}`}
             wide
           />
         )}

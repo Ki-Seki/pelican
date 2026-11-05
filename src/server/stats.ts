@@ -773,6 +773,7 @@ connect((event) => {
 
 // --- Claude Code's own stats (read only) --------------------------------------------------------
 
+/** `longest.at`: when that session started (ms), as Claude Code recorded it; the rest are UTC days. */
 type StatsCache = { through: number; days: Map<number, { sessions: number; active: boolean }>; longest?: { id: string; ms: number; at: number }; first?: number };
 
 /**
@@ -809,7 +810,8 @@ export async function readStatsCache(): Promise<StatsCache | undefined> {
     days.set(day, { sessions: num(entry.sessionCount), active: num(entry.messageCount) > 0 || num(entry.sessionCount) > 0 });
   }
   const longest = raw.longestSession as Record<string, unknown> | null | undefined;
-  const at = longest ? date(longest.timestamp) : undefined;
+  // Its time as it is, not cut to its day: the page says the day, in UTC as every other.
+  const at = longest && typeof longest.timestamp === 'string' && date(longest.timestamp) !== undefined ? Date.parse(longest.timestamp) : undefined;
   const first = date(raw.firstSessionDate);
   return {
     through,
@@ -1045,7 +1047,7 @@ async function workOut({ range, now, titles, statsCache: cache }: SummaryInput):
       if (entry.active) active.add(day);
     }
     const theirs = statsCache.longest;
-    if (theirs && (!longest || theirs.ms > longest.ms)) longest = { id: theirs.id, ms: theirs.ms, at: theirs.at * DAY };
+    if (theirs && (!longest || theirs.ms > longest.ms)) longest = theirs;
   }
   const { current, longest: longestStreak } = streaks(active, from, to);
 

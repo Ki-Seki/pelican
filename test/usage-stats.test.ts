@@ -279,7 +279,7 @@ describe('usage from transcripts', () => {
     const cache = await readStatsCache();
     const all = await sum('all', cache);
     expect(all.from).toBe('2026-10-01');
-    expect(all.activity).toMatchObject({ sessions: 2 + 1 + 3 + 1, activeDays: 4, longestStreak: 2, currentStreak: 2, longest: { id: 'old', ms: 9_000_000, at: Date.parse('2026-10-01') } });
+    expect(all.activity).toMatchObject({ sessions: 2 + 1 + 3 + 1, activeDays: 4, longestStreak: 2, currentStreak: 2, longest: { id: 'old', ms: 9_000_000, at: Date.parse('2026-10-01T08:00:00.000Z') } });
     expect(all.activity.since).toBe('2026-10-01');
     // Tokens come from the transcripts alone: the first one is from November 4.
     expect(all.tokensSince).toBe('2026-11-04');
