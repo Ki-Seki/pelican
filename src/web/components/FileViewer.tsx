@@ -117,7 +117,7 @@ const highlightPlugins = [[rehypeHighlight, { detect: false, ignoreMissing: true
 const Highlighted = memo(function Highlighted({ text, language }: { text: string; language: string }) {
   // A fence longer than any run of backticks in the text, so none of it can close the block.
   const fence = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((m) => m[0].length + 1)));
-  return <ReactMarkdown rehypePlugins={highlightPlugins} components={highlightComponents}>{`${fence}${language}\n${text}\n${fence}`}</ReactMarkdown>;
+  return <ReactMarkdown rehypePlugins={highlightPlugins} components={highlightComponents}>{`${fence}${language}\n${lastBreakOff(text)}\n${fence}`}</ReactMarkdown>;
 });
 
 /** The lines the selection covers inside `box`, and its text, while there is one. */
@@ -178,11 +178,12 @@ function SelectionBar({ from, to, onQuote, text, place }: { from: number; to: nu
   );
 }
 
-const splitText = (text: string) => {
-  const lines = text.split('\n');
-  if (lines.length > 1 && lines.at(-1) === '') lines.pop();
-  return lines;
-};
+/** A file's text without the line break it ends with, which starts no line of its own, as in an editor. */
+function lastBreakOff(text: string): string {
+  return text.endsWith('\n') ? text.slice(0, -1) : text;
+}
+
+const splitText = (text: string) => lastBreakOff(text).split('\n');
 
 type FileViewerProps = {
   cwd: string;
