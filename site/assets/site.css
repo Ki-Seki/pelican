@@ -7,7 +7,8 @@
   --panel: #f4f4f1;
   --ink: #141515;
   --ink-2: #55585d;
-  --ink-3: #8b8e94;
+  --ink-3: #6a6d73;
+  --ink-faint: #8b8e94;
   --line: #e6e6e1;
   --line-soft: #efefeb;
   --chip: #f0f0ec;
@@ -32,7 +33,8 @@
     --panel: #101214;
     --ink: #ececea;
     --ink-2: #a5a8ae;
-    --ink-3: #6f737a;
+    --ink-3: #868a91;
+    --ink-faint: #6f737a;
     --line: #23262a;
     --line-soft: #1b1e21;
     --chip: #1b1d20;
@@ -93,9 +95,11 @@ code, pre, kbd { font-family: var(--mono); }
 .copy .i { width: 15px; height: 15px; }
 .copy.done { color: var(--accent); }
 
-pre.code { position: relative; overflow-x: auto; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); font-size: 14px; line-height: 1.75; color: var(--ink); }
+pre.code { position: relative; padding: 18px 52px 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); font-size: 14px; line-height: 1.75; color: var(--ink); }
 pre.code .c { color: var(--ink-3); }
 pre.code .copy { position: absolute; top: 10px; right: 10px; }
+/* The block holds still and its code scrolls, so the copy button is never over a command. */
+pre.code code, .docs pre code { display: block; overflow-x: auto; }
 
 /* ------------------------------------------------------------------ hero */
 
@@ -103,8 +107,8 @@ pre.code .copy { position: absolute; top: 10px; right: 10px; }
 .hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 64px; }
 .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 560; color: var(--ink-2); }
 .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-.hero h1 { margin-top: 22px; font: 700 clamp(44px, 6.6vw, 76px)/1.02 var(--display); letter-spacing: -0.045em; text-wrap: balance; }
-.hero h1 .soft { color: var(--ink-3); }
+.hero h1 { margin-top: 22px; font: 700 clamp(36px, 5.4vw, 64px)/1.04 var(--display); letter-spacing: -0.04em; text-wrap: balance; }
+.hero h1 .soft { color: var(--ink-faint); }
 .lede { max-width: 33em; margin-top: 24px; font-size: clamp(17px, 1.6vw, 19.5px); line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
 .ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
 .hero .cmd { margin-top: 18px; }
@@ -133,7 +137,6 @@ pre.code .copy { position: absolute; top: 10px; right: 10px; }
 .phone .island { position: absolute; top: 10px; left: 50%; z-index: 2; width: 92px; height: 26px; translate: -50% 0; border-radius: 999px; background: #000; pointer-events: none; }
 .device-note { margin-top: 16px; text-align: center; font-size: 13px; color: var(--ink-3); }
 .hero-shot { display: none; }
-.hero-shot img { width: 100%; height: auto; }
 
 @media (max-width: 980px) {
   .hero { padding-top: 48px; }
@@ -141,9 +144,16 @@ pre.code .copy { position: absolute; top: 10px; right: 10px; }
   .device { justify-self: center; }
 }
 @media (max-width: 640px) {
-  /* A phone inside a phone helps nobody: show the screens, and open the demo full size. */
-  .device { display: none; }
-  .hero-shot { display: block; margin-top: 8px; border-radius: 18px; }
+  /* A phone inside a phone helps nobody: one screen of the app, right under the headline, opens
+     the demo full size. The rest of the first screen is the line and the two ways in. */
+  .hero { padding: 28px 0 72px; }
+  .hero h1 { margin-top: 16px; }
+  .device, .lede .more { display: none; }
+  .hero-shot { display: block; width: 76%; aspect-ratio: 4 / 5; margin: 24px auto 0; overflow: hidden; border: 1px solid var(--line); border-radius: 24px; background: var(--surface); box-shadow: var(--shadow); }
+  .hero-shot picture, .hero-shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .lede { margin-top: 22px; }
+  .ctas { margin-top: 22px; gap: 10px; }
+  .btn { padding: 0 16px; }
 }
 
 /* ------------------------------------------------------------------ sections */
@@ -155,8 +165,6 @@ section.band.tint { background: var(--panel); }
 .band .sub { max-width: 36em; margin-top: 18px; font-size: 18px; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
 
 .feature-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 72px; }
-.feature-row + .feature-row { margin-top: 112px; }
-.feature-row.flip .copy-side { order: 2; }
 .points { display: grid; gap: 16px; margin-top: 28px; list-style: none; }
 .points li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; font-size: 15.5px; color: var(--ink-2); }
 .points li b { color: var(--ink); font-weight: 600; }
@@ -177,15 +185,41 @@ section.band.tint { background: var(--panel); }
 .fact b { display: block; font-weight: 600; }
 .fact span { display: block; margin-top: 2px; font-size: 14.5px; color: var(--ink-2); }
 
+.after { margin-top: 18px; font-size: 15px; color: var(--ink-2); }
+
+.compare { width: 100%; margin-top: 40px; border-collapse: collapse; font-size: 15px; line-height: 1.5; }
+.compare th, .compare td { padding: 14px 20px 14px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.compare thead th { padding-top: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-3); }
+.compare tbody th { width: 18%; font-weight: 600; white-space: nowrap; }
+.compare td { color: var(--ink-2); }
+.compare .ours th, .compare .ours td { color: var(--ink); }
+.compare code { padding: 1px 5px; border-radius: 5px; background: var(--chip); font-size: 0.88em; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.qa-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 56px; margin-top: 40px; }
+.qa-grid dt { font-weight: 620; }
+.qa-grid dd { margin-top: 6px; font-size: 15.5px; color: var(--ink-2); }
+.qa-grid code { padding: 1px 5px; border-radius: 5px; background: var(--chip); font-size: 0.88em; }
+
 .start { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 72px; align-items: center; }
 .start .note { margin-top: 18px; font-size: 15px; color: var(--ink-2); }
+.band .sub code { padding: 1px 6px; border-radius: 6px; background: var(--chip); font-size: 0.86em; }
 
 @media (max-width: 980px) {
   section.band { padding: 84px 0; }
   .feature-row, .local, .start { grid-template-columns: minmax(0, 1fr); gap: 40px; }
-  .feature-row.flip .copy-side { order: 0; }
-  .feature-row + .feature-row { margin-top: 84px; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  /* Each tool on its own, with its two answers labelled, instead of three narrow columns. */
+  .compare, .compare tbody { display: block; }
+  .compare thead { display: none; }
+  .compare tr { display: block; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .compare th, .compare td { display: block; padding: 0; border: 0; }
+  .compare tbody th { width: auto; }
+  .compare td { margin-top: 4px; }
+  .compare td::before { content: attr(data-label) ": "; color: var(--ink-3); }
+  .qa-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; }
 }
 @media (max-width: 560px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
@@ -220,7 +254,7 @@ section.band.tint { background: var(--panel); }
 .docs b { font-weight: 620; }
 .docs a:not(.copy) { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 3px; }
 .docs :not(pre) > code { padding: 2px 6px; border-radius: 6px; background: var(--chip); font-size: 0.86em; overflow-wrap: anywhere; }
-.docs pre { position: relative; overflow-x: auto; padding: 16px 52px 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 13.5px; line-height: 1.7; }
+.docs pre { position: relative; padding: 16px 52px 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 13.5px; line-height: 1.7; }
 .docs pre .c { color: var(--ink-3); }
 .docs pre .copy { position: absolute; top: 9px; right: 9px; }
 .docs table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 14.5px; line-height: 1.55; }
