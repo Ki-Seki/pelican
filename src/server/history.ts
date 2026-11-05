@@ -75,6 +75,12 @@ const CHUNK = 8 * 1024 * 1024;
 const MAX_WEIGHT = 64 * 1024 * 1024;
 const MAX_FILES = 32;
 const KEEP_UNREAD_MS = 10 * 60_000;
+/**
+ * A transcript read this recently is in use (a page follows its session, which grows): it is kept
+ * past the budget, or two long sessions in use at once would each evict the other, and every look
+ * at one would parse it whole again.
+ */
+const IN_USE_MS = 60_000;
 const transcripts = new Map<string, Transcript>();
 const locks = new Map<string, Promise<unknown>>();
 
@@ -101,8 +107,8 @@ function empty(file: string, ino: number): Transcript {
 
 /**
  * Lets go of transcripts nobody has read for a while, then of the least recently read past the
- * budget. The one read last stays, however large. One let go while a read of it is under way only
- * means the next read parses it again.
+ * budget, but not of those in use. The one read last stays, however large. One let go while a read
+ * of it is under way only means the next read parses it again.
  */
 function trim(now = Date.now()): void {
   const newest = [...transcripts.keys()].at(-1);
@@ -111,8 +117,9 @@ function trim(now = Date.now()): void {
     if (file !== newest && now - t.readAt > KEEP_UNREAD_MS) transcripts.delete(file);
     else total += t.weight;
   }
+  // In the order they were last read: past the first one in use, all are.
   for (const [file, t] of transcripts) {
-    if (file === newest || (total <= MAX_WEIGHT && transcripts.size <= MAX_FILES)) break;
+    if (file === newest || now - t.readAt < IN_USE_MS || (total <= MAX_WEIGHT && transcripts.size <= MAX_FILES)) break;
     transcripts.delete(file);
     total -= t.weight;
   }

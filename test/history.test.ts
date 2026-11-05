@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { readHistory } from '../src/server/history';
 
@@ -155,4 +155,43 @@ describe('readRecordedSettings', () => {
     ].join('\n') + '\n');
     expect(await readRecordedSettings(file)).toEqual({ model: 'claude-opus-5-5', effort: 'max', fast: true, ultracode: true, permissionMode: 'bypassPermissions' });
   });
+});
+
+describe('readHistory: the parsed transcripts it keeps', () => {
+  it('keeps two long sessions in use at once, reading only what each gains, though together they pass the budget', async () => {
+    // Two sessions of about 35M characters kept each (a message keeps at most 60,000), more together
+    // than the 64 Mi kept for sessions not in use.
+    const long = async (name: string) => {
+      const file = path.join(dir, name);
+      const text = 'x'.repeat(59_000);
+      const rows: string[] = [];
+      for (let i = 0; i < 600; i += 1) rows.push(say(`${name}-${i}`, i === 0 ? null : `${name}-${i - 1}`, i % 2 ? 'assistant' : 'user', text));
+      await writeFile(file, `${rows.join('\n')}\n`);
+      return file;
+    };
+    const a = await long('a.jsonl');
+    const b = await long('b.jsonl');
+    const firstOfA = (await readHistory(a))[0];
+    const firstOfB = (await readHistory(b))[0];
+    // Each grows while the other is read, as two pages following two working sessions see them.
+    for (let i = 0; i < 2; i += 1) {
+      await appendFile(a, `${say(`a-more-${i}`, i === 0 ? 'a.jsonl-599' : `a-more-${i - 1}`, 'user', 'more')}\n`);
+      const nowA = await readHistory(a);
+      await appendFile(b, `${say(`b-more-${i}`, i === 0 ? 'b.jsonl-599' : `b-more-${i - 1}`, 'user', 'more')}\n`);
+      const nowB = await readHistory(b);
+      // Read on from where it was, not parsed again from the start.
+      expect(nowA[0]).toBe(firstOfA);
+      expect(nowB[0]).toBe(firstOfB);
+      expect(texts(nowA).at(-1)).toBe('more');
+    }
+    // Once nobody has looked at one for a minute, it is let go past the budget, as before.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      await readHistory(b);
+      expect((await readHistory(a))[0]).not.toBe(firstOfA);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
 });
