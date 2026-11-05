@@ -875,6 +875,7 @@ export function Chat({
         <Workspace
           open={workspace.open}
           docked={workspace.docked}
+          busy={busy && permissions.length === 0}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           onAddToMessage={(text) => {

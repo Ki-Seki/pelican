@@ -16,6 +16,8 @@ const server = vi.hoisted(() => ({
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
+  /** How often git status was asked for. */
+  gitReads: 0,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -37,7 +39,10 @@ vi.mock('../src/web/lib/api', async (original) => {
         { path: '/code/app', name: 'app', lastActivity: Date.now() - 60_000, sessions: 2 },
         { path: '/code/site', name: 'site', lastActivity: Date.now() - 120_000, sessions: 1 },
       ],
-      git: async () => ({ repo: false }),
+      git: async () => {
+        server.gitReads += 1;
+        return { repo: false };
+      },
       tree: async () => [],
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...server.session },
@@ -86,14 +91,16 @@ beforeAll(() => {
 const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
+const { setPrefs } = await import('../src/web/lib/prefs');
 const { setComments } = await import('../src/web/lib/review');
+const { setRun } = await import('../src/web/lib/store');
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
   setComments(CWD, []);
   media = {};
-  Object.assign(server, { answers: [], sent: [], session: {}, run: null });
+  Object.assign(server, { answers: [], sent: [], session: {}, run: null, gitReads: 0 });
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
@@ -247,5 +254,60 @@ describe('a session another app is waiting in, while Claude is idle here', () =>
     expect(header).toBeTruthy();
     expect(screen.getByText(/Claude is waiting for an answer in the terminal; answer it there\. A message sent here starts a second Claude/)).toBeTruthy();
     expect(box().placeholder).toBe('Needs you in the terminal · a message starts a second Claude');
+  });
+});
+
+describe('Changes and files, open beside the conversation', () => {
+  const idle: RunState = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] };
+  const working: RunState = { ...idle, busy: true };
+  const asking: RunState = {
+    ...working,
+    permissions: [{ id: 'p1', sessionId: SESSION, toolName: 'Bash', input: { command: 'npm test' }, createdAt: Date.now() }],
+  };
+  const runIs = (run: RunState) => {
+    server.run = run;
+    act(() => setRun(SESSION, run));
+  };
+  /**
+   * What was asked for lands, in real time (only the polls are timed here): the session as read
+   * at the last poll must not come back over the run a test sets next.
+   */
+  const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
+  /** Git status reads over that many seconds of a window that stays in view. */
+  const readsIn = async (seconds: number) => {
+    const before = server.gitReads;
+    await act(() => vi.advanceTimersByTimeAsync(seconds * 1000));
+    const reads = server.gitReads - before;
+    await settle();
+    return reads;
+  };
+
+  it('reads git status every few seconds only while Claude works; idle, as often as the conversation does', async () => {
+    media['(min-width: 1440px)'] = true;
+    setPrefs({ workspacePane: true });
+    server.run = idle;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      session();
+      await screen.findByRole('complementary', { name: 'Changes and files' });
+      await loaded();
+      await waitFor(() => expect(server.gitReads).toBeGreaterThan(0));
+      await settle();
+      // A pane that stays open from one session to the next: the conversation's own reading, every 30 s.
+      expect(await readsIn(60)).toBe(2);
+      runIs(working);
+      expect(await readsIn(10)).toBe(2);
+      // Claude waits for an answer: nothing changes meanwhile.
+      runIs(asking);
+      expect(await readsIn(20)).toBeLessThanOrEqual(1);
+      // The turn ends: read once more, at once.
+      const before = server.gitReads;
+      runIs(idle);
+      await waitFor(() => expect(server.gitReads).toBe(before + 1));
+    } finally {
+      vi.useRealTimers();
+      setPrefs({ workspacePane: false });
+      act(() => setRun(SESSION, undefined));
+    }
   });
 });
