@@ -86,10 +86,12 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
     // What ignores the request still goes, also once the shell itself has exited.
     setTimeout(() => signal('SIGKILL'), KILL_AFTER_MS).unref();
   };
+  // Up to the limit, and nothing past it held even for a moment: a command can print gigabytes.
   const keep = (current: string, text: string) => {
-    if (current.length + text.length <= MAX_OUTPUT) return current + text;
+    const room = MAX_OUTPUT - current.length;
+    if (text.length <= room) return current + text;
     truncated = true;
-    return (current + text).slice(0, MAX_OUTPUT);
+    return room > 0 ? current + text.slice(0, room) : current;
   };
   // Decoded as a stream, so a character split between two reads stays whole.
   child.stdout.setEncoding('utf8');

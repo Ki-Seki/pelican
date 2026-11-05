@@ -19,7 +19,8 @@ const WAIT_MS = 500;
 /** A command whose record could not be written stays on show this long, saying why. */
 const FAILED_SHOWN_MS = 2 * 60_000;
 
-type Entry = { shell: LiveShell; run: CommandRun; pending: string; flush?: NodeJS.Timeout };
+/** `pending`: output not sent to the pages yet; `cut`: some went past what they keep. */
+type Entry = { shell: LiveShell; run: CommandRun; pending: string; cut?: boolean; flush?: NodeJS.Timeout };
 
 const bySession = new Map<string, Map<string, Entry>>();
 
@@ -33,24 +34,32 @@ export const shellsEvent = (sessionId: string): ServerEvent => ({ type: 'shells'
 
 const tell = (sessionId: string) => feedFor(sessionId).broadcast(shellsEvent(sessionId));
 
-/** What came since the last look goes out in one piece, up to what the page keeps. */
+/** What came since the last look goes out in one piece; once some was left out, the pages are told. */
 function flush(sessionId: string, entry: Entry): void {
   clearTimeout(entry.flush);
   entry.flush = undefined;
-  if (!entry.pending) return;
-  const room = MAX_OUTPUT - entry.shell.output.length;
-  const text = entry.pending.slice(0, Math.max(0, room));
-  const cut = text.length < entry.pending.length;
-  entry.pending = '';
-  if (text) {
+  if (entry.pending) {
     const from = entry.shell.output.length;
-    entry.shell.output += text;
-    feedFor(sessionId).broadcast({ type: 'shell_output', sessionId, id: entry.shell.id, from, text });
+    entry.shell.output += entry.pending;
+    feedFor(sessionId).broadcast({ type: 'shell_output', sessionId, id: entry.shell.id, from, text: entry.pending });
+    entry.pending = '';
   }
-  if (cut && !entry.shell.truncated) {
+  if (entry.cut && !entry.shell.truncated) {
     entry.shell.truncated = true;
     tell(sessionId);
   }
+}
+
+/**
+ * Output as it comes, held until the next look only up to what the page keeps: past that it is
+ * let go as it comes, since a command can print gigabytes (`!yes`) and keep at it for its half hour.
+ */
+function take(sessionId: string, entry: Entry, text: string): void {
+  const room = MAX_OUTPUT - entry.shell.output.length - entry.pending.length;
+  if (text.length > room) entry.cut = true;
+  if (room > 0) entry.pending += text.length > room ? text.slice(0, room) : text;
+  else if (entry.shell.truncated) return;
+  entry.flush ??= setTimeout(() => flush(sessionId, entry), FLUSH_MS);
 }
 
 function forget(sessionId: string, id: string): void {
@@ -92,10 +101,7 @@ export function startShell(sessionId: string, cwd: string, command: string, env?
   const run = startCommand(cwd, command, {
     ...(env ? { env } : {}),
     onOutput: (text) => {
-      if (!entry) return;
-      entry.pending += text;
-      const current = entry;
-      current.flush ??= setTimeout(() => flush(sessionId, current), FLUSH_MS);
+      if (entry) take(sessionId, entry, text);
     },
   });
   entry = { shell, run, pending: '' };

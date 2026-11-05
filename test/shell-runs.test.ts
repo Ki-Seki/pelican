@@ -90,7 +90,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
 const { closeAll, getRun, sendMessage } = await import('../src/server/runner');
 const { listModels } = await import('../src/server/models');
 const { feedFor } = await import('../src/server/feed');
-const { BASH_CAVEAT } = await import('../src/server/shell');
+const { BASH_CAVEAT, MAX_OUTPUT } = await import('../src/server/shell');
 const { liveShells, shellsEvent, startShell, stopShell } = await import('../src/server/shell-runs');
 const { app } = await import('../src/server/app');
 const { accessToken, loadAuth } = await import('../src/server/auth');
@@ -211,6 +211,29 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     expect(textOf(claude.prompts.at(-2)!)).toBe('<bash-input>echo meanwhile</bash-input>');
     expect(claude.prompts.at(-1)!.shouldQuery).toBe(true);
   });
+
+  it('that prints without end holds no more of it than the page keeps, and Pelican stays small', async () => {
+    const { sessionId, events } = await idleSession();
+    const before = process.memoryUsage().rss;
+    let peak = before;
+    const sampling = setInterval(() => {
+      peak = Math.max(peak, process.memoryUsage().rss);
+    }, 20);
+    try {
+      // A gigabyte or more a second: before, every bit of it was held until the next look.
+      const shell = startShell(sessionId, folder, 'yes "a fairly long line of output, to fill the pipe as fast as it goes ..........."');
+      await settle(3000);
+      expect(liveShells(sessionId)[0]).toMatchObject({ id: shell.id, truncated: true });
+      expect(liveShells(sessionId)[0]!.output.length).toBe(MAX_OUTPUT);
+      stopShell(sessionId, shell.id);
+      await until(() => liveShells(sessionId).length === 0, 10_000);
+      const sent = events.flatMap((e) => (e.type === 'shell_output' && e.id === shell.id ? [e.text] : [])).join('');
+      expect(sent.length).toBe(MAX_OUTPUT);
+    } finally {
+      clearInterval(sampling);
+    }
+    expect(peak - before).toBeLessThan(300e6);
+  }, 20_000);
 
   it('a page that subscribes is told of the commands running there, all of them', async () => {
     const { sessionId } = await idleSession();
