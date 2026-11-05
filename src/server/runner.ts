@@ -958,7 +958,9 @@ export class SessionRun {
               ...(typeof message.usage?.output_tokens === 'number' ? { outputTokens: message.usage.output_tokens } : {}),
             };
             this.activity = undefined;
+            // A turn Claude starts on its own (a scheduled check) may say nothing: it must not repeat the last reply.
             const reply = this.lastReply;
+            this.lastReply = '';
             // What waited for this turn goes out now, together, as Claude Code sends what was queued.
             const waiting = this.queued.splice(0);
             if (waiting.length > 0) {
