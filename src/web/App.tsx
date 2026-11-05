@@ -339,10 +339,12 @@ function Main() {
   );
 
   if (wide) {
+    // minmax(0, 1fr): the conversation's column never grows past the window to fit its content,
+    // which pushed Changes and files, docked at its right edge, out of view.
     return (
-      <div className="app-height grid grid-cols-[minmax(300px,360px)_1fr] overflow-hidden">
+      <div className="app-height grid grid-cols-[minmax(300px,360px)_minmax(0,1fr)] overflow-hidden">
         <aside className="min-h-0 border-r border-line">{list}</aside>
-        <main className="min-h-0">
+        <main className="min-h-0 min-w-0">
           {main ?? (
             <div className="flex h-full items-center justify-center">
               <div className="text-center">

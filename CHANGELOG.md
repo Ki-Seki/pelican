@@ -5,6 +5,8 @@
 - New sessions start at High effort until you pick another in Settings (New sessions start with >
   Model); picking Default there leaves the effort to Claude Code, as before. Sessions that already
   ran keep what they ran with, and a model without effort levels gets none.
+- On a computer, Changes and files docked beside the conversation is no longer cut off at the
+  right edge when the conversation holds long lines (the column grew to fit them).
 - The website's phone pictures show the whole screen, the message box included.
 - qrcode-generator 2 and esbuild 0.28 (the QR codes are the same, checked bit for bit).
 
