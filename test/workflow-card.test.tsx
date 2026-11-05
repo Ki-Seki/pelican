@@ -197,3 +197,17 @@ describe('a workflow agent', () => {
     expect(pages).toHaveBeenCalledWith(SESSION, 'toolu_w', 'a1', 2);
   });
 });
+
+describe('a workflow asking to run', () => {
+  it('shows its phases and what running it costs, the script a tap away, as Claude Code asks', async () => {
+    const { PermissionCard } = await import('../src/web/components/PermissionCard');
+    render(<PermissionCard sessionId={SESSION} request={{ id: 'p1', sessionId: SESSION, toolName: 'Workflow', input: { script: META }, createdAt: Date.now() }} />);
+    expect(screen.getByText('Claude wants to run a dynamic workflow')).toBeTruthy();
+    expect(document.body.textContent).toContain('This dynamic workflow will spin up multiple subagents across the following phases:');
+    expect(document.body.textContent).toContain('Review — one agent per area');
+    expect(document.body.textContent).toContain('can use a lot of tokens quickly');
+    expect(document.body.textContent).not.toContain('export const meta');
+    fireEvent.click(screen.getByRole('button', { name: 'View raw script' }));
+    expect(document.body.textContent).toContain('export const meta');
+  });
+});
