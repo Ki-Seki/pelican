@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api } from '../lib/api';
+import { type Entry, fold, foldKey, single } from '../lib/fold';
 import { dayGroup, relativeTime } from '../lib/format';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
@@ -99,7 +100,7 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
   );
 });
 
-type Group = { key: string; label: string; sessions: SessionSummary[] };
+type Group = { key: string; label: string; entries: Entry[]; count: number };
 
 function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const prefs = usePrefs();
@@ -157,6 +158,13 @@ export function SessionList({
   const [project, setProject] = useState<string>();
   const [viewOpen, setViewOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
+  const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, key: string) => set((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
 
   // One chip per real project; scratch sessions share one chip, and so do temporary ones,
   // which "All" leaves out unless the list's options say otherwise: they are mostly runs other sessions started.
@@ -197,7 +205,7 @@ export function SessionList({
     });
 
     if (prefs.listGroup === 'project' && !project) {
-      const byProject = new Map<string, Group>();
+      const byProject = new Map<string, { key: string; label: string; sessions: SessionSummary[] }>();
       for (const s of filtered) {
         const key = s.temp ? TEMP : s.scratch ? SCRATCH : s.cwd || s.project;
         const label = s.temp ? 'Temporary' : s.scratch ? 'Scratch' : s.project || '—';
@@ -208,18 +216,17 @@ export function SessionList({
         }
         group.sessions.push(s);
       }
-      return [...byProject.values()];
+      return [...byProject.values()].map((g) => ({ key: g.key, label: g.label, entries: fold(g.sessions), count: g.sessions.length }));
     }
 
     const out: Group[] = [];
     const active = filtered.filter((s) => s.status !== 'idle');
-    if (active.length > 0) out.push({ key: 'active', label: 'Active', sessions: active });
-    for (const s of filtered) {
-      if (s.status !== 'idle') continue;
-      const label = dayGroup(s.lastActivity);
+    if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active.map(single), count: active.length });
+    for (const entry of fold(filtered.filter((s) => s.status === 'idle'))) {
+      const label = dayGroup(entry.session.lastActivity);
       const last = out.at(-1);
-      if (last && last.label === label) last.sessions.push(s);
-      else out.push({ key: label, label, sessions: [s] });
+      if (last && last.label === label) last.entries.push(entry);
+      else out.push({ key: label, label, entries: [entry], count: 0 });
     }
     return out;
   }, [sessions, query, project, prefs.listGroup, prefs.showTemporary, prefs.showSideChats]);
@@ -295,33 +302,47 @@ export function SessionList({
               {byProject ? (
                 <button
                   type="button"
-                  onClick={() => setCollapsed((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(group.key)) next.delete(group.key);
-                    else next.add(group.key);
-                    return next;
-                  })}
+                  onClick={() => toggle(setCollapsed, group.key)}
                   className="sticky top-0 z-10 flex w-full items-center gap-1.5 bg-bg/90 px-3 pt-3 pb-1 text-left backdrop-blur"
                 >
                   <ChevronDown className={`size-3.5 text-faint transition-transform ${folded ? '-rotate-90' : ''}`} />
                   <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{group.label}</span>
-                  <span className="text-[12px] text-faint tabular-nums">{group.sessions.length}</span>
+                  <span className="text-[12px] text-faint tabular-nums">{group.count}</span>
                 </button>
               ) : (
                 <h2 className="sticky top-0 z-10 bg-bg/90 px-3 pt-3 pb-1 text-[11.5px] font-medium tracking-wide text-faint uppercase backdrop-blur">
                   {group.label}
                 </h2>
               )}
-              {!folded && group.sessions.map((s) => (
-                <Row
-                  key={s.id}
-                  session={s}
-                  selected={s.id === selectedId}
-                  unread={s.id !== selectedId && s.status !== 'running' && isUnread(s.id, s.lastActivity)}
-                  showProject={!byProject}
-                  onOpen={onOpen}
-                />
-              ))}
+              {!folded && group.entries.map(({ session: s, earlier }) => {
+                const row = (session: SessionSummary) => (
+                  <Row
+                    key={session.id}
+                    session={session}
+                    selected={session.id === selectedId}
+                    unread={session.id !== selectedId && session.status !== 'running' && isUnread(session.id, session.lastActivity)}
+                    showProject={!byProject}
+                    onOpen={onOpen}
+                  />
+                );
+                if (earlier.length === 0) return row(s);
+                const open = unfolded.has(foldKey(s)) || earlier.some((e) => e.id === selectedId);
+                return (
+                  <div key={s.id}>
+                    {row(s)}
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => toggle(setUnfolded, foldKey(s))}
+                      className="-mt-1 mb-1 ml-1.5 flex h-8 items-center gap-1 rounded-full px-1.5 text-[12.5px] text-faint hover:text-fg"
+                    >
+                      {open ? 'Hide' : `${earlier.length} earlier`}
+                      <ChevronDown className={`size-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+                    </button>
+                    {open && <div className="mb-1 ml-3 border-l border-line pl-1">{earlier.map(row)}</div>}
+                  </div>
+                );
+              })}
             </section>
           );
         })}

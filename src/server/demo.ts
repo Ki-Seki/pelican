@@ -210,6 +210,24 @@ const SESSIONS: DemoSession[] = [
       ];
     },
   },
+  // A scheduled check: every run is a session of its own, with the same folder and prompt.
+  // The list folds them into the newest.
+  ...[1, 7, 13].map((hours, i): DemoSession => ({
+    id: `a8b9c0d1-7777-4a7b-8c7d-00000000000${7 + i}`,
+    title: 'Check the export queue',
+    project: 'data-pipeline',
+    branch: 'main',
+    rows: () => {
+      const t = Date.now() - hours * HOUR;
+      const id = `q${i}`;
+      return [
+        { role: 'user', at: t, content: 'Check the export queue: is anything stuck or failing?' },
+        { role: 'assistant', at: t + 4000, content: [tool(id, 'Bash', { command: 'python3 pipeline/queue.py --status', description: 'Show the queue' })] },
+        { role: 'user', at: t + 6000, content: [result(id, ['queued 0  running 1  failed 0', 'queued 3  running 1  failed 0', 'queued 0  running 0  failed 0'][i]!)] },
+        { role: 'assistant', at: t + 8000, content: [text(['All clear: one export running, nothing stuck.', 'Three exports waiting behind one that runs; none failed.', 'All clear: the queue is empty.'][i]!)] },
+      ];
+    },
+  })),
   {
     id: 'e2f5d8a4-5555-4e5f-8071-000000000005',
     title: 'Turn this CSV into JSON',
