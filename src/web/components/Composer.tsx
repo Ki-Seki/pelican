@@ -228,16 +228,25 @@ type Content = { text: string; files: boolean };
  * those there. A command never shares the box, with words or with files: words typed under it
  * would become part of it (its arguments, or more of the shell command), words above it would make
  * it a message, and files would go with it as a list after it. Then it, or the message that comes
- * back while one is typed, waits above the box with its files (`held`), to be put back.
+ * back while one is typed, waits above the box with its files (`held`), to be put back. In a side
+ * chat nothing is a command. Words the box holds already, word for word, are not put in twice:
+ * typed again, or kept as its draft while they were on their way, and the box shown again since.
  */
-function givenBack(box: Content, back: Content): { text: string; held?: boolean } {
+function givenBack(box: Content, back: Content, commands: boolean): { text: string; held?: boolean } {
   const words = back.text.trim();
   if (!words && !back.files) return { text: box.text };
+  if (words && box.text.trim() === words) return { text: box.text };
   const typed = box.text.trim().length > 0;
-  if ((typed || box.files) && (isCommand(back.text) || isCommand(box.text))) return { text: box.text, held: true };
+  if (commands && (typed || box.files) && (isCommand(back.text) || isCommand(box.text))) return { text: box.text, held: true };
   if (!words) return { text: box.text };
   return { text: typed ? `${back.text.trimEnd()}\n\n${box.text}` : back.text };
 }
+
+/**
+ * Drafts a box has taken, each once. A side chat's box, closed and opened again, is a new box
+ * given the same draft: it starts from what was typed in it, its draft (lib/drafts), instead.
+ */
+const taken = new WeakSet<ComposerDraft>();
 
 /** How a text waiting to be put back is shown: its first line. */
 const firstLine = (text: string) => text.trim().split('\n')[0]!;
@@ -309,8 +318,9 @@ export function Composer({
   atBottom?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {
-  const [saved] = useState(() => (draftKey && !draft ? loadDraft(draftKey) : undefined));
-  const [text, setText] = useState(draft?.text ?? saved?.text ?? '');
+  // What was typed here, and the draft given, if this box has not taken it yet, put in once it is up.
+  const [saved] = useState(() => (draftKey ? loadDraft(draftKey) : undefined));
+  const [text, setText] = useState(saved?.text ?? '');
   const [caret, setCaret] = useState(0);
   const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
   // Quotes of what was selected (lib/quote), above the box until they go above the words.
@@ -364,12 +374,13 @@ export function Composer({
   useEffect(() => setHighlight(0), [trigger?.kind, trigger?.query]);
 
   useEffect(() => {
-    if (!draft) return;
+    if (!draft || taken.has(draft)) return;
+    taken.add(draft);
     // A message given back (its send failed) brings its quotes back above the box, before any added since.
     const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
     if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
     const files = draft.attachments ?? [];
-    const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: given.text, files: files.length > 0 }) : undefined;
+    const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: given.text, files: files.length > 0 }, !side) : undefined;
     const next = draft.block ? withQuote(text, draft.text)
       : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
         : back ? back.text
@@ -516,7 +527,7 @@ export function Composer({
     const back = held[at];
     if (back === undefined || uploading) return;
     const files = back.attachments ?? [];
-    const joined = givenBack({ text, files: uploads.some((u) => !u.error) }, { text: back.text, files: files.length > 0 });
+    const joined = givenBack({ text, files: uploads.some((u) => !u.error) }, { text: back.text, files: files.length > 0 }, !side);
     const next = joined.held ? back.text : joined.text;
     if (joined.held) {
       const attached = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
