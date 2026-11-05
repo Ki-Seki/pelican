@@ -1,6 +1,7 @@
 import { CircleHelp, ClipboardList, ExternalLink, Loader2, Plug, ShieldQuestion, TriangleAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { revealHidden } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { api } from '../lib/api';
@@ -9,21 +10,6 @@ import { Diff } from './Diff';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
-
-/**
- * Characters that change how text reads without being seen (zero-width, direction overrides and
- * isolates): a command can read as an echo while the shell runs something else. Shown as tokens.
- */
-const HIDDEN = /[​-‏‪-‮⁦-⁩﻿]/g;
-
-export function revealHidden(text: string): { text: string; hidden: boolean } {
-  let hidden = false;
-  const shown = text.replace(HIDDEN, (ch) => {
-    hidden = true;
-    return `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`;
-  });
-  return { text: shown, hidden };
-}
 
 /**
  * Whether a click on an approval is meant for it. For a moment after the card appears, and after
@@ -110,7 +96,9 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target) : undefined;
   const raw = !edit && !command && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
-  const hidden = Boolean(command?.hidden || target?.hidden || raw?.hidden);
+  // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
+  const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
+  const hidden = [command, target, raw, head, about, server, always].some((text) => text?.hidden);
 
   const allow = <Button kind={request.defaultToNo ? 'secondary' : 'primary'} disabled={busy} onClick={() => decide({ behavior: 'allow' })}>Allow</Button>;
   const deny = <Button kind={request.defaultToNo ? 'primary' : 'quiet'} disabled={busy} onClick={() => setDenying(true)}>Deny</Button>;
@@ -118,11 +106,11 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
     <div>
       <div className="flex items-start gap-2 text-[13px] text-muted">
         <ShieldQuestion className="mt-px size-4 shrink-0" />
-        <span>{headline(request, cwd)}</span>
+        <span>{head!.text}</span>
       </div>
       {request.agent && <div className="mt-0.5 text-[12.5px] text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${request.agent} agent`}</div>}
-      {request.server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {request.server}</div>}
-      {request.description && <div className="mt-1 text-[12.5px] leading-snug text-muted">{request.description}</div>}
+      {server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {server.text}</div>}
+      {about && <div className="mt-1 text-[12.5px] leading-snug text-muted">{about.text}</div>}
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
       {target && (summary.prose || !command) && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{target.text}</div>}
       {request.reason && <div className="mt-1 text-[12.5px] text-faint">{request.reason}</div>}
@@ -161,9 +149,9 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
           <div className="mt-3 flex flex-wrap gap-2">
             {request.defaultToNo ? <>{deny}{allow}</> : <>{allow}{deny}</>}
           </div>
-          {request.always && (
+          {always && (
             <div className="mt-2 flex">
-              <Button wrap disabled={busy} onClick={() => decide({ behavior: 'allow', remember: true })}>{request.always}</Button>
+              <Button wrap disabled={busy} onClick={() => decide({ behavior: 'allow', remember: true })}>{always.text}</Button>
             </div>
           )}
         </>
