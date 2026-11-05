@@ -118,6 +118,8 @@ security, the launch, competitors, code quality) and an adversarial review of th
 - When the computer cannot be reached, one quiet line says so, with Retry.
 - A `!` command that leaves something running in the background returns at once.
 - A named pipe or device file in a project can no longer freeze Pelican.
+- On Linux with Node 24, a Claude Code that Node runs (Node names its main thread MainThread) is
+  recognized again as working in another app.
 - A signed-out or missing Claude Code is detected and said in Pelican's words; the banner and
   Settings > About say which Claude Code runs, and when your own `claude` is newer.
 

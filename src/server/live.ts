@@ -110,7 +110,8 @@ export async function liveProcesses(): Promise<Map<string, LiveProcess>> {
   const procs = entries.length > 0 ? await processes() : undefined;
   for (const entry of entries) {
     const proc = procs?.get(entry.pid);
-    if (procs && (!proc || !/claude|node|bun|disclaimer/i.test(proc.comm))) continue;
+    // Node 24 on Linux names its main thread, so ps shows a Claude Code run by Node as MainThread.
+    if (procs && (!proc || !/claude|node|bun|disclaimer|MainThread/i.test(proc.comm))) continue;
     const ours = procs ? descends(entry.pid, procs) : entry.entrypoint === 'sdk-ts';
     if (ours) continue;
     const busy = entry.status !== undefined && entry.status !== 'idle';
