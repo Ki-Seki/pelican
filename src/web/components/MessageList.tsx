@@ -13,7 +13,7 @@ import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
-import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
+import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PromptBody, QuoteAction } from './Quotes';
@@ -673,29 +673,9 @@ export function MessageList({
   // When the running turn began, for a run that does not say: the prompt that started it.
   const promptAt = items.findLast((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user' && !i.steered)?.timestamp;
 
-  // The files each prompt's turn changed, said under the last of Claude's answers to it.
+  // The files each turn changed, said under the last of Claude's answers in it.
   const turns = usePathLinks()?.turns;
-  const changedUnder = useMemo(() => {
-    const byPrompt = new Map((turns ?? []).map((turn) => [turn.uuid, turn]));
-    const under = new Map<string, TurnChanges>();
-    let prompt: string | undefined;
-    let answer: string | undefined;
-    const close = () => {
-      const turn = prompt ? byPrompt.get(prompt) : undefined;
-      if (turn && answer) under.set(answer, turn);
-    };
-    for (const item of items) {
-      if (item.kind === 'user' && !item.steered) {
-        close();
-        prompt = item.key;
-        answer = undefined;
-      } else if (item.kind === 'assistant') {
-        answer = item.key;
-      }
-    }
-    close();
-    return under;
-  }, [items, turns]);
+  const changedUnder = useMemo(() => filesChangedUnder(items, turns ?? []), [items, turns]);
 
   /**
    * After anything that changes the list's size or position: back to the end while following,

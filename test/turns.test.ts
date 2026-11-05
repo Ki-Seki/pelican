@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ChatMessage } from '../src/shared/protocol';
-import { buildItems } from '../src/web/lib/turns';
+import { buildItems, filesChangedUnder } from '../src/web/lib/turns';
 
 const user = (uuid: string, text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], ...extra });
 const assistant = (uuid: string, blocks: ChatMessage['blocks']): ChatMessage => ({ uuid, role: 'assistant', blocks });
@@ -81,5 +81,38 @@ describe('toChatMessage: refusals', () => {
     // Stopped is not refused, and a plain error is neither.
     expect(row('interrupted')?.blocks[0]).not.toHaveProperty('denied');
     expect(row()?.blocks[0]).not.toHaveProperty('denied');
+  });
+});
+
+describe('where a turn’s "files changed" goes', () => {
+  const turn = (uuid: string, n: number) => ({ uuid, n, text: '', files: [{ path: 'theme.css', added: 1, removed: 1 }], checkpoint: false });
+  const picture: ChatMessage['blocks'][number] = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+
+  it('under Claude’s answer to a ! command when the command’s turn changed files, as /diff cuts turns', () => {
+    const items = buildItems([
+      user('p1', 'Fix the failing tests'),
+      assistant('a1', [{ type: 'text', text: 'Run them and I will look.' }]),
+      user('c1', '<bash-input>npm test</bash-input>'),
+      user('o1', '<bash-stdout>FAIL theme.test.ts</bash-stdout><bash-stderr></bash-stderr>'),
+      assistant('a2', [{ type: 'text', text: 'Fixed.' }]),
+      user('p2', 'Thanks'),
+      assistant('a3', [{ type: 'text', text: 'You are welcome.' }]),
+    ]);
+    // The ! command's turn is known by the row holding the command, the card's own key.
+    const under = filesChangedUnder(items, [turn('c1', 3)]);
+    expect([...under].map(([answer, t]) => [answer, t.uuid])).toEqual([['a2', 'c1']]);
+  });
+
+  it('under the last answer of the turn a picture sent without words belongs to, and after a task’s note under its answer', () => {
+    const items = buildItems([
+      user('p1', 'Make the toggle bigger'),
+      assistant('a1', [{ type: 'text', text: 'Done.' }]),
+      { uuid: 'i1', role: 'user', blocks: [picture] },
+      assistant('a2', [{ type: 'text', text: 'And now it matches.' }]),
+      user('n1', '<task-notification>\n<summary>Background command "npm run build" completed (exit code 0)</summary>\n</task-notification>'),
+      assistant('a3', [{ type: 'text', text: 'The build is fixed.' }]),
+    ]);
+    const under = filesChangedUnder(items, [turn('p1', 1), turn('n1', 2)]);
+    expect([...under].map(([answer, t]) => [answer, t.uuid])).toEqual([['a2', 'p1'], ['a3', 'n1']]);
   });
 });

@@ -1,5 +1,5 @@
 import { errorLine, nextStep } from '../../shared/errors';
-import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
+import type { ChatMessage, ImageBlock, ToolResultBlock, TurnChanges } from '../../shared/protocol';
 import { todosOf } from '../../shared/tasks';
 
 export type ToolCall = {
@@ -236,6 +236,8 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
         }
       } else {
         push({ ...classified, key: message.uuid });
+        // Claude's answer to a background task's note comes after the note, as a turn of its own.
+        if (classified.kind === 'notice' && classified.tone === 'task') turn = undefined;
       }
       continue;
     }
@@ -271,6 +273,37 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
     });
   }
   return items;
+}
+
+/**
+ * Where each turn's "files changed" goes: under the last of Claude's answers in it. Turns end
+ * where Claude Code's /diff ends them (see changes.ts), at the next row it counts as a prompt: a
+ * prompt with words or a `/` command, a `!` command, a background task's note, an interruption, a
+ * compaction. A `/` command's output belongs to it, and a picture sent without words is no new turn.
+ */
+export function filesChangedUnder(items: readonly Item[], turns: readonly TurnChanges[]): Map<string, TurnChanges> {
+  const byStart = new Map(turns.map((turn) => [turn.uuid, turn]));
+  const under = new Map<string, TurnChanges>();
+  let start: string | undefined;
+  let answer: string | undefined;
+  const close = () => {
+    const turn = start ? byStart.get(start) : undefined;
+    if (turn && answer) under.set(answer, turn);
+  };
+  for (const item of items) {
+    const starts = item.kind === 'user' ? !item.steered && (Boolean(item.text) || Boolean(item.command))
+      : item.kind === 'notice' ? item.tone === 'task' || item.tone === 'interrupt'
+        : item.kind === 'shell' || item.kind === 'compact';
+    if (starts) {
+      close();
+      start = item.key;
+      answer = undefined;
+    } else if (item.kind === 'assistant') {
+      answer = item.key;
+    }
+  }
+  close();
+  return under;
 }
 
 /** Text of a tool result, with images left out. */
