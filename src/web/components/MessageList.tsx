@@ -11,6 +11,7 @@ import { describeTool } from '../lib/tools';
 import { buildItems, type Item, type Part } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
+import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -415,7 +416,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
   return (
     <div>
       {run.partial.map((block, i) => {
-        if (block.type === 'text') return block.text ? <Markdown key={i} text={block.text} className="my-2" /> : null;
+        if (block.type === 'text') return block.text ? <StreamingMarkdown key={i} text={block.text} className="my-2" /> : null;
         if (block.type === 'thinking') return <Thinking key={i} text={block.thinking} live />;
         const summary = describeTool(block.name, partialTarget(block), cwd);
         const Icon = summary.icon;

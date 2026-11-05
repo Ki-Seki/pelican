@@ -77,4 +77,18 @@ describe('the live socket', () => {
       expect(await alive()).toBe(200);
     }
   });
+
+  it('answers every subscribe with the run as it is, or with none, also when asked again', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { headers: { ...page, authorization: `Bearer ${accessToken()}` } });
+    const events: unknown[] = [];
+    ws.on('message', (data) => events.push(JSON.parse(String(data))));
+    await new Promise((resolve) => ws.on('open', resolve));
+    const id = '0f0f0f0f-0000-4000-8000-0000000000aa';
+    ws.send(JSON.stringify({ type: 'subscribe', sessionId: id }));
+    ws.send(JSON.stringify({ type: 'subscribe', sessionId: id }));
+    ws.send(JSON.stringify({ type: 'subscribe', sessionId: '../../etc' }));
+    for (const start = Date.now(); events.length < 2 && Date.now() - start < 2000;) await new Promise((resolve) => setTimeout(resolve, 20));
+    ws.close();
+    expect(events).toEqual([{ type: 'run', sessionId: id, state: null }, { type: 'run', sessionId: id, state: null }]);
+  });
 });

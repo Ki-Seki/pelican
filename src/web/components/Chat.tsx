@@ -17,7 +17,7 @@ import {
   getView,
   loadLatest,
   removeLocalMessage,
-  setRun,
+  syncRun,
   truncateFrom,
   useSessionView,
 } from '../lib/store';
@@ -293,8 +293,8 @@ export function Chat({
   }, [sessionId]);
 
   useEffect(() => {
-    if (sessionId && detail?.run && !getView(sessionId).run) setRun(sessionId, detail.run);
-  }, [sessionId, detail?.run]);
+    if (sessionId && detail) syncRun(sessionId, detail.run);
+  }, [sessionId, detail]);
 
   // Whatever is on screen counts as read.
   useEffect(() => {

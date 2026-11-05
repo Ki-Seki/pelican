@@ -211,14 +211,26 @@ export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-
 export type RewindResult = { canRewind: boolean; error?: string; files?: string[]; insertions?: number; deletions?: number };
 export type Agent = { name: string; description: string };
 
+/** Text streamed into a run's partial block `index` since the last update: `text` goes at `from`. */
+export type PartialAppend = { index: number; from: number; text: string };
+
 export type ServerEvent =
   | { type: 'session'; session: SessionSummary }
   | { type: 'sessions_changed' }
   | { type: 'message'; sessionId: string; message: ChatMessage }
-  | { type: 'run'; state: RunState }
+  | { type: 'run'; state: RunState; sessionId?: string }
+  /** The answer to a subscribe when no Claude runs for the session here: the client clears what it had. */
+  | { type: 'run'; sessionId: string; state: null }
+  /**
+   * While Claude writes, only what was added: applied to the run the client has when each `from` is
+   * where its copy ends. A client whose copy does not match subscribes again and gets the whole run.
+   */
+  | { type: 'partial'; sessionId: string; appends: PartialAppend[] }
   /** A session's status changed; sent to every client, for session lists. */
   | { type: 'status'; sessionId: string; status: SessionStatus }
-  | { type: 'reload'; sessionId: string };
+  | { type: 'reload'; sessionId: string }
+  /** Every 25 s: pages cannot see pings, and a socket that has gone quiet is a dead one. */
+  | { type: 'tick' };
 
 export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }

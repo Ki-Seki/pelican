@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { ClientEvent, ServerEvent } from '../shared/protocol.js';
+import type { ClientEvent, RunState, ServerEvent } from '../shared/protocol.js';
 import { app } from './app.js';
 import { loadAuth, signedIn } from './auth.js';
 import { config } from './config.js';
@@ -12,10 +12,18 @@ import { connect, subscribe } from './feed.js';
 import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
+import { RunChannel } from './stream.js';
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 /** A browser follows a handful of sessions at once; more from one socket is not a browser. */
 const MAX_SUBSCRIPTIONS = 64;
+/** Proxies close idle sockets (Cloudflare after 100 s); a ping this often keeps them open and finds dead ones. */
+const HEARTBEAT_MS = 25_000;
+/**
+ * Unsent bytes past which a socket gets no more run updates until it catches up (a phone on a slow
+ * link): each update replaces the last, so only the newest is sent once the backlog is gone.
+ */
+const MAX_BUFFERED = 256 * 1024;
 
 /** A client event, or undefined for anything else. */
 function clientEvent(text: string): ClientEvent | undefined {
@@ -58,8 +66,9 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   await loadAuth();
   await initPush();
 
-  // Client events are a few hundred bytes; nothing bigger is read.
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  // Client events are a few hundred bytes; nothing bigger is read. What goes out is mostly JSON,
+  // compressed: Tailscale Serve and SSH tunnels pass it on as it is.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: { threshold: 1024 } });
 
   const { url, server } = await new Promise<{ url: string; server: ReturnType<typeof serve> }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info: AddressInfo) => {
@@ -95,27 +104,76 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     };
     const disconnect = connect(send);
     const subscriptions = new Map<string, () => void>();
-    // Proxies close idle sockets (Cloudflare after 100 s); a ping every 25 s keeps it open.
-    const ping = setInterval(() => ws.ping(), 25_000);
+    const channels = new Map<string, RunChannel>();
+    /** Sessions whose run updates were held back while the socket was full. */
+    const behind = new Set<string>();
+    let catchingUp: NodeJS.Timeout | undefined;
+
+    const sendRun = (sessionId: string, state: RunState | null) => {
+      const channel = channels.get(sessionId);
+      if (!channel || ws.readyState !== ws.OPEN) return;
+      if (ws.bufferedAmount > MAX_BUFFERED) {
+        channel.reset();
+        behind.add(sessionId);
+        catchingUp ??= setInterval(() => {
+          if (ws.readyState !== ws.OPEN || ws.bufferedAmount > MAX_BUFFERED / 2) return;
+          clearInterval(catchingUp);
+          catchingUp = undefined;
+          for (const id of [...behind]) {
+            behind.delete(id);
+            sendRun(id, runState(id) ?? null);
+          }
+        }, 250);
+        return;
+      }
+      const event = channel.next(state);
+      if (event) send(event);
+    };
+
+    // A socket that missed a pong is gone (a phone that changed networks, a closed lid): it is
+    // dropped with its subscriptions, instead of being polled for until TCP gives up. Pages
+    // cannot see pings, so a tick tells them the socket still works.
+    let alive = true;
+    ws.on('pong', () => {
+      alive = true;
+    });
+    const heartbeat = setInterval(() => {
+      if (!alive) {
+        ws.terminate();
+        return;
+      }
+      alive = false;
+      ws.ping();
+      send({ type: 'tick' });
+    }, HEARTBEAT_MS);
     // A frame too large or malformed closes this socket; unheard, the error would stop the server.
     ws.on('error', () => ws.terminate());
 
     ws.on('message', (data) => {
       const event = clientEvent(String(data));
       if (!event) return;
-      if (event.type === 'subscribe' && !subscriptions.has(event.sessionId)) {
-        if (subscriptions.size >= MAX_SUBSCRIPTIONS) return;
-        subscriptions.set(event.sessionId, subscribe(event.sessionId, send));
-        const state = runState(event.sessionId);
-        if (state) send({ type: 'run', state });
-      } else if (event.type === 'unsubscribe') {
-        subscriptions.get(event.sessionId)?.();
-        subscriptions.delete(event.sessionId);
+      const id = event.sessionId;
+      if (event.type === 'subscribe') {
+        if (!subscriptions.has(id)) {
+          if (subscriptions.size >= MAX_SUBSCRIPTIONS) return;
+          channels.set(id, new RunChannel(id));
+          subscriptions.set(id, subscribe(id, (update) => (update.type === 'run' ? sendRun(id, update.state) : send(update))));
+        }
+        // Every subscribe is answered with the run as it is now, or with none, also a repeated
+        // one: a page that comes back after a while asks again and is set right, whatever it missed.
+        channels.get(id)!.reset();
+        sendRun(id, runState(id) ?? null);
+      } else {
+        subscriptions.get(id)?.();
+        subscriptions.delete(id);
+        channels.delete(id);
+        behind.delete(id);
       }
     });
 
     ws.on('close', () => {
-      clearInterval(ping);
+      clearInterval(heartbeat);
+      clearInterval(catchingUp);
       disconnect();
       for (const unsubscribe of subscriptions.values()) unsubscribe();
     });
