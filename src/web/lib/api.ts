@@ -19,6 +19,7 @@ import type {
   RunState,
   SendMode,
   ServerInfo,
+  SessionChanges,
   SessionSummary,
   TaskOutput,
   TreeEntry,
@@ -234,12 +235,25 @@ export const api = {
   /** The plan's usage as Claude Code's /usage shows it, or null where plan limits do not apply. */
   planUsage: () => request<{ plan: PlanUsage | null }>('usage/plan').then((r) => r.plan),
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
-  git: (cwd: string) => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}`),
-  gitDiff: (cwd: string, path: string) => request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),
+  /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
+  git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
+  gitDiff: (cwd: string, path: string, scope?: 'base') =>
+    request<{ diff: string }>(`git/diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ''}`).then((r) => r.diff),
   tree: (cwd: string, path: string) => request<{ entries: TreeEntry[] }>(`tree?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`).then((r) => r.entries),
   file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>
     request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
+  /** The lines of the folder's files that hold `q` (Claude Code's ripgrep, else a scan). */
+  search: (cwd: string, q: string) =>
+    request<{ engine: 'rg' | 'scan'; files: Array<{ path: string; lines: Array<{ n: number; text: string }> }>; truncated: boolean }>(`search?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`),
+  /** Which of these paths (at most 50) are files in the folder. */
+  exists: (cwd: string, paths: string[]) =>
+    request<{ paths: string[] }>(`exists?cwd=${encodeURIComponent(cwd)}${paths.map((p) => `&p=${encodeURIComponent(p)}`).join('')}`).then((r) => r.paths),
+  /** What each turn of a session changed (T1, T2…), from Claude Code's records of its edits. */
+  changes: (id: string) => request<SessionChanges>(`sessions/${encodeURIComponent(id)}/changes`),
+  /** One turn's diff of one file. */
+  turnDiff: (id: string, turn: string, path: string) =>
+    request<{ diff: string }>(`sessions/${encodeURIComponent(id)}/changes?turn=${encodeURIComponent(turn)}&path=${encodeURIComponent(path)}`).then((r) => r.diff),
   projects: () => request<{ projects: Project[] }>('projects').then((r) => r.projects),
   dirs: (path?: string) => request<DirListing>(`dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   /** Makes a folder inside `parent` and says where it is. */

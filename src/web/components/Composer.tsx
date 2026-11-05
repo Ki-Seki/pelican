@@ -6,6 +6,7 @@ import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api, apiUrl, isDemoNote } from '../lib/api';
 import { loadDraft, useDraftSaver } from '../lib/drafts';
+import { withQuote } from '../lib/quote';
 import { formatBytes } from '../lib/format';
 import { composing, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
@@ -226,9 +227,10 @@ export function Composer({
   cwd?: string;
   /**
    * Text to put in the box, e.g. a prompt being edited, or one that failed to send (with its
-   * files); a new `key` puts it in again. `append` adds it after what is there.
+   * files); a new `key` puts it in again. `append` adds it after what is there; `block` too, on
+   * lines of its own (a quote, line comments, a request).
    */
-  draft?: { text: string; key: number; append?: boolean; attachments?: Attachment[] };
+  draft?: { text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] };
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
@@ -274,7 +276,7 @@ export function Composer({
 
   useEffect(() => {
     if (!draft) return;
-    const next = draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
+    const next = draft.block ? withQuote(text, draft.text) : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
     setText(next);
     // A message given back (its send failed) brings its files back too, beside any added since.
     const back = draft.attachments;

@@ -85,13 +85,45 @@ export function commentsMessage(comments: readonly LineComment[]): string {
     .join('\n\n');
 }
 
+/** A message with line comments after it, as they go with the next message (or alone, Send now). */
+export function withComments(text: string, comments: readonly LineComment[]): string {
+  if (comments.length === 0) return text;
+  const body = text.replace(/\s+$/, '');
+  return body ? `${body}\n\n${commentsMessage(comments)}` : commentsMessage(comments);
+}
+
 /**
  * Comments not sent yet, by folder: the changes are the folder's, whichever of its sessions is
- * open. Kept in this page only, until they go into a message.
+ * open. As in Claude Desktop they go with the next message sent from it, or all at once with
+ * Send now. Kept with the drafts in this browser, so a reload loses none, and forgotten with
+ * them when it signs out.
  */
-const byFolder = new Map<string, LineComment[]>();
+const KEY = 'pelican:comments';
+const KEEP_FOLDERS = 20;
+const KEEP_EACH = 200;
 const listeners = new Set<() => void>();
 const NONE: LineComment[] = [];
+
+function load(): Map<string, LineComment[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as unknown;
+    if (!raw || typeof raw !== 'object') return new Map();
+    return new Map(Object.entries(raw as Record<string, unknown>).filter((entry): entry is [string, LineComment[]] => Array.isArray(entry[1])));
+  } catch {
+    return new Map();
+  }
+}
+
+const byFolder = load();
+
+function keep(): void {
+  try {
+    if (byFolder.size === 0) localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, JSON.stringify(Object.fromEntries([...byFolder].slice(-KEEP_FOLDERS))));
+  } catch {
+    // Private mode or full: the comments live as long as the page.
+  }
+}
 
 export function useComments(cwd: string): LineComment[] {
   return useSyncExternalStore(
@@ -103,8 +135,25 @@ export function useComments(cwd: string): LineComment[] {
   );
 }
 
+/** The folder's comments as they are now, outside a component. */
+export const commentsOf = (cwd: string): LineComment[] => byFolder.get(cwd) ?? NONE;
+
 export function setComments(cwd: string, comments: LineComment[]): void {
-  if (comments.length > 0) byFolder.set(cwd, comments);
-  else byFolder.delete(cwd);
+  byFolder.delete(cwd);
+  if (comments.length > 0) byFolder.set(cwd, comments.slice(-KEEP_EACH));
+  keep();
+  for (const listener of listeners) listener();
+}
+
+/** Takes away comments that went with a message (others may have been added meanwhile). */
+export function dropComments(cwd: string, sent: readonly LineComment[]): void {
+  const gone = new Set(sent.map((c) => c.id));
+  setComments(cwd, commentsOf(cwd).filter((c) => !gone.has(c.id)));
+}
+
+/** Signing out leaves no comments behind in this browser. */
+export function forgetComments(): void {
+  byFolder.clear();
+  keep();
   for (const listener of listeners) listener();
 }

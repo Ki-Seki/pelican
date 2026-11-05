@@ -1,0 +1,131 @@
+import { randomUUID } from 'node:crypto';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { sessionChanges, turnDiff } from '../src/server/changes';
+import { lineDiff, splitLines, toHunks } from '../src/shared/line-diff';
+import { parseDiff } from '../src/web/lib/review';
+
+/**
+ * A transcript as Claude Code writes one: prompts, tool calls, and their results with what the
+ * tool recorded (`toolUseResult`), plus a file-history snapshot for each prompt it kept files for.
+ */
+function transcript(cwd: string) {
+  const lines: string[] = [];
+  let parent: string | null = null;
+  let at = Date.parse('2026-11-05T10:00:00Z');
+  const row = (fields: Record<string, unknown>) => {
+    const uuid = randomUUID();
+    at += 1000;
+    lines.push(JSON.stringify({ parentUuid: parent, isSidechain: false, cwd, sessionId: 's1', uuid, timestamp: new Date(at).toISOString(), ...fields }));
+    parent = uuid;
+    return uuid;
+  };
+  let calls = 0;
+  return {
+    lines,
+    prompt(text: string, checkpoint = true) {
+      const uuid = row({ type: 'user', message: { role: 'user', content: text } });
+      if (checkpoint) lines.push(JSON.stringify({ type: 'file-history-snapshot', messageId: uuid, snapshot: { messageId: uuid, trackedFileBackups: {}, timestamp: new Date(at).toISOString() }, isSnapshotUpdate: false }));
+      return uuid;
+    },
+    /** A tool call and its result; `recorded` is what Claude Code keeps of the result. */
+    tool(name: string, input: Record<string, unknown>, recorded?: unknown) {
+      calls += 1;
+      const id = `toolu_${calls}`;
+      row({ type: 'assistant', message: { role: 'assistant', id: `msg_${calls}`, content: [{ type: 'tool_use', id, name, input }] } });
+      row({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] }, ...(recorded === undefined ? {} : { toolUseResult: recorded }) });
+      return id;
+    },
+    reply(text: string) {
+      row({ type: 'assistant', message: { role: 'assistant', id: `msg_r${lines.length}`, content: [{ type: 'text', text }] } });
+    },
+  };
+}
+
+const patch = (before: string, after: string) => toHunks(lineDiff(splitLines(before), splitLines(after))!);
+const edit = (file: string, before: string, after: string) => ({ filePath: file, oldString: 'x', newString: 'y', originalFile: before, structuredPatch: patch(before, after), userModified: false, replaceAll: false });
+
+let dir: string;
+let cwd: string;
+let file: string;
+const THEME = ':root {\n  --bg: #fff;\n  --fg: #111;\n}\n';
+const THEME_DARK = `${THEME}\n[data-theme=dark] {\n  --bg: #000;\n  --fg: #eee;\n}\n`;
+const THEME_FIXED = THEME_DARK.replace('--fg: #eee;', '--fg: #ededed;');
+const ids: Record<string, string> = {};
+
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-changes-'));
+  cwd = path.join(dir, 'app');
+  file = path.join(dir, 's1.jsonl');
+  const t = transcript(cwd);
+  ids.first = t.prompt('Add a dark theme\n\nwith a toggle');
+  ids.firstEdit = t.tool('Edit', { file_path: `${cwd}/src/theme.css` }, edit(`${cwd}/src/theme.css`, THEME, THEME_DARK));
+  t.tool('Write', { file_path: `${cwd}/src/Toggle.tsx` }, { type: 'create', filePath: `${cwd}/src/Toggle.tsx`, content: 'export const Toggle = () => null;\n', structuredPatch: [], originalFile: null });
+  // A command that changed a file: only git sees that, as in Claude Code.
+  t.tool('Bash', { command: 'sed -i s/a/b/ README.md' }, { stdout: '', stderr: '', interrupted: false });
+  t.reply('Done.');
+  ids.question = t.prompt('What does the toggle do?', false);
+  t.tool('Read', { file_path: `${cwd}/src/Toggle.tsx` }, { type: 'text', file: { filePath: `${cwd}/src/Toggle.tsx`, content: '…' } });
+  t.reply('It switches the theme.');
+  ids.second = t.prompt('The text is too dim in the dark');
+  t.tool('Edit', { file_path: `${cwd}/src/theme.css` }, edit(`${cwd}/src/theme.css`, THEME_DARK, THEME_FIXED));
+  // The second edit changes the very line the first one made: the turn changed one line, not two.
+  t.tool('Edit', { file_path: `${cwd}/src/theme.css` }, edit(`${cwd}/src/theme.css`, THEME_FIXED, THEME_FIXED.replace('--fg: #ededed;', '--fg: #f0f0f0;')));
+  t.tool('MultiEdit', { file_path: `${cwd}/src/App.tsx` }, { filePath: `${cwd}/src/App.tsx`, edits: [], originalFileContents: 'a\nb\nc\n', structuredPatch: patch('a\nb\nc\n', 'a\nB\nc\nd\n'), userModified: false });
+  // An edit held for the owner to review changed nothing.
+  t.tool('Edit', { file_path: `${cwd}/src/held.ts` }, { ...edit(`${cwd}/src/held.ts`, 'a\n', 'b\n'), staged: true });
+  t.tool('Write', { file_path: '/elsewhere/notes.md' }, { type: 'update', filePath: '/elsewhere/notes.md', content: 'new\n', originalFile: 'old\n', structuredPatch: patch('old\n', 'new\n') });
+  t.tool('NotebookEdit', { notebook_path: `${cwd}/a.ipynb` }, { notebook_path: `${cwd}/a.ipynb`, old_source: 'x = 1', new_source: 'x = 2\ny = 3', cell_type: 'code', language: 'python', edit_mode: 'replace', original_file: '{}', updated_file: '{}' });
+  ids.command = t.prompt('<command-name>/review</command-name>\n<command-args>the theme</command-args>');
+  t.tool('Edit', { file_path: `${cwd}/src/theme.css` }, edit(`${cwd}/src/theme.css`, 'one\n', 'two\n'));
+  await writeFile(file, `${t.lines.join('\n')}\n`);
+});
+afterAll(() => rm(dir, { recursive: true, force: true }));
+
+describe('changes per turn, from Claude Code’s records', () => {
+  it('numbers the prompts that led Claude to edit files, with each file and its lines', async () => {
+    const { turns, lines } = await sessionChanges(file, cwd);
+    expect(turns.map((t) => [t.n, t.text])).toEqual([[1, 'Add a dark theme with a toggle'], [2, 'The text is too dim in the dark'], [3, '/review the theme']]);
+    expect(turns[0]!.uuid).toBe(ids.first);
+    expect(turns[0]!.files).toEqual([
+      { path: 'src/theme.css', added: 5, removed: 0, line: 5 },
+      { path: 'src/Toggle.tsx', added: 1, removed: 0, created: true, line: 1 },
+    ]);
+    // A file Claude edited twice in one turn counts what the turn changed in it, start to end.
+    const second = turns[1]!.files;
+    expect(second.find((f) => f.path === 'src/theme.css')).toMatchObject({ added: 1, removed: 1 });
+    expect(second.find((f) => f.path === 'src/App.tsx')).toMatchObject({ added: 2, removed: 1 });
+    expect(second.find((f) => f.path === '/elsewhere/notes.md')).toMatchObject({ added: 1, removed: 1 });
+    expect(second.find((f) => f.path === 'a.ipynb')).toMatchObject({ added: 2, removed: 1 });
+    expect(second.some((f) => f.path.includes('held'))).toBe(false);
+    expect(turns.flatMap((t) => t.files).some((f) => f.path === 'README.md')).toBe(false);
+    expect(turns.map((t) => t.checkpoint)).toEqual([true, true, true]);
+    expect(lines[ids.firstEdit!]).toBe(5);
+  });
+
+  it('diffs a file over a turn: before its first edit against after its last', async () => {
+    const diff = await turnDiff(file, cwd, ids.second!, 'src/theme.css');
+    const changed = parseDiff(diff).filter((l) => l.kind === 'add' || l.kind === 'del').map((l) => `${l.kind} ${l.text}`);
+    expect(changed).toEqual(['del   --fg: #eee;', 'add   --fg: #f0f0f0;']);
+    expect(await turnDiff(file, cwd, ids.first!, 'src/Toggle.tsx')).toContain('+export const Toggle = () => null;');
+    expect(await turnDiff(file, cwd, ids.question!, 'src/theme.css')).toBe('');
+    expect(await turnDiff(file, cwd, ids.first!, 'README.md')).toBe('');
+  });
+
+  it('follows the session as it grows, reading only what was added', async () => {
+    const t = transcript(cwd);
+    const next = t.prompt('One more');
+    t.tool('Write', { file_path: `${cwd}/b.txt` }, { type: 'create', filePath: `${cwd}/b.txt`, content: '1\n2\n', structuredPatch: [], originalFile: null });
+    // The new rows continue the conversation from its last row.
+    const last = JSON.parse((await import('node:fs')).readFileSync(file, 'utf8').trimEnd().split('\n').at(-1)!) as { uuid: string };
+    const first = JSON.parse(t.lines[0]!) as Record<string, unknown>;
+    t.lines[0] = JSON.stringify({ ...first, parentUuid: last.uuid });
+    await appendFile(file, `${t.lines.join('\n')}\n`);
+    const { turns } = await sessionChanges(file, cwd);
+    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 4, files: [{ path: 'b.txt', added: 2, removed: 0, created: true }] });
+  });
+});

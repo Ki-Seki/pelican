@@ -5,7 +5,9 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
+import { rehypePathRefs } from '../lib/path-refs';
 import { openImage } from './Lightbox';
+import { PathRef } from './PathLink';
 import { PreviewCard } from './Preview';
 
 function textOf(node: ReactNode): string {
@@ -101,10 +103,12 @@ const components: Components = {
     );
   },
 };
+// A file named in a reply opens in Changes and files, once it is known to be in the folder.
+Object.assign(components, { 'pelican-path': PathRef });
 
 // Line breaks are kept, as in Claude's own apps: output like logs and lists of numbers stays readable.
 const remarkPlugins = [remarkGfm, remarkBreaks];
-const rehypePlugins = [[rehypeHighlight, { detect: false, ignoreMissing: true }]] as never;
+const rehypePlugins = [[rehypeHighlight, { detect: false, ignoreMissing: true }], rehypePathRefs] as never;
 
 export const Markdown = memo(function Markdown({ text, className = '' }: { text: string; className?: string }) {
   return (

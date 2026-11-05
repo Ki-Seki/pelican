@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 
 import { api } from '../lib/api';
 import { duration } from '../lib/format';
+import { useFileLink, usePathLinks } from '../lib/path-links';
 import { useSessionId } from '../lib/session-context';
 import { useSessionView } from '../lib/store';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
@@ -12,6 +13,7 @@ import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
 import { loadsInPlace, Markdown } from './Markdown';
+import { STEP_LINK } from './PathLink';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
@@ -318,20 +320,33 @@ export function ToolTarget({ summary }: { summary: ToolSummary }) {
     const dir = cut > 0 ? target.slice(0, cut) : '';
     return (
       <span className="flex min-w-0 items-baseline gap-1.5 overflow-hidden">
-        <span className="shrink-0 font-mono text-[12px] text-fg/85">{name}</span>
+        {/* The folder gives way first; a name longer than the row then ends in an ellipsis, never cut off. */}
+        <span className="min-w-0 truncate font-mono text-[12px] text-fg/85">{name}</span>
         {/* Right-to-left so a long folder loses its start, not its end; the marks keep the slashes in place. */}
-        {dir && <span className="min-w-0 truncate font-mono text-[11px] text-faint" dir="rtl">{`\u200e${dir}\u200e`}</span>}
+        {dir && <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-faint" dir="rtl">{`\u200e${dir}\u200e`}</span>}
       </span>
     );
   }
   return <span className={`min-w-0 truncate ${summary.prose ? '' : 'font-mono text-[12px]'}`}>{target}</span>;
 }
 
+/** The file a step read or changed, and the line to open it at: where a Read began, where an edit's change is. */
+function useStepFile(call: ToolCall) {
+  const lines = usePathLinks()?.lines;
+  const file = FILE_TOOLS.has(call.name) ? str(call.input.file_path) || str(call.input.notebook_path) : '';
+  const offset = typeof call.input.offset === 'number' ? call.input.offset : undefined;
+  const line = call.name === 'Read' ? offset : lines?.[call.id];
+  return useFileLink(file || undefined, line && line > 0 ? line : undefined);
+}
+
+const FILE_TOOLS = new Set(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+
 export const ToolCallView = memo(function ToolCallView({ call, cwd, running, defaultOpen = false }: { call: ToolCall; cwd?: string; running: boolean; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => setOpen(defaultOpen), [defaultOpen]);
   const summary = describeTool(call.name, call.input, cwd);
   const outcome = outcomeOf(call);
+  const fileLink = useStepFile(call);
   const stats = useMemo(() => {
     const edits = editsOf(call);
     if (edits.length === 0) return undefined;
@@ -363,31 +378,49 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   const failed = outcome.kind === 'failed';
   // A refused or interrupted edit changed nothing, whatever it meant to change.
   const changed = stats && (outcome.kind === 'done' || outcome.kind === 'pending') && (stats.added > 0 || stats.removed > 0);
+  const row = (target: React.ReactNode) => (
+    <>
+      <Icon className={`size-3.5 shrink-0 ${failed ? 'text-danger' : ''}`} />
+      <span className="shrink-0 text-fg/80">{summary.verb}</span>
+      {target}
+      {changed && (
+        <span className="shrink-0 font-mono text-[11px]">
+          {stats.added > 0 && <span className="text-add">+{stats.added}</span>}
+          {stats.removed > 0 && <span className="ml-1 text-del">−{stats.removed}</span>}
+        </span>
+      )}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
+        {outcome.kind === 'pending' && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
+        {failed && <span className="text-[11px] text-danger">failed</span>}
+        {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
+        {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
+        <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
+      </span>
+    </>
+  );
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="group flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-left text-[13px] text-muted hover:text-fg"
-        aria-expanded={open}
-      >
-        <Icon className={`size-3.5 shrink-0 ${failed ? 'text-danger' : ''}`} />
-        <span className="shrink-0 text-fg/80">{summary.verb}</span>
-        {summary.target && <ToolTarget summary={summary} />}
-        {changed && (
-          <span className="shrink-0 font-mono text-[11px]">
-            {stats.added > 0 && <span className="text-add">+{stats.added}</span>}
-            {stats.removed > 0 && <span className="ml-1 text-del">−{stats.removed}</span>}
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-          {outcome.kind === 'pending' && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
-          {failed && <span className="text-[11px] text-danger">failed</span>}
-          {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
-          {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
-          <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
-        </span>
-      </button>
+      {fileLink ? (
+        // The file's name opens it, as a path does in Claude Desktop; the rest of the row still
+        // opens the step (its toggle lies under the whole row, the name's link above it).
+        <div className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg">
+          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${summary.verb} ${summary.target ?? ''}`.trim()} className="absolute inset-0 rounded-md" />
+          {row(
+            <a href={fileLink.href} onClick={fileLink.onClick} title={`Open ${fileLink.path}`} className={`relative z-[1] flex min-w-0 ${STEP_LINK}`}>
+              <ToolTarget summary={summary} />
+            </a>,
+          )}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="group flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-left text-[13px] text-muted hover:text-fg"
+          aria-expanded={open}
+        >
+          {row(summary.target && <ToolTarget summary={summary} />)}
+        </button>
+      )}
       {outcome.kind === 'pending' && running && (call.name === 'Agent' || call.name === 'Task') && <AgentProgress toolUseId={call.id} />}
       {outcome.kind === 'denied' && outcome.note && <div className="mb-1.5 ml-5.5"><Note text={outcome.note} /></div>}
       {open && (

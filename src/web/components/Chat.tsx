@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MessageSquare, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
@@ -13,7 +13,9 @@ import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
+import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { commentsOf, dropComments, useComments, withComments } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
@@ -381,7 +383,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; attachments?: Attachment[] }>();
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] }>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -489,23 +491,28 @@ export function Chat({
       return;
     }
     const uuid = newId();
+    // Line comments go with the next prompt, as in Claude Desktop; a command takes none.
+    const notes = cwd && !text.trimStart().startsWith('/') ? commentsOf(cwd) : [];
+    const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
-    if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
+    if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
     try {
       // A new session's mode, with Claude Code's settings for its folder read first.
       // An effort the model does not offer (High on a model without efforts) is not sent.
       const offered = modelOf(modelList?.models, settings);
       const fitted = settings.effort && offered && !offered.efforts.includes(settings.effort) ? { ...settings, effort: undefined } : settings;
       const sent = modePicked ? fitted : { ...fitted, permissionMode: await startModeIn(scratch ? undefined : newCwd, fitted) };
-      const body = { text, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
+      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
         clearDraft(viewId, text);
+        if (cwd) dropComments(cwd, notes);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
         clearDraft(viewId, text);
+        if (cwd) dropComments(cwd, notes);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -627,12 +634,26 @@ export function Chat({
     }
   };
 
-  // Files changed in the session's folder, for the badge on the Changes button; refreshed when a turn ends.
-  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd), refetchInterval: 30_000 });
+  // Files changed in the session's folder, for the badge on the Changes button: read when the chat
+  // opens and as each turn ends; Changes and files reads it more often only while it is looked at.
+  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd) });
   const changes = git?.repo ? git.files.length : 0;
+  // What each turn changed, from Claude Code's records: for the line under a turn, and Show in Changes.
+  const { data: turnChanges } = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: Boolean(sessionId), staleTime: 30_000 });
   useEffect(() => {
     if (!busy && cwd) void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
-  }, [busy, cwd, queryClient]);
+    if (!busy && sessionId) void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
+  }, [busy, cwd, sessionId, queryClient]);
+  // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
+  const { show: showWorkspace } = workspace;
+  // Line comments waiting to go with the next message.
+  const waitingComments = useComments(cwd ?? '');
+  const links = useMemo<PathLinks | undefined>(() => cwd ? {
+    cwd,
+    openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
+    openTurn: (uuid) => showWorkspace({ tab: 'changes', scope: uuid }),
+    ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
+  } : undefined, [cwd, showWorkspace, turnChanges]);
 
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
@@ -763,9 +784,11 @@ export function Chat({
   };
 
   return (
+    <PathLinksContext.Provider value={links}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
-        {!wide && (
+        {/* Also while Changes and files has folded the list away, beside the conversation. */}
+        {(!wide || workspace.folded) && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
@@ -881,6 +904,14 @@ export function Chat({
             <NoteText text={sendError.text} />
           </Notice>
         )}
+        {waitingComments.length > 0 && !workspace.open && (
+          <div className="mx-auto mb-2 flex max-w-3xl">
+            <button type="button" onClick={() => workspace.show({ tab: 'changes' })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
+              <MessageSquare className="size-3.5 shrink-0 text-faint" />
+              <span className="truncate">{waitingComments.length === 1 ? '1 comment goes with your next message' : `${waitingComments.length} comments go with your next message`}</span>
+            </button>
+          </div>
+        )}
         {sessionId && view.run?.queued && view.run.queued.length > 0 && (
           <QueuedStrip
             queued={view.run.queued}
@@ -922,11 +953,18 @@ export function Chat({
           open={workspace.open}
           docked={workspace.docked}
           busy={busy && permissions.length === 0}
+          {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          onAddToMessage={(text) => {
+          {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+          onAddToMessage={(text, block) => {
             if (!workspace.docked) workspace.setOpen(false);
-            setDraftText({ text, key: Date.now(), append: true });
+            setDraftText({ text, key: Date.now(), append: true, ...(block ? { block } : {}) });
+          }}
+          onSendComments={() => {
+            if (commentsOf(cwd).length === 0) return;
+            if (!workspace.docked) workspace.setOpen(false);
+            void send('', [], prefs.sendWhileBusy);
           }}
         />
       )}
@@ -972,5 +1010,6 @@ export function Chat({
         />
       )}
     </div>
+    </PathLinksContext.Provider>
   );
 }

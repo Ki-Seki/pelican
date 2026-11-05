@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { lineDiff, splitLines, toHunks } from '../shared/line-diff.js';
 import type { ModelOption, RunState, SessionStatus, TaskOutput } from '../shared/protocol.js';
 import { config } from './config.js';
 import type { LiveProcess } from './live.js';
@@ -21,8 +22,12 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 
 type Block = Record<string, unknown>;
-/** `model` and `extra`: what Claude Code writes on rows that are not a reply of the model's own (an API error). */
-type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number; model?: string; extra?: Record<string, unknown> };
+/**
+ * A transcript row. `model` and `extra`: what Claude Code writes on rows that are not a reply of
+ * the model's own (an API error). `result`: what Claude Code records of a tool's result next to it
+ * (an edit's structured patch); `checkpoint`: Claude Code kept the files as they were before this prompt.
+ */
+type Row = { role: 'user' | 'assistant'; content: string | Block[]; at: number; model?: string; extra?: Record<string, unknown>; result?: Record<string, unknown>; checkpoint?: boolean };
 
 const tool = (id: string, name: string, input: Record<string, unknown>): Block => ({ type: 'tool_use', id, name, input });
 const result = (id: string, content: string, isError = false): Block => ({ type: 'tool_result', tool_use_id: id, content, ...(isError ? { is_error: true } : {}) });
@@ -31,6 +36,18 @@ const text = (value: string): Block => ({ type: 'text', text: value });
 function numbered(source: string): string {
   return source.split('\n').map((line, i) => `${String(i + 1).padStart(6)}\t${line}`).join('\n');
 }
+
+/** What Claude Code records of an Edit: the file before, and the patch it made of it. */
+function edited(file: string, before: string, oldString: string, newString: string): Record<string, unknown> {
+  const after = before.replace(oldString, newString);
+  return {
+    filePath: file, oldString, newString, originalFile: before,
+    structuredPatch: toHunks(lineDiff(splitLines(before), splitLines(after)) ?? []), userModified: false, replaceAll: false,
+  };
+}
+
+/** What Claude Code records of a Write that made a file. */
+const created = (file: string, content: string) => ({ type: 'create', filePath: file, content, structuredPatch: [], originalFile: null });
 
 type DemoSession = { id: string; title: string; project: string; branch: string; rows: (cwd: string) => Row[]; scratch?: boolean };
 
@@ -46,6 +63,37 @@ body {
   color: var(--fg);
 }`;
 
+const DARK_OLD = '  --accent: #2563eb;\n}';
+const DARK_NEW = "  --accent: #2563eb;\n}\n\n:root[data-theme='dark'] {\n  --bg: #0b0b0c;\n  --fg: #ededed;\n  --muted: #a1a1a1;\n  --accent: #60a5fa;\n}";
+
+const TOGGLE_TSX = `type Theme = 'light' | 'dark';
+
+/** Switches the page between the light and dark color values in theme.css. */
+export function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
+  return (
+    <label className="row">
+      Dark theme
+      <input type="checkbox" checked={value === 'dark'} onChange={(e) => onChange(e.target.checked ? 'dark' : 'light')} />
+    </label>
+  );
+}
+`;
+
+const LOGIN_OLD = "  await page.waitForTimeout(500);\n  await page.click('text=Sign in');";
+const LOGIN_NEW = "  await expect(page.locator('input[name=csrf]')).not.toHaveValue('');\n  await page.click('text=Sign in');";
+
+/** The login test as the fix left it. */
+const LOGIN_SPEC = `import { expect, test } from '@playwright/test';
+
+test('signs in with a valid password', async ({ page }) => {
+  await page.goto('/login');
+  await page.fill('input[name=email]', 'ada@example.com');
+  await page.fill('input[name=password]', 'correct horse');
+${LOGIN_NEW}
+  await expect(page).toHaveURL('/settings');
+});
+`;
+
 const SESSIONS: DemoSession[] = [
   {
     id: 'a3f1c2d4-1111-4a1b-8c3d-000000000001',
@@ -58,6 +106,7 @@ const SESSIONS: DemoSession[] = [
         {
           role: 'user',
           at: t,
+          checkpoint: true,
           content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: SETTINGS_SCREENSHOT } },
             text('Add a dark theme to the settings page, with a toggle. Keep the colors in CSS variables.'),
@@ -86,11 +135,23 @@ const SESSIONS: DemoSession[] = [
           at: t + 14000,
           content: [tool('t3', 'Edit', {
             file_path: `${cwd}/src/styles/theme.css`,
-            old_string: '  --accent: #2563eb;\n}',
-            new_string: "  --accent: #2563eb;\n}\n\n:root[data-theme='dark'] {\n  --bg: #0b0b0c;\n  --fg: #ededed;\n  --muted: #a1a1a1;\n  --accent: #60a5fa;\n}",
+            old_string: DARK_OLD,
+            new_string: DARK_NEW,
           })],
         },
-        { role: 'user', at: t + 15000, content: [result('t3', `The file ${cwd}/src/styles/theme.css has been updated successfully.`)] },
+        {
+          role: 'user',
+          at: t + 15000,
+          content: [result('t3', `The file ${cwd}/src/styles/theme.css has been updated successfully.`)],
+          result: edited(`${cwd}/src/styles/theme.css`, `${THEME_CSS}\n`, DARK_OLD, DARK_NEW),
+        },
+        { role: 'assistant', at: t + 17000, content: [tool('t4', 'Write', { file_path: `${cwd}/src/settings/ThemeToggle.tsx`, content: TOGGLE_TSX })] },
+        {
+          role: 'user',
+          at: t + 18000,
+          content: [result('t4', `File created successfully at: ${cwd}/src/settings/ThemeToggle.tsx`)],
+          result: created(`${cwd}/src/settings/ThemeToggle.tsx`, TOGGLE_TSX),
+        },
         { role: 'assistant', at: t + 19000, content: [text('Now the toggle itself, next to the other display settings:')] },
       ];
     },
@@ -147,7 +208,7 @@ const SESSIONS: DemoSession[] = [
     rows: (cwd) => {
       const t = Date.now() - 3 * HOUR;
       return [
-        { role: 'user', at: t, content: 'The login test fails about one run in five on CI. Plan a fix first.' },
+        { role: 'user', at: t, checkpoint: true, content: 'The login test fails about one run in five on CI. Plan a fix first.' },
         {
           role: 'assistant',
           at: t + 30000,
@@ -161,11 +222,16 @@ const SESSIONS: DemoSession[] = [
           at: t + 95000,
           content: [tool('p2', 'Edit', {
             file_path: `${cwd}/tests/login.spec.ts`,
-            old_string: "  await page.waitForTimeout(500);\n  await page.click('text=Sign in');",
-            new_string: "  await expect(page.locator('input[name=csrf]')).not.toHaveValue('');\n  await page.click('text=Sign in');",
+            old_string: LOGIN_OLD,
+            new_string: LOGIN_NEW,
           })],
         },
-        { role: 'user', at: t + 96000, content: [result('p2', `The file ${cwd}/tests/login.spec.ts has been updated successfully.`)] },
+        {
+          role: 'user',
+          at: t + 96000,
+          content: [result('p2', `The file ${cwd}/tests/login.spec.ts has been updated successfully.`)],
+          result: edited(`${cwd}/tests/login.spec.ts`, LOGIN_SPEC.replace(LOGIN_NEW, LOGIN_OLD), LOGIN_OLD, LOGIN_NEW),
+        },
         { role: 'assistant', at: t + 99000, content: [tool('p3', 'Bash', { command: 'npx playwright test tests/login.spec.ts --repeat-each=50', description: 'Run the login test 50 times' })] },
         { role: 'user', at: t + 160000, content: [result('p3', 'Running 50 tests using 4 workers\n\n  50 passed (58.2s)')] },
         { role: 'assistant', at: t + 165000, content: [text('All 50 runs pass now. The test waits for the CSRF token instead of sleeping, so it is also about 400 ms faster.')] },
@@ -197,13 +263,18 @@ const SESSIONS: DemoSession[] = [
     rows: (cwd) => {
       const t = Date.now() - 50 * MIN;
       return [
-        { role: 'user', at: t, content: "Chart last week's signups by day, and make me a one-page summary I can share." },
+        { role: 'user', at: t, checkpoint: true, content: "Chart last week's signups by day, and make me a one-page summary I can share." },
         { role: 'assistant', at: t + 3000, content: [text("I'll read the numbers first."), tool('v1', 'Read', { file_path: `${cwd}/data/signups.csv` })] },
         { role: 'user', at: t + 4000, content: [result('v1', numbered(SIGNUPS_CSV.trimEnd()))] },
         { role: 'assistant', at: t + 9000, content: [tool('v2', 'mcp__visualize__show_widget', { title: 'signups_by_day', loading_messages: ['Stacking the bars'], widget_code: signupsChart() })] },
         { role: 'user', at: t + 10000, content: [result('v2', 'Shown to the user.')] },
         { role: 'assistant', at: t + 16000, content: [tool('v3', 'Write', { file_path: `${cwd}/reports/signups-week-45.html`, content: REPORT_HTML })] },
-        { role: 'user', at: t + 17000, content: [result('v3', `File created successfully at: ${cwd}/reports/signups-week-45.html`)] },
+        {
+          role: 'user',
+          at: t + 17000,
+          content: [result('v3', `File created successfully at: ${cwd}/reports/signups-week-45.html`)],
+          result: created(`${cwd}/reports/signups-week-45.html`, REPORT_HTML),
+        },
         {
           role: 'assistant',
           at: t + 21000,
@@ -260,25 +331,13 @@ export function Settings() {
 }
 `;
 
-const TOGGLE_TSX = `type Theme = 'light' | 'dark';
-
-/** Switches the page between the light and dark color values in theme.css. */
-export function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
-  return (
-    <label className="row">
-      Dark theme
-      <input type="checkbox" checked={value === 'dark'} onChange={(e) => onChange(e.target.checked ? 'dark' : 'light')} />
-    </label>
-  );
-}
-`;
-
 const DARK_CSS = `${THEME_CSS.replace('  --accent: #2563eb;\n}', "  --accent: #2563eb;\n}\n\n:root[data-theme='dark'] {\n  --bg: #0b0b0c;\n  --fg: #ededed;\n  --muted: #a1a1a1;\n  --accent: #60a5fa;\n}")}\n`;
 
 const FILE_TEXT: Record<string, string> = {
   'acme-web/src/styles/theme.css': `${THEME_CSS}\n`,
   'acme-web/src/settings/Settings.tsx': SETTINGS_TSX,
   'acme-web/README.md': '# acme-web\n\nThe Acme web app.\n',
+  'acme-web/tests/login.spec.ts': LOGIN_SPEC,
   'data-pipeline/README.md': '# data-pipeline\n\nNightly exports and the numbers behind them.\n',
   'data-pipeline/data/signups.csv': SIGNUPS_CSV,
   'data-pipeline/reports/signups-week-45.html': REPORT_HTML,
@@ -286,24 +345,30 @@ const FILE_TEXT: Record<string, string> = {
 };
 
 /**
- * The first project is a git repository with Claude's work so far left
- * uncommitted, so the Changes panel has something to show. Skipped without git.
+ * The first project is a git repository: main, a branch with one commit of its own, and Claude's
+ * work so far left uncommitted, so Changes has something to show since the last commit and since
+ * the branch split. Skipped without git.
  */
 async function demoRepository(dir: string): Promise<void> {
   const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
   // Your own git setup (hooks, templates, signing) has no say in the demo's repository.
   const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
   try {
-    await git(['init', '-q', '-b', 'feat/dark-theme']);
+    await git(['init', '-q', '-b', 'main']);
     await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });
     await git(['add', '-A']);
     await git(['commit', '-q', '--no-verify', '-m', 'Settings page']);
+    await git(['switch', '-q', '-c', 'feat/dark-theme']);
+    await writeFile(path.join(dir, 'README.md'), README_THEMES);
+    await git(['commit', '-q', '--no-verify', '-am', 'Say in the README where the colors live']);
     await writeFile(path.join(dir, 'src/styles/theme.css'), DARK_CSS);
     await writeFile(path.join(dir, 'src/settings/ThemeToggle.tsx'), TOGGLE_TSX);
   } catch {
     // No git here; the panel shows the files only.
   }
 }
+
+const README_THEMES = '# acme-web\n\nThe Acme web app.\n\n## Colors\n\nEvery color is a CSS variable in `src/styles/theme.css`.\n';
 
 const DEMO_FILES: Record<string, string[]> = {
   'acme-web': ['README.md', 'package.json', 'src/app.tsx', 'src/settings/Settings.tsx', 'src/settings/ThemeToggle.tsx', 'src/styles/theme.css', 'tests/login.spec.ts'],
@@ -479,7 +544,12 @@ export async function prepareDemo(): Promise<void> {
       lines.push(JSON.stringify({
         parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId: session.id, version: '2.1.318',
         gitBranch: session.branch, type: row.role, message, uuid, timestamp: new Date(row.at).toISOString(), ...row.extra,
+        ...(row.result ? { toolUseResult: row.result } : {}),
       }));
+      if (row.checkpoint) {
+        const at = new Date(row.at).toISOString();
+        lines.push(JSON.stringify({ type: 'file-history-snapshot', messageId: uuid, snapshot: { messageId: uuid, trackedFileBackups: {}, timestamp: at }, isSnapshotUpdate: false }));
+      }
       parent = uuid;
     }
     await writeFile(path.join(dir, `${session.id}.jsonl`), `${lines.join('\n')}\n`);

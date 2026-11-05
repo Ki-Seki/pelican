@@ -84,6 +84,11 @@ for (const session of sessions) {
   for (const task of detail?.run?.tasks ?? []) if (task.output) await save(`sessions/${q(session.id)}/tasks/${q(task.id)}/output`);
   await save(`sessions/${q(session.id)}/messages?limit=120`);
   await save(`sessions/${q(session.id)}/mcp`);
+  // What each turn changed, and each turn's diff of each of its files.
+  const changes = await save(`sessions/${q(session.id)}/changes`);
+  for (const turn of changes?.turns ?? []) {
+    for (const file of turn.files) await save(`sessions/${q(session.id)}/changes?turn=${q(turn.uuid)}&path=${q(file.path)}`);
+  }
   if (session.cwd) folders.add(session.cwd);
 }
 for (const cwd of folders) {
@@ -92,6 +97,11 @@ for (const cwd of folders) {
   await save(`files?cwd=${q(cwd)}&q=`);
   const git = await save(`git?cwd=${q(cwd)}`);
   for (const file of git?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}`);
+  // Since the branch split from the default branch, when it is on another branch.
+  if (git?.base && git.branch && git.branch !== git.base) {
+    const since = await save(`git?cwd=${q(cwd)}&scope=base`);
+    for (const file of since?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}&scope=base`);
+  }
   // Every folder and small file, so the Files panel works all the way down.
   const walk = async (dir) => {
     const listing = await save(`tree?cwd=${q(cwd)}&path=${q(dir)}`);
