@@ -67,6 +67,11 @@ export const DEMO_REPLY = STATIC_DEMO
 
 export const DEMO_STEER = 'In your own Pelican, Claude would read this at its next step.';
 
+/** A side question's reply: what Claude would do with it in your own Pelican. */
+export const DEMO_SIDE_REPLY = STATIC_DEMO
+  ? `This demo has no Claude behind it. In your own Pelican, Claude answers here from the session so far, reading files but changing nothing. [Install Pelican](${INSTALL_URL})`
+  : 'This is the demo, so no Claude answers. Start Pelican without `--demo` and Claude answers here from the session so far, reading files but changing nothing.';
+
 /** What Claude says after the step that was waiting for you, by request id (the server's demoRunState). */
 const AFTER: Record<string, string> = {
   'demo-permission': 'The toggle is in place, next to the font size picker. Next I’d remember the choice, so the theme stays after a reload. The demo stops here.',
@@ -127,13 +132,14 @@ function end(sessionId: string, run: RunState): void {
   reply(sessionId, user(text ? [{ type: 'text', text }] : [], { uuid: queued[0]!.uuid }));
 }
 
-/** A message taken by Claude, answered with what Claude would do. */
+/** A message taken by Claude, answered with what Claude would do (a side chat's: what it would do there). */
 function reply(sessionId: string, message: ChatMessage): void {
   say(sessionId, message);
   const run = currentRun(sessionId) ?? idleRun(sessionId);
   runAs(sessionId, { ...run, busy: true, permissions: [], partial: [] });
+  const words = stories.get(sessionId)?.summary?.sideChatOf ? DEMO_SIDE_REPLY : DEMO_REPLY;
   later(sessionId, 1400, () => {
-    say(sessionId, assistant([{ type: 'text', text: DEMO_REPLY }]));
+    say(sessionId, assistant([{ type: 'text', text: words }]));
     finish(sessionId, 1400);
   });
 }
@@ -221,6 +227,26 @@ function create(body: SendBody): { sessionId: string } {
   };
   runAs(id, idleRun(id, body.settings));
   reply(id, user(body.text ? [{ type: 'text', text: body.text }] : [], { uuid: body.uuid }));
+  return { sessionId: id };
+}
+
+/** A side question: a side chat of the session's, started in the page like a new session, listed under it. */
+function side(sessionId: string, body: { question?: string; uuid?: string; settings?: RunSettings }): { sessionId: string } {
+  const id = newId();
+  const cwd = folders.get(sessionId) ?? '';
+  folders.set(id, cwd);
+  storyOf(id).summary = {
+    id,
+    title: 'Side chat',
+    cwd,
+    project: cwd.split('/').filter(Boolean).at(-1) ?? '',
+    lastActivity: Date.now(),
+    createdAt: Date.now(),
+    status: 'running',
+    sideChatOf: sessionId,
+  };
+  runAs(id, idleRun(id, { ...body.settings, permissionMode: 'dontAsk' }));
+  reply(id, user([{ type: 'text', text: body.question ?? '' }], body.uuid ? { uuid: body.uuid } : {}));
   return { sessionId: id };
 }
 
@@ -341,6 +367,7 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
   const rest = match?.[2] ?? '';
   if (path === 'sessions' && init.method === 'POST') return create(body as SendBody);
   if (id && rest === '/messages') return send(id, body as SendBody);
+  if (id && rest === '/side') return side(id, body as { question?: string; uuid?: string; settings?: RunSettings });
   if (id && rest.startsWith('/permissions/')) return decide(id, decodeURIComponent(rest.slice('/permissions/'.length)), body as PermissionDecision);
   if (id && rest === '/interrupt') return interrupt(id);
   if (id && rest.startsWith('/queued/')) return unqueue(id, decodeURIComponent(rest.slice('/queued/'.length)));

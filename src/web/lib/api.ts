@@ -204,6 +204,12 @@ export const api = {
    */
   edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[]; startMode?: PermissionMode }) =>
     send<{ sessionId: string; inPlace: boolean }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body),
+  /**
+   * A side question about the session, as Claude Desktop asks one: a side chat is made from the
+   * session so far, only reading, and the question goes there. Later ones go to it with `send`.
+   */
+  side: (id: string, body: { question: string; settings: RunSettings; uuid: string }) =>
+    send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/side`, body),
   /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
   fork: (id: string, options: { before?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),

@@ -88,9 +88,9 @@ export function QuoteAction({ within, quoteKey }: { within: RefObject<HTMLElemen
         announce('Quoted in your message');
       }}
       style={{ top: shown.top, left: shown.left }}
-      className="animate-fade absolute z-20 flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg shadow-lg select-none after:absolute after:-inset-1 pointer-fine:h-8 pointer-fine:px-3"
+      className="animate-fade absolute z-20 flex h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-panel px-3.5 text-[13px] font-medium shadow-lg select-none after:absolute after:-inset-1 hover:bg-hover pointer-fine:h-8 pointer-fine:px-3"
     >
-      <TextQuote className="size-3.5" />
+      <TextQuote className="size-3.5 text-muted" />
       Quote
     </button>
   );

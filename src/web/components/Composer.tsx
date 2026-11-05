@@ -386,7 +386,8 @@ export function Composer({
   };
   useEffect(() => () => recognition.current?.stop(), []);
 
-  const hint = busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
+  // A side chat's box asks for a question whatever its Claude is doing.
+  const hint = busy && !shell && !side ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
@@ -526,7 +527,8 @@ export function Composer({
 
   return (
     // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
-    <div className="pb-safe relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg">
+    // A side chat's box sits in a pane or a sheet, which keeps clear of the phone's edge itself.
+    <div className={`${side ? 'pb-2' : 'pb-safe'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
       {showSuggestions && (
         <div
           id={listId}
