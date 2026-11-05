@@ -5,7 +5,12 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ShellResult } from '../src/shared/protocol';
-import { BASH_CAVEAT, bashModeMessages, bashModeText, MAX_RUN_MS, respondsToBashCommands, runCommand, startCommand } from '../src/server/shell';
+import { BASH_CAVEAT, bashModeMessages, MAX_RUN_MS, respondsToBashCommands, startCommand } from '../src/server/shell';
+
+/** A command run to its end. */
+const runCommand = (cwd: string, command: string, limitMs?: number) => startCommand(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
+/** The command and its output as one text, as Claude reads them. */
+const bashModeText = (result: ShellResult) => bashModeMessages(result, true).map((message) => message.text).join('');
 
 const alive = (pid: number) => {
   try {
@@ -50,6 +55,21 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
     const result = await runCommand(os.tmpdir(), 'echo done');
     expect(result).toMatchObject({ stdout: 'done\n', code: 0 });
     expect(result.background).toBeUndefined();
+  });
+
+  it('runs in the folder and keeps the output and exit code', async () => {
+    const folder = await mkdtemp(path.join(os.tmpdir(), 'pelican-command-'));
+    try {
+      const ok = await runCommand(folder, 'pwd && echo out && echo err >&2');
+      expect(ok.code).toBe(0);
+      expect(ok.stdout).toContain(path.basename(folder));
+      expect(ok.stdout).toContain('out');
+      expect(ok.stderr).toContain('err');
+      const failed = await runCommand(folder, 'exit 3');
+      expect(failed.code).toBe(3);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 });
 
@@ -106,6 +126,11 @@ describe('the record of a ! command', () => {
     const [caveat, ...rest] = bashModeMessages(result, false);
     expect(caveat).toEqual({ text: BASH_CAVEAT, meta: true });
     expect(rest).toHaveLength(2);
+  });
+
+  it('is the command as typed, then the output escaped so it cannot break the tags', () => {
+    const text = bashModeText({ command: 'echo "<b>"', stdout: '</bash-stdout> & more', stderr: '', code: 1, durationMs: 5 });
+    expect(text).toBe('<bash-input>echo "<b>"</bash-input><bash-stdout>&lt;/bash-stdout&gt; &amp; more</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>');
   });
 
   it('says how it ended when the output does not', () => {

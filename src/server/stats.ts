@@ -1169,9 +1169,6 @@ export async function sessionFiles(sessionId: string, main: string): Promise<Fou
   return found;
 }
 
-/** Each model's prices as fitted now, per token (tests, and checking the fit). */
-export const usagePrices = () => pricesFrom(records.values());
-
 /** Forgets everything read (tests). */
 export function resetUsage(): void {
   records.clear();
@@ -1192,6 +1189,3 @@ export function resetUsage(): void {
   ownTimer = undefined;
   version += 1;
 }
-
-/** How many transcripts have a record now (tests). */
-export const recordCount = () => records.size;

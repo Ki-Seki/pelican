@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bashModeText, runCommand } from '../src/server/shell';
 import { gitDiff, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
 
 let repo: string;
@@ -167,22 +166,5 @@ describe('workspace', () => {
     expect(() => inside(repo, '../etc/passwd')).toThrow();
     expect(() => inside(repo, '/etc/passwd')).toThrow();
     await expect(readProjectFile(repo, '../../etc/hosts')).rejects.toThrow();
-  });
-});
-
-describe('! commands', () => {
-  it('runs in the folder and keeps the output and exit code', async () => {
-    const ok = await runCommand(repo, 'pwd && echo out && echo err >&2');
-    expect(ok.code).toBe(0);
-    expect(ok.stdout).toContain(path.basename(repo));
-    expect(ok.stdout).toContain('out');
-    expect(ok.stderr).toContain('err');
-    const failed = await runCommand(repo, 'exit 3');
-    expect(failed.code).toBe(3);
-  });
-
-  it('writes them the way Claude Code’s bash mode does: the command as typed, the output escaped so it cannot break the tags', () => {
-    const text = bashModeText({ command: 'echo "<b>"', stdout: '</bash-stdout> & more', stderr: '', code: 1, durationMs: 5 });
-    expect(text).toBe('<bash-input>echo "<b>"</bash-input><bash-stdout>&lt;/bash-stdout&gt; &amp; more</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>');
   });
 });

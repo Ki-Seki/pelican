@@ -148,10 +148,6 @@ export function startCommand(cwd: string, command: string, options: { limitMs?: 
   };
 }
 
-/** A command run to its end, for callers that only need the result. */
-export const runCommand = (cwd: string, command: string, limitMs?: number): Promise<ShellResult> =>
-  startCommand(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
-
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const count = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
@@ -184,9 +180,6 @@ export function bashModeMessages(result: ShellResult, respond: boolean): Array<{
     { text: `<bash-stdout>${escape(result.stdout)}</bash-stdout><bash-stderr>${escape(result.stderr + notes(result))}</bash-stderr>` },
   ];
 }
-
-/** The command and its output as one text. */
-export const bashModeText = (result: ShellResult): string => bashModeMessages(result, true).map((message) => message.text).join('');
 
 /**
  * Whether Claude answers a `!` command, as the CLI decides it: unless `respondToBashCommands` is
