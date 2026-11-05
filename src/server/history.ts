@@ -1,8 +1,11 @@
-import { open, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 
 import { isPermissionMode } from '../shared/modes.js';
 import type { ChatMessage, RecordedSettings } from '../shared/protocol.js';
-import { toChatMessage } from './normalize.js';
+import { config } from './config.js';
+import { type ImageAddress, storedImages, toChatMessage } from './normalize.js';
+import { openRegular } from './open.js';
 
 /**
  * A session's whole conversation, read from its transcript, across compactions.
@@ -31,11 +34,18 @@ type Node = {
   preservedTail: string | undefined;
   /** Position among the rows that have a uuid, in file order. */
   index: number;
+  /** Where the row is in the file, in bytes: its pictures are read from there when a page asks. */
+  at: number;
+  bytes: number;
   /** What the app shows for this row; rows like attachments only link the chain. */
   message: ChatMessage | undefined;
+  /** Roughly what the message keeps in memory. */
+  weight: number;
 };
 
 type Transcript = {
+  /** Where pages load the pictures its messages hold as data. */
+  address: ((uuid: string) => ImageAddress) | undefined;
   /** The settings the session last ran with, in file order. */
   recorded: RecordedSettings;
   ino: number;
@@ -51,21 +61,64 @@ type Transcript = {
   chainIndex: Map<string, number>;
   chainLeaf: string | undefined;
   messages: ChatMessage[];
+  /** What its messages keep in memory, roughly, and when it was last read. */
+  weight: number;
+  readAt: number;
 };
 
 const CHUNK = 8 * 1024 * 1024;
-const MAX_FILES = 16;
+/**
+ * Parsed transcripts are kept, so a page or a poll reads only what was added since. They are let
+ * go oldest first past this much text (a few long sessions, not a count of files that may each be
+ * hundreds of megabytes), and once nobody has read them for a while.
+ */
+const MAX_WEIGHT = 64 * 1024 * 1024;
+const MAX_FILES = 32;
+const KEEP_UNREAD_MS = 10 * 60_000;
 const transcripts = new Map<string, Transcript>();
 const locks = new Map<string, Promise<unknown>>();
 
 const str = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
 
-function empty(ino: number): Transcript {
+/** Roughly the characters a value holds: what a parsed message costs to keep. */
+function weightOf(value: unknown, depth = 0): number {
+  if (typeof value === 'string') return value.length;
+  if (value === null || typeof value !== 'object' || depth > 6) return 8;
+  let weight = 32;
+  for (const item of Array.isArray(value) ? value : Object.values(value)) weight += weightOf(item, depth + 1);
+  return weight;
+}
+
+function empty(file: string, ino: number): Transcript {
+  // The demo's pages are saved as files for the project site, which has no server to ask for a picture.
+  const id = encodeURIComponent(path.basename(file, '.jsonl'));
+  const address = config.demo ? undefined : (uuid: string) => (n: number) => `api/sessions/${id}/images/${encodeURIComponent(uuid)}/${n}`;
   return {
-    recorded: {}, ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
-    chain: [], chainIndex: new Map(), chainLeaf: undefined, messages: [],
+    address, recorded: {}, ino, offset: 0, carry: Buffer.alloc(0), nodes: new Map(), order: [], leaf: undefined,
+    chain: [], chainIndex: new Map(), chainLeaf: undefined, messages: [], weight: 0, readAt: Date.now(),
   };
 }
+
+/**
+ * Lets go of transcripts nobody has read for a while, then of the least recently read past the
+ * budget. The one read last stays, however large. One let go while a read of it is under way only
+ * means the next read parses it again.
+ */
+function trim(now = Date.now()): void {
+  const newest = [...transcripts.keys()].at(-1);
+  let total = 0;
+  for (const [file, t] of transcripts) {
+    if (file !== newest && now - t.readAt > KEEP_UNREAD_MS) transcripts.delete(file);
+    else total += t.weight;
+  }
+  for (const [file, t] of transcripts) {
+    if (file === newest || (total <= MAX_WEIGHT && transcripts.size <= MAX_FILES)) break;
+    transcripts.delete(file);
+    total -= t.weight;
+  }
+}
+
+setInterval(() => trim(), 60_000).unref();
 
 /** Keeps the settings a row shows the session ran with: the latest row wins. */
 function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
@@ -91,11 +144,11 @@ function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
  * next step: Claude Code records it as a `queued_command` attachment where it
  * was taken in, not as a user row.
  */
-function steeredMessage(row: Record<string, unknown>, uuid: string): ChatMessage | undefined {
+function steeredMessage(row: Record<string, unknown>, uuid: string, address: ImageAddress | undefined): ChatMessage | undefined {
   const attachment = row.attachment as { type?: string; prompt?: unknown; source_uuid?: unknown; commandMode?: unknown } | undefined;
   if (row.type !== 'attachment' || attachment?.type !== 'queued_command') return undefined;
   if (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') return undefined;
-  const message = toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, message: { role: 'user', content: attachment.prompt } });
+  const message = toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, message: { role: 'user', content: attachment.prompt } }, address);
   if (!message) return undefined;
   const source = str(attachment.source_uuid);
   return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
@@ -112,7 +165,8 @@ function localCommand(row: Record<string, unknown>, uuid: string): ChatMessage |
   return { uuid, role: 'system', blocks: [{ type: 'text', text }], ...(Number.isNaN(timestamp) ? {} : { timestamp }) };
 }
 
-function addLine(t: Transcript, line: string): void {
+/** Adds one row, found `at` bytes into the file and `bytes` long. */
+function addLine(t: Transcript, line: string, at: number, bytes: number): void {
   // Rows that take part in the conversation carry a uuid; skip the rest (titles, costs, requests) unparsed.
   if (line.length < 2 || line.charCodeAt(0) !== 123 || !line.includes('"uuid"')) return;
   let row: Record<string, unknown>;
@@ -125,10 +179,13 @@ function addLine(t: Transcript, line: string): void {
   if (!uuid || row.isSidechain === true) return;
   note(t.recorded, row);
   const turn = row.type === 'user' || row.type === 'assistant';
-  const message = turn ? toChatMessage(row) : steeredMessage(row, uuid) ?? localCommand(row, uuid);
+  const address = t.address?.(uuid);
+  const message = turn ? toChatMessage(row, address) : steeredMessage(row, uuid, address) ?? localCommand(row, uuid);
+  const weight = message ? weightOf(message.blocks) : 0;
   const existing = t.nodes.get(uuid);
   if (existing) {
-    existing.message = message;
+    t.weight += weight - existing.weight;
+    Object.assign(existing, { message, weight, at, bytes });
     return;
   }
   const metadata = row.compactMetadata as { preservedSegment?: { tailUuid?: unknown } } | undefined;
@@ -138,34 +195,44 @@ function addLine(t: Transcript, line: string): void {
     logicalParent: str(row.logicalParentUuid),
     preservedTail: str(metadata?.preservedSegment?.tailUuid),
     index: t.order.length,
+    at,
+    bytes,
     message,
+    weight,
   };
   t.nodes.set(uuid, node);
   t.order.push(node);
+  t.weight += weight + 200;
   if (turn) t.leaf = node;
 }
 
 async function readNew(file: string, t: Transcript, size: number): Promise<void> {
-  const handle = await open(file, 'r');
+  const handle = await openRegular(file);
   try {
-    let position = t.offset;
-    while (position < size) {
-      const buffer = Buffer.allocUnsafe(Math.min(CHUNK, size - position));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    // The offset moves with each chunk, together with the line it may leave unfinished: a read
+    // that fails part way carries on from there next time, without reading a line twice.
+    while (t.offset < size) {
+      const buffer = Buffer.allocUnsafe(Math.min(CHUNK, size - t.offset));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, t.offset);
       if (bytesRead <= 0) break;
-      position += bytesRead;
       const data = t.carry.length > 0 ? Buffer.concat([t.carry, buffer.subarray(0, bytesRead)]) : buffer.subarray(0, bytesRead);
+      // Where `data` starts in the file.
+      const start = t.offset - t.carry.length;
       const lastBreak = data.lastIndexOf(0x0a);
+      t.offset += bytesRead;
       if (lastBreak < 0) {
         t.carry = Buffer.from(data);
         continue;
       }
       t.carry = Buffer.from(data.subarray(lastBreak + 1));
-      for (const line of data.subarray(0, lastBreak).toString('utf8').split('\n')) addLine(t, line);
+      for (let from = 0; from <= lastBreak;) {
+        const end = data.indexOf(0x0a, from);
+        addLine(t, data.toString('utf8', from, end), start + from, end - from);
+        from = end + 1;
+      }
     }
-    t.offset = position;
     // A last row without its newline yet: use it if it is whole; it is read again with the rest later.
-    if (t.carry.length > 0) addLine(t, t.carry.toString('utf8'));
+    if (t.carry.length > 0) addLine(t, t.carry.toString('utf8'), t.offset - t.carry.length, t.carry.length);
   } finally {
     await handle.close();
   }
@@ -221,11 +288,12 @@ async function read(file: string): Promise<ChatMessage[]> {
   }
   let t = transcripts.get(file);
   // Replaced or cut short: start over.
-  if (!t || t.ino !== info.ino || info.size < t.offset) t = empty(info.ino);
+  if (!t || t.ino !== info.ino || info.size < t.offset) t = empty(file, info.ino);
   transcripts.delete(file);
   transcripts.set(file, t);
-  while (transcripts.size > MAX_FILES) transcripts.delete(transcripts.keys().next().value!);
+  t.readAt = Date.now();
   if (info.size > t.offset) await readNew(file, t, info.size);
+  trim();
   return conversation(t);
 }
 
@@ -245,4 +313,30 @@ export function readHistory(file: string): Promise<ChatMessage[]> {
     if (locks.get(file) === next) locks.delete(file);
   }).catch(() => undefined);
   return next;
+}
+
+/**
+ * The `n`th picture a transcript row holds as data (`storedImages`), decoded: what a page loads
+ * by the address its message carries. Read from the row's own place in the file.
+ */
+export async function transcriptImage(file: string, uuid: string, n: number): Promise<{ mediaType: string; data: Buffer } | undefined> {
+  await readHistory(file);
+  const node = transcripts.get(file)?.nodes.get(uuid);
+  if (!node) return undefined;
+  let row: { uuid?: unknown; type?: unknown; message?: { content?: unknown }; attachment?: { type?: unknown; prompt?: unknown } };
+  const handle = await openRegular(file);
+  try {
+    const buffer = Buffer.alloc(node.bytes);
+    await handle.read(buffer, 0, node.bytes, node.at);
+    row = JSON.parse(buffer.toString('utf8')) as typeof row;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+  if (row.uuid !== uuid) return undefined;
+  // A message sent while Claude worked is an attachment row; its prompt is the content.
+  const content = row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment.prompt : row.message?.content;
+  const image = storedImages(content)[n];
+  return image && { mediaType: image.mediaType, data: Buffer.from(image.data, 'base64') };
 }

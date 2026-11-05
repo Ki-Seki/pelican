@@ -8,16 +8,43 @@ type Raw = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is Raw => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/**
+ * The start of a long text, as a copy: a slice would keep the whole text in memory, so a clipped
+ * 500 KB tool result would still cost 500 KB in every cache that holds the message.
+ */
+const head = (text: string, max: number) => structuredClone(`${text.slice(0, max)}\n…`);
+
 function clip(text: string, max: number): TextBlock {
-  return text.length > max
-    ? { type: 'text', text: `${text.slice(0, max)}\n…`, truncated: true }
-    : { type: 'text', text };
+  return text.length > max ? { type: 'text', text: head(text, max), truncated: true } : { type: 'text', text };
 }
 
-function image(raw: Raw): ImageBlock | undefined {
+/** A tool call's input with its long texts cut (a Write carries the whole file); the page shows their start. */
+function clipInput(input: Raw): Raw {
+  let clipped: Raw | undefined;
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value !== 'string' || value.length <= MAX_TEXT) continue;
+    clipped ??= { ...input };
+    clipped[key] = head(value, MAX_TEXT);
+  }
+  return clipped ?? input;
+}
+
+/**
+ * Where a page loads the `n`th picture a message holds as data (see `storedImages`). With one, a
+ * message carries addresses instead of the pictures; without, the pictures themselves (a message
+ * streaming in, before the transcript has it).
+ */
+export type ImageAddress = (n: number) => string;
+
+type Images = { address?: ImageAddress; n: number };
+
+function image(raw: Raw, images: Images): ImageBlock | undefined {
   const source = raw.source;
   if (!isRecord(source)) return undefined;
   if (source.type === 'base64' && typeof source.data === 'string') {
+    const n = images.n;
+    images.n += 1;
+    if (images.address) return { type: 'image', source: { type: 'url', url: images.address(n) } };
     const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/png';
     return source.data.length > MAX_IMAGE_BASE64
       ? { type: 'image', source: { type: 'base64', media_type: mediaType, data: '' }, omitted: true }
@@ -27,7 +54,27 @@ function image(raw: Raw): ImageBlock | undefined {
   return undefined;
 }
 
-function resultContent(content: unknown): { content: string | Array<TextBlock | ImageBlock>; truncated: boolean } {
+/**
+ * The pictures a message's content holds as data, in the order `ImageAddress` numbers them: its
+ * own, and those inside its tool results, as `toChatMessage` meets them.
+ */
+export function storedImages(content: unknown): Array<{ mediaType: string; data: string }> {
+  const found: Array<{ mediaType: string; data: string }> = [];
+  const take = (raw: unknown) => {
+    if (!isRecord(raw) || raw.type !== 'image' || !isRecord(raw.source)) return;
+    const { type, data, media_type: mediaType } = raw.source;
+    if (type === 'base64' && typeof data === 'string') found.push({ mediaType: typeof mediaType === 'string' ? mediaType : 'image/png', data });
+  };
+  if (!Array.isArray(content)) return found;
+  for (const block of content) {
+    if (!isRecord(block)) continue;
+    if (block.type === 'image') take(block);
+    else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string' && Array.isArray(block.content)) block.content.forEach(take);
+  }
+  return found;
+}
+
+function resultContent(content: unknown, images: Images): { content: string | Array<TextBlock | ImageBlock>; truncated: boolean } {
   if (typeof content === 'string') {
     const clipped = clip(content, MAX_RESULT_TEXT);
     return { content: clipped.text, truncated: Boolean(clipped.truncated) };
@@ -42,14 +89,14 @@ function resultContent(content: unknown): { content: string | Array<TextBlock | 
       truncated ||= Boolean(clipped.truncated);
       parts.push(clipped);
     } else if (part.type === 'image') {
-      const img = image(part);
+      const img = image(part, images);
       if (img) parts.push(img);
     }
   }
   return { content: parts, truncated };
 }
 
-function blocks(content: unknown): Block[] {
+function blocks(content: unknown, images: Images): Block[] {
   if (typeof content === 'string') return content ? [clip(content, MAX_TEXT)] : [];
   if (!Array.isArray(content)) return [];
   const out: Block[] = [];
@@ -65,12 +112,12 @@ function blocks(content: unknown): Block[] {
       case 'tool_use':
       case 'server_tool_use':
         if (typeof raw.id === 'string' && typeof raw.name === 'string') {
-          out.push({ type: 'tool_use', id: raw.id, name: raw.name, input: isRecord(raw.input) ? raw.input : {} });
+          out.push({ type: 'tool_use', id: raw.id, name: raw.name, input: isRecord(raw.input) ? clipInput(raw.input) : {} });
         }
         break;
       case 'tool_result': {
         if (typeof raw.tool_use_id !== 'string') break;
-        const { content: resultBody, truncated } = resultContent(raw.content);
+        const { content: resultBody, truncated } = resultContent(raw.content, images);
         out.push({
           type: 'tool_result',
           tool_use_id: raw.tool_use_id,
@@ -88,7 +135,7 @@ function blocks(content: unknown): Block[] {
         }
         break;
       case 'image': {
-        const img = image(raw);
+        const img = image(raw, images);
         if (img) out.push(img);
         break;
       }
@@ -105,9 +152,9 @@ function blocks(content: unknown): Block[] {
 /**
  * Converts a transcript message (`getSessionMessages`) or a streamed SDK message
  * into the shape the app renders. Returns undefined for messages with nothing
- * to show.
+ * to show. With `address`, pictures held as data are referred to by address.
  */
-export function toChatMessage(raw: Raw): ChatMessage | undefined {
+export function toChatMessage(raw: Raw, address?: ImageAddress): ChatMessage | undefined {
   const type = raw.type;
   if (type !== 'user' && type !== 'assistant') return undefined;
   if (typeof raw.uuid !== 'string') return undefined;
@@ -115,7 +162,7 @@ export function toChatMessage(raw: Raw): ChatMessage | undefined {
   const out: ChatMessage = {
     uuid: raw.uuid,
     role: type,
-    blocks: blocks(message.content),
+    blocks: blocks(message.content, { ...(address ? { address } : {}), n: 0 }),
   };
   if (out.blocks.length === 0) return undefined;
   const timestamp = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN;

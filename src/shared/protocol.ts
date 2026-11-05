@@ -5,7 +5,8 @@ import type { PermissionMode } from './modes';
 export type { PermissionMode } from './modes';
 
 /** idle: nothing running · running: this app is running a turn · waiting: a turn waits for an
- *  approval or an answer · live: another client (Desktop, the terminal) wrote to it just now. */
+ *  approval or an answer (in another app when `runningIn` says so) · live: another client
+ *  (Desktop, the terminal) is working on it, or wrote to it just now. */
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'live';
 
 export type SessionSummary = {
@@ -30,7 +31,7 @@ export type SessionSummary = {
   archived?: boolean;
   /** Open (idle) in another app too, which does not see what is sent here until it reopens the session. */
   openIn?: string;
-  /** Which Claude Code client is working on it right now, when that is not this app and is known. */
+  /** The other app working on it right now, or waiting there for an answer: "the terminal", "Claude Desktop". */
   runningIn?: string;
   /** Start of Claude's latest reply. */
   preview?: string;
@@ -229,6 +230,8 @@ export type ShellResult = {
   code: number | null;
   durationMs: number;
   truncated?: boolean;
+  /** It left a process running in the background (`npm run dev &`), which goes on after it. */
+  background?: boolean;
 };
 
 /** One of the account's usage limits, as Claude Code last reported it. */
@@ -260,14 +263,26 @@ export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-
 export type RewindResult = { canRewind: boolean; error?: string; files?: string[]; insertions?: number; deletions?: number };
 export type Agent = { name: string; description: string };
 
+/** Text streamed into a run's partial block `index` since the last update: `text` goes at `from`. */
+export type PartialAppend = { index: number; from: number; text: string };
+
 export type ServerEvent =
   | { type: 'session'; session: SessionSummary }
   | { type: 'sessions_changed' }
   | { type: 'message'; sessionId: string; message: ChatMessage }
-  | { type: 'run'; state: RunState }
+  | { type: 'run'; state: RunState; sessionId?: string }
+  /** The answer to a subscribe when no Claude runs for the session here: the client clears what it had. */
+  | { type: 'run'; sessionId: string; state: null }
+  /**
+   * While Claude writes, only what was added: applied to the run the client has when each `from` is
+   * where its copy ends. A client whose copy does not match subscribes again and gets the whole run.
+   */
+  | { type: 'partial'; sessionId: string; appends: PartialAppend[] }
   /** A session's status changed; sent to every client, for session lists. */
   | { type: 'status'; sessionId: string; status: SessionStatus }
-  | { type: 'reload'; sessionId: string };
+  | { type: 'reload'; sessionId: string }
+  /** Every 25 s: pages cannot see pings, and a socket that has gone quiet is a dead one. */
+  | { type: 'tick' };
 
 export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { compress } from 'hono/compress';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { isPermissionMode } from '../shared/modes.js';
@@ -26,6 +27,7 @@ import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { transcriptImage } from './history.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { claudeRanIn } from './trust.js';
 
@@ -66,9 +68,10 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-/** What the page loads without fetch, so it cannot mark: an uploaded image, a download. */
+/** What the page loads without fetch, so it cannot mark: an uploaded image, a picture in a message, a download. */
 const unmarked = (c: Context) => c.req.method === 'GET'
-  && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path));
+  && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path)
+    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path));
 
 /** The Origin header as an origin (`null`, garbage and missing are none). */
 function originOf(header: string | undefined): string | undefined {
@@ -118,6 +121,10 @@ const limits = {
   json: bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }),
 };
 app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth : c.req.path === '/api/uploads' ? limits.upload : limits.json)(c, next));
+
+// Answers are JSON that compresses well (a long session list or a page of messages, ten times
+// over), and the proxies a phone comes through pass them on as they are. Images are left alone.
+app.use('/api/*', compress({ threshold: 1024 }));
 
 app.onError((error, c) => {
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
@@ -660,6 +667,14 @@ app.post('/api/uploads', async (c) => {
   return c.json({ attachment: await saveUpload(file) });
 });
 
+/** What a file the page loads by address may do: show as itself, nothing more, and only here. */
+const INERT = {
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
 app.get('/api/uploads/:id', async (c) => {
   const found = await readUpload(c.req.param('id'));
   if (!found) return c.notFound();
@@ -669,10 +684,29 @@ app.get('/api/uploads/:id', async (c) => {
   return c.body(new Uint8Array(found.data), 200, {
     'Content-Type': found.attachment.mime,
     'Cache-Control': 'private, max-age=86400',
-    'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
-    'X-Frame-Options': 'SAMEORIGIN',
+    ...INERT,
     ...(image ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.attachment.name)}` }),
+  });
+});
+
+/** The picture types Claude takes; nothing else a transcript holds is sent as an image. */
+const PICTURES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * A picture a message holds (a screenshot, an image sent with a prompt): pages carry its address
+ * instead of the data, so a page of messages stays small and a picture loads only when shown.
+ * The same message and position always hold the same picture, so browsers keep it.
+ */
+app.get('/api/sessions/:id/images/:uuid/:n', async (c) => {
+  const n = Number(c.req.param('n'));
+  const file = await transcriptPath(c.req.param('id'));
+  if (!file || !Number.isSafeInteger(n)) return c.json({ error: 'No such picture' }, 404);
+  const image = await transcriptImage(file, c.req.param('uuid'), n);
+  if (!image || !PICTURES.has(image.mediaType)) return c.json({ error: 'No such picture' }, 404);
+  return c.body(new Uint8Array(image.data), 200, {
+    'Content-Type': image.mediaType,
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    ...INERT,
   });
 });
 
@@ -730,6 +764,31 @@ const POLICY: Record<string, string> = {
   ...(config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
 };
 
+/** Compressed copies the build wrote next to each file, best first. */
+const ENCODINGS = [['br', '.br'], ['gzip', '.gz']] as const;
+
+/** The encodings a request takes (`Accept-Encoding`), without those it refuses with q=0. */
+function acceptedEncodings(header: string | undefined): Set<string> {
+  const accepted = new Set<string>();
+  for (const part of (header ?? '').toLowerCase().split(',')) {
+    const [name, ...params] = part.split(';').map((p) => p.trim());
+    const q = params.find((p) => p.startsWith('q='));
+    if (name && !(q && Number(q.slice(2)) <= 0)) accepted.add(name);
+  }
+  return accepted;
+}
+
+/** Hashed assets never change under their name: kept in memory once read, each copy by its path. */
+const assetCache = new Map<string, Buffer>();
+
+async function readStatic(file: string, hashed: boolean): Promise<Buffer | undefined> {
+  const cached = assetCache.get(file);
+  if (cached) return cached;
+  const data = await readFile(file).catch(() => undefined);
+  if (data && hashed) assetCache.set(file, data);
+  return data;
+}
+
 /** The web app. Every URL in it is relative, so it works under any path a proxy mounts it at. */
 app.get('/*', async (c) => {
   if (!config.webDir) return c.text('The web app is not built. Run `npm run build`, or use `npm run dev`.', 503);
@@ -759,18 +818,28 @@ app.get('/*', async (c) => {
   const requested = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
   let file = path.join(root, requested);
   if (!file.startsWith(root) || requested === '/' || !path.extname(file)) file = path.join(root, 'index.html');
-  try {
-    const data = await readFile(file);
-    const ext = path.extname(file);
-    const hashed = file.includes(`${path.sep}assets${path.sep}`);
-    return c.body(new Uint8Array(data), 200, {
-      'Content-Type': TYPES[ext] ?? 'application/octet-stream',
-      'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
-      'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'same-origin',
-      ...POLICY,
-    });
-  } catch {
-    return c.notFound();
+  const ext = path.extname(file);
+  const hashed = file.includes(`${path.sep}assets${path.sep}`);
+  const accepted = acceptedEncodings(c.req.header('accept-encoding'));
+  let encoding: string | undefined;
+  let data: Buffer | undefined;
+  for (const [name, suffix] of ENCODINGS) {
+    if (!accepted.has(name) && !accepted.has('*')) continue;
+    data = await readStatic(`${file}${suffix}`, hashed);
+    if (data) {
+      encoding = name;
+      break;
+    }
   }
+  data ??= await readStatic(file, hashed);
+  if (!data) return c.notFound();
+  return c.body(new Uint8Array(data), 200, {
+    'Content-Type': TYPES[ext] ?? 'application/octet-stream',
+    'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+    ...(encoding ? { 'Content-Encoding': encoding } : {}),
+    Vary: 'Accept-Encoding',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+    ...POLICY,
+  });
 });

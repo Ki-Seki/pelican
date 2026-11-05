@@ -133,7 +133,7 @@ async function start(text = 'Fix the login test', settings = {}) {
   const run = getRun(sessionId)!;
   const state = () => run.state();
   const messages = () => events.flatMap((e) => (e.type === 'message' ? [e.message] : []));
-  const runs = () => events.flatMap((e) => (e.type === 'run' ? [e.state] : []));
+  const runs = () => events.flatMap((e) => (e.type === 'run' && e.state ? [e.state] : []));
   return { sessionId, claude, run, state, messages, runs, events };
 }
 

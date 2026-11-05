@@ -18,7 +18,7 @@ import {
   getView,
   loadLatest,
   removeLocalMessage,
-  setRun,
+  syncRun,
   truncateFrom,
   useSessionView,
 } from '../lib/store';
@@ -356,8 +356,8 @@ export function Chat({
   }, [sessionId]);
 
   useEffect(() => {
-    if (sessionId && detail?.run && !getView(sessionId).run) setRun(sessionId, detail.run);
-  }, [sessionId, detail?.run]);
+    if (sessionId && detail) syncRun(sessionId, detail.run);
+  }, [sessionId, detail]);
 
   // Whatever is on screen counts as read.
   useEffect(() => {
@@ -612,6 +612,11 @@ export function Chat({
         {session?.status === 'live' && !view.run && (
           <Notice tone="live">
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
+          </Notice>
+        )}
+        {session?.status === 'waiting' && session.runningIn && !view.run && (
+          <Notice>
+            Claude is waiting for an answer in {session.runningIn}. Sending here runs a second Claude on the same conversation.
           </Notice>
         )}
         {/* Open, idle, in another app too: explained once, the first time it happens; the session

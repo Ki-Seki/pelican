@@ -1,0 +1,78 @@
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { getSessionInfo, listSessions } from '@anthropic-ai/claude-agent-sdk';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { config } from '../src/server/config';
+import { listSummaries, sessionInfo } from '../src/server/sessions';
+
+vi.mock('@anthropic-ai/claude-agent-sdk', async (original) => {
+  const sdk = await original<typeof import('@anthropic-ai/claude-agent-sdk')>();
+  return { ...sdk, listSessions: vi.fn(sdk.listSessions), getSessionInfo: vi.fn(sdk.getSessionInfo) };
+});
+
+let dir: string;
+let project: string;
+const saved = { claudeHome: config.claudeHome, env: process.env.CLAUDE_CONFIG_DIR };
+const id = (n: number) => `0f0f0f0f-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const at = new Date(Date.now() - 3600_000).toISOString();
+const rows = (session: string, text: string) => `${[
+  { type: 'user', uuid: `${session}-u`, parentUuid: null, sessionId: session, cwd: '/w/app', timestamp: at, message: { role: 'user', content: text } },
+  { type: 'assistant', uuid: `${session}-a`, parentUuid: `${session}-u`, sessionId: session, cwd: '/w/app', timestamp: at, message: { role: 'assistant', content: [{ type: 'text', text: `Done: ${text}` }] } },
+].map((row) => JSON.stringify(row)).join('\n')}\n`;
+
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-sessions-'));
+  config.claudeHome = dir;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  project = path.join(dir, 'projects', '-w-app');
+  await mkdir(project, { recursive: true });
+  for (const n of [1, 2, 3]) await writeFile(path.join(project, `${id(n)}.jsonl`), rows(id(n), `task ${n}`));
+});
+afterAll(async () => {
+  config.claudeHome = saved.claudeHome;
+  if (saved.env === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = saved.env;
+  await rm(dir, { recursive: true, force: true });
+});
+
+const ids = async () => (await listSummaries(() => undefined)).map((s) => s.id).sort();
+
+describe('the session list', () => {
+  it('reads every transcript once, then only what changed, and shares one look between requests', async () => {
+    const [first, second] = await Promise.all([ids(), ids()]);
+    expect(first).toEqual([id(1), id(2), id(3)]);
+    expect(second).toEqual(first);
+    expect(getSessionInfo).toHaveBeenCalledTimes(3);
+
+    vi.mocked(getSessionInfo).mockClear();
+    expect(await ids()).toEqual(first);
+    expect(getSessionInfo).not.toHaveBeenCalled();
+
+    // One grows, one is new, one is gone.
+    await appendFile(path.join(project, `${id(2)}.jsonl`), `${JSON.stringify({ type: 'custom-title', customTitle: 'Renamed', sessionId: id(2) })}\n`);
+    await writeFile(path.join(project, `${id(4)}.jsonl`), rows(id(4), 'task 4'));
+    await rm(path.join(project, `${id(3)}.jsonl`));
+    const summaries = await listSummaries(() => undefined);
+    expect(summaries.map((s) => s.id).sort()).toEqual([id(1), id(2), id(4)]);
+    expect(summaries.find((s) => s.id === id(2))?.title).toBe('Renamed');
+    expect(summaries.find((s) => s.id === id(4))).toMatchObject({ cwd: '/w/app', preview: 'Done: task 4' });
+    expect(vi.mocked(getSessionInfo).mock.calls.map(([session]) => session).sort()).toEqual([id(2), id(4)]);
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
+  it('shows a session that went on in another as that one, as Claude Code’s /resume does', async () => {
+    await writeFile(path.join(project, `${id(6)}.jsonl`), rows(id(6), 'task 6'));
+    await appendFile(path.join(project, `${id(1)}.jsonl`), `${JSON.stringify({ type: 'continued-in', continuedInSessionId: id(6) })}\n`);
+    expect(await ids()).toEqual([id(2), id(4), id(6)]);
+  });
+
+  it('finds a session it has not listed yet without reading them all', async () => {
+    await writeFile(path.join(project, `${id(5)}.jsonl`), rows(id(5), 'task 5'));
+    vi.mocked(listSessions).mockClear();
+    expect(await sessionInfo(id(5))).toMatchObject({ sessionId: id(5), cwd: '/w/app' });
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+});

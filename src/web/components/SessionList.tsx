@@ -17,7 +17,7 @@ const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Tempora
 
 export function statusLabel(status: SessionStatus, runningIn?: string): string {
   if (status === 'running') return 'Working';
-  if (status === 'waiting') return 'Needs you';
+  if (status === 'waiting') return runningIn ? `Needs you in ${runningIn}` : 'Needs you';
   if (status === 'live') return runningIn ? `Working in ${runningIn}` : 'Working elsewhere';
   return '';
 }

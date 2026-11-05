@@ -1,8 +1,9 @@
-import { open, readdir, realpath, stat } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { FileContent, GitFile, GitStatus, TreeEntry } from '../shared/protocol.js';
 import { git } from './git.js';
+import { openRegular } from './open.js';
 
 const MAX_FILE = 512 * 1024;
 const MAX_DIFF = 400_000;
@@ -166,13 +167,17 @@ export async function listTree(cwd: string, relative: string): Promise<TreeEntry
 
 const IMAGE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
 
-/** A file to read on the phone: text up to half a megabyte, images as data, other binaries named only. */
+/**
+ * A file to read on the phone: text up to half a megabyte, images as data, other binaries named
+ * only. A named pipe or a device is not read (`openRegular`): opening one could hold up every
+ * file read of the server.
+ */
 export async function readProjectFile(cwd: string, relative: string): Promise<FileContent> {
   const full = await insideReal(cwd, relative);
-  const info = await stat(full);
   const ext = path.extname(full).slice(1).toLowerCase();
-  const handle = await open(full, 'r');
+  const handle = await openRegular(full);
   try {
+    const info = await handle.stat();
     if (IMAGE[ext] && info.size <= 4 * 1024 * 1024) {
       const data = Buffer.alloc(info.size);
       await handle.read(data, 0, info.size, 0);

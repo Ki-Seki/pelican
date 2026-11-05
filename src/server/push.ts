@@ -71,6 +71,7 @@ export async function notify(payload: PushPayload): Promise<void> {
   }));
   if (gone.length > 0) {
     subscriptions = subscriptions.filter((s) => !gone.includes(s.endpoint));
-    await save(subsFile(), subscriptions);
+    // Callers do not wait for a notification: a failed save is said here, not left to reject.
+    await save(subsFile(), subscriptions).catch((error: Error) => console.warn('[pelican] could not save push subscriptions', error.message));
   }
 }

@@ -1,6 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
-import type { ChatMessage, RunState, ServerEvent } from '../../shared/protocol';
+import type { ChatMessage, PartialAppend, PartialBlock, RunState, ServerEvent } from '../../shared/protocol';
 import { api } from './api';
 import { socket } from './socket';
 
@@ -20,6 +20,23 @@ const EMPTY: SessionView = { messages: [], offset: 0, total: 0, loaded: false, l
 const views = new Map<string, SessionView>();
 const listeners = new Map<string, Set<() => void>>();
 
+/** Sessions shown before, newest last: their views stay, so going back is instant; older ones go. */
+const KEEP_VIEWS = 5;
+const left: string[] = [];
+
+/** A session no longer on screen keeps its view for a while; views beyond the last few are let go. */
+function leave(sessionId: string): void {
+  // Unsubscribed with it: until the socket answers again, a page load says what runs.
+  heard.delete(sessionId);
+  const at = left.indexOf(sessionId);
+  if (at >= 0) left.splice(at, 1);
+  left.push(sessionId);
+  while (left.length > KEEP_VIEWS) {
+    const old = left.shift()!;
+    if ((listeners.get(old)?.size ?? 0) === 0) views.delete(old);
+  }
+}
+
 function update(sessionId: string, change: (view: SessionView) => SessionView): void {
   views.set(sessionId, change(views.get(sessionId) ?? EMPTY));
   for (const listener of listeners.get(sessionId) ?? []) listener();
@@ -30,19 +47,21 @@ export function getView(sessionId: string): SessionView {
 }
 
 export function useSessionView(sessionId: string | undefined): SessionView {
-  return useSyncExternalStore(
-    (listener) => {
-      if (!sessionId) return () => {};
-      let set = listeners.get(sessionId);
-      if (!set) {
-        set = new Set();
-        listeners.set(sessionId, set);
-      }
-      set.add(listener);
-      return () => set.delete(listener);
-    },
-    () => (sessionId ? getView(sessionId) : EMPTY),
-  );
+  // The same function while the session is the same: React subscribes again whenever it changes.
+  const subscribe = useCallback((listener: () => void) => {
+    if (!sessionId) return () => {};
+    let set = listeners.get(sessionId);
+    if (!set) {
+      set = new Set();
+      listeners.set(sessionId, set);
+    }
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) leave(sessionId);
+    };
+  }, [sessionId]);
+  return useSyncExternalStore(subscribe, () => (sessionId ? getView(sessionId) : EMPTY));
 }
 
 /**
@@ -51,7 +70,7 @@ export function useSessionView(sessionId: string | undefined): SessionView {
  * read mid-turn); it replaces the copy with that id. A local copy never
  * replaces a confirmed one.
  */
-function merge(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+export function merge(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   const index = new Map<string, number>();
   const note = (message: ChatMessage, at: number) => {
     index.set(message.uuid, at);
@@ -150,8 +169,48 @@ export function clearDraft(viewId: string): void {
   drafts.delete(viewId);
 }
 
+/**
+ * Sessions whose run the live socket has answered for since it connected. From then on the socket
+ * says what runs; a page load read earlier could bring back a run that has ended since.
+ */
+const heard = new Set<string>();
+
 export function setRun(sessionId: string, run: RunState | undefined): void {
-  update(sessionId, (view) => ({ ...view, run }));
+  const view = views.get(sessionId);
+  if (!run && !view?.run) return;
+  const wasBusy = Boolean(view?.run?.busy);
+  update(sessionId, (v) => ({ ...v, run }));
+  // A finished turn, or a run that is gone: re-read the transcript, so anything published before
+  // this page subscribed (the first prompt of a new session) is confirmed too.
+  if (wasBusy && !run?.busy) void loadLatest(sessionId);
+}
+
+/** The run as loading the session saw it (null: none). Used only until the socket has answered. */
+export function syncRun(sessionId: string, run: RunState | null): void {
+  if (!heard.has(sessionId)) setRun(sessionId, run ?? undefined);
+}
+
+const textOf = (block: PartialBlock) => (block.type === 'text' ? block.text : block.type === 'thinking' ? block.thinking : block.inputJson);
+
+function appended(block: PartialBlock, text: string): PartialBlock {
+  if (block.type === 'text') return { ...block, text: block.text + text };
+  if (block.type === 'thinking') return { ...block, thinking: block.thinking + text };
+  return { ...block, inputJson: block.inputJson + text };
+}
+
+/** Streamed text added to the run's blocks; a copy that does not match asks for the whole run again. */
+function applyAppends(sessionId: string, appends: PartialAppend[]): void {
+  const run = views.get(sessionId)?.run;
+  const partial = run?.partial.slice();
+  for (const { index, from, text } of appends) {
+    const block = partial?.[index];
+    if (!partial || !block || textOf(block).length !== from) {
+      socket.refresh(sessionId);
+      return;
+    }
+    partial[index] = appended(block, text);
+  }
+  if (run && partial) update(sessionId, (view) => ({ ...view, run: { ...run, partial } }));
 }
 
 /** Moves the optimistic first message of a new session to the id the server gave it. */
@@ -170,13 +229,15 @@ export function handleEvent(event: ServerEvent): void {
       }
       break;
     case 'run': {
-      const wasBusy = Boolean(views.get(event.state.sessionId)?.run?.busy);
-      update(event.state.sessionId, (view) => ({ ...view, run: event.state }));
-      // A finished turn: re-read the transcript, so anything published before this
-      // page subscribed (the first prompt of a new session) is confirmed too.
-      if (wasBusy && !event.state.busy) void loadLatest(event.state.sessionId);
+      const sessionId = event.state?.sessionId ?? event.sessionId;
+      if (!sessionId) break;
+      heard.add(sessionId);
+      setRun(sessionId, event.state ?? undefined);
       break;
     }
+    case 'partial':
+      applyAppends(event.sessionId, event.appends);
+      break;
     case 'reload':
       void loadLatest(event.sessionId);
       break;
@@ -187,9 +248,11 @@ export function handleEvent(event: ServerEvent): void {
 
 socket.on(handleEvent);
 
-/** After a reconnect, catch up on whatever was missed while offline. */
-socket.onConnection((connected) => {
-  if (!connected) return;
+// A new connection answers for every session again.
+socket.onConnection(() => heard.clear());
+
+/** After connecting, and on coming back to the page, catch up on whatever was missed. */
+socket.onResync(() => {
   for (const sessionId of listeners.keys()) {
     if ((listeners.get(sessionId)?.size ?? 0) > 0) void loadLatest(sessionId);
   }

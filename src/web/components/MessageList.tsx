@@ -11,6 +11,7 @@ import { describeTool } from '../lib/tools';
 import { buildItems, type Item, type Part } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
+import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -132,7 +133,7 @@ const AssistantTurn = memo(function AssistantTurn({
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
           <button key={seg.key} type="button" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
-            <img alt="" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
+            <img alt="" loading="lazy" decoding="async" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
           </button>
         ),
       )}
@@ -181,7 +182,7 @@ const UserBubble = memo(function UserBubble({
               <RemoteImage key={i} src={imageSrc(image)} />
             ) : (
               <button key={i} type="button" onClick={() => openImage(imageSrc(image))}>
-                <img alt="" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
+                <img alt="" loading="lazy" decoding="async" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
               </button>
             ),
           )}
@@ -246,7 +247,7 @@ function EditPrompt({ text, images, last, onCancel, onSend }: {
   const [value, setValue] = useState(text);
   // Positions among all the prompt's images, as the server counts them; only those held in the
   // transcript (not a link to one elsewhere) can go along.
-  const carried = images.flatMap((image, i) => (image.source.type === 'base64' ? [i] : []));
+  const carried = images.flatMap((image, i) => (image.source.type === 'base64' || image.source.url.startsWith('api/sessions/') ? [i] : []));
   const [kept, setKept] = useState(carried);
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -423,7 +424,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
   return (
     <div>
       {run.partial.map((block, i) => {
-        if (block.type === 'text') return block.text ? <Markdown key={i} text={block.text} className="my-2" /> : null;
+        if (block.type === 'text') return block.text ? <StreamingMarkdown key={i} text={block.text} className="my-2" /> : null;
         if (block.type === 'thinking') return <Thinking key={i} text={block.thinking} live />;
         const summary = describeTool(block.name, partialTarget(block), cwd);
         const Icon = summary.icon;

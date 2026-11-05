@@ -1,0 +1,44 @@
+import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { config } from '../src/server/config';
+import { keepDays, saveUpload, sweepUploads } from '../src/server/files';
+
+let dir: string;
+const saved = { stateDir: config.stateDir, claudeHome: config.claudeHome };
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-uploads-'));
+  config.stateDir = path.join(dir, 'state');
+  config.claudeHome = path.join(dir, 'claude');
+  await mkdir(config.claudeHome, { recursive: true });
+});
+afterAll(async () => {
+  Object.assign(config, saved);
+  await rm(dir, { recursive: true, force: true });
+});
+
+const DAY = 24 * 3600_000;
+
+describe('uploads', () => {
+  it('go once they are older than Claude Code keeps sessions', async () => {
+    const old = await saveUpload(new File(['old'], 'old.png', { type: 'image/png' }));
+    const recent = await saveUpload(new File(['new'], 'new.png', { type: 'image/png' }));
+    const then = new Date(Date.now() - 31 * DAY);
+    await utimes(path.dirname(old.path), then, then);
+    expect(await keepDays()).toBe(30);
+    expect(await sweepUploads((await keepDays()) * DAY)).toBe(1);
+    expect(await readdir(path.join(config.stateDir, 'uploads'))).toEqual([recent.id]);
+  });
+
+  it('are kept as long as Claude Code’s cleanupPeriodDays says, and at least a day', async () => {
+    await writeFile(path.join(config.claudeHome, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 90 }));
+    expect(await keepDays()).toBe(90);
+    await writeFile(path.join(config.claudeHome, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 0 }));
+    expect(await keepDays()).toBe(1);
+    await writeFile(path.join(config.claudeHome, 'settings.json'), 'not json');
+    expect(await keepDays()).toBe(30);
+  });
+});

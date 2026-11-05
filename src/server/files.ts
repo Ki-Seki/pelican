@@ -68,3 +68,38 @@ export async function removeUpload(id: string): Promise<void> {
   if (!/^[0-9a-f-]{36}$/.test(id)) return;
   await rm(path.join(uploadsDir(), id), { recursive: true, force: true });
 }
+
+/**
+ * How long Claude Code keeps sessions: `cleanupPeriodDays` in its settings, 30 days unless set.
+ * Uploads are kept as long: past that, the conversations that used them are gone too.
+ */
+export async function keepDays(): Promise<number> {
+  try {
+    const days = (JSON.parse(await readFile(path.join(config.claudeHome, 'settings.json'), 'utf8')) as { cleanupPeriodDays?: unknown }).cleanupPeriodDays;
+    // 0 keeps no transcripts at all; an upload still lives through the day it is sent.
+    if (typeof days === 'number' && Number.isFinite(days) && days >= 0) return Math.max(1, days);
+  } catch {
+    // No settings, or not JSON: Claude Code's default.
+  }
+  return 30;
+}
+
+/** Removes uploads older than `maxAgeMs`; returns how many went. */
+export async function sweepUploads(maxAgeMs: number, now = Date.now()): Promise<number> {
+  let names: string[];
+  try {
+    names = await readdir(uploadsDir());
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (!/^[0-9a-f-]{36}$/.test(name)) continue;
+    const dir = path.join(uploadsDir(), name);
+    const info = await stat(dir).catch(() => undefined);
+    if (!info?.isDirectory() || now - info.mtimeMs < maxAgeMs) continue;
+    await rm(dir, { recursive: true, force: true });
+    removed += 1;
+  }
+  return removed;
+}
