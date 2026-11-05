@@ -1,12 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Folder, FolderOpen, Loader2, NotebookPen } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Folder, FolderOpen, Loader2, NotebookPen } from 'lucide-react';
 import { useState } from 'react';
 
 import { api } from '../lib/api';
 import { relativeTime, shortPath } from '../lib/format';
+import type { Start } from '../lib/start';
+import { Sheet } from './Sheet';
 
-/** Where a new session runs: a recent project, or any folder on the machine. */
-export function FolderPicker({ home, onPick, onScratch }: { home?: string; onPick: (path: string) => void; onScratch: () => void }) {
+/**
+ * Where a new session runs: a recent project, or any folder on the machine. On a page of its own
+ * before the first session; after that in a sheet, from the folder under the new session's chat.
+ */
+export function FolderPicker({ home, onPick, onScratch, current, inSheet = false }: {
+  home?: string;
+  onPick: (path: string) => void;
+  onScratch: () => void;
+  /** The place picked now, marked in the list. */
+  current?: Start;
+  inSheet?: boolean;
+}) {
   const { data: projects } = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const [browsing, setBrowsing] = useState<string>();
   const { data: listing, isFetching } = useQuery({
@@ -14,17 +26,20 @@ export function FolderPicker({ home, onPick, onScratch }: { home?: string; onPic
     queryFn: () => api.dirs(browsing),
     enabled: browsing !== undefined,
   });
+  const frame = inSheet ? 'px-1 pb-2' : 'mx-auto max-w-xl px-4 py-6';
+  const isCurrent = (path: string) => Boolean(current && 'cwd' in current && current.cwd === path);
+  const scratchCurrent = Boolean(current && 'scratch' in current);
 
   if (browsing !== undefined) {
     return (
-      <div className="mx-auto max-w-xl px-4 py-4">
+      <div className={frame}>
         <div className="flex items-center gap-2">
-          <button type="button" aria-label="Back to recent folders" className="grid size-9 place-items-center rounded-full hover:bg-hover" onClick={() => setBrowsing(undefined)}>
+          <button type="button" aria-label="Back to recent folders" className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-hover" onClick={() => setBrowsing(undefined)}>
             <ChevronLeft className="size-5" />
           </button>
           <div className="min-w-0 flex-1 truncate font-mono text-[13px] text-muted">{listing ? shortPath(listing.path, home) : '…'}</div>
           {listing && (
-            <button type="button" className="h-9 rounded-full bg-fg px-4 text-[14px] font-medium text-bg" onClick={() => onPick(listing.path)}>
+            <button type="button" className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg" onClick={() => onPick(listing.path)}>
               Start here
             </button>
           )}
@@ -50,32 +65,43 @@ export function FolderPicker({ home, onPick, onScratch }: { home?: string; onPic
   }
 
   return (
-    <div className="mx-auto max-w-xl px-4 py-6">
-      <h2 className="text-[20px] font-semibold tracking-tight">New session</h2>
-      <p className="mt-1 text-[13.5px] text-muted">Choose the folder Claude works in.</p>
+    <div className={frame}>
+      {!inSheet && (
+        <>
+          <h2 className="text-[20px] font-semibold tracking-tight">New session</h2>
+          <p className="mt-1 text-[13.5px] text-muted">Choose the folder Claude works in.</p>
+        </>
+      )}
       <button
         type="button"
         onClick={onScratch}
-        className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3 text-left hover:bg-hover"
+        aria-current={scratchCurrent || undefined}
+        className={`flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3 text-left hover:bg-hover ${inSheet ? '' : 'mt-4'}`}
       >
         <NotebookPen className="size-4 shrink-0 text-faint" />
         <div className="min-w-0 flex-1">
           <div className="text-[14.5px]">Scratch folder</div>
-          <div className="text-[12px] text-faint">For something quick: a new empty folder in ~/scratch</div>
+          <div className="text-[12px] text-faint">A new empty folder in ~/scratch</div>
         </div>
-        <ChevronRight className="size-4 text-faint" />
+        {scratchCurrent ? <Check className="size-4 shrink-0" /> : <ChevronRight className="size-4 text-faint" />}
       </button>
       <div className="mt-5 mb-1.5 px-1 text-[11.5px] font-medium tracking-wide text-faint uppercase">Projects</div>
       <div className="overflow-hidden rounded-2xl border border-line bg-panel">
         {!projects && <div className="flex justify-center py-8"><Loader2 className="size-5 animate-spin text-faint" /></div>}
         {projects?.slice(0, 12).map((p) => (
-          <button key={p.path} type="button" className="flex w-full items-center gap-3 border-b border-line px-4 py-3 text-left hover:bg-hover" onClick={() => onPick(p.path)}>
+          <button
+            key={p.path}
+            type="button"
+            aria-current={isCurrent(p.path) || undefined}
+            className="flex w-full items-center gap-3 border-b border-line px-4 py-3 text-left hover:bg-hover"
+            onClick={() => onPick(p.path)}
+          >
             <Folder className="size-4 shrink-0 text-faint" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[14.5px]">{p.name}</div>
               <div className="truncate font-mono text-[11.5px] text-faint">{shortPath(p.path, home)}</div>
             </div>
-            <span className="shrink-0 text-[12px] text-faint">{relativeTime(p.lastActivity)}</span>
+            {isCurrent(p.path) ? <Check className="size-4 shrink-0" /> : <span className="shrink-0 text-[12px] text-faint">{relativeTime(p.lastActivity)}</span>}
           </button>
         ))}
         <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14.5px] hover:bg-hover" onClick={() => setBrowsing('')}>
@@ -84,5 +110,35 @@ export function FolderPicker({ home, onPick, onScratch }: { home?: string; onPic
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The folder a new session will run in, under its empty chat. + opens that chat straight away, in
+ * the latest project, so you can type at once; a tap here picks another folder.
+ */
+export function StartIn({ start, home, onStart }: { start: Start; home?: string; onStart: (start: Start) => void }) {
+  const [open, setOpen] = useState(false);
+  const label = 'scratch' in start ? 'A new folder in ~/scratch' : shortPath(start.cwd, home);
+  const pick = (next: Start) => {
+    setOpen(false);
+    onStart(next);
+  };
+  return (
+    <>
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={`Folder: ${label}`}
+        onClick={() => setOpen(true)}
+        className="mx-auto mt-1 flex h-10 max-w-full min-w-0 items-center gap-1 rounded-full px-3 font-mono text-[12.5px] text-faint hover:bg-hover hover:text-fg"
+      >
+        <span className="min-w-0 truncate">{label}</span>
+        <ChevronDown className="size-3.5 shrink-0" />
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)} title="Start in">
+        <FolderPicker inSheet current={start} {...(home ? { home } : {})} onPick={(cwd) => pick({ cwd })} onScratch={() => pick({ scratch: true })} />
+      </Sheet>
+    </>
   );
 }

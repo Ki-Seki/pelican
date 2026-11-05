@@ -14,6 +14,7 @@ import { composing } from '../lib/keyboard';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
+import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
 import {
   addLocalMessage,
@@ -29,6 +30,7 @@ import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import { Composer, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
+import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
@@ -37,7 +39,7 @@ import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
-import { Workspace } from './Workspace';
+import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
 
 /** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
 const withoutBypass = (settings: RunSettings): RunSettings =>
@@ -337,8 +339,8 @@ export function Chat({
   wide: boolean;
   onBack: () => void;
   onOpen: (id: string, replace?: boolean) => void;
-  /** Opens a new, empty session in a folder. */
-  onStartIn: (cwd: string) => void;
+  /** Opens a new, empty session somewhere else, in place of this one. */
+  onStartIn: (start: Start) => void;
 }) {
   const viewId = sessionId ?? `new:${scratch ? 'scratch' : newCwd}`;
   const view = useSessionView(viewId);
@@ -376,7 +378,6 @@ export function Chat({
   const failed = (error: unknown) => setSendError({ text: (error as Error).message, note: isDemoNote(error) || isUnreachable(error) });
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
   const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
   const [running, setRunning] = useState<string>();
@@ -459,7 +460,7 @@ export function Chat({
     dismissDemoNote();
     if (sessionId && CLEAR.test(text) && cwd) {
       carried.set(`new:${cwd}`, withoutBypass(settings));
-      onStartIn(cwd);
+      onStartIn({ cwd });
       return;
     }
     const uuid = newId();
@@ -496,6 +497,7 @@ export function Chat({
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
   const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
+  const workspace = useWorkspacePane(Boolean(cwd));
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
@@ -660,7 +662,7 @@ export function Chat({
   };
 
   return (
-    <div ref={root} className="relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto" {...dropHandlers}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked ? 'pr-(--pane-w)' : ''}`} {...dropHandlers}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {!wide && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
@@ -693,7 +695,14 @@ export function Chat({
         {/* On a phone the meter sits by Send once the context is filling; the session menu always has the number. */}
         {wide && meter}
         {cwd && (
-          <button type="button" aria-label="Changes and files" onClick={() => setWorkspaceOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg">
+          <button
+            type="button"
+            aria-label="Changes and files"
+            aria-pressed={workspace.dockable ? workspace.open : undefined}
+            title={`Changes and files (${PANE_KEYS})`}
+            onClick={() => workspace.setOpen(!workspace.open)}
+            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.docked ? 'bg-hover text-fg' : 'text-muted'}`}
+          >
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
           </button>
@@ -719,9 +728,9 @@ export function Chat({
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-            <div>
+            <div className="min-w-0 max-w-full">
               <div className="text-[17px] font-medium">What should Claude do?</div>
-              <div className="mt-1 font-mono text-[12.5px] text-faint">{subtitle}</div>
+              <StartIn start={newCwd ? { cwd: newCwd } : { scratch: true }} {...(home ? { home } : {})} onStart={onStartIn} />
             </div>
           </div>
         )}
@@ -820,12 +829,13 @@ export function Chat({
 
       {cwd && (
         <Workspace
-          open={workspaceOpen}
-          onClose={() => setWorkspaceOpen(false)}
+          open={workspace.open}
+          docked={workspace.docked}
+          onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          onMention={(path) => {
-            setWorkspaceOpen(false);
-            setDraftText({ text: `@${path} `, key: Date.now(), append: true });
+          onAddToMessage={(text) => {
+            if (!workspace.docked) workspace.setOpen(false);
+            setDraftText({ text, key: Date.now(), append: true });
           }}
         />
       )}

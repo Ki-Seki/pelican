@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Bell, ChevronRight, LogOut } from 'lucide-react';
+import { ChevronRight, LogOut } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { ServerInfo } from '../../shared/protocol';
@@ -111,23 +111,21 @@ export function SettingsSheet({
       <div className="h-1.5" />
       <SheetToggle label="Suggest what to ask next" checked={prefs.suggestions} onChange={(suggestions) => setPrefs({ suggestions })} />
 
-      {/* The demo sends nothing anywhere, notifications included. */}
-      {!info?.demo && (
-        <>
-          <SheetHeading>Notifications</SheetHeading>
-          {notifications === 'unsupported' || notifications === 'denied' ? (
-            <SheetOption icon={<Bell className="size-4" />} label="Notifications" description={NOTIFICATION_HINT[notifications]} onSelect={() => {}} />
-          ) : (
-            <SheetToggle
-              icon={<Bell className="size-4 text-muted" />}
-              label="Notifications"
-              description={NOTIFICATION_HINT[notifications]}
-              checked={notifications === 'on'}
-              onChange={onToggleNotifications}
-            />
-          )}
-        </>
-      )}
+      {/* The demo sends nothing anywhere, notifications included. Where they cannot be turned on, the
+          row says why and is not a control. */}
+      {!info?.demo && (notifications === 'unsupported' || notifications === 'denied' ? (
+        <div className="px-3 py-2.5">
+          <div className="text-[15px]">Notifications</div>
+          <div className="mt-0.5 text-[12.5px] leading-snug text-muted">{NOTIFICATION_HINT[notifications]}</div>
+        </div>
+      ) : (
+        <SheetToggle
+          label="Notifications"
+          description={NOTIFICATION_HINT[notifications]}
+          checked={notifications === 'on'}
+          onChange={onToggleNotifications}
+        />
+      ))}
 
       {(account || windows.length > 0 || plan?.extra) && <SheetHeading>Account</SheetHeading>}
       {account && (

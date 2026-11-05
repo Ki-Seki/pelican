@@ -25,6 +25,7 @@ import {
 } from './lib/notifications';
 import { applyTheme } from './lib/prefs';
 import { socket } from './lib/socket';
+import { defaultStart, newSessionQuery } from './lib/start';
 import { STATIC_DEMO } from './lib/static-demo';
 import { setWaitingCount } from './lib/title';
 import { fitToVisibleViewport } from './lib/viewport';
@@ -234,7 +235,7 @@ function Main() {
       machine={info?.machine ?? ''}
       selectedId={sessionId}
       onOpen={(id) => open(id)}
-      onNew={() => navigate('?new')}
+      onNew={(start) => navigate(newSessionQuery(start))}
       onSettings={() => setSettingsOpen(true)}
       connected={connected}
       banner={banner}
@@ -255,7 +256,7 @@ function Main() {
         wide={wide}
         onBack={() => navigate('')}
         onOpen={open}
-        onStartIn={(cwd) => navigate(`?new&cwd=${encodeURIComponent(cwd)}`)}
+        onStartIn={(start) => navigate(newSessionQuery(start), true)}
       />
     );
   } else if (isNew) {
@@ -300,7 +301,7 @@ function Main() {
               <div className="text-center">
                 <MessageSquare className="mx-auto size-8 text-faint" />
                 <div className="mt-3 text-[15px] text-muted">Pick a session, or start a new one</div>
-                <button type="button" onClick={() => navigate('?new')} className="mx-auto mt-4 flex h-10 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg">
+                <button type="button" onClick={() => navigate(newSessionQuery(defaultStart(queryClient.getQueryData<SessionSummary[]>(['sessions']) ?? [])))} className="mx-auto mt-4 flex h-10 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg">
                   <Plus className="size-4" /> New session
                 </button>
               </div>

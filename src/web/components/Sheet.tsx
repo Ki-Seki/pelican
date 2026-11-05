@@ -120,6 +120,7 @@ export function SheetOption({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       onClick={onSelect}
       data-autofocus={selected || undefined}
       className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-hover ${selected ? 'bg-hover' : ''} ${danger ? 'text-danger' : ''}`}

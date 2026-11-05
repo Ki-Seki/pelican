@@ -49,9 +49,9 @@ function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
           </div>
           {busy === server.name ? <Loader2 className="size-4 animate-spin text-faint" /> : live && (
             server.status === 'failed' || server.status === 'needs-auth' ? (
-              <button type="button" className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg" onClick={() => change(server.name, { reconnect: true })}>Reconnect</button>
+              <button type="button" className="h-10 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-fine:h-8" onClick={() => change(server.name, { reconnect: true })}>Reconnect</button>
             ) : (
-              <button type="button" className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg" onClick={() => change(server.name, { enabled: server.status === 'disabled' })}>
+              <button type="button" className="h-10 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-fine:h-8" onClick={() => change(server.name, { enabled: server.status === 'disabled' })}>
                 {server.status === 'disabled' ? 'Turn on' : 'Turn off'}
               </button>
             )
@@ -59,7 +59,7 @@ function McpServers({ sessionId, open }: { sessionId: string; open: boolean }) {
         </div>
       ))}
       {!showAll && signIn.length > 0 && (
-        <button type="button" onClick={() => setShowAll(true)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-muted hover:bg-hover">
+        <button type="button" onClick={() => setShowAll(true)} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-muted hover:bg-hover pointer-fine:min-h-9">
           <span className="size-2 shrink-0 rounded-full bg-wait" />
           {signIn.length} more need signing in
         </button>
@@ -242,7 +242,7 @@ export function SessionMenu({
             <button
               type="button"
               disabled={busy}
-              className="h-9 rounded-full bg-danger px-4 text-[14px] font-medium text-white disabled:opacity-40"
+              className="h-10 rounded-full bg-danger px-4 text-[14px] font-medium text-bg disabled:opacity-40"
               onClick={() => act(async () => {
                 await api.remove(sessionId);
                 onDeleted();
@@ -250,7 +250,7 @@ export function SessionMenu({
             >
               Delete
             </button>
-            <button type="button" className="h-9 rounded-full bg-chip px-4 text-[14px]" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" className="h-10 rounded-full bg-chip px-4 text-[14px]" onClick={() => setConfirmDelete(false)}>Cancel</button>
           </div>
         </div>
       ) : (
@@ -285,7 +285,7 @@ export function SessionMenu({
         </Detail>
       )}
       <Detail label="ID" mono>
-        <button type="button" className="inline-flex items-center gap-1.5 text-left hover:text-fg" onClick={() => copy('id', sessionId)}>
+        <button type="button" className="-my-2 inline-flex items-center gap-1.5 py-2 text-left hover:text-fg" onClick={() => copy('id', sessionId)}>
           {sessionId}
           {copied === 'id' ? <Check className="size-3 shrink-0" /> : <Copy className="size-3 shrink-0" />}
         </button>
