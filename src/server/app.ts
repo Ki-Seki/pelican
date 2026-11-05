@@ -3,6 +3,8 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
+import { Readable } from 'node:stream';
+
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -29,7 +31,8 @@ import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTask
 import { runCommand } from './shell.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
-import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
+import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, readProjectFile } from './workspace.js';
+import { searchText } from './search.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
@@ -78,7 +81,7 @@ app.use('*', async (c, next) => {
 /** What the page loads without fetch, so it cannot mark: an uploaded image, a picture in a message, a download. */
 const unmarked = (c: Context) => c.req.method === 'GET'
   && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path)
-    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path));
+    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path) || c.req.path === '/api/file/raw');
 
 /** The Origin header as an origin (`null`, garbage and missing are none). */
 function originOf(header: string | undefined): string | undefined {
@@ -607,6 +610,42 @@ app.get('/api/file', async (c) => {
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
   return c.json(await readProjectFile(cwd, file));
+});
+
+/**
+ * A file of the folder, downloaded: as an attachment that runs nothing where it opens (no
+ * sniffing, the sandbox's policy), read as it is, up to 200 MB. Asked for by a plain link.
+ */
+app.get('/api/file/raw', async (c) => {
+  const cwd = await folderOf(c);
+  const file = c.req.query('path');
+  if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
+  const opened = await openProjectFile(cwd, file).catch(() => undefined);
+  if (!opened) return c.json({ error: 'No such file' }, 404);
+  if (opened.size > 200 * 1024 * 1024) {
+    await opened.handle.close();
+    return c.json({ error: 'That file is larger than 200 MB' }, 413);
+  }
+  const stream = opened.handle.createReadStream();
+  return c.body(Readable.toWeb(stream) as ReadableStream, 200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': String(opened.size),
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
+    'Cache-Control': 'private, no-store',
+    ...INERT,
+  });
+});
+
+/**
+ * The lines of the folder's files that hold some text (Files' search): Claude Code's own
+ * ripgrep, else a bounded scan (search.ts). Runs no git and nothing of the folder's.
+ */
+app.get('/api/search', async (c) => {
+  const cwd = await folderOf(c);
+  const q = c.req.query('q') ?? '';
+  if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  if (!q.trim() || q.length > 200) return c.json({ error: 'Search for some text, up to 200 characters' }, 400);
+  return c.json(await searchText(cwd, q));
 });
 
 /**

@@ -240,6 +240,9 @@ export const api = {
   file: (cwd: string, path: string) => request<FileContent>(`file?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`),
   files: (cwd: string, q: string) =>
     request<{ files: string[] }>(`files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`).then((r) => r.files),
+  /** The lines of the folder's files that hold `q` (Claude Code's ripgrep, else a scan). */
+  search: (cwd: string, q: string) =>
+    request<{ engine: 'rg' | 'scan'; files: Array<{ path: string; lines: Array<{ n: number; text: string }> }>; truncated: boolean }>(`search?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(q)}`),
   /** Which of these paths (at most 50) are files in the folder. */
   exists: (cwd: string, paths: string[]) =>
     request<{ paths: string[] }>(`exists?cwd=${encodeURIComponent(cwd)}${paths.map((p) => `&p=${encodeURIComponent(p)}`).join('')}`).then((r) => r.paths),

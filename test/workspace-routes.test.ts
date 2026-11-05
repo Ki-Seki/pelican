@@ -61,6 +61,36 @@ describe('which files are there', () => {
   });
 });
 
+describe('a file downloaded', () => {
+  it('comes as an attachment that runs nothing where it opens, and only from inside the folder', async () => {
+    const response = await ask(`/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=src%2Fa.ts`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('one\n');
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''a.ts");
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('content-security-policy')).toContain('sandbox');
+    for (const bad of ['link.txt', '../secret.txt', '/etc/hosts', 'src']) {
+      expect((await ask(`/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(bad)}`)).status).toBe(404);
+    }
+  });
+
+  it('is a plain link the page cannot mark, so it is let through only as the page itself would ask', async () => {
+    const url = `/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=src%2Fa.ts`;
+    expect((await ask(url, { 'x-pelican': '' })).status).toBe(200);
+    expect((await ask(url, { 'x-pelican': '', 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await app.request(url, { headers: { host: 'localhost:7860' } })).status).toBe(401);
+  });
+});
+
+describe('searching the folder', () => {
+  it('needs some text, and finds it', async () => {
+    expect((await ask(`/api/search?cwd=${encodeURIComponent(cwd)}&q=`)).status).toBe(400);
+    const result = await (await ask(`/api/search?cwd=${encodeURIComponent(cwd)}&q=one`)).json() as { files: Array<{ path: string }> };
+    expect(result.files.map((f) => f.path)).toEqual(['src/a.ts']);
+  });
+});
+
 describe('what each turn changed', () => {
   it('comes from the transcript, with each file’s diff, in any folder', async () => {
     const response = await ask(`/api/sessions/${SESSION}/changes`);

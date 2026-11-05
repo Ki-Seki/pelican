@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MessageSquare, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
@@ -13,6 +13,7 @@ import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
+import { commentsOf, dropComments, useComments, withComments } from '../lib/review';
 import { loadDefaults, markSeen, markTipSeen, newSessionDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
@@ -372,7 +373,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; attachments?: Attachment[] }>();
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] }>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -481,23 +482,28 @@ export function Chat({
       return;
     }
     const uuid = newId();
+    // Line comments go with the next prompt, as in Claude Desktop; a command takes none.
+    const notes = cwd && !text.trimStart().startsWith('/') ? commentsOf(cwd) : [];
+    const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
-    if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
+    if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
     try {
       // A new session's mode, with Claude Code's settings for its folder read first.
       // An effort the model does not offer (High on a model without efforts) is not sent.
       const offered = modelOf(modelList?.models, settings);
       const fitted = settings.effort && offered && !offered.efforts.includes(settings.effort) ? { ...settings, effort: undefined } : settings;
       const sent = modePicked ? fitted : { ...fitted, permissionMode: await startModeIn(scratch ? undefined : newCwd, fitted) };
-      const body = { text, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
+      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
         clearDraft(viewId, text);
+        if (cwd) dropComments(cwd, notes);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
         clearDraft(viewId, text);
+        if (cwd) dropComments(cwd, notes);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
@@ -611,6 +617,8 @@ export function Chat({
   }, [busy, cwd, sessionId, queryClient]);
   // Paths in the conversation open their file in Changes and files, at their line; a turn's line its changes.
   const { show: showWorkspace } = workspace;
+  // Line comments waiting to go with the next message.
+  const waitingComments = useComments(cwd ?? '');
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
     openFile: (path, line) => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) }),
@@ -855,6 +863,14 @@ export function Chat({
             <NoteText text={sendError.text} />
           </Notice>
         )}
+        {waitingComments.length > 0 && !workspace.open && (
+          <div className="mx-auto mb-2 flex max-w-3xl">
+            <button type="button" onClick={() => workspace.show({ tab: 'changes' })} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
+              <MessageSquare className="size-3.5 shrink-0 text-faint" />
+              <span className="truncate">{waitingComments.length === 1 ? '1 comment goes with your next message' : `${waitingComments.length} comments go with your next message`}</span>
+            </button>
+          </div>
+        )}
         {sessionId && view.run?.queued && view.run.queued.length > 0 && (
           <QueuedStrip
             queued={view.run.queued}
@@ -900,9 +916,14 @@ export function Chat({
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           {...(sessionId ? { sessionId, onRewind: (uuid: string) => setRewinding(uuid) } : {})}
-          onAddToMessage={(text) => {
+          onAddToMessage={(text, block) => {
             if (!workspace.docked) workspace.setOpen(false);
-            setDraftText({ text, key: Date.now(), append: true });
+            setDraftText({ text, key: Date.now(), append: true, ...(block ? { block } : {}) });
+          }}
+          onSendComments={() => {
+            if (commentsOf(cwd).length === 0) return;
+            if (!workspace.docked) workspace.setOpen(false);
+            void send('', [], prefs.sendWhileBusy);
           }}
         />
       )}

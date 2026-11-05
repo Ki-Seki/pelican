@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import type { Attachment } from '../../shared/protocol';
+import { forgetComments } from './review';
 
 /**
  * Half-written messages, one per chat (a session, or a new session in a folder), kept in this
@@ -69,13 +70,14 @@ export function moveDraft(from: string, to: string): void {
   saveDraft(to, draft.text, draft.attachments);
 }
 
-/** Signing out leaves no prompts behind in this browser. */
+/** Signing out leaves no prompts behind in this browser, nor line comments waiting to go with one. */
 export function forgetDrafts(): void {
   try {
     localStorage.removeItem(KEY);
   } catch {
     // Nothing was kept.
   }
+  forgetComments();
 }
 
 /**

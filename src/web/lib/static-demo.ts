@@ -48,6 +48,8 @@ export async function staticRequest(base: URL, path: string, init?: RequestInit)
   if (init?.method && init.method !== 'GET') throw new DemoRefusal(DEMO_NOTE);
   generatedAt ??= fetch(new URL('data/meta.json', base)).then((r) => r.json()).then((m: { generatedAt: number }) => m.generatedAt);
   const [query, params] = path.split('?');
+  // Searching the files' text needs the computer: the demo says so, asking for nothing.
+  if (query === 'search') throw new DemoRefusal(DEMO_NOTE);
   // Which files are there, for links in the conversation: from the folder's whole list, saved.
   if (query === 'exists') {
     const asked = new URLSearchParams(params);

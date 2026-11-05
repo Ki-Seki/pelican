@@ -232,19 +232,45 @@ describe('a new session moved to another folder before it starts', () => {
   });
 });
 
-describe('Add to message, from Changes and files', () => {
-  it('leaves the keys in the message box once the sheet has gone, not on the button that opened it', async () => {
-    setComments(CWD, [{ id: 'c1', path: 'src/styles/theme.css', kind: 'add', line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' }]);
+describe('line comments, as in Claude Desktop', () => {
+  const comment = { id: 'c1', path: 'src/styles/theme.css', kind: 'add' as const, line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' };
+
+  it('go with the next message, after what was typed, and are gone once it went', async () => {
+    setComments(CWD, [comment]);
     session();
     await loaded();
-    const opener = screen.getByLabelText('Changes and files');
-    // A click puts focus on the button, as browsers do.
-    opener.focus();
-    fireEvent.click(opener);
-    fireEvent.click(await screen.findByText('Add to message'));
-    await waitFor(() => expect(document.querySelector('dialog')).toBeNull());
-    await waitFor(() => expect(document.activeElement).toBe(box()));
-    expect(box().value).toContain('Use the variables here too');
+    expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
+    fireEvent.change(box(), { target: { value: 'Looks good otherwise' } });
+    fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe("Looks good otherwise\n\nsrc/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
+    await waitFor(() => expect(screen.queryByText('1 comment goes with your next message')).toBeNull());
+  });
+
+  it('stay when the message does not go through, and never go with a command', async () => {
+    setComments(CWD, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    fireEvent.change(box(), { target: { value: 'Looks good' } });
+    fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    await screen.findByText('1 comment goes with your next message');
+    fireEvent.change(box(), { target: { value: '/compact' } });
+    fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    expect(server.sent[1]!.text).toBe('/compact');
+    expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
+  });
+
+  it('are sent on their own with Send now, from Changes and files', async () => {
+    setComments(CWD, [comment]);
+    session();
+    await loaded();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByText('Send now'));
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe("src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too");
   });
 });
 

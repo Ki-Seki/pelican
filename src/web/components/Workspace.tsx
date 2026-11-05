@@ -1,18 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
-import { AtSign, ChevronLeft, ChevronRight, File, Folder, Loader2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
-import { baseName, formatBytes } from '../lib/format';
+import { baseName } from '../lib/format';
 import { composing } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
-import { commentsMessage, setComments, useComments } from '../lib/review';
+import { useComments } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
-import { Markdown } from './Markdown';
+import { SendComments } from './Comments';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
 import { WorkspaceChanges } from './WorkspaceChanges';
+import { WorkspaceFiles } from './WorkspaceFiles';
 
 /**
  * From this width Changes and files sits beside the conversation instead of over it; under the
@@ -33,8 +34,10 @@ function useMedia(query: string): boolean {
   return matches;
 }
 
-/** The keys that show and hide the pane, as this computer writes them. */
-export const PANE_KEYS = /Mac|iP(hone|ad|od)/.test(navigator.userAgent) ? '⌘⇧D' : 'Ctrl+Shift+D';
+/** The keys that show and hide the pane, and that send line comments, as this computer writes them. */
+const MAC = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
+export const PANE_KEYS = MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
+const SEND_KEYS = MAC ? '⌘↵' : 'Ctrl+Enter';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
@@ -90,39 +93,6 @@ export function useWorkspacePane(available: boolean) {
   return { open, setOpen, show, hide, dockable, docked, folded: docked && !roomy };
 }
 
-const LANGUAGE: Record<string, string> = {
-  ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', mjs: 'js', cjs: 'js', json: 'json', md: 'markdown', py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
-  java: 'java', kt: 'kotlin', swift: 'swift', c: 'c', h: 'c', cpp: 'cpp', cs: 'csharp', css: 'css', scss: 'scss', html: 'html', xml: 'xml',
-  yml: 'yaml', yaml: 'yaml', toml: 'toml', sh: 'bash', bash: 'bash', zsh: 'bash', sql: 'sql', php: 'php', lua: 'lua', vue: 'xml', svelte: 'xml',
-};
-
-function FileView({ cwd, path, onMention }: { cwd: string; path: string; onMention: (path: string) => void }) {
-  const { data, isLoading, error } = useQuery({ queryKey: ['file', cwd, path], queryFn: () => api.file(cwd, path), staleTime: 5_000 });
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  return (
-    <div className="px-1 pb-4">
-      <div className="mb-2 flex items-center gap-2 px-2">
-        <span className="min-w-0 flex-1 truncate text-[12px] text-faint">{data ? formatBytes(data.size) : ''}</span>
-        <button type="button" onClick={() => onMention(path)} className="flex h-10 items-center gap-1.5 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg">
-          <AtSign className="size-3.5" /> Mention
-        </button>
-      </div>
-      {isLoading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
-      {error && <div className="px-3 py-6 text-[13px] text-danger">{(error as Error).message}</div>}
-      {data?.image && <img src={data.image} alt={path} className="mx-auto max-h-[70dvh] max-w-full rounded-lg border border-line" />}
-      {data?.binary && <div className="px-3 py-6 text-center text-[13px] text-faint">A binary file; nothing to show here</div>}
-      {data?.text !== undefined && (
-        data.text.length <= 120_000 && (LANGUAGE[ext] || ext === 'md')
-          ? ext === 'md'
-            ? <Markdown text={data.text} className="px-2" />
-            : <Markdown text={`\`\`\`${LANGUAGE[ext]}\n${data.text.replace(/```/g, '``​`')}\n\`\`\``} className="text-[12.5px]" />
-          : <pre className="overflow-x-auto rounded-lg border border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words">{data.text}</pre>
-      )}
-      {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}
-    </div>
-  );
-}
-
 /**
  * On a phone, the view covers the whole screen: what is behind it takes no taps and no reading,
  * focus moves in, and goes back where it was when the view closes.
@@ -146,7 +116,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, onAddToMessage }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, onAddToMessage, onSendComments }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -159,8 +129,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   sessionId?: string;
   /** Rewind code: puts the files back as they were before a prompt (the chat asks first). */
   onRewind?: (uuid: string) => void;
-  /** Adds text to the message being written: a file to mention, or comments on the changes. */
-  onAddToMessage: (text: string) => void;
+  /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */
+  onAddToMessage: (text: string, block?: boolean) => void;
+  /** Sends the line comments to Claude now (they go with the next message otherwise). */
+  onSendComments?: () => void;
 }) {
   const comments = useComments(cwd);
   const commentsIn = useMemo(() => {
@@ -173,7 +145,6 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const step: WorkspaceStep = routed ?? { tab: lastTab };
   const tab = step.tab;
   const shown = step.path && !step.path.endsWith('/') ? { kind: tab === 'changes' ? 'diff' as const : 'file' as const, path: step.path } : undefined;
-  const dir = tab === 'files' && step.path?.endsWith('/') ? step.path.slice(0, -1) : '';
   /** A step further in: on a phone a step of its own in the history, beside the conversation in place. */
   const go = (to: WorkspaceStep) => goTo(to, !docked);
   const up = (to: WorkspaceStep) => (docked ? goTo(to, false) : goUp(to));
@@ -188,7 +159,6 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // once more as each turn ends, for the count on its button.
   const looking = open && tab === 'changes';
   const status = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd), enabled: open, refetchInterval: looking && !step.scope ? (busy ? 5_000 : 30_000) : false });
-  const tree = useQuery({ queryKey: ['tree', cwd, dir], queryFn: () => api.tree(cwd, dir), enabled: open && tab === 'files' && !shown });
   const turns = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: open && Boolean(sessionId), staleTime: 30_000 });
   const git = status.data?.repo ? status.data : undefined;
 
@@ -198,7 +168,6 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     if (open && nothingToCompare && tab === 'changes' && !shown) goTo({ tab: 'files' }, false);
   }, [open, nothingToCompare, tab, shown]);
 
-  const crumbs = dir ? dir.split('/') : [];
   const back = shown ? (
     <button
       type="button"
@@ -246,55 +215,30 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           {...(onRewind ? { onRewind } : {})}
         />
       )}
-      {shown?.kind === 'file' && <FileView cwd={cwd} path={shown.path} onMention={(path) => onAddToMessage(`@${path} `)} />}
-
-      {!shown && tab === 'files' && (
-        <div>
-          <nav aria-label="Folder" className="no-scrollbar flex items-center gap-0.5 overflow-x-auto px-2 pb-1.5 text-[12.5px]">
-            <button type="button" onClick={() => up({ tab: 'files' })} aria-current={crumbs.length === 0 ? 'location' : undefined} className={`h-9 shrink-0 rounded-md px-1.5 font-mono ${crumbs.length === 0 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{baseName(cwd)}</button>
-            {crumbs.map((part, i) => (
-              <span key={i} className="flex shrink-0 items-center">
-                <ChevronRight className="size-3 text-faint" />
-                <button type="button" onClick={() => up({ tab: 'files', path: `${crumbs.slice(0, i + 1).join('/')}/` })} aria-current={i === crumbs.length - 1 ? 'location' : undefined} className={`h-9 rounded-md px-1.5 font-mono ${i === crumbs.length - 1 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{part}</button>
-              </span>
-            ))}
-          </nav>
-          {tree.isLoading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
-          {tree.error && <div className="px-3 py-6 text-[13px] text-danger">{(tree.error as Error).message}</div>}
-          {tree.data?.length === 0 && <div className="px-3 py-8 text-center text-[13px] text-faint">An empty folder</div>}
-          {tree.data?.map((entry) => (
-            <button
-              key={entry.path}
-              type="button"
-              onClick={() => go({ tab: 'files', path: entry.dir ? `${entry.path}/` : entry.path })}
-              className="flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-hover pointer-fine:min-h-10"
-            >
-              {entry.dir ? <Folder className="size-4 shrink-0 text-faint" /> : <File className="size-4 shrink-0 text-faint" />}
-              <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{entry.name}</span>
-              {entry.size !== undefined && <span className="shrink-0 text-[11.5px] text-faint">{formatBytes(entry.size)}</span>}
-            </button>
-          ))}
-        </div>
-      )}
+      {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}
     </>
   );
 
-  // Comments wait here, across files, until they go into the message together.
+  // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
+  // now (⌘↵) sends them on their own.
   const footer = comments.length > 0 && (
     <div className="flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4">
-      <span className="min-w-0 flex-1 text-[13px] text-muted">{comments.length === 1 ? '1 comment' : `${comments.length} comments`}</span>
-      <button
-        type="button"
-        onClick={() => {
-          onAddToMessage(commentsMessage(comments));
-          setComments(cwd, []);
-        }}
-        className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9"
-      >
-        Add to message
-      </button>
+      <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
+        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> · sent with your next message</span>
+      </span>
+      {onSendComments && (
+        <button type="button" onClick={onSendComments} title={`Send now (${SEND_KEYS})`} className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
+          Send now
+        </button>
+      )}
     </div>
   );
+  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.defaultPrevented || composing(e.nativeEvent) || comments.length === 0 || !onSendComments) return;
+    e.preventDefault();
+    onSendComments();
+  };
 
   const view = useRef<HTMLDivElement>(null);
   useCovering(open && !docked, view);
@@ -310,7 +254,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   if (!open) return null;
   if (docked) {
     return (
-      <aside aria-label="Changes and files" className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
+      <SendComments.Provider value={onSendComments}>
+      <aside aria-label="Changes and files" onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
         <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
           <button type="button" aria-label="Close" title={`Close (${PANE_KEYS})`} onClick={onClose} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
@@ -321,15 +266,18 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-4">{body}</div>
         {footer}
       </aside>
+      </SendComments.Provider>
     );
   }
   return createPortal(
+    <SendComments.Provider value={onSendComments}>
     <div
       ref={view}
       role="region"
       aria-label="Changes and files"
       tabIndex={-1}
       onKeyDown={(e) => {
+        onKeyDown(e);
         if (e.key === 'Escape' && !e.defaultPrevented && !composing(e.nativeEvent)) {
           e.preventDefault();
           onClose();
@@ -355,7 +303,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           <ChevronRight className="size-4 shrink-0 text-faint" />
         </button>
       )}
-    </div>,
+    </div>
+    </SendComments.Provider>,
     document.body,
   );
 }

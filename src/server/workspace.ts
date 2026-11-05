@@ -290,6 +290,17 @@ export async function listTree(cwd: string, relative: string): Promise<TreeEntry
   return entries.sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
+/** A file of the folder opened to be read whole (a download): its real path inside the folder, a regular file. */
+export async function openProjectFile(cwd: string, relative: string): Promise<{ handle: Awaited<ReturnType<typeof openRegular>>; size: number }> {
+  const handle = await openRegular(await insideReal(cwd, relative));
+  try {
+    return { handle, size: (await handle.stat()).size };
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
 const IMAGE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
 
 /**

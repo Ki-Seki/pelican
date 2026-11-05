@@ -3,7 +3,8 @@ import { useId, useMemo, useRef, useState } from 'react';
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
 import { type CodeLine, commentKey, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments } from '../lib/review';
-import { CommentBox, CommentNote } from './Comments';
+import { CommentBox, CommentNote, useSendComments } from './Comments';
+import { useLinePick } from './line-pick';
 
 const isCode = (line: { kind: string }): line is CodeLine => line.kind === 'add' || line.kind === 'del' || line.kind === 'same';
 
@@ -22,6 +23,7 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
   const [showHint] = useState(() => !tipSeen('line-comments'));
   const box = useRef<HTMLDivElement>(null);
   const id = useId();
+  const sendAll = useSendComments();
 
   if (!diff.trim()) return <div className="px-3 py-6 text-center text-[13px] text-faint">No changes in this file</div>;
   if (/^Binary files /m.test(diff)) return <div className="px-3 py-6 text-center text-[13px] text-faint">A binary file changed</div>;
@@ -32,16 +34,13 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
   const outdated = comments.filter((c) => !lines.some((line) => isCode(line) && commentKey(c) === lineKey(line) && c.code === line.text));
   const codeAt = lines.flatMap((line, i) => (isCode(line) ? [i] : []));
 
-  const pick = (line: CodeLine) => {
-    // Selecting text to copy is not asking to comment.
-    if (window.getSelection()?.toString()) return;
-    setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' }));
-  };
-  const save = (line: CodeLine, note: string) => {
+  const pick = useLinePick((line: CodeLine) => setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' })));
+  const save = (line: CodeLine, note: string, now: boolean) => {
     setComments(cwd, [...all, { id: newId(), path, kind: line.kind, line: lineNumber(line), code: line.text, note: note.trim() }]);
     setEditing(undefined);
     markTipSeen('line-comments');
     box.current?.focus({ preventScroll: true });
+    if (now) sendAll?.();
   };
   const remove = (comment: LineComment) => setComments(cwd, all.filter((c) => c.id !== comment.id));
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -54,7 +53,7 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
       document.getElementById(`${id}-${next}`)?.scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter' && cursor !== undefined) {
       e.preventDefault();
-      pick(lines[cursor] as CodeLine);
+      pick(lines[cursor] as CodeLine, true);
     }
   };
 
@@ -95,7 +94,7 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
                 <CommentBox
                   note={editing.note}
                   onNote={(note) => setEditing({ key, note })}
-                  onSave={() => save(line, editing.note)}
+                  onSave={(now) => save(line, editing.note, now)}
                   onCancel={() => {
                     setEditing(undefined);
                     box.current?.focus({ preventScroll: true });

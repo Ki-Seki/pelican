@@ -1,7 +1,16 @@
 import { MessageSquare, X } from 'lucide-react';
+import { createContext, useContext } from 'react';
 
 import { composing } from '../lib/keyboard';
+import { enterSends } from '../lib/prefs';
 import type { LineComment } from '../lib/review';
+
+/**
+ * Sends the folder's line comments to Claude now, all at once (Claude Desktop's ⌘↵); otherwise
+ * they go with the next message. Provided by Changes and files.
+ */
+export const SendComments = createContext<(() => void) | undefined>(undefined);
+export const useSendComments = () => useContext(SendComments);
 
 /** A comment under its line; one whose line has changed since shows the line as it was. */
 export function CommentNote({ comment, outdated = false, onRemove }: { comment: LineComment; outdated?: boolean; onRemove: () => void }) {
@@ -19,14 +28,19 @@ export function CommentNote({ comment, outdated = false, onRemove }: { comment: 
   );
 }
 
-export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; onNote: (note: string) => void; onSave: () => void; onCancel: () => void }) {
+/**
+ * Writing a comment on a line, with Claude Desktop's keys: Enter adds it where Enter sends a
+ * message (a computer, unless Settings says otherwise), ⌘↵ (Ctrl Enter) adds it and sends all the
+ * comments at once, Esc lets it go. `onSave(true)`: send them all now.
+ */
+export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; onNote: (note: string) => void; onSave: (sendAll: boolean) => void; onCancel: () => void }) {
   const ready = note.trim().length > 0;
   return (
     <form
       className="border-y border-line bg-panel p-2 font-sans"
       onSubmit={(e) => {
         e.preventDefault();
-        if (ready) onSave();
+        if (ready) onSave(false);
       }}
     >
       <textarea
@@ -40,13 +54,17 @@ export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; o
           // Keys an input method takes are its own: Esc there cancels a conversion, not the comment.
           if (composing(e.nativeEvent)) return;
           if (e.key === 'Escape') {
-            // The comment goes; the sheet around it stays.
+            // The comment goes; the view around it stays.
             e.preventDefault();
             e.stopPropagation();
             onCancel();
-          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ready) {
+          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            onSave();
+            e.stopPropagation();
+            if (ready) onSave(true);
+          } else if (e.key === 'Enter' && !e.shiftKey && !e.altKey && enterSends()) {
+            e.preventDefault();
+            if (ready) onSave(false);
           }
         }}
         className="block w-full resize-none rounded-lg border border-line bg-bg px-2.5 py-2 text-[16px] leading-snug outline-none placeholder:text-faint focus:border-fg pointer-fine:text-[14px]"
@@ -58,4 +76,3 @@ export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; o
     </form>
   );
 }
-
