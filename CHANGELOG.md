@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.4.0
+
+Files, changes and side chats as in Claude Desktop, `!` commands you can watch, and your usage
+from every app.
+
+### Highlights
+
+- **Changes and files.** See what each turn changed (T1, T2…, from Claude Code's own record, so
+  also outside git), what is uncommitted, or everything since your branch split from main, with
+  diffs, and Rewind code where Claude Code kept a checkpoint. Search the folder by name or in the
+  text, and read a file with line numbers, Markdown and HTML previewed. A file a step names, or a
+  `path:line` in a reply, opens at its line, and under a turn that edited files "3 files changed"
+  opens them. On a phone it is a view of its own that the back gesture steps through; on a computer
+  it sits beside the conversation from 1024px wide.
+- **Side chats.** `/btw`, Cmd/Ctrl+; or Side chat in the session menu asks something on the side,
+  as in Claude Desktop. Claude answers from a read-only copy of the session (Read, Grep and Glob,
+  no MCP servers, never Bypass), and nothing goes back to the session, which keeps working. It sits
+  beside the conversation on a computer and is a sheet on a phone. Side chats are Claude Code
+  sessions titled "Side chat", folded under their session, and continue in the CLI and Desktop.
+- **Quote.** Select text in a reply, a step's output or a file and tap Quote. The quote waits
+  above the message box with your draft and goes above your words as a `>` quote; lines of a file
+  carry where they are, as `src/app.ts:7-8`.
+- **Live `!` commands.** Output as it comes, with Stop, for up to 30 minutes. When a command ends,
+  Claude answers it, as in the CLI, unless `respondToBashCommands` is false. Commands are written
+  the way Claude Code writes them, so the terminal and Desktop show Pelican's, and Pelican shows
+  theirs.
+- **Usage and activity.** Settings > Usage and activity shows your Claude Code usage on this
+  computer, from every app: tokens of each kind over 7 days, 30 days or all time, per day,
+  sessions, active days and streaks, and where they went by project, model, app and session, with
+  a few highlights. On a plan its limits are at the top; on an API key or a provider, the cost
+  Claude Code estimates. Each reply counts once, also when it was copied into a side chat or a
+  branch. The session menu shows what that session used.
+
+### Changes in behavior
+
+- Line comments go with your next message, as in Claude Desktop, or on their own with
+  Cmd/Ctrl+Enter, instead of Add to message. They are kept across reloads and forgotten on sign-out.
+- Transcript views are Claude Desktop's: Normal, Thinking and Verbose, and Ctrl+O steps through
+  them. Thinking shows in a session's menu once Claude has thought there. A session set to Summary
+  opens in Normal.
+- A `!` command may run 30 minutes instead of two, and Claude answers it when it ends, which is a
+  turn like a prompt. A command you stop gets no answer.
+- Changes and files docks from 1024px wide instead of 1440px; below 1280px the session list folds
+  away while it is open, and Cmd/Ctrl+K brings it back.
+- Commit, Push and Create PR, on the branch line, put a request to Claude in the message box, so
+  your rules, hooks and attribution apply. Pelican runs no git that changes anything.
+
+### The conversation
+
+- A failed request at the end of the conversation offers Retry, which sends the prompt again with
+  its files, or Compact when the conversation is too long.
+- Scheduled check-ins have Cancel, which asks Claude to cancel them.
+- An MCP server that needs you to sign in says where: `claude mcp login <name>` in a terminal on
+  the computer, or claude.ai's connectors page.
+- Approval notifications have Allow and Deny where the device shows buttons on notifications
+  (Chrome on a computer or Android); questions and plans open the session.
+- The session menu shows the session's tokens, the share from the cache, its models and
+  compactions, and its cost where Claude Code counts one.
+
+### Security
+
+- Changes and files reads only regular files inside the session's folder, links followed and
+  checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
+  config, an empty environment, no git and no links followed.
+- A side chat only reads, asks for nothing, and takes no `/` or `!` commands.
+- Notification buttons go through the same checks as the page.
+
+### Site, docs and project
+
+- The docs cover Changes and files, side chats, quotes, live `!` commands, the views and the
+  usage page, and the coverage table moves side questions, views, quotes and Create PR to Yes.
+- The browser smoke test checks the docked pane at 1024, 1280 and 1440px and the side chat pane,
+  and opens older sessions at one size only, to keep CI quick.
+
 ## 0.3.1
 
 - New sessions start at High effort until you pick another in Settings (New sessions start with >

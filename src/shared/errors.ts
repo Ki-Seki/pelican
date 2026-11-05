@@ -21,7 +21,7 @@ function kindOf(text: string, code?: string): Kind | undefined {
   if (/prompt is too long/i.test(t)) return 'too-long';
   if (/Not logged in|Please run \/login|Invalid API key|OAuth token (has )?expired|API Error: 401\b|authentication_failed/i.test(t)) return 'signed-out';
   if (/Credit balance is too low/i.test(t)) return 'credit';
-  if (/^You['’]ve hit your (?:\w+ )?limit/i.test(t)) return 'limit';
+  if (/^You['’]ve hit your (?:[\w-]+ ){0,2}limit/i.test(t)) return 'limit';
   if (/\b529\b|overloaded/i.test(t)) return 'overloaded';
   if (/API Error: 5\d\d\b|"type":"api_error"|Internal server error/i.test(t)) return 'api';
   if (/API Error: (?:Request timed out|Connection error)|ECONNRESET|ETIMEDOUT|fetch failed/i.test(t)) return 'offline';
@@ -43,8 +43,11 @@ export function plainError(text: string, machine = 'your computer', code?: strin
     case 'credit':
       return 'The API account’s credit balance is too low. Add credits in the Claude Console.';
     case 'limit': {
-      const resets = text.trim().match(/^You['’]ve hit your (?:\w+ )?limit\s*·\s*(resets [^\n]+)/i)?.[1];
-      return `You have reached your usage limit.${resets ? ` It ${resets.trim().replace(/\.$/, '')}.` : ''}`;
+      // Claude Code names the limit ("5-hour", "weekly", "Opus", "usage credit") and when it resets.
+      const hit = text.trim().match(/^You['’]ve hit your ((?:[\w-]+ ){0,2})limit(?:\s*·\s*(resets [^\n·]+))?/i);
+      const name = hit?.[1]?.trim();
+      const resets = hit?.[2]?.trim().replace(/\.$/, '');
+      return `You have reached your ${name ? `${name} limit` : 'usage limit'}.${resets ? ` It ${resets}.` : ''}`;
     }
     case 'overloaded':
       return 'Anthropic’s API is overloaded. Try again in a moment.';

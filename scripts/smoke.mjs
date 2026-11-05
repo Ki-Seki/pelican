@@ -239,6 +239,52 @@ async function checkSideChat(browser, base, sessions) {
   await context.close();
 }
 
+/**
+ * Settings > Usage and activity, on a phone and wide, light and dark, in each range: it fills in
+ * from the demo's transcripts, and nothing on it ends past the window.
+ */
+async function checkUsage(browser, base) {
+  for (const [size, options] of Object.entries(SIZES)) {
+    for (const scheme of ['light', 'dark']) {
+      const context = await browser.newContext({ ...options, colorScheme: scheme });
+      const page = await context.newPage();
+      watch(page, () => `app, usage, ${size}, ${scheme}`);
+      await page.goto(base, { waitUntil: 'networkidle' });
+      await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+      const row = page.getByRole('button', { name: /^Usage and activity/ }).first();
+      if (!(await row.waitFor({ timeout: 5000 }).then(() => true, () => false))) {
+        problems.push(`app, usage, ${size}: Settings has no Usage and activity`);
+        await context.close();
+        continue;
+      }
+      await row.click();
+      const sheet = page.getByRole('dialog', { name: 'Usage and activity' });
+      for (const range of ['7 days', '30 days', 'All']) {
+        const pick = sheet.getByRole('radio', { name: range, exact: true }).or(sheet.getByRole('button', { name: range, exact: true })).first();
+        if (await pick.count()) await pick.click();
+        else notes.push(`app, usage, ${size}: no "${range}" range`);
+        await page.waitForLoadState('networkidle');
+        await page.waitForTimeout(300);
+        const found = await page.evaluate(() => {
+          const out = [];
+          const dialog = [...document.querySelectorAll('dialog[open]')].at(-1);
+          if (!dialog || !/\d/.test(dialog.textContent ?? '')) out.push('shows no figures');
+          for (const el of dialog?.querySelectorAll('*') ?? []) {
+            const box = el.getBoundingClientRect();
+            if (box.width > 0 && box.right > innerWidth + 1 && !el.closest('.overflow-x-auto, .sr-only')) {
+              out.push(`a ${el.tagName.toLowerCase()} ends ${Math.round(box.right - innerWidth)}px past the window`);
+              break;
+            }
+          }
+          return out;
+        });
+        problems.push(...found.map((problem) => `app, usage, ${size}, ${scheme}, ${range}: ${problem}`));
+      }
+      await context.close();
+    }
+  }
+}
+
 /** The site's own pages: the pictures fit their phones, the demo frame lays out as a phone does. */
 async function checkSite(browser, base) {
   for (const [size, options] of Object.entries(SIZES)) {
@@ -306,6 +352,7 @@ try {
     stop = async () => server.stop();
     await checkSite(browser, server.base);
     await driveApp(browser, `${server.base}demo/`, await savedSessions(site));
+    await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
     stop = demo.stop;
@@ -314,6 +361,7 @@ try {
     await driveApp(browser, demo.base, sessions ?? []);
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
+    await checkUsage(browser, demo.base);
   }
 } finally {
   await browser.close();

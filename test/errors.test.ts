@@ -12,6 +12,9 @@ describe('Claude Code’s errors in plain words', () => {
     expect(plainError('Not logged in · Please run /login', 'studio')).toBe('Claude Code is not signed in on studio. Run claude in a terminal there and sign in with /login.');
     expect(plainError('Invalid API key · Fix external API key')).toMatch(/^Claude Code is not signed in on your computer/);
     expect(plainError("You've hit your limit · resets 3pm (Europe/London)")).toBe('You have reached your usage limit. It resets 3pm (Europe/London).');
+    expect(plainError("You've hit your 5-hour limit · resets 6pm · progress saved")).toBe('You have reached your 5-hour limit. It resets 6pm.');
+    expect(plainError("You've hit your usage credit limit")).toBe('You have reached your usage credit limit.');
+    expect(plainError("You've hit your weekly limit · resets Mon 9am")).toBe('You have reached your weekly limit. It resets Mon 9am.');
     expect(plainError('Something else entirely')).toBeUndefined();
   });
 

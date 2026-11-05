@@ -33,7 +33,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   for a proxy on the same computer.
 - **Notifications follow the sign-in.** Each device's push subscription is tied to the secret it
   signed in under: a new token or password stops notifications to every device, and signing out
-  turns them off on that device first.
+  turns them off on that device first. Allow and Deny on a notification send the request the page
+  would, with its header, from its origin and under its sign-in, and do nothing for a request that
+  was already answered.
 - **A browser signed out keeps nothing to show.** Signing out forgets its drafts and asks the
   browser to drop what it keeps of Pelican, and the pictures of a conversation are checked with
   Pelican each time they are shown, so a signed-out browser gets none from its cache.
@@ -87,6 +89,16 @@ can read your sessions and have Claude run commands as you, so treat access to i
   trusted folder, git runs for the Changes panel with hooks, the file-system monitor, external
   diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of a work
   tree outside the folder.
+- **Files stay in their folder.** Changes and files reads only regular files inside the session's
+  folder, named by a relative path without `..` whose real path, links followed, is still inside
+  it. A download comes as an attachment, with no sniffing and the sandbox's content policy, so it
+  never runs in Pelican's page. Search runs the ripgrep inside Claude Code's own binary, by its
+  full path, with no config file, an empty environment, no git and no links followed (or a scan
+  in Node where that is not there), within limits on files, lines, time and output. What a turn
+  changed is read from Claude Code's transcript, not from git, so it shows in any folder.
+- **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
+  mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
+  Pelican resumes it.
 - **What gets installed is what was tested.** The package ships `npm-shrinkwrap.json`, so npm
   installs the exact dependency tree CI tested, with integrity hashes, and the Agent SDK, with the
   Claude Code it bundles, is pinned to one version.

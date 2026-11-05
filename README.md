@@ -66,12 +66,15 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   every compaction. When another app is working on one, or waits for you there, Pelican says which
   app; once it is idle, continue it here.
 - **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
-  works, `!` commands, `/` commands and skills, `@` files, every model and permission mode, rewind
-  and branch, subagents and background tasks, MCP servers and usage limits.
+  works, side chats, `!` commands with their output live, `/` commands and skills, `@` files, every
+  model and permission mode, rewind and branch, subagents and background tasks, MCP servers.
 - **What Claude makes, in place.** Charts and diagrams Claude draws and pages it writes show in the
   conversation, as still pictures until you tap Run.
-- **The changes beside the chat.** Every changed file with its diff. Tap a line to comment, and
-  your comments go into the next message.
+- **Changes and files, as in Claude Desktop.** What each turn changed, what is uncommitted, or
+  everything since your branch split, with diffs. Search and read the folder; a path in a reply
+  opens the file at its line. Comment on a line or quote it, and Create PR asks Claude.
+- **Your usage, from every app.** Tokens, sessions and streaks by project, model and app, with your
+  plan's limits, or the cost Claude Code estimates on an API key.
 - **Made for a phone, good on a computer.** One hand, dictation, a notification when Claude needs
   you or finishes, and a Home Screen icon. On a wide screen, the list, the conversation and the
   changes sit side by side.
@@ -101,8 +104,7 @@ Remote Control can answer a prompt waiting in your terminal; Pelican cannot. Mor
 Pelican runs Claude Code itself, so your settings, `CLAUDE.md`, hooks, skills, subagents and MCP
 servers work as they do in the terminal, and so does any login: a Claude plan, an API key, Bedrock,
 Google Cloud or Microsoft Foundry. What Pelican does not do: Remote Control, cloud sessions, a
-worktree for each new session, side questions (`/btw`), a terminal of its own, or editing files by
-hand. [The full table](https://ki-seki.github.io/pelican/docs.html#coverage) goes through Claude
+worktree for each new session, a terminal of its own, or editing files by hand. [The full table](https://ki-seki.github.io/pelican/docs.html#coverage) goes through Claude
 Code's features one by one.
 
 ## Security
