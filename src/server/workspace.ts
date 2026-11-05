@@ -147,6 +147,8 @@ export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'un
   }
   const base = await defaultBranch(cwd).catch(() => undefined);
   if (base) out.base = base.name;
+  // Somewhere to push to, read from the config (`git remote` contacts nothing).
+  if (await git(cwd, ['remote'], 5000).then((names) => names.trim() !== '', () => false)) out.remote = true;
   // Since the branch split: what git diff says changed since then, and the new files status found.
   let since: string | undefined;
   if (scope === 'base') {

@@ -368,7 +368,8 @@ const FILE_TEXT: Record<string, string> = {
 /**
  * The first project is a git repository: main, a branch with one commit of its own, and Claude's
  * work so far left uncommitted, so Changes has something to show since the last commit and since
- * the branch split. Skipped without git.
+ * the branch split. It has a remote, as a repository you push from does, at an address nothing
+ * answers (nothing in the demo contacts it). Skipped without git.
  */
 async function demoRepository(dir: string): Promise<void> {
   const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
@@ -376,6 +377,7 @@ async function demoRepository(dir: string): Promise<void> {
   const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
   try {
     await git(['init', '-q', '-b', 'main']);
+    await git(['remote', 'add', 'origin', 'https://git.example.com/acme/acme-web.git']);
     await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });
     await git(['add', '-A']);
     await git(['commit', '-q', '--no-verify', '-m', 'Settings page']);

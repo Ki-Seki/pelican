@@ -276,7 +276,7 @@ describe('line comments, as in Claude Desktop', () => {
 
 describe('Commit, Push and Create PR', () => {
   it('fill the message box with a request to Claude, to be read and sent from there: nothing runs', async () => {
-    server.git = { repo: true, branch: 'feat/x', base: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
+    server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
     session();
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });

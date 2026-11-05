@@ -38,6 +38,21 @@ describe('workspace', () => {
     expect(byPath['new name.txt']).toMatchObject({ status: 'renamed', from: 'old name.txt' });
   });
 
+  it('says whether there is a remote to push to, from the config alone', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-remote-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: work });
+      const local = await gitStatus(work);
+      expect(local.repo && local.remote).toBeFalsy();
+      // An address nothing answers at: knowing there is a remote contacts none.
+      execFileSync('git', ['remote', 'add', 'origin', 'https://git.invalid/acme/app.git'], { cwd: work });
+      const pushable = await gitStatus(work);
+      expect(pushable.repo && pushable.remote).toBe(true);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('counts the lines of new files only so far: big ones and those past the first hundred get no count', async () => {
     const many = await mkdtemp(path.join(os.tmpdir(), 'pelican-untracked-'));
     try {
