@@ -26,6 +26,8 @@ const left: string[] = [];
 
 /** A session no longer on screen keeps its view for a while; views beyond the last few are let go. */
 function leave(sessionId: string): void {
+  // Unsubscribed with it: until the socket answers again, a page load says what runs.
+  heard.delete(sessionId);
   const at = left.indexOf(sessionId);
   if (at >= 0) left.splice(at, 1);
   left.push(sessionId);

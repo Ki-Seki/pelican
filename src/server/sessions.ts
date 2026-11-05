@@ -22,10 +22,12 @@ function titleOf(info: SDKSessionInfo): string {
   return title.replace(/\s+/g, ' ').trim() || 'Untitled session';
 }
 
-async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>, archived: Set<string>): Promise<SessionSummary> {
-  const known = files.get(info.sessionId);
-  const file = known?.file ?? await transcriptPath(info.sessionId);
-  const times = file ? await lastTurnTime(file, known) : undefined;
+/** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
+async function summarize(
+  info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>, archived: Set<string>, fresh?: Seen,
+): Promise<SessionSummary> {
+  const file = fresh?.file ?? await transcriptPath(info.sessionId);
+  const times = file ? await lastTurnTime(file, fresh) : undefined;
   const lastTurn = times?.lastTurn;
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
@@ -139,7 +141,7 @@ function sessionInfos(): Promise<SDKSessionInfo[]> {
 export async function listSummaries(status: StatusSource): Promise<SessionSummary[]> {
   const infos = await sessionInfos();
   const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, live, archived)));
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, live, archived, files.get(info.sessionId))));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
