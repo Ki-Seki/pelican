@@ -199,9 +199,10 @@ export const api = {
   /**
    * Edit the prompt `before` and send it again: the last prompt in place (`inPlace`), an earlier
    * one on a branch made just before it (a new session for the first prompt). `uuid` is made once
-   * per edit, so a retry gets the same result.
+   * per edit, so a retry gets the same result. `startMode`: the mode Settings picked for new
+   * sessions, for a branch of a session in Bypass, which never starts in it.
    */
-  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[] }) =>
+  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[]; startMode?: PermissionMode }) =>
     send<{ sessionId: string; inPlace: boolean }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body),
   /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
   fork: (id: string, options: { before?: string; title?: string } = {}) =>

@@ -63,3 +63,19 @@ export const MODE_INFO: Record<PermissionMode, { label: string; short: string; d
  * session in it keeps it and shows it, but it is never offered.
  */
 export const OFFERED_MODES: readonly PermissionMode[] = PERMISSION_MODES.filter((mode) => mode !== 'dontAsk');
+
+/**
+ * The modes new sessions may start in, as Settings offers them. Bypass is never among them: it is
+ * picked in a session, for that session alone.
+ */
+export const START_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto'];
+
+/**
+ * The mode a new session starts in: the one picked in Settings, else Claude Code's own
+ * permissions.defaultMode, else Auto; Manual where the model has no Auto mode. Never Bypass,
+ * whatever asks for it: a new session, a branch, an edited earlier prompt or a /clear.
+ */
+export function startMode(picked: PermissionMode | undefined, claudeCode: PermissionMode | undefined, model: { supportsAuto?: boolean } | undefined): PermissionMode {
+  const mode = [picked, claudeCode].find((m) => m && m !== 'bypassPermissions') ?? 'auto';
+  return mode === 'auto' && model?.supportsAuto === false ? 'default' : mode;
+}

@@ -9,8 +9,7 @@ import { loadDraft, useDraftSaver } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
 import { composing, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
-import { ModelSheet, ModelSummary, modelOf } from './ModelSheet';
-import { Sheet, SheetOption } from './Sheet';
+import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
 
@@ -244,9 +243,6 @@ export function Composer({
 
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
-  // The session's own mode is listed even when it is not offered (Don't ask), so the list says where it is.
-  const offered = OFFERED_MODES.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
-  const modes = offered.includes(permission) ? offered : [permission, ...offered];
   const uploading = uploads.some((u) => !u.attachment && !u.error);
   const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment)) && !uploading;
 
@@ -344,12 +340,20 @@ export function Composer({
   };
   useEffect(() => () => recognition.current?.stop(), []);
 
+  const hint = busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
-  }, [text]);
+    // Empty, the box is as tall as what it says: a hint that takes two lines on a phone shows whole.
+    let height = el.scrollHeight;
+    if (!el.value && hint) {
+      el.value = hint;
+      height = el.scrollHeight;
+      el.value = '';
+    }
+    el.style.height = `${Math.min(height, Math.round(window.innerHeight * 0.4))}px`;
+  }, [text, hint]);
 
   // On a phone too: a new session opens ready to type, with the keyboard up where the browser
   // lets a page raise it.
@@ -529,7 +533,7 @@ export function Composer({
           value={text}
           rows={1}
           disabled={disabled}
-          placeholder={busy && !shell ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder}
+          placeholder={hint}
           aria-label="Message Claude"
           aria-autocomplete={showSuggestions ? 'list' : undefined}
           aria-controls={showSuggestions ? listId : undefined}
@@ -619,14 +623,7 @@ export function Composer({
 
       <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
 
-      <Sheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} title="When Claude wants to act">
-        {modes.map((m) => (
-          <SheetOption key={m} label={MODE_INFO[m].label} description={MODE_INFO[m].description} selected={m === permission} onSelect={() => {
-            if (OFFERED_MODES.includes(m)) set({ permissionMode: m });
-            setSheet(undefined);
-          }} />
-        ))}
-      </Sheet>
+      <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} />
     </div>
   );
 }

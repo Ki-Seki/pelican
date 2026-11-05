@@ -46,7 +46,7 @@ import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
 import { notify } from './push.js';
-import { sessionInfo } from './sessions.js';
+import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeText } from './shell.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
@@ -281,12 +281,30 @@ export class SessionRun {
    * process would cut it off.
    */
   get hasBackgroundTasks(): boolean {
-    const now = Date.now();
+    if (this.forgetPastChecks()) this.emit();
+    return this.taskCount > 0 || Boolean(this.wakeup) || this.crons.size > 0;
+  }
+
+  /**
+   * How much of that work there is to show: background tasks and subagents (watchers aside, which
+   * Claude Code says are no activity) and the checks Claude stays running for. A session with some,
+   * and no turn running, is still at work.
+   */
+  get backgroundCount(): number {
+    if (this.forgetPastChecks()) this.emit();
+    return this.work();
+  }
+
+  private work(): number {
+    return this.tasks.length + (this.wakeup ? 1 : 0) + this.crons.size;
+  }
+
+  /** Drops one-off checks long past due; whether any went. */
+  private forgetPastChecks(now = Date.now()): boolean {
     const before = (this.wakeup ? 1 : 0) + this.crons.size;
     if (this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now) this.wakeup = undefined;
     for (const [id, cron] of this.crons) if (!cron.repeats && (cron.next ?? 0) + DUE_GRACE_MS < now) this.crons.delete(id);
-    if ((this.wakeup ? 1 : 0) + this.crons.size !== before) this.emit();
-    return this.taskCount > 0 || Boolean(this.wakeup) || this.crons.size > 0;
+    return (this.wakeup ? 1 : 0) + this.crons.size !== before;
   }
 
   start(): void {
@@ -331,7 +349,7 @@ export class SessionRun {
     this.q = query({ prompt: this.input, options });
     void this.pump();
     void sessionInfo(this.sessionId).then((info) => {
-      if (info) this.title = info.customTitle || info.summary || '';
+      if (info) this.title = sessionTitle(info) ?? '';
     });
   }
 
@@ -389,16 +407,19 @@ export class SessionRun {
     this.emitNow();
   }
 
-  private lastStatus?: SessionStatus;
+  private lastStatus?: string;
 
   private emitNow(): void {
+    this.forgetPastChecks();
     const state = this.state();
     feedFor(this.sessionId).broadcast({ type: 'run', state });
-    // Session lists only care about the status; streamed text stays with the session's viewers.
+    // Session lists only care about the status and the work left running; streamed text stays
+    // with the session's viewers.
     const status = this.status();
-    if (status !== this.lastStatus) {
-      this.lastStatus = status;
-      broadcastAll({ type: 'status', sessionId: this.sessionId, status });
+    const tasks = this.work();
+    if (`${status}:${tasks}` !== this.lastStatus) {
+      this.lastStatus = `${status}:${tasks}`;
+      broadcastAll({ type: 'status', sessionId: this.sessionId, status, ...(tasks > 0 ? { tasks } : {}) });
     }
   }
 
@@ -1007,6 +1028,11 @@ export class SessionRun {
       this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
       this.settleAll('Session closed.');
       this.queued = [];
+      // Its background work and checks ended with the process.
+      this.tasks = [];
+      this.taskCount = 0;
+      this.wakeup = undefined;
+      this.crons.clear();
       this.setBusy(false);
       this.emit();
       // A newer run may have taken this session's place already (see sendMessage).
@@ -1035,6 +1061,12 @@ export function runIn(cwd: string): SessionRun | undefined {
 export function runStatus(sessionId: string): SessionStatus | undefined {
   if (config.demo) return sessionId === DEMO_WAITING_SESSION ? 'waiting' : undefined;
   return getRun(sessionId)?.status();
+}
+
+/** Background work running in a session this app runs (see SessionRun.backgroundCount); 0 for none. */
+export function runTasks(sessionId: string): number {
+  if (config.demo) return 0;
+  return getRun(sessionId)?.backgroundCount ?? 0;
 }
 
 export function runState(sessionId: string): RunState | undefined {

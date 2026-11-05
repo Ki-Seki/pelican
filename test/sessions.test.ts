@@ -69,6 +69,12 @@ describe('the session list', () => {
     expect(await ids()).toEqual([id(2), id(4), id(6)]);
   });
 
+  it('counts the background work of a session this app runs, and only of one it runs', async () => {
+    const summaries = await listSummaries((session) => (session === id(2) ? 'idle' : undefined), () => 2);
+    expect(summaries.find((s) => s.id === id(2))).toMatchObject({ status: 'idle', tasks: 2 });
+    expect(summaries.filter((s) => s.tasks !== undefined).map((s) => s.id)).toEqual([id(2)]);
+  });
+
   it('finds a session it has not listed yet without reading them all', async () => {
     await writeFile(path.join(project, `${id(5)}.jsonl`), rows(id(5), 'task 5'));
     vi.mocked(listSessions).mockClear();

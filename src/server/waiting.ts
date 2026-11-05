@@ -2,7 +2,7 @@ import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { type LiveProcess, liveProcesses, registry } from './live.js';
 import { notify } from './push.js';
-import { sessionInfo } from './sessions.js';
+import { sessionInfo, sessionTitle } from './sessions.js';
 
 /**
  * How long Claude waits in another app before the phone hears of it. Someone at the keyboard
@@ -24,7 +24,7 @@ function what(waiting: string): string {
 async function tell(sessionId: string, process: LiveProcess): Promise<void> {
   const info = await sessionInfo(sessionId).catch(() => undefined);
   await notify({
-    title: info?.customTitle || info?.summary || 'Claude Code',
+    title: (info && sessionTitle(info)) || 'Claude Code',
     body: `Claude ${what(process.waiting ?? '')} in ${process.app ?? 'another app'}`,
     sessionId,
     // The same tag as this app's own questions: one notification per session, the latest.

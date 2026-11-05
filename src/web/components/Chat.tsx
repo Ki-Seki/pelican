@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
-import { MODE_INFO } from '../../shared/modes';
+import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
+import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
@@ -16,6 +17,7 @@ import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
+import { elsewhere, elsewherePlaceholder, elsewhereTip, TIP_KEYS } from '../lib/status';
 import {
   addLocalMessage,
   adoptView,
@@ -30,24 +32,22 @@ import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import { Composer, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
+import { modelOf } from './ModelSheet';
 import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
-import { StatusBadge, StatusDot } from './SessionList';
+import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
 
-/** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
-const withoutBypass = (settings: RunSettings): RunSettings =>
-  (settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: 'default' } : settings);
-
 /**
  * /clear, /reset and /new, as in Claude Code: a fresh conversation in the same folder, going on
- * with the same settings (Bypass aside). Handed to the new session's view by its id.
+ * with the same settings, Bypass aside: then it starts in the mode a new session does. Handed to
+ * the new session's view by its id.
  */
 const CLEAR = /^\/(clear|reset|new)(\s|$)/;
 const carried = new Map<string, RunSettings>();
@@ -303,10 +303,10 @@ function NoteText({ text }: { text: string }) {
 }
 
 /** A line above the composer. Red only for what went wrong; the demo's note and warnings are info. */
-function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error' | 'live'; children: React.ReactNode; onDismiss?: () => void }) {
+function Notice({ tone = 'info', children, onDismiss }: { tone?: 'info' | 'error'; children: React.ReactNode; onDismiss?: () => void }) {
   return (
     <div className={`mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-xl px-3 py-2 text-[12.5px] leading-snug ${tone === 'error' ? 'border border-line bg-panel text-danger' : 'text-muted'}`}>
-      {tone === 'error' ? <TriangleAlert className="mt-px size-4 shrink-0" /> : tone === 'live' ? <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-live" /> : <Info className="mt-px size-3.5 shrink-0" />}
+      {tone === 'error' ? <TriangleAlert className="mt-px size-4 shrink-0" /> : <Info className="mt-px size-3.5 shrink-0" />}
       <div className="min-w-0 flex-1">{children}</div>
       {onDismiss && (
         <button type="button" aria-label="Dismiss" onClick={onDismiss} className="relative -my-0.5 grid size-6 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2.5 hover:text-fg">
@@ -363,7 +363,8 @@ export function Chat({
     return settings;
   });
   const [settings, setSettings] = useState<RunSettings>(() => {
-    const base = loadDefaults();
+    // The mode is the session's own; a new session's is worked out below.
+    const { permissionMode: _start, ...base } = loadDefaults();
     if (!sessionId) return carry ? { ...base, ...carry } : base;
     const live = getView(sessionId).run?.settings;
     if (live) return { ...base, ...live };
@@ -379,7 +380,7 @@ export function Chat({
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
-  const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
+  const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   const [running, setRunning] = useState<string>();
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -425,26 +426,37 @@ export function Chat({
     if (runSettings || chosen.current || !sessionId) return;
     const choice = session ? sessionChoice(sessionId) : undefined;
     if (choice && session && choice.at > session.lastActivity) setSettings((current) => ({ ...current, ...choice.settings }));
-    else if (recorded) setSettings({ ...loadDefaults(), ...recorded });
+    else if (recorded) setSettings({ ...loadDefaults(), permissionMode: undefined, ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, recordedKey, session?.lastActivity, Boolean(runSettings)]);
 
-  // A new session starts in the mode Claude Code's settings give (permissions.defaultMode), as in
-  // the terminal; with none, it asks first.
-  const { data: defaults } = useQuery({
-    queryKey: ['defaults', scratch ? '' : newCwd ?? ''],
-    queryFn: () => api.defaults(scratch ? undefined : newCwd),
-    enabled: !sessionId && (scratch || Boolean(newCwd)),
+  // A new session starts in the mode picked in Settings, else the one Claude Code's settings give
+  // for its folder (permissions.defaultMode), else Auto, Manual for a model without Auto
+  // (startMode): worked out afresh until a mode is picked for it here.
+  const [modePicked, setModePicked] = useState(() => Boolean(sessionId) || carry?.permissionMode !== undefined);
+  const [pickedStart] = useState(() => loadDefaults().permissionMode);
+  const defaultsQuery = (folder: string | undefined) => ({
+    queryKey: ['defaults', folder ?? ''],
+    queryFn: () => api.defaults(folder),
     staleTime: 30_000,
     retry: false,
   });
-  useEffect(() => {
-    if (sessionId || chosen.current || !defaults?.permissionMode) return;
-    setSettings((current) => ({ ...current, permissionMode: defaults.permissionMode! }));
-  }, [sessionId, defaults?.permissionMode]);
+  const { data: defaults } = useQuery({ ...defaultsQuery(scratch ? undefined : newCwd), enabled: !sessionId && (scratch || Boolean(newCwd)) });
+  const startingMode = (next: RunSettings, claudeCode: PermissionMode | null | undefined) => startMode(pickedStart, claudeCode ?? undefined, modelOf(modelList?.models, next));
+  const shown = modePicked ? settings : { ...settings, permissionMode: startingMode(settings, defaults?.permissionMode) };
+  /** The mode a new session starts in, in `folder`, once Claude Code's settings there are known. */
+  const startModeIn = async (folder: string | undefined, next: RunSettings) => {
+    const claudeCode = await queryClient.fetchQuery(defaultsQuery(folder)).then((d) => d.permissionMode, () => undefined);
+    return startingMode(next, claudeCode);
+  };
+  /** What a branch, an edited earlier prompt or a /clear goes on with: these settings, never Bypass. */
+  const branchSettings = async (): Promise<RunSettings> =>
+    (settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: await startModeIn(cwd, settings) } : settings);
 
   const changeSettings = (next: RunSettings) => {
     chosen.current = true;
+    // A model without Auto moves a worked-out Auto to Manual; only a mode picked here stays put.
+    if (!modePicked && next.permissionMode !== shown.permissionMode && next.permissionMode !== startingMode(next, defaults?.permissionMode)) setModePicked(true);
     setSettings(next);
     // It stays with this session when you leave and come back; a new session's goes with it once sent.
     if (sessionId) saveSessionChoice(sessionId, next);
@@ -459,22 +471,26 @@ export function Chat({
     setNote(undefined);
     dismissDemoNote();
     if (sessionId && CLEAR.test(text) && cwd) {
-      carried.set(`new:${cwd}`, withoutBypass(settings));
+      // Out of Bypass, the new conversation starts in the mode a new session does.
+      const { permissionMode = 'default', ...rest } = settings;
+      carried.set(`new:${cwd}`, permissionMode === 'bypassPermissions' ? rest : { ...rest, permissionMode });
       onStartIn({ cwd });
       return;
     }
     const uuid = newId();
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
-    const body = { text, attachments: attachments.map((a) => a.id), settings, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
     try {
+      // A new session's mode, with Claude Code's settings for its folder read first.
+      const sent = modePicked ? settings : { ...settings, permissionMode: await startModeIn(scratch ? undefined : newCwd, settings) };
+      const body = { text, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
-        saveSessionChoice(sessionId, settings);
+        saveSessionChoice(sessionId, sent);
         clearDraft(viewId, text);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
-        saveSessionChoice(created, settings);
+        saveSessionChoice(created, sent);
         clearDraft(viewId, text);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
@@ -495,13 +511,22 @@ export function Chat({
 
   const firstPrompt = view.messages.find((m) => m.role === 'user' && m.blocks.some((b) => b.type === 'text'));
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
-  const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
+  // Before the list has it, a new session is called by its first prompt, shortened as the server does.
+  const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
-  const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
+  // Another app working on the session, or waiting there for an answer, is what the session is
+  // doing, also while Claude is idle here: the status says it, the same way the list does.
+  const other = elsewhere(session, view.run);
+  const otherAtWork = other && other.situation !== 'open' ? other : undefined;
+  const status = permissions.length > 0 ? 'waiting' : busy ? 'running'
+    : otherAtWork ? (otherAtWork.situation === 'waiting' ? 'waiting' : 'live')
+      : view.run ? 'idle' : session?.status ?? 'idle';
+  // Between turns: background tasks and subagents still running, and the checks Claude stays running for.
+  const working = view.run ? (busy ? 0 : (view.run.tasks?.length ?? 0) + (view.run.scheduled?.length ?? 0)) : session?.tasks ?? 0;
 
   // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
   const shell = async (command: string) => {
@@ -539,9 +564,10 @@ export function Chat({
     }
     try {
       // The server decides: the last prompt is replaced here; an earlier one branches, and a
-      // branch never starts in Bypass.
-      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages });
-      saveSessionChoice(result.sessionId, result.inPlace ? settings : withoutBypass(settings));
+      // branch never starts in Bypass but in the mode a new session would (given the one
+      // picked in Settings).
+      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages, ...(pickedStart ? { startMode: pickedStart } : {}) });
+      saveSessionChoice(result.sessionId, result.inPlace ? settings : await branchSettings());
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       if (result.inPlace) {
         truncateFrom(viewId, uuid);
@@ -678,15 +704,10 @@ export function Chat({
           >
             <div className="truncate text-[15px] font-medium">{title || ' '}</div>
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
-              {/* The list has room for "Working in Claude Desktop"; a phone's header, for the folder too. */}
-              {!wide && status === 'live' && session?.runningIn && !view.run ? (
-                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-live"><StatusDot status="live" />In {session.runningIn}</span>
-              ) : (
-                <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} />
-              )}
+              <StatusBadge status={status} runningIn={otherAtWork ? session?.runningIn : undefined} tasks={working} />
               <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
               {/* On a phone the line has room for the branch only when nothing else is going on; the session menu always has it. */}
-              {session?.gitBranch && (wide || status === 'idle') && (
+              {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
                 <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
               )}
             </div>
@@ -723,6 +744,7 @@ export function Chat({
             // Can't reach the computer: the line under the header says so, and offers to retry.
             view={offline === 'unreachable' && view.error ? { ...view, error: undefined } : view}
             cwd={cwd}
+            {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
             {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
           />
@@ -760,22 +782,15 @@ export function Chat({
           </div>
         )}
         {limitNotice(limits) && <Notice tone={limitReached(limits) ? 'error' : 'info'}>{limitNotice(limits)}</Notice>}
-        {session?.status === 'live' && !view.run && (
-          <Notice tone="live">Sending here starts a second Claude on this conversation.</Notice>
-        )}
-        {session?.status === 'waiting' && session.runningIn && !view.run && (
-          <Notice>
-            Claude is waiting for an answer in {session.runningIn}. Sending here runs a second Claude on the same conversation.
-          </Notice>
-        )}
-        {/* Open, idle, in another app too: explained once, the first time it happens; the session
-            menu says it for each session after that. */}
-        {session?.openIn && status !== 'live' && !busy && !openElsewhereSeen && (
+        {/* Another app has the session: each way it can (open, working, waiting there) is explained
+            once in this browser, the first time it happens. After that the status says it, the
+            message box says what sending does, and the session menu names an app it is open in. */}
+        {other && !tipsSeen.has(TIP_KEYS[other.situation]) && (
           <Notice onDismiss={() => {
-            markTipSeen('open-elsewhere');
-            setOpenElsewhereSeen(true);
+            markTipSeen(TIP_KEYS[other.situation]);
+            setTipsSeen((seen) => new Set(seen).add(TIP_KEYS[other.situation]));
           }}>
-            Also open in {session.openIn}, which shows what you send here once you reopen the session there.
+            {elsewhereTip(other)}
           </Notice>
         )}
         {modelList?.signedIn === false && (
@@ -805,7 +820,7 @@ export function Chat({
       <Composer
         ref={composer}
         busy={busy}
-        settings={settings}
+        settings={shown}
         onSettings={changeSettings}
         models={modelList?.models}
         onSend={(text, attachments, mode) => void send(text, attachments, mode)}
@@ -814,7 +829,7 @@ export function Chat({
         stopping={Boolean(view.run?.stopping)}
         // On a computer the box takes the keys as soon as a chat opens (the composer skips this on touch screens).
         autoFocus
-        placeholder={sessionId ? 'Reply to Claude' : 'Message Claude'}
+        placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
         {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
         {...(cwd ? { cwd } : {})}
@@ -864,13 +879,13 @@ export function Chat({
           {...(home ? { home } : {})}
           {...(view.run ? { run: view.run } : {})}
           onRenamed={refresh}
-          onForked={(id) => {
+          onForked={(id) => void branchSettings().then((next) => {
             // A branch is new work: it carries this session's settings, except Bypass.
-            saveSessionChoice(id, withoutBypass(settings));
+            saveSessionChoice(id, next);
             setMenuOpen(false);
             void queryClient.invalidateQueries({ queryKey: ['sessions'] });
             onOpen(id);
-          }}
+          })}
           onDeleted={() => {
             setMenuOpen(false);
             void queryClient.invalidateQueries({ queryKey: ['sessions'] });

@@ -4,6 +4,7 @@ import type {
   Block, ChatMessage, MessagesPage, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus, SessionSummary,
 } from '../../shared/protocol';
 import { currentTasks, type Todo } from '../../shared/tasks';
+import { shortTitle } from '../../shared/titles';
 import { answerLocally } from './api';
 import { newId } from './ids';
 import { DEMO_NOTE, DemoRefusal, INSTALL_URL, STATIC_DEMO } from './static-demo';
@@ -202,7 +203,7 @@ function create(body: SendBody): { sessionId: string } {
   const story = storyOf(id);
   story.summary = {
     id,
-    title: body.text.split('\n')[0]!.slice(0, 80) || 'New session',
+    title: shortTitle(body.text) || 'New session',
     cwd,
     project: cwd.split('/').filter(Boolean).at(-1) ?? '',
     lastActivity: Date.now(),

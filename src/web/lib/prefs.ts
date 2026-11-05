@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
+import { START_MODES } from '../../shared/modes';
 import type { RunSettings } from '../../shared/protocol';
 
 const SETTINGS_KEY = 'pelican:settings';
@@ -24,8 +25,8 @@ const write = (key: string, value: unknown) => {
 
 /**
  * What a new session starts with, set in Settings (a choice in a session stays in that session);
- * remembered per browser. The permission mode is not among them: it comes from Claude Code's own
- * settings (permissions.defaultMode, read by the server), else new work asks first.
+ * remembered per browser. The permission mode is there only once one was picked in Settings;
+ * until then new sessions start in the one Claude Code's settings give, else Auto (startMode).
  */
 export function loadDefaults(): RunSettings {
   const raw = read<Partial<RunSettings>>(SETTINGS_KEY, {});
@@ -34,12 +35,12 @@ export function loadDefaults(): RunSettings {
     ...(raw.effort ? { effort: raw.effort } : {}),
     fast: Boolean(raw.fast),
     ultracode: Boolean(raw.ultracode),
-    permissionMode: 'default',
+    ...(raw.permissionMode && START_MODES.includes(raw.permissionMode) ? { permissionMode: raw.permissionMode } : {}),
   };
 }
 
-export function saveDefaults({ permissionMode: _mode, ...settings }: RunSettings): void {
-  write(SETTINGS_KEY, settings);
+export function saveDefaults({ permissionMode, ...settings }: RunSettings): void {
+  write(SETTINGS_KEY, { ...settings, ...(permissionMode && START_MODES.includes(permissionMode) ? { permissionMode } : {}) });
 }
 
 const TIPS_KEY = 'pelican:tips-seen';

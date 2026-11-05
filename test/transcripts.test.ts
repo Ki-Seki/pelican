@@ -54,6 +54,28 @@ describe('readLastTurn', () => {
     expect(turn?.time).toBe(Date.parse('2026-11-05T01:00:00.000Z'));
   });
 
+  it('says why the turn stopped when its reply is Claude Code’s note of an API error', async () => {
+    const file = await write('e.jsonl', [
+      row({ type: 'user', timestamp: '2026-10-30T01:00:00.000Z', message: { role: 'user', content: 'Deploy the site' } }),
+      row({
+        type: 'assistant', timestamp: '2026-10-30T01:00:01.000Z', isApiErrorMessage: true, error: 'authentication_failed',
+        message: { model: '<synthetic>', content: [{ type: 'text', text: 'Not logged in · Please run /login' }] },
+      }),
+    ]);
+    expect(await readLastTurn(file)).toEqual({ time: Date.parse('2026-10-30T01:00:01.000Z'), stopped: 'not signed in' });
+  });
+
+  it('notes a summary Claude Code wrote at the end, which the SDK titles the session with, unless a last prompt is there', async () => {
+    const turn = [
+      row({ type: 'user', timestamp: '2026-11-05T01:00:00.000Z', message: { role: 'user', content: 'Fix it' } }),
+      row({ type: 'assistant', timestamp: '2026-11-05T01:00:05.000Z', message: { content: [{ type: 'text', text: 'Fixed.' }] } }),
+    ];
+    const summary = row({ type: 'summary', summary: 'Fixing the cache key', leafUuid: 'x' });
+    expect((await readLastTurn(await write('f.jsonl', [...turn, summary])))?.summarized).toBe(true);
+    expect((await readLastTurn(await write('g.jsonl', [...turn, summary, row({ type: 'last-prompt', lastPrompt: 'Fix it' })])))?.summarized).toBeUndefined();
+    expect((await readLastTurn(await write('h.jsonl', turn)))?.summarized).toBeUndefined();
+  });
+
   it('returns nothing for a missing file', async () => {
     expect(await readLastTurn(path.join(dir, 'missing.jsonl'))).toBeUndefined();
   });

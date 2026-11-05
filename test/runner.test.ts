@@ -116,8 +116,8 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, askedFor, oneLine } = await import('../src/server/runner');
-const { feedFor } = await import('../src/server/feed');
+const { closeAll, closeIdle, getRun, sendMessage, askedFor, oneLine, runTasks } = await import('../src/server/runner');
+const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
 
@@ -561,6 +561,34 @@ describe('work that runs on its own', () => {
     expect(await run.taskOutput('b1')).toEqual({ output: 'listening on :3000\n', truncated: false });
     claude.say(system('task_notification', { task_id: 'a1', status: 'completed', output_file: '', summary: 'done' }));
     await vi.waitFor(() => expect(state().progress).toBeUndefined());
+  });
+
+  it('counts what runs on between turns for the session list, and tells every list when that changes', async () => {
+    const heard: ServerEvent[] = [];
+    const stop = connect((event) => heard.push(event));
+    const { sessionId, run, claude } = await start();
+    claude.say(system('background_tasks_changed', { tasks: [
+      { task_id: 'a1', task_type: 'local_agent', subagent_type: 'Explore', description: 'Find the flaky test' },
+      { task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' },
+      { task_id: 'w1', task_type: 'monitor_mcp', description: 'watch logs', ambient: true },
+    ] }));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    // Watchers are no activity, as Claude Code says; the agent and the command are.
+    expect(runTasks(sessionId)).toBe(2);
+    expect(heard.filter((e) => e.type === 'status').at(-1)).toEqual({ type: 'status', sessionId, status: 'idle', tasks: 2 });
+    // A scheduled check keeps Claude running too: it counts.
+    claude.say(toolCall('c1', 'CronCreate', { cron: '0 * * * *', prompt: 'check the deploy' }));
+    claude.say(toolResult('c1', { id: 'job-1', humanSchedule: 'every hour', recurring: true, nextFireAt: Date.now() + 3600_000 }));
+    await vi.waitFor(() => expect(runTasks(sessionId)).toBe(3));
+    claude.say(system('background_tasks_changed', { tasks: [] }));
+    await vi.waitFor(() => expect(runTasks(sessionId)).toBe(1));
+    expect(heard.filter((e) => e.type === 'status').at(-1)).toEqual({ type: 'status', sessionId, status: 'idle', tasks: 1 });
+    // The process ends, and its work with it.
+    claude.end();
+    await vi.waitFor(() => expect(heard.filter((e) => e.type === 'status').at(-1)).toEqual({ type: 'status', sessionId, status: 'idle' }));
+    expect(runTasks(sessionId)).toBe(0);
+    stop();
   });
 
   it('measures the context from the last response, without counting every category after each turn', async () => {

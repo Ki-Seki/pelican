@@ -6,16 +6,20 @@ export type Entry = { session: SessionSummary; earlier: SessionSummary[] };
 export const single = (session: SessionSummary): Entry => ({ session, earlier: [] });
 export const foldKey = (s: SessionSummary) => `${s.cwd}\u0000${s.title.trim()}`;
 
+/** Working, waiting, or between turns with background tasks still running: the list's Active group. */
+export const isActive = (s: SessionSummary): boolean => s.status !== 'idle' || (s.tasks ?? 0) > 0;
+
 /**
  * Sessions in the same folder with the same title fold into the newest: a scheduled task's
  * runs, or the branches of a session named once, are one row with the earlier ones a tap
- * away. One that is working or waiting is never folded. Expects the newest first.
+ * away. One that is active (working, waiting, or with background tasks) is never folded.
+ * Expects the newest first.
  */
 export function fold(sessions: SessionSummary[]): Entry[] {
   const out: Entry[] = [];
   const byKey = new Map<string, Entry>();
   for (const s of sessions) {
-    if (s.status !== 'idle') {
+    if (isActive(s)) {
       out.push(single(s));
       continue;
     }

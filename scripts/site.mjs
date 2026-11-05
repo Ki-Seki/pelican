@@ -74,7 +74,7 @@ async function save(request) {
 }
 const q = encodeURIComponent;
 
-for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs']) await save(request);
+for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs', 'defaults']) await save(request);
 const { sessions } = await save('sessions');
 const folders = new Set();
 for (const session of sessions) {
@@ -85,6 +85,7 @@ for (const session of sessions) {
 }
 for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
+  await save(`defaults?cwd=${q(cwd)}`);
   await save(`files?cwd=${q(cwd)}&q=`);
   const git = await save(`git?cwd=${q(cwd)}`);
   for (const file of git?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}`);
