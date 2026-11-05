@@ -185,6 +185,18 @@ describe('a change made by another process (`pelican token --reset`, `pelican pa
   });
 });
 
+describe('a file caught half-written', () => {
+  it('changes nothing until it can be read whole', async () => {
+    await setPassword('a good password');
+    const written = path.join(dir, 'auth.json');
+    await writeFile(written, '{"version": 1, "salt": "');
+    refreshAuth(Date.now() + 6000);
+    expect(authMode()).toBe('password');
+    expect(await checkPassword('a good password')).toBe(true);
+    await clearPassword();
+  });
+});
+
 describe('a sign-in in use', () => {
   it('is renewed, at most once a day, so only 30 days without use sign a browser out', () => {
     const now = Date.now();

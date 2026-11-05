@@ -166,10 +166,18 @@ export async function pelicanChoice(folder: string): Promise<TrustChoice | undef
   return undefined;
 }
 
-/** Keeps the user's answer for the folder's repository (or the folder itself, outside one). */
+/** Whether `outer` is `inner` or a folder that holds it. */
+const holds = (outer: string, inner: string) => inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : `${outer}${path.sep}`);
+
+/**
+ * Keeps the user's answer for the folder's repository (or the folder itself, outside one), never
+ * for the home folder or above it: a home folder kept in git would otherwise answer for all of it.
+ */
 export async function rememberChoice(folder: string, choice: TrustChoice): Promise<void> {
   const dir = await real(folder);
-  const key = (await gitRoot(dir)) ?? dir;
+  const top = await gitRoot(dir);
+  const home = await real(os.homedir());
+  const key = top && !holds(top, home) ? top : dir;
   const folders = await loadChoices();
   folders.delete(key);
   folders.set(key, choice);

@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { config } from './config.js';
@@ -73,11 +73,16 @@ export function refreshAuth(now = Date.now(), force = false): void {
   if (current === seen) return;
   seen = current;
   const before = secret();
-  password = readJsonSync<Password>(passwordFile());
+  // A file that cannot be read whole is read again next time; until then nothing changes.
+  const nextPassword = readJsonSync<Password>(passwordFile());
+  if (nextPassword?.hash && nextPassword.secret) password = nextPassword;
+  else if (signature(passwordFile()) === '-') password = undefined;
+  else seen = undefined;
   if (config.auth !== 'none') {
     const next = readJsonSync<Token>(tokenFile());
-    // A file being written, or removed by hand, leaves the token in use as it is.
+    // Removed by hand: the token in use stays until a new one is made.
     if (next?.token && next.secret) token = next;
+    else if (signature(tokenFile()) !== '-') seen = undefined;
   }
   if (secret() !== before) codes.clear();
 }
@@ -88,9 +93,12 @@ function derive(text: string, salt: Buffer, params: { N: number; r: number; p: n
   });
 }
 
+/** Written whole or not at all: a running server reading it meanwhile never sees half of it. */
 async function writePrivate(file: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  const temp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await rename(temp, file);
 }
 
 const readJson = async <T>(file: string): Promise<T | undefined> => {

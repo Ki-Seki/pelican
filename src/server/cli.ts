@@ -332,8 +332,10 @@ async function afterStart(ctx: import('./service.js').ServiceContext): Promise<v
   }
   const { accessToken, loadAuth } = await import('./auth.js');
   await loadAuth();
-  const token = answer.mode === 'token' ? accessToken() : undefined;
-  console.log(`\n  ${token ? tokenLink(addressFor(config.host, config.port), token) : addressFor(config.host, config.port)}\n  On your phone: \`${NAME} phone\`\n`);
+  // The link with the token goes to a terminal only, never into a pipe or a log.
+  const token = answer.mode === 'token' && process.stdout.isTTY ? accessToken() : undefined;
+  const signIn = answer.mode === 'token' && !token ? `\n  \`${NAME} token\` prints the link that signs a browser in` : '';
+  console.log(`\n  ${token ? tokenLink(addressFor(config.host, config.port), token) : addressFor(config.host, config.port)}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
 }
 
 /** One line with every version a bug report needs. */

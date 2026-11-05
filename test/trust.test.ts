@@ -139,6 +139,24 @@ describe('trust', () => {
     expect((await stat(path.join(config.stateDir, 'trust.json'))).mode & 0o777).toBe(0o600);
   });
 
+  it('is never kept for the home folder, even when the home folder is a repository', async () => {
+    const home = path.join(root, 'home');
+    const download = path.join(home, 'Downloads', 'thing');
+    await mkdir(download, { recursive: true });
+    gitIn(home, 'init', '-q', '-b', 'main');
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      await rememberChoice(download, 'trusted');
+      expect(await pelicanChoice(download)).toBe('trusted');
+      await mkdir(path.join(home, 'Downloads', 'other'), { recursive: true });
+      expect(await pelicanChoice(path.join(home, 'Downloads', 'other'))).toBeUndefined();
+    } finally {
+      process.env.HOME = savedHome;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('follows Claude having worked there, unless the user chose their settings only', async () => {
     await claudeWorkedIn(repo);
     expect(await folderTrusted(repo)).toBe(true);
