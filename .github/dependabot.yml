@@ -17,6 +17,9 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # The Agent SDK has an entry of its own, below.
+    ignore:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
     groups:
       development:
         dependency-type: development
@@ -24,3 +27,21 @@ updates:
       runtime:
         dependency-type: production
         update-types: [minor, patch]
+  # The Agent SDK brings the Claude Code that Pelican runs, and a new one ships most days: each
+  # gets a pull request of its own, which runs all the checks and the browser smoke test, and
+  # sdk-report.yml comments on it with what changed upstream.
+  - package-ecosystem: npm
+    directory: /
+    # Dependabot takes a second entry for the same folder only on another target branch; naming
+    # the default branch, which the entry above leaves implicit, counts as one
+    # (dependabot/dependabot-core#1778).
+    target-branch: main
+    schedule:
+      interval: daily
+    # One day, not seven: a release Anthropic replaces within hours is skipped, a bad or hijacked
+    # one has a day to be caught and pulled, and a new Claude Code still reaches Pelican the next
+    # day rather than the next week.
+    cooldown:
+      default-days: 1
+    allow:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
