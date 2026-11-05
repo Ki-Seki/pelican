@@ -16,7 +16,7 @@ export function requestKey(path: string): string {
   return hash.toString(16).padStart(8, '0');
 }
 
-const TIME_KEYS = new Set(['timestamp', 'lastActivity', 'createdAt', 'resetsAt', 'at']);
+const TIME_KEYS = new Set(['timestamp', 'lastActivity', 'createdAt', 'resetsAt', 'at', 'startedAt', 'queuedAt', 'lastProgressAt']);
 
 function shift(value: unknown, by: number): unknown {
   if (Array.isArray(value)) return value.map((v) => shift(v, by));

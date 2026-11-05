@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from 'react';
 
 import type {
-  Block, ChatMessage, MessagesPage, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus, SessionSummary,
+  Block, ChatMessage, MessagesPage, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
 import { currentTasks, type Todo } from '../../shared/tasks';
+import { isRunning } from '../../shared/workflows';
 import { shortTitle } from '../../shared/titles';
 import { answerLocally, ApiError } from './api';
 import { newId } from './ids';
@@ -262,13 +263,22 @@ function interrupt(sessionId: string): { ok: boolean } {
   return { ok: true };
 }
 
-/** Stop on a command Claude left running: it ends, and the session has nothing left at work. */
+/** A workflow stopped as Claude Code stops one: the agents still at work stop with it. */
+const stopped = (workflow: Workflow): Workflow => ({
+  ...workflow,
+  status: 'killed',
+  ...(workflow.startedAt !== undefined ? { durationMs: Date.now() - workflow.startedAt } : {}),
+  agents: workflow.agents.map((a) => (a.state === 'start' || a.state === 'progress' ? { ...a, state: 'error', error: 'Stopped because the workflow was stopped' } : a)),
+});
+
+/** Stop on a command or a workflow Claude left running: it ends, and the session has nothing left at work. */
 function stopTask(sessionId: string, taskId: string): { ok: boolean } {
   const run = currentRun(sessionId);
   if (!run?.tasks?.some((t) => t.id === taskId)) return { ok: true };
   const { tasks, ...rest } = run;
   const left = tasks.filter((t) => t.id !== taskId);
-  runAs(sessionId, left.length > 0 ? { ...rest, tasks: left } : rest);
+  const workflows = rest.workflows && Object.fromEntries(Object.entries(rest.workflows).map(([call, w]) => [call, w.taskId === taskId && isRunning(w.status) ? stopped(w) : w]));
+  runAs(sessionId, { ...(left.length > 0 ? { ...rest, tasks: left } : rest), ...(workflows ? { workflows } : {}) });
   return { ok: true };
 }
 
