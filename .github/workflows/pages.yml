@@ -1,8 +1,8 @@
 name: Site
 
 # The project site and its live demo, published to GitHub Pages once CI has passed on the same
-# commit of main: the demo never runs ahead of what the checks saw. CI cancels a run on main when
-# a newer commit arrives, so an older commit cannot be published after a newer one.
+# commit of main: the demo never runs ahead of what the checks saw. Only the commit main is at
+# now is published, so an older commit whose checks pass late (run again by hand) changes nothing.
 on:
   workflow_run:
     workflows: [CI]
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build the site
+  newest:
+    name: Still the newest commit of main
     # A push to this repository's main, never a pull request from a fork whose branch is also
     # called main: this workflow runs with the rights to publish.
     if: >-
@@ -27,6 +27,30 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      newest: ${{ steps.main.outputs.newest }}
+    steps:
+      - name: Compare with main as it is now
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$head" = "$SHA" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main has moved on to $head: $SHA is not published."
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build the site
+    needs: newest
+    if: needs.newest.outputs.newest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

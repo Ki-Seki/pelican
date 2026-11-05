@@ -61,7 +61,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, and what changed upstream |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
 
 ## Keeping up with Claude Code
 
@@ -92,6 +92,13 @@ publishing (OIDC, with provenance): no npm token exists anywhere, and only `rele
 release too. A release candidate goes to npm under the `next` tag, and a fix for an older line
 (0.2.4 after 0.3.0) under `latest-0.2`; only the newest version becomes `latest`, what
 `npm install -g pelican-cc` installs.
+
+A fix for an older line is made on a branch from that line's last tag
+(`git switch -c 0.2.x v0.2.3`). A release runs the workflows of the commit it tags, and the
+`release.yml` of 0.2.3 and earlier publishes every version as `latest`, which npm refuses for a
+version below it. So copy the current one onto the branch, and commit it, before you tag:
+`git checkout main -- .github/workflows/release.yml`. Create its release with `--latest=false`, so
+GitHub keeps showing the newest release first.
 
 ## Style
 

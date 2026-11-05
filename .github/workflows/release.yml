@@ -45,6 +45,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
+          set -euo pipefail
           version="${RELEASE_TAG#v}"
           # A version published by hand already (the first release was) is not published again.
           if npm view "pelican-cc@$version" version >/dev/null 2>&1; then
@@ -54,10 +55,16 @@ jobs:
           # npm 11 publishes a prerelease, or a version below the newest, only under a tag of its
           # own: release candidates go out as next, a fix for an older line as latest-<line>
           # (latest-0.2), and nothing but the newest version becomes what everyone installs.
-          latest=$(npm view pelican-cc dist-tags.latest 2>/dev/null || true)
+          # pelican-cc has a latest, so a lookup that fails stops the release: taken as none, it
+          # would make a fix for an older line latest.
+          latest=$(npm view pelican-cc dist-tags.latest)
+          if [ -z "$latest" ]; then
+            echo "npm named no latest version of pelican-cc"
+            exit 1
+          fi
           if [ "$PRERELEASE" = "true" ] || [ "${version#*-}" != "$version" ]; then
             tag=next
-          elif [ -n "$latest" ] && ! node -e '
+          elif ! node -e '
             const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
             process.exit((a.map((n, i) => n - b[i]).find((d) => d !== 0) ?? 0) >= 0 ? 0 : 1);
           ' "$version" "$latest"; then
@@ -66,7 +73,12 @@ jobs:
             tag=latest
           fi
           echo "Publishing pelican-cc@$version as $tag"
-          npm publish ./pelican-cc-*.tgz --provenance --access public --tag "$tag"
+          # latest without --tag: npm then checks itself that no published version is higher.
+          if [ "$tag" = latest ]; then
+            npm publish ./pelican-cc-*.tgz --provenance --access public
+          else
+            npm publish ./pelican-cc-*.tgz --provenance --access public --tag "$tag"
+          fi
       # --clobber: a run that failed after uploading can run again.
       - name: Attach the package to the release
         env:

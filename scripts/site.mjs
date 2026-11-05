@@ -64,18 +64,18 @@ const demoServer = await startDemo({ port: PORT });
 const data = path.join(demo, 'data');
 await mkdir(data, { recursive: true });
 const saved = new Set();
-async function save(request) {
+async function save(request, adjust = (body) => body) {
   if (saved.has(request)) return undefined;
   saved.add(request);
   const response = await fetch(BASE + request, { headers: MARK });
   if (!response.ok) return undefined;
-  const body = await response.json();
+  const body = adjust(await response.json());
   await writeFile(path.join(data, `${requestKey(request)}.json`), JSON.stringify(body));
   return body;
 }
 const q = encodeURIComponent;
 
-for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'dirs', 'defaults']) await save(request);
+for (const request of ['auth', 'info', 'models', 'usage', 'usage/plan', 'projects', 'defaults']) await save(request);
 const { sessions } = await save('sessions');
 const folders = new Set();
 for (const session of sessions) {
@@ -100,6 +100,17 @@ for (const cwd of folders) {
   };
   await walk('');
 }
+// A new session's folder sheet, browsed from the demo's home down, and what the empty chat of a
+// new session in any of those folders asks: the mode it starts in, and its changes. The home is
+// the top of the demo's world, so its listing has no way up.
+const browse = async (dir) => {
+  const listing = await (dir === undefined ? save('dirs', ({ parent, ...home }) => home) : save(`dirs?path=${q(dir)}`));
+  if (!listing) return;
+  await save(`defaults?cwd=${q(listing.path)}`);
+  await save(`git?cwd=${q(listing.path)}`);
+  for (const folder of listing.dirs ?? []) await browse(folder.path);
+};
+await browse(undefined);
 await writeFile(path.join(data, 'meta.json'), JSON.stringify({ generatedAt: Date.now() }));
 await demoServer.stop();
 console.log(`site written to ${out} (${saved.size} demo answers)`);
