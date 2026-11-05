@@ -36,10 +36,10 @@ afterAll(async () => {
 });
 
 describe('a notification of a request Claude waits on', () => {
-  it('carries the request, for Allow and Deny on the device', async () => {
-    await notify({ title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1' });
+  it('carries the request, for Allow and Deny on the device, and whether its command fits the line Android shows', async () => {
+    await notify({ title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1', fitsOneLine: true });
     expect(JSON.parse(sent.at(-1)!.body)).toEqual({
-      title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1', url: 'https://laptop.example.ts.net/?s=s-1',
+      title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1', fitsOneLine: true, url: 'https://laptop.example.ts.net/?s=s-1',
     });
   });
 
