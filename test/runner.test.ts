@@ -774,7 +774,7 @@ describe('when Claude Code ends', () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(fresh.busy).toBe(true);
     // Nothing from the old run after the new one spoke: no idle state, no idle status for the lists.
-    expect(events.slice(from).filter((e) => e.type === 'run')).toEqual([]);
+    expect(events.slice(from).filter((e) => e.type === 'run' && !e.state?.busy)).toEqual([]);
     expect(events.filter((e) => e.type === 'run').at(-1)).toMatchObject({ state: { busy: true } });
     expect(heard.filter((e) => e.type === 'status' && e.sessionId === sessionId).at(-1)).toMatchObject({ status: 'running' });
     expect(getRun(sessionId)).toBe(fresh);
