@@ -11,6 +11,7 @@ import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 
 import type { SavedOutputPage } from '../shared/protocol.js';
 import { openRegular } from './open.js';
+import { readHistory, transcriptRow } from './history.js';
 import { transcriptPath } from './transcripts.js';
 import { launchFor } from './trust.js';
 
@@ -698,23 +699,54 @@ const SAVED_NAME = /^[A-Za-z0-9_-]{1,128}\.(?:txt|json)$/;
 export const SAVED_PAGE_BYTES = 256 * 1024;
 
 /**
+ * The session the record of a long output in this one was copied from, by its name, where that
+ * is the session its saved file's path names: Claude Code's forkSession copies a session's rows,
+ * each saying where from (`forkedFrom`), and leaves the files where they were. The record is found
+ * among the conversation's messages, as read for its pages, and its own row read again, alone.
+ */
+async function copiedFrom(sessionId: string, name: string): Promise<string | undefined> {
+  const transcript = SESSION_ID.test(sessionId) ? await transcriptPath(sessionId) : undefined;
+  if (!transcript) return undefined;
+  for (const message of await readHistory(transcript)) {
+    if (message.role !== 'user') continue;
+    const text = message.blocks.map((block) => (block.type === 'text' ? block.text : '')).join('');
+    if (!text.includes('<persisted-output>')) continue;
+    for (const [, file] of text.matchAll(/saved to: ([^\n]+)/g)) {
+      const parts = file!.split(/[\\/]/);
+      const owner = parts.at(-3);
+      if (parts.at(-1) !== name || parts.at(-2) !== 'tool-results' || !owner || !SESSION_ID.test(owner) || owner === sessionId) continue;
+      const forked = (await transcriptRow(transcript, message.uuid))?.forkedFrom as { sessionId?: unknown } | undefined;
+      if (forked?.sessionId === owner) return owner;
+    }
+  }
+  return undefined;
+}
+
+/**
  * One page of an output Claude Code saved in place of one too long for the conversation (a long
  * `!` command's, as its record names it), from `from` bytes in, whole lines where it can, whole
- * characters always: read by its
- * name alone, from that session's own tool-results folder, a regular file reached through no link.
- * Undefined for anything else, or once Claude Code has let it go.
+ * characters always: read by its name alone from that session's own tool-results folder, or, for
+ * a record a fork copied, from the folder of the session it was copied from (copiedFrom). Only a
+ * regular file reached through no link and with no other name (no hard link to it). Undefined for
+ * anything else, or once Claude Code has let it go.
  */
 export async function savedOutputPage(sessionId: string, name: string, from: number): Promise<SavedOutputPage | undefined> {
   if (!SAVED_NAME.test(name) || !Number.isSafeInteger(from) || from < 0) return undefined;
-  const folder = await toolResultsFolder(sessionId);
-  if (!folder) return undefined;
+  return await pageIn(sessionId, name, from) ?? await pageIn(await copiedFrom(sessionId, name), name, from);
+}
+
+async function pageIn(sessionId: string | undefined, name: string, from: number): Promise<SavedOutputPage | undefined> {
+  const folder = sessionId ? await toolResultsFolder(sessionId) : undefined;
+  if (!sessionId || !folder) return undefined;
   try {
     // Where it must be, with only the projects' own folders resolved: a link on the way leads elsewhere.
     const expected = path.join(await realpath(path.dirname(path.dirname(folder))), sessionId, 'tool-results', name);
     if (await realpath(path.join(folder, name)) !== expected) return undefined;
     const handle = await openRegular(expected);
     try {
-      const { size } = await handle.stat();
+      const { size, nlink } = await handle.stat();
+      // Claude Code writes each one anew; one with another name is another file, put there.
+      if (nlink > 1) return undefined;
       const start = Math.min(from, size);
       const buffer = Buffer.alloc(Math.min(SAVED_PAGE_BYTES, size - start));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);

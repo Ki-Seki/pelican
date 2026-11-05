@@ -361,25 +361,35 @@ export function readHistory(file: string, { sidechain = false }: { sidechain?: b
 }
 
 /**
- * The `n`th picture a transcript row holds as data (`storedImages`), decoded: what a page loads
- * by the address its message carries. Read from the row's own place in the file.
+ * A transcript row as Claude Code wrote it, read again from its own place in the file (one row,
+ * however long the file): for what its message does not carry, such as its pictures' data or the
+ * session it was copied from.
  */
-export async function transcriptImage(file: string, uuid: string, n: number): Promise<{ mediaType: string; data: Buffer } | undefined> {
+export async function transcriptRow(file: string, uuid: string): Promise<Record<string, unknown> | undefined> {
   await readHistory(file);
   const node = transcripts.get(file)?.nodes.get(uuid);
   if (!node) return undefined;
-  let row: { uuid?: unknown; type?: unknown; message?: { content?: unknown }; attachment?: { type?: unknown; prompt?: unknown } };
+  let row: Record<string, unknown>;
   const handle = await openRegular(file);
   try {
     const buffer = Buffer.alloc(node.bytes);
     await handle.read(buffer, 0, node.bytes, node.at);
-    row = JSON.parse(buffer.toString('utf8')) as typeof row;
+    row = JSON.parse(buffer.toString('utf8')) as Record<string, unknown>;
   } catch {
     return undefined;
   } finally {
     await handle.close();
   }
-  if (row.uuid !== uuid) return undefined;
+  return row.uuid === uuid ? row : undefined;
+}
+
+/**
+ * The `n`th picture a transcript row holds as data (`storedImages`), decoded: what a page loads
+ * by the address its message carries. Read from the row's own place in the file.
+ */
+export async function transcriptImage(file: string, uuid: string, n: number): Promise<{ mediaType: string; data: Buffer } | undefined> {
+  const row = await transcriptRow(file, uuid) as { type?: unknown; message?: { content?: unknown }; attachment?: { type?: unknown; prompt?: unknown } } | undefined;
+  if (!row) return undefined;
   // A message sent while Claude worked is an attachment row; its prompt is the content.
   const content = row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment.prompt : row.message?.content;
   const image = storedImages(content)[n];
