@@ -156,6 +156,19 @@ describe('a diff read again while it is open', () => {
     expect(screen.getByText('A binary file changed')).toBeTruthy();
   });
 
+  it('says a file renamed whole was renamed from its old path, unchanged, rather than show git’s header', () => {
+    // As git writes it, the new name quoted for its quotes.
+    const renamed = 'diff --git a/src/old.ts "b/src/new \\"name\\".ts"\nsimilarity index 100%\nrename from src/old.ts\nrename to "src/new \\"name\\".ts"\n';
+    const view = render(<UnifiedDiff diff={renamed} path={'src/new "name".ts'} cwd={CWD} />);
+    expect(screen.getByText('Renamed from src/old.ts, unchanged')).toBeTruthy();
+    expect(screen.queryByText(/similarity index/)).toBeNull();
+    view.rerender(<UnifiedDiff diff={'diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n'} path="run.sh" cwd={CWD} />);
+    expect(screen.getByText('Made executable')).toBeTruthy();
+    view.rerender(<UnifiedDiff diff={'diff --git a/tab\\there b/x\nsimilarity index 100%\nrename from "tab\\there"\nrename to x\nold mode 100755\nnew mode 100644\n'} path="x" cwd={CWD} />);
+    // A name git writes with escapes, read back as it is (a tab in it, here).
+    expect(screen.getByText('Renamed from tab\there, and no longer executable', { normalizer: (text) => text })).toBeTruthy();
+  });
+
   it('in Changes, as when the window gets the focus back after a commit: the view stays and says so', async () => {
     server.diff = DIFF;
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { gitDiff, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
+import { headerOnly } from '../src/web/lib/diff-header';
 
 let repo: string;
 beforeAll(async () => {
@@ -142,6 +143,27 @@ describe('workspace', () => {
       expect(added(base)).toBe(1);
       // The old path is held to the folder as the new one is.
       await expect(gitDiff(work, 'new.txt', 'uncommitted', '../outside.txt')).rejects.toThrow();
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('says of a file renamed whole that it was renamed from its old path, unchanged, also when git quotes the name', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-rename-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work });
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'old.txt'), 'a\nb\n');
+      await writeFile(path.join(work, 'run.sh'), 'echo hi\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      git('mv', 'old.txt', 'docs "draft".txt');
+      await chmod(path.join(work, 'run.sh'), 0o755);
+      const renamed = await gitDiff(work, 'docs "draft".txt', 'uncommitted', 'old.txt');
+      // git writes only its header for these: no line changed.
+      expect(renamed).not.toContain('@@');
+      expect(headerOnly(renamed)).toBe('Renamed from old.txt, unchanged');
+      expect(headerOnly(await gitDiff(work, 'run.sh'))).toBe('Made executable');
     } finally {
       await rm(work, { recursive: true, force: true });
     }
