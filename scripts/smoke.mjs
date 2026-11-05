@@ -107,7 +107,104 @@ async function startElsewhere(page, where) {
   if (!(await page.locator('button[aria-label="Folder: ~/code"]').count())) problems.push(`${where}: the new session does not start in ~/code`);
 }
 
-/** The list, its sheets, a new session in another folder, and every session with its sheets. */
+/** Changes and files, open on a step (beside the conversation it opens from its button; the address names only the step). */
+async function openWorkspace(page, url) {
+  const view = page.locator('[role="region"][aria-label="Changes and files"], aside[aria-label="Changes and files"]');
+  await page.goto(url, { waitUntil: 'networkidle' });
+  if (!(await view.count())) await page.getByRole('button', { name: 'Changes and files', exact: true }).first().click();
+  return (await view.waitFor({ timeout: 5000 }).then(() => true, () => false)) ? view : undefined;
+}
+
+/**
+ * Down the Files tab to the first file with something in it that shows as numbered lines (pages
+ * and Markdown open as they look), and open it.
+ */
+async function openSourceFile(page, view) {
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!(await view.locator('button:has(> span.font-mono)').first().waitFor({ timeout: 5000 }).then(() => true, () => false))) return undefined;
+    const entries = await view.locator('button:has(> span.font-mono)').evaluateAll((rows) => rows.map((row) => ({
+      name: row.querySelector('span.font-mono')?.textContent ?? '',
+      size: row.querySelector('span.font-mono + span')?.textContent ?? '',
+      folder: Boolean(row.querySelector('svg.lucide-folder')),
+    })));
+    const code = entries.find((e) => !e.folder && e.size && e.size !== '0 B' && /\.(css|scss|tsx?|jsx?|py|go|rs|json|ya?ml|toml|sh|sql|txt)$/.test(e.name));
+    if (code) {
+      await view.locator('button > span.font-mono').getByText(code.name, { exact: true }).first().click();
+      const shown = await page.locator('[data-line="2"]').waitFor({ timeout: 5000 }).then(() => true, () => false);
+      return shown ? code.name : undefined;
+    }
+    const folder = entries.find((e) => e.folder);
+    if (!folder) return undefined;
+    await view.locator('button > span.font-mono').getByText(folder.name, { exact: true }).first().click();
+    await view.locator('nav[aria-label="Folder"] [aria-current="location"]').getByText(folder.name, { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+  }
+  return undefined;
+}
+
+/** Lines of the open file selected, as a drag over them selects them. */
+function selectLines(page, from, to) {
+  return page.evaluate(([a, b]) => {
+    const [first, last] = [a, b].map((n) => document.querySelector(`[data-line="${n}"]`));
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.childNodes.length);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  }, [from, to]);
+}
+
+/**
+ * Changes and files, walked as someone reading the session does: Files, a file, two of its lines
+ * selected and quoted into the message; a search of the files' text; Show, a turn, and the diff of
+ * a file it changed. The page's watch catches what goes wrong on the way; this, what never shows.
+ */
+async function walkWorkspace(page, base, session, where, step) {
+  const url = `${base}?s=${encodeURIComponent(session.id)}`;
+  // The site's demo has no computer to search with, and says so.
+  const live = !base.endsWith('/demo/');
+  const missing = (what) => problems.push(`${where}, session ${session.id}: ${what}`);
+
+  step('Files, a file and Quote');
+  let view = await openWorkspace(page, `${url}&w=files`);
+  if (!view) return missing('Changes and files does not open');
+  const file = await openSourceFile(page, view);
+  if (!file) return missing('Files opens no file as its lines');
+  const word = (await page.locator('[data-line="1"]').textContent())?.match(/[A-Za-z_]{3,}/)?.[0] ?? 'the';
+  await selectLines(page, 1, 2);
+  const quote = page.getByRole('button', { name: 'Quote', exact: true });
+  if (!(await quote.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing(`selecting lines of ${file} offers no Quote`);
+  await quote.click();
+  if (!(await page.locator('button[aria-label^="Remove the quote"]').first().waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`Quote on ${file} puts no quote above the message box`);
+
+  step('a text search');
+  view = await openWorkspace(page, `${url}&w=files`);
+  if (!view) return missing('Changes and files does not open again');
+  await view.getByRole('searchbox', { name: 'Search files' }).fill(word);
+  await view.getByRole('button', { name: /^Search in files for/ }).click();
+  const answered = view.locator('mark').or(view.getByText(/^No file holds|This is a demo/)).first();
+  if (!(await answered.waitFor({ timeout: 8000 }).then(() => true, () => false))) missing(`searching the files for "${word}" shows nothing`);
+  else if (live && !(await view.locator('mark').count())) missing(`searching the files for "${word}" does not find it in ${file}`);
+
+  step('Show, a turn and its diff');
+  view = await openWorkspace(page, `${url}&w=changes`);
+  if (!view) return missing('Changes does not open');
+  const show = view.getByRole('button', { name: /^Show:/ });
+  if (!(await show.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Changes has no Show');
+  await show.click();
+  const turn = page.getByRole('dialog', { name: 'Show' }).getByRole('button', { name: /^T\d+ · / }).first();
+  if (!(await turn.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Show offers no turn');
+  await turn.click();
+  const changed = view.locator('button:has(> span[title])').first();
+  if (!(await changed.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('the turn lists no file');
+  await changed.click();
+  if (!(await page.locator('[role="group"][aria-label^="Changes to "]').waitFor({ timeout: 5000 }).then(() => true, () => false))) missing('a file the turn changed shows no diff');
+  await page.waitForLoadState('networkidle');
+}
+
+/**
+ * The list, its sheets, a new session in another folder, and every session with its sheets; then
+ * Changes and files, walked through in the newest session that has a folder.
+ */
 async function driveApp(browser, base, sessions) {
   // The list folds side chats away under their session.
   const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
@@ -138,6 +235,8 @@ async function driveApp(browser, base, sessions) {
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
         for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
       }
+      const walked = sessions.find((s) => !s.sideChatOf && s.cwd);
+      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; });
       all = false;
       await context.close();
     }
@@ -148,7 +247,8 @@ async function driveApp(browser, base, sessions) {
  * On screens wide enough for Changes and files to sit beside the conversation, from the narrowest
  * such width, where the session list folds away, to where list, conversation and pane all fit:
  * the pane stays inside the window (a conversation column that grew to fit its content once pushed
- * it out of view), nothing in it is cut off at its right edge, and the conversation keeps room.
+ * it out of view), nothing in it is cut off at its right edge, and the conversation keeps room. In
+ * a file, a selection's Quote and Copy sit at the pane's foot, under what scrolls.
  */
 async function checkDocked(browser, base, sessions) {
   for (const width of [1024, 1280, 1440]) {
@@ -205,6 +305,28 @@ async function checkDocked(browser, base, sessions) {
         return out;
       });
       problems.push(...found.map((problem) => `app, docked at ${width}px, session ${session.id}: ${problem}`));
+    }
+    const reading = sessions.find((s) => !s.sideChatOf && s.cwd);
+    if (reading) {
+      at = `session ${reading.id}, a file's selection`;
+      const view = await openWorkspace(page, `${base}?s=${encodeURIComponent(reading.id)}&w=files`);
+      const file = view && await openSourceFile(page, view);
+      if (!file) {
+        problems.push(`app, docked at ${width}px, session ${reading.id}: Files opens no file as its lines`);
+      } else {
+        await selectLines(page, 1, 2);
+        await page.getByRole('button', { name: 'Quote', exact: true }).waitFor({ timeout: 3000 }).catch(() => {});
+        const out = await page.evaluate(() => {
+          const pane = document.querySelector('aside[aria-label="Changes and files"]');
+          const bar = [...pane.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Quote')?.parentElement;
+          if (!bar) return 'selecting lines of a file offers no Quote';
+          const scroller = pane.querySelector('.overflow-y-auto');
+          const { bottom, top } = bar.getBoundingClientRect();
+          if (scroller.contains(bar) || Math.abs(scroller.getBoundingClientRect().bottom - top) > 1) return 'a file scrolls under its Quote and Copy';
+          return Math.abs(pane.getBoundingClientRect().bottom - bottom) > 1 ? `Quote and Copy end ${Math.round(pane.getBoundingClientRect().bottom - bottom)}px above the pane's foot` : '';
+        });
+        if (out) problems.push(`app, docked at ${width}px, session ${reading.id}, ${file}: ${out}`);
+      }
     }
     await context.close();
   }
