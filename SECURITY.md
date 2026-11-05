@@ -61,14 +61,14 @@ can read your sessions and have Claude run commands as you, so treat access to i
   no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,
   helper commands and environment variables in its Claude Code settings, servers in its
-  `.mcp.json`, filters in its git config. Claude Code asks before it runs them in a terminal, but
-  never in a session started through its SDK, so Pelican asks. Before Claude Code first starts in
-  a folder nobody has trusted that brings any of these, Pelican lists them, read from the folder's
-  files (the git config through `git config`, which starts nothing, with the files it includes),
-  and offers **Trust and start** or **Use my settings only**. With your settings only, Claude Code
-  loads just your user settings, and git runs none of the repository's filters, its file-system
-  monitor or its hooks folder; a folder whose git config git cannot read in full does not start
-  that way.
+  `.mcp.json`, slash commands, skills and agents that run a shell or tools without asking, filters
+  in its git config. Claude Code asks before it runs them in a terminal, but never in a session
+  started through its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has
+  trusted that brings any of these, Pelican lists them, read from the folder's files (the git
+  config through `git config`, which starts nothing, with the files it includes), and offers
+  **Trust and start** or **Use my settings only**. With your settings only, Claude Code loads just
+  your user settings, and git runs none of the repository's filters, its file-system monitor or
+  its hooks folder; a folder whose git config git cannot read in full does not start that way.
   A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
   written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
   Claude Code has worked there before, unless you chose your settings only for it. Listing a

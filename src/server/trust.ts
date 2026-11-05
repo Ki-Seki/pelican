@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -11,9 +11,10 @@ import { lastTurnTime, transcriptPath } from './transcripts.js';
 
 /**
  * Folder trust. A folder can bring programs of its own: hooks, MCP servers, helper commands and
- * environment variables in its Claude Code settings, filters in its git config. Claude Code asks
- * before it runs them in an interactive session, but an SDK session never asks, so Pelican asks
- * instead, before the first Claude Code process in a folder nobody has trusted.
+ * environment variables in its Claude Code settings, commands, skills and agents that run a shell
+ * or tools without asking, filters in its git config. Claude Code asks before it runs them in an
+ * interactive session, but an SDK session never asks, so Pelican asks instead, before the first
+ * Claude Code process in a folder nobody has trusted.
  *
  * A folder is trusted when Claude Code's own record says so (the CLI's trust dialog, read and never
  * written), when it was trusted in Pelican, when Pelican made it (a scratch folder), or when Claude
@@ -280,6 +281,91 @@ function fromMcp(file: unknown): string[] {
   });
 }
 
+/** Frontmatter keys that give a command, skill or agent powers of its own (Claude Code reads them in any case and with `_` for `-`). */
+const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|permission[-_]?mode)["']?[ \t]*:(.*)$/i;
+
+/**
+ * What a project's command, skill or agent may run without asking: tools its frontmatter allows,
+ * hooks, MCP servers, a permission mode; and for a command or a skill, the shell it runs as it
+ * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them.
+ */
+function fromMarkdown(what: string, text: string, shell: boolean): string[] {
+  const found: string[] = [];
+  const front = /^\uFEFF?\s*---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[1];
+  const lines = front?.split(/\r?\n/) ?? [];
+  const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
+  // Keys of the frontmatter itself, not of a map inside it.
+  const top = indent(lines.find((line) => line.trim() && !line.trim().startsWith('#')) ?? '');
+  const under = (line: string) => !line.trim() || indent(line) > top || (indent(line) === top && line.trim().startsWith('-'));
+  lines.forEach((line, i) => {
+    const power = POWERS.exec(line);
+    if (!power || (indent(line) !== top && !line.includes('{'))) return;
+    // The value, with the lines under it (a list, a map), on one line.
+    const value = [power[2]!.trim()];
+    for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) if (lines[j]!.trim()) value.push(lines[j]!.trim());
+    const mode = value.join(' ').replace(/^["']|["']$/g, '');
+    if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
+    found.push(`${what}: ${line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`}`);
+  });
+  if (shell) {
+    for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(`${what} runs: ${block[1]!.trim()}`);
+    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(`${what} runs: ${inline[1]!}`);
+  }
+  return found;
+}
+
+/** Where Claude Code finds a project's commands, skills and agents in each folder's `.claude`. */
+const MARKDOWN = [['commands', 'Command'], ['skills', 'Skill'], ['agents', 'Agent']] as const;
+
+/**
+ * More than any project has: past this many files (or entries looked at), the folder is asked
+ * about instead of being read without end.
+ */
+type Budget = { files: number; entries: number };
+const budgetFor = (): Budget => ({ files: 500, entries: 10_000 });
+const spent = (budget: Budget) => budget.files < 0 || budget.entries < 0;
+
+/** The Markdown files in a folder and its subfolders, as Claude Code finds them (through links too). */
+async function markdownIn(root: string, budget: Budget): Promise<string[]> {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    const key = await realpath(dir).catch(() => dir);
+    if (seen.has(key) || depth > 10) return;
+    seen.add(key);
+    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (spent(budget) || (budget.entries -= 1) < 0) return;
+      const full = path.join(dir, entry.name);
+      const isDir = entry.isSymbolicLink() ? await stat(full).then((s) => s.isDirectory(), () => false) : entry.isDirectory();
+      if (isDir) await walk(full, depth + 1);
+      else if (entry.name.endsWith('.md') && (budget.files -= 1) >= 0) files.push(full);
+    }
+  };
+  await walk(root, 0);
+  return files;
+}
+
+/** What a folder's own commands, skills and agents bring (see fromMarkdown). */
+async function fromClaudeFolder(dir: string, from: string, budget: Budget): Promise<string[]> {
+  const found: string[] = [];
+  for (const [kind, what] of MARKDOWN) {
+    const root = path.join(dir, '.claude', kind);
+    for (const file of await markdownIn(root, budget)) {
+      const skill = /^skill\.md$/i.test(path.basename(file));
+      // A skill is its SKILL.md; the other files in its folder are documents Claude may read.
+      if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
+      const { text, odd } = await readText(file);
+      if (odd || text === undefined) {
+        found.push(`Cannot be read: ${path.relative(from, file)}`);
+        continue;
+      }
+      const name = path.relative(root, skill ? path.dirname(file) : file.slice(0, -'.md'.length)) || path.basename(root);
+      found.push(...fromMarkdown(`${what} ${kind === 'commands' ? '/' : ''}${name}`, text, kind !== 'agents'));
+    }
+  }
+  return found;
+}
+
 /** A setting of a git config as git reads it: its name in git's spelling, its value, the file it is in. */
 type GitEntry = { name: string; value: string; file: string };
 
@@ -449,11 +535,14 @@ export async function folderBrings(folder: string): Promise<string[]> {
     if (odd) found.push(`Cannot be read: ${path.relative(dir, file)}`);
     return value;
   };
+  const budget = budgetFor();
   for (let d = dir; d !== home; d = path.dirname(d)) {
     for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await json(path.join(d, '.claude', name))));
     found.push(...fromMcp(await json(path.join(d, '.mcp.json'))));
+    found.push(...(await fromClaudeFolder(d, dir, budget)));
     if (d === top || path.dirname(d) === d) break;
   }
+  if (spent(budget)) found.push('More commands, skills and agents than Pelican reads');
   if (top) found.push(...(await gitBrings(top)));
   const unique = [...new Set(found.map(short))];
   return unique.length > MAX_ITEMS ? [...unique.slice(0, MAX_ITEMS - 1), `and ${unique.length - MAX_ITEMS + 1} more`] : unique;
