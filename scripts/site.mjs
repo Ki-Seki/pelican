@@ -82,8 +82,16 @@ for (const session of sessions) {
   await save(`sessions/${q(session.id)}`);
   await save(`sessions/${q(session.id)}/messages?limit=120`);
   await save(`sessions/${q(session.id)}/mcp`);
+  await save(`sessions/${q(session.id)}/usage`);
   if (session.cwd) folders.add(session.cwd);
 }
+// The usage page, once the demo has read its transcripts (a saved answer never fills in).
+for (let i = 0; i < 50; i += 1) {
+  const { summary } = await (await fetch(`${BASE}usage/stats`, { headers: MARK })).json();
+  if (summary?.progress?.ready) break;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
+for (const range of ['7d', '30d', 'all']) await save(`usage/stats?range=${range}`);
 for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
   await save(`defaults?cwd=${q(cwd)}`);

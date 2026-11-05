@@ -256,7 +256,9 @@ function TokensChart({ unit, points }: { unit: 'day' | 'week'; points: UsagePoin
   const onKey = (e: KeyboardEvent<SVGSVGElement>) => {
     const from = active ?? n - 1;
     const next = e.key === 'ArrowLeft' ? from - 1 : e.key === 'ArrowRight' ? from + 1 : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : undefined;
+    // Esc first lets go of the day it reads out; the next one closes the sheet.
     if (e.key === 'Escape' && active !== undefined) {
+      e.preventDefault();
       e.stopPropagation();
       setActive(undefined);
       return;

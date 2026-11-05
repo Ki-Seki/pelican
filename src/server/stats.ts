@@ -196,17 +196,16 @@ function addRate(rates: Array<[string, number, number]>, model: string, usd: num
 /** Adds one row of the transcript. Rows that cannot matter are looked at only as far as it takes to tell. */
 function addLine(record: FileRecord, state: Reading, line: Buffer): void {
   if (line.length < 2 || line[0] !== 0x7b) return;
-  const head = line.toString('latin1', 0, Math.min(HEAD, line.length));
+  const kind = kindOf(line.toString('latin1', 0, Math.min(HEAD, line.length)));
   // Titles, requests, snapshots, queue operations: rows of Claude Code's own, with "type" first.
-  if (head.startsWith('{"type":"')) {
-    if (!head.startsWith('{"type":"cost-state"')) return;
+  if (kind === 'skip') return;
+  if (kind === 'cost') {
     const row = parse(line);
     if (row && (record.sub || row.sessionId === undefined || row.sessionId === state.fileId)) costRow(record, row);
     return;
   }
-  const reply = head.includes('"role":"assistant"') || head.includes('"type":"assistant"');
   // A tool's result sits between two replies: it has no usage and adds nothing to the times.
-  if (!reply && (line.length > SMALL_ROW || line.includes('"tool_use_id"'))) return;
+  if (kind === 'other' && (line.length > SMALL_ROW || line.includes('"tool_use_id"'))) return;
   const row = parse(line);
   if (!row) return;
   // Rows a side chat, branch or fork copied from another session: they ran there, not here.
@@ -280,35 +279,50 @@ async function printAt(handle: Awaited<ReturnType<typeof openRegular>>, offset: 
   return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('base64url').slice(0, 22);
 }
 
-/** Whether a line too long to keep whole might still be one to read: a reply, or Claude Code's cost. */
-function worthKeeping(pieces: Buffer[]): boolean {
-  const head = Buffer.concat(pieces.length > 1 ? pieces.slice(0, 4) : pieces).toString('latin1', 0, HEAD);
-  return head.startsWith('{"type":"cost-state"') || head.includes('"role":"assistant"') || head.includes('"type":"assistant"');
+/**
+ * What a row is, from its first kilobyte: Claude Code's cost (read), another of its own rows
+ * (titles, requests, snapshots: passed over), a reply (read, however long), a tool's result (passed
+ * over), or something else (read when it is short).
+ */
+type Kind = 'cost' | 'skip' | 'reply' | 'other';
+
+function kindOf(head: string): Kind {
+  if (head.startsWith('{"type":"')) return head.startsWith('{"type":"cost-state"') ? 'cost' : 'skip';
+  if (head.includes('"role":"assistant"') || head.includes('"type":"assistant"')) return 'reply';
+  return head.includes('"tool_use_id"') ? 'skip' : 'other';
 }
 
-/** Reads the lines of `handle` from the record's offset to `size`, one chunk at a time. */
+/**
+ * Reads the lines of `handle` from the record's offset to `size`, one chunk at a time, into one
+ * buffer: a line is used up before the next read. A line that runs past a chunk is judged by its
+ * head at once, so the long ones that do not matter (pictures, tools' output, request records) are
+ * passed over without being copied.
+ */
 async function readLines(handle: Awaited<ReturnType<typeof openRegular>>, record: FileRecord, size: number, onLine: (line: Buffer) => void): Promise<void> {
   let position = record.offset;
   let pieces: Buffer[] = [];
   let pending = 0;
+  let kind: Kind | undefined;
   let skipping = false;
+  const buffer = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1, size - position)));
   while (position < size) {
-    const length = Math.min(CHUNK, size - position);
-    const buffer = Buffer.allocUnsafe(length);
+    const length = Math.min(buffer.length, size - position);
     const { bytesRead } = await handle.read(buffer, 0, length, position);
     if (bytesRead <= 0) break;
-    const data = bytesRead < length ? buffer.subarray(0, bytesRead) : buffer;
+    const data = buffer.subarray(0, bytesRead);
     let from = 0;
     for (;;) {
       const end = data.indexOf(0x0a, from);
       if (end < 0) {
         if (!skipping && from < data.length) {
-          pieces.push(data.subarray(from));
-          pending += data.length - from;
-          // A picture or a tool's long output: its bytes are passed over, not kept.
-          if (pending > SMALL_ROW && (pending > LARGEST_REPLY || !worthKeeping(pieces))) {
+          const rest = data.subarray(from);
+          pending += rest.length;
+          if (kind === undefined && pending >= HEAD) kind = kindOf((pieces.length > 0 ? Buffer.concat([...pieces, rest]) : rest).toString('latin1', 0, HEAD));
+          if (kind === 'skip' || pending > (kind === 'reply' || kind === 'cost' ? LARGEST_REPLY : SMALL_ROW)) {
             skipping = true;
             pieces = [];
+          } else {
+            pieces.push(Buffer.from(rest));
           }
         }
         break;
@@ -319,6 +333,7 @@ async function readLines(handle: Awaited<ReturnType<typeof openRegular>>, record
       }
       pieces = [];
       pending = 0;
+      kind = undefined;
       skipping = false;
       from = end + 1;
       record.offset = position + from;
