@@ -15,6 +15,8 @@ import { ToolCallView, ToolTarget } from './ToolCall';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
 
+const matches = (query: string) => typeof matchMedia === 'function' && matchMedia(query).matches;
+
 function Thinking({ text, live, defaultOpen = false }: { text: string; live?: boolean; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   if (!text.trim()) {
@@ -27,7 +29,7 @@ function Thinking({ text, live, defaultOpen = false }: { text: string; live?: bo
   }
   return (
     <div>
-      <button type="button" className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen((v) => !v)}>
+      <button type="button" aria-expanded={open} className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen((v) => !v)}>
         <Brain className="size-3.5" />
         <span className={live ? 'shimmer-text' : ''}>{live ? 'Thinking…' : 'Thought'}</span>
         <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
@@ -64,7 +66,7 @@ function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; 
   return (
     <div className="my-1.5">
       {fold && (
-        <button type="button" className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen(true)}>
+        <button type="button" aria-expanded={false} className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen(true)}>
           <Layers className="size-3.5" />
           <span>{tools} steps</span>
           <span className="text-faint">· show all</span>
@@ -329,7 +331,7 @@ function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
   }
   return (
     <div className="text-[13px] text-muted">
-      <button type="button" className="flex min-h-7 items-center gap-2 text-left hover:text-fg" onClick={() => setOpen((v) => !v)}>
+      <button type="button" {...(item.detail ? { 'aria-expanded': open } : {})} className="flex min-h-7 items-center gap-2 text-left hover:text-fg" onClick={() => setOpen((v) => !v)}>
         <SquareTerminal className="size-3.5 shrink-0" />
         <span>{item.text}</span>
         {item.detail && <ChevronRight className={`size-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />}
@@ -365,7 +367,7 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
         <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${long && !all ? 'max-h-60 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]' : ''}`}>{output}</pre>
       )}
       {long && (
-        <button type="button" className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
+        <button type="button" aria-expanded={all} className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
           {all ? 'Show less' : 'Show all'}
         </button>
       )}
@@ -431,7 +433,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
       {!hasText && (
         <div className="flex min-h-8 items-center gap-2 text-[13px]">
           <span className="relative flex size-2">
-            <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
+            <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 motion-reduce:animate-none ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
             <span className={`relative inline-flex size-2 rounded-full ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
           </span>
           <span className="shimmer-text">
@@ -462,7 +464,8 @@ export function MessageList({
   const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
   const lastSending = useRef<string | undefined>(undefined);
   const scroller = useRef<HTMLDivElement>(null);
-  /** Following the newest output. Stops the moment the reader scrolls up, touches the list or opens something. */
+  const content = useRef<HTMLDivElement>(null);
+  /** Following the newest output. Stops the moment the reader scrolls up or opens something; any other tap leaves it be. */
   const atBottom = useRef(true);
   /** A finger is on the list: never move it under them. */
   const touching = useRef(false);
@@ -471,6 +474,22 @@ export function MessageList({
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
   const lastPrompt = [...items].reverse().find((i) => i.kind === 'user' && !i.command)?.key;
+
+  /**
+   * After anything that changes the list's size or position: back to the end while following,
+   * and the jump button whenever there is more below. The position is noted before the browser
+   * reports the scroll, so a page that grew or shrank is not taken for the reader scrolling up.
+   */
+  const settle = () => {
+    const el = scroller.current;
+    if (!el) return;
+    // Text being selected stays where it is, still following; the jump button says there is more.
+    const selection = typeof getSelection === 'function' ? getSelection() : null;
+    const selecting = Boolean(selection && !selection.isCollapsed && selection.anchorNode && el.contains(selection.anchorNode));
+    if (atBottom.current && !touching.current && !selecting) el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
+    setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > 80);
+  };
 
   // Older messages are about to go in above: note where the reader is before the page changes,
   // so the same lines stay on screen. (The browser's own scroll anchoring is off for this list.)
@@ -495,16 +514,28 @@ export function MessageList({
     if (snapshot.current) {
       el.scrollTop = snapshot.current.top + (el.scrollHeight - snapshot.current.height);
       snapshot.current = undefined;
-    } else if (atBottom.current && !touching.current) {
-      el.scrollTop = el.scrollHeight;
     }
-    lastTop.current = el.scrollTop;
+    settle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, view.run?.partial, mode]);
+
+  // What grows or shrinks after it is drawn keeps the end in view too: pictures and frames that
+  // get their height once loaded, an approval card or a notice that takes room from the list.
+  useEffect(() => {
+    const el = scroller.current;
+    const inner = content.current;
+    if (!el || !inner || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => settle());
+    observer.observe(el);
+    observer.observe(inner);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     atBottom.current = true;
-    const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    settle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // Near the top, or with too little to scroll at all, the next older page loads by itself:
@@ -537,19 +568,28 @@ export function MessageList({
   return (
     <SessionContext.Provider value={sessionId}>
     <div className="relative min-h-0 flex-1">
-      {/* Opening a step makes the page longer without a scroll: from then on the reader is reading,
-          not following, so new output must not pull them to the end. Scrolling back down follows again. */}
+      {/* Opening or closing something (a step, a long output) is reading, not following: what
+          arrives next must not pull it away. A tap that opens nothing (selecting text, a link,
+          Copy) leaves following as it was. Scrolling back down to the end follows again. */}
       <div
         ref={scroller}
         onScroll={onScroll}
-        onClickCapture={() => { atBottom.current = false; }}
+        onClickCapture={(e) => {
+          if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary')) atBottom.current = false;
+        }}
         onTouchStart={() => { touching.current = true; }}
-        onTouchEnd={() => { touching.current = false; }}
-        onTouchCancel={() => { touching.current = false; }}
+        onTouchEnd={() => {
+          touching.current = false;
+          settle();
+        }}
+        onTouchCancel={() => {
+          touching.current = false;
+          settle();
+        }}
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
-        <div className="mx-auto max-w-3xl px-4 pt-3 pb-6">
+        <div ref={content} className="mx-auto max-w-3xl px-4 pt-3 pb-6">
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
               {view.loadingOlder ? (
@@ -611,12 +651,12 @@ export function MessageList({
         <button
           type="button"
           aria-label="Jump to latest"
-          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md"
+          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
           onClick={() => {
             const el = scroller.current;
             if (!el) return;
             atBottom.current = true;
-            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+            el.scrollTo({ top: el.scrollHeight, behavior: matches('(prefers-reduced-motion: reduce)') ? 'auto' : 'smooth' });
           }}
         >
           <ArrowDown className="size-4" />

@@ -50,6 +50,7 @@ export function Diff({ before, after, maxLines = 400 }: { before: string; after:
           <button
             key={`gap-${row.i}`}
             type="button"
+            aria-expanded={false}
             className="block w-full bg-hover px-3 py-0.5 text-left text-[11px] text-faint hover:text-fg"
             onClick={() => setExpanded(true)}
           >

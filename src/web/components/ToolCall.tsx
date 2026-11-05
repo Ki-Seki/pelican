@@ -38,7 +38,7 @@ function Output({ text, failed }: { text: string; failed?: boolean }) {
         {text}
       </pre>
       {long && (
-        <button type="button" className="mt-1 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
+        <button type="button" aria-expanded={all} className="mt-1 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
           {all ? 'Show less' : 'Show all'}
         </button>
       )}
@@ -80,7 +80,7 @@ function SentFile({ path, open: startOpen }: { path: string; open: boolean }) {
     staleTime: 60_000,
   });
   const chip = (
-    <button type="button" onClick={() => setOpen((v) => !v)} className="flex min-h-9 w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-left text-[13px]">
+    <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex min-h-9 w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-left text-[13px]">
       <FileText className="size-4 shrink-0 text-faint" />
       <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{name}</span>
       {isLoading ? <Loader2 className="size-3.5 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />}
@@ -262,7 +262,7 @@ function PlanCard({ call }: { call: ToolCall }) {
       <div className={open ? '' : 'max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]'}>
         <Markdown text={plan} className="text-[14px]" />
       </div>
-      <button type="button" className="mt-1 text-[12px] text-faint hover:text-fg" onClick={() => setOpen((v) => !v)}>
+      <button type="button" aria-expanded={open} className="mt-1 text-[12px] text-faint hover:text-fg" onClick={() => setOpen((v) => !v)}>
         {open ? 'Show less' : 'Show the whole plan'}
       </button>
     </div>

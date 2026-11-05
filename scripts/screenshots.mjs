@@ -22,13 +22,9 @@ const browser = await chromium.launch({
 });
 await mkdir(OUT, { recursive: true });
 
-/**
- * Before each picture: the demo's own notice goes (the README says the sessions are made up),
- * and so does the round "jump to latest" button, which is a moment of scrolling, not the screen.
- */
+/** Before each picture: the demo's own notice goes (the README says the sessions are made up). */
 const tidy = () => {
   document.querySelector('[data-demo-banner]')?.remove();
-  document.querySelector('button[aria-label="Jump to latest"]')?.remove();
 };
 
 async function phoneShots(scheme) {
