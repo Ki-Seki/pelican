@@ -22,6 +22,15 @@ const browser = await chromium.launch({
 });
 await mkdir(OUT, { recursive: true });
 
+/**
+ * Before each picture: the demo's own notice goes (the README says the sessions are made up),
+ * and so does the round "jump to latest" button, which is a moment of scrolling, not the screen.
+ */
+const tidy = () => {
+  document.querySelector('[data-demo-banner]')?.remove();
+  document.querySelector('button[aria-label="Jump to latest"]')?.remove();
+};
+
 async function phoneShots(scheme) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: scheme,
@@ -30,7 +39,7 @@ async function phoneShots(scheme) {
   const shots = [];
   // The demo's own notice says these sessions are made up; the README says so instead.
   const grab = async () => {
-    await page.evaluate(() => document.querySelector('[data-demo-banner]')?.remove());
+    await page.evaluate(tidy);
     shots.push(await page.screenshot());
   };
   await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -69,7 +78,7 @@ async function desktopShot(scheme, file) {
   const page = await context.newPage();
   await page.goto(`${BASE}?s=${WAITING}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(700);
-  await page.evaluate(() => document.querySelector('[data-demo-banner]')?.remove());
+  await page.evaluate(tidy);
   await page.screenshot({ path: path.join(OUT, file) });
   await context.close();
 }
@@ -86,8 +95,8 @@ async function socialCard(shots) {
     h1{margin:34px 0 0;font-size:64px;line-height:1.02;font-weight:700;letter-spacing:-0.045em}
     h1 span{color:#8b8e94}
     p{margin:22px 0 0;font-size:24px;line-height:1.45;color:#55585d}
-    .phones{position:absolute;right:-30px;top:60px;display:flex;gap:26px;transform:rotate(-6deg)}
-    .phones img{width:270px;border-radius:30px;border:9px solid #0c0d0e;box-shadow:0 30px 60px -20px rgba(0,0,0,.35)}
+    .phones{position:absolute;right:-30px;top:60px;display:flex;align-items:flex-start;gap:26px;transform:rotate(-6deg)}
+    .phones img{width:270px;height:auto;flex:none;border-radius:30px;border:9px solid #0c0d0e;box-shadow:0 30px 60px -20px rgba(0,0,0,.35)}
     .phones img:last-child{margin-top:70px}
   </style>
   <div class="copy"><div class="brand">${logo}Pelican</div><h1>Claude Code,<br><span>in your pocket.</span></h1><p>Every session, live, from your phone. Open source; runs on your computer.</p></div>
