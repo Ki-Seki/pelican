@@ -20,6 +20,13 @@ updates:
     # The Agent SDK has an entry of its own, below.
     ignore:
       - dependency-name: "@anthropic-ai/claude-agent-sdk"
+      # Node's types follow the oldest Node Pelican supports (engines), so they cannot offer APIs
+      # it lacks; they move with that floor, by hand.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # jsdom 30's dependencies need a newer Node than the 22.12 Pelican tests on.
+      - dependency-name: jsdom
+        update-types: ["version-update:semver-major"]
     groups:
       development:
         dependency-type: development

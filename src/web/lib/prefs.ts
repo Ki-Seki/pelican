@@ -28,8 +28,14 @@ const write = (key: string, value: unknown) => {
  * remembered per browser. The permission mode is there only once one was picked in Settings;
  * until then new sessions start in the one Claude Code's settings give, else Auto (startMode).
  */
+/** The effort new sessions start with until another is picked in Settings (owner's decision). */
+export const START_EFFORT = 'high';
+
+type StoredDefaults = Partial<Omit<RunSettings, 'effort'>> & { effort?: string | null };
+
+/** What was picked in Settings, as it is kept: effort null is Default picked there (Claude Code's own for the model). */
 export function loadDefaults(): RunSettings {
-  const raw = read<Partial<RunSettings>>(SETTINGS_KEY, {});
+  const raw = read<StoredDefaults>(SETTINGS_KEY, {});
   return {
     model: raw.model ?? 'default',
     ...(raw.effort ? { effort: raw.effort } : {}),
@@ -39,8 +45,16 @@ export function loadDefaults(): RunSettings {
   };
 }
 
-export function saveDefaults({ permissionMode, ...settings }: RunSettings): void {
-  write(SETTINGS_KEY, { ...settings, ...(permissionMode && START_MODES.includes(permissionMode) ? { permissionMode } : {}) });
+/** What a new session starts with: Settings' picks, with High effort until an effort is picked there. */
+export function newSessionDefaults(): RunSettings {
+  const picked = 'effort' in read<StoredDefaults>(SETTINGS_KEY, {});
+  const defaults = loadDefaults();
+  return picked || defaults.effort ? defaults : { ...defaults, effort: START_EFFORT };
+}
+
+export function saveDefaults({ permissionMode, effort, ...settings }: RunSettings): void {
+  // Default is kept as a pick of its own (null), so it is not taken for nothing picked yet.
+  write(SETTINGS_KEY, { ...settings, effort: effort ?? null, ...(permissionMode && START_MODES.includes(permissionMode) ? { permissionMode } : {}) });
 }
 
 const TIPS_KEY = 'pelican:tips-seen';

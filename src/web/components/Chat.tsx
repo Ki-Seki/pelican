@@ -12,7 +12,7 @@ import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
-import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { loadDefaults, markSeen, markTipSeen, newSessionDefaults, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { fromRecorded } from '../lib/settings';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
@@ -364,7 +364,7 @@ export function Chat({
   });
   const [settings, setSettings] = useState<RunSettings>(() => {
     // The mode is the session's own; a new session's is worked out below.
-    const { permissionMode: _start, ...base } = loadDefaults();
+    const { permissionMode: _start, ...base } = sessionId ? loadDefaults() : newSessionDefaults();
     if (!sessionId) return carry ? { ...base, ...carry } : base;
     const live = getView(sessionId).run?.settings;
     if (live) return { ...base, ...live };
@@ -484,7 +484,10 @@ export function Chat({
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
     try {
       // A new session's mode, with Claude Code's settings for its folder read first.
-      const sent = modePicked ? settings : { ...settings, permissionMode: await startModeIn(scratch ? undefined : newCwd, settings) };
+      // An effort the model does not offer (High on a model without efforts) is not sent.
+      const offered = modelOf(modelList?.models, settings);
+      const fitted = settings.effort && offered && !offered.efforts.includes(settings.effort) ? { ...settings, effort: undefined } : settings;
+      const sent = modePicked ? fitted : { ...fitted, permissionMode: await startModeIn(scratch ? undefined : newCwd, fitted) };
       const body = { text, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);

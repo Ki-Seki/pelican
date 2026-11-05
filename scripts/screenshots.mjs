@@ -25,6 +25,9 @@ const browser = await chromium.launch({
 });
 await mkdir(OUT, { recursive: true });
 
+/** The app's height inside the site's phone frame, under its status bar (site.css: 844px less 40px at the frame's scale). */
+const FRAMED_HEIGHT = 796;
+
 /** Before each picture: the demo's own notice goes (the README says the sessions are made up). */
 const tidy = () => {
   document.querySelector('[data-demo-banner]')?.remove();
@@ -53,12 +56,21 @@ async function phoneShots(scheme) {
   await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
   await page.waitForTimeout(500);
   await grab();
+  // The site's phone frames draw a status bar over the top 40px (about 48px of the app at their
+  // scale), so the pictures that go in them are taken that much shorter, to show the whole screen.
+  // Their one-time tips are seen already: the message box says the same.
+  await page.setViewportSize({ width: 390, height: FRAMED_HEIGHT });
+  await page.evaluate(() => localStorage.setItem('pelican:tips-seen', JSON.stringify({ 'open-elsewhere': true, 'working-elsewhere': true, 'waiting-elsewhere': true })));
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  await page.evaluate(tidy);
+  const list = await page.screenshot();
   await page.goto(`${BASE}?s=${ELSEWHERE}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(700);
   await page.evaluate(tidy);
   const live = await page.screenshot();
   await context.close();
-  return { shots, live };
+  return { shots, live, list };
 }
 
 /** Three phone screens side by side, each with rounded corners, on the page color. */
@@ -112,9 +124,9 @@ async function socialCard(shots) {
 }
 
 for (const scheme of ['light', 'dark']) {
-  const { shots, live } = await phoneShots(scheme);
+  const { shots, live, list } = await phoneShots(scheme);
   await strip(shots, scheme, `phone-${scheme}.png`);
-  await writeFile(path.join(OUT, `list-${scheme}.png`), shots[0]);
+  await writeFile(path.join(OUT, `list-${scheme}.png`), list);
   await writeFile(path.join(OUT, `live-${scheme}.png`), live);
   if (scheme === 'light') await socialCard(shots);
   await desktopShot(scheme, `desktop-${scheme}.png`);

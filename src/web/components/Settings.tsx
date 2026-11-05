@@ -9,7 +9,7 @@ import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
 import { hasKeyboard, MOD } from '../lib/keyboard';
 import type { NotificationState } from '../lib/notifications';
-import { loadDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
+import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
@@ -57,7 +57,7 @@ export function SettingsSheet({
     }));
   const account = models?.account;
   // What new sessions start with. Changed only here: a choice in a session stays with that session.
-  const [defaults, setDefaults] = useState(loadDefaults);
+  const [defaults, setDefaults] = useState(newSessionDefaults);
   const [modelOpen, setModelOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const keep = (next: RunSettings) => {
