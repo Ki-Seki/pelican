@@ -86,7 +86,6 @@ for (const session of sessions) {
 }
 for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
-  // The mode a new session there starts in, which the list asks for before + is tapped.
   await save(`defaults?cwd=${q(cwd)}`);
   await save(`files?cwd=${q(cwd)}&q=`);
   const git = await save(`git?cwd=${q(cwd)}`);
