@@ -83,9 +83,13 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm pack
-      - name: Install the package and serve the demo from it
+      # As `npm install -g pelican-cc` installs it from npm: with the tree its npm-shrinkwrap.json
+      # pins, which npm takes only from a package the registry says has one, never from a tarball
+      # installed by its path. A registry on the runner hands the package out as npm's does. Its own
+      # npm cache, so the one setup-node keeps for the other jobs stays as it is.
+      - name: Install the package as people get it, and serve the demo from it
         run: |
-          npm install -g ./pelican-cc-*.tgz
+          node scripts/registry.mjs pelican-cc-*.tgz npm install -g pelican-cc --cache "$RUNNER_TEMP/npm-cache"
           pelican --version
           pelican --demo --port 7861 &
           for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/info && break; sleep 1; done

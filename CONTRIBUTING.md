@@ -61,7 +61,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, and what changed upstream |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
 
 ## Keeping up with Claude Code
 
