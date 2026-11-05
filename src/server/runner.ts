@@ -1337,8 +1337,9 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
 /**
  * Asks a side question about a session, as Claude Desktop's side chats do: the session so far is
  * copied (the Agent SDK's forkSession) under Desktop's title for one, and the copy's own Claude,
- * which only reads, answers there. The session itself, running or not, is not touched. A copy
- * whose Claude cannot take the question is removed again, so nothing is left behind.
+ * which only reads, answers there. The session itself, running or not, is not touched. A copy the
+ * question could not be sent to is removed again, so nothing is left behind; one whose Claude
+ * fails later stays, with the question, to be asked again.
  */
 export async function startSideChat(sessionId: string, input: Omit<SendInput, 'attachments' | 'mode'>): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');

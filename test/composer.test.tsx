@@ -105,6 +105,15 @@ describe('quotes above the message box', () => {
     expect(screen.queryByText('Why CSS variables?')).toBeNull();
   });
 
+  it('wait for the next message when a / command goes, which has to start its own', () => {
+    const { onSend, box } = renderComposer('q4');
+    act(() => addQuote('q4', '> keep me'));
+    fireEvent.change(box, { target: { value: '/compact focus on the export' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith('/compact focus on the export', [], 'steer');
+    expect(screen.getByText('keep me')).toBeTruthy();
+  });
+
   it('can be sent alone, and are kept with the draft', () => {
     vi.useFakeTimers();
     try {

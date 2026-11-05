@@ -453,13 +453,15 @@ export function Composer({
     // Typed out of habit in a side chat, /btw only says what the rest is.
     const words = side ? text.trim().replace(ASKS_BTW, '').trim() : text.trim();
     if (!words && quotes.length === 0 && !uploads.some((u) => u.attachment)) return;
+    // A / command has to start its message: the quotes wait for the next one, as with a ! command.
+    const command = words.startsWith('/');
     const attachments = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
     draftSaver.now(words, attachments, quotes);
-    onSend(messageWithQuotes(quotes, words), attachments, mode);
+    onSend(command ? words : messageWithQuotes(quotes, words), attachments, mode);
     justSent.current = true;
     setText('');
     setCaret(0);
-    setQuotes([]);
+    if (!command) setQuotes([]);
     for (const u of uploads) forget(u);
     setUploads([]);
   };
