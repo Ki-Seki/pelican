@@ -1,7 +1,9 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
 import { readLastTurn } from '../src/server/transcripts';
@@ -36,6 +38,22 @@ describe('the demo shows what runs on and what waits', () => {
     const live = demoLiveProcesses();
     expect(live.get(WAITING)).toMatchObject({ app: 'the terminal', busy: true, waiting: 'permission prompt' });
     expect([...live.values()].some((p) => p.app === 'Claude Desktop' && p.busy && !p.waiting)).toBe(true);
+  });
+});
+
+const SIDE = 'a3f1c2d4-1111-4a1b-8c3d-0000000000a1';
+const transcriptOf = (project: string, id: string) => path.join(config.claudeHome, 'projects', path.join(config.home, 'code', project).replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);
+const rowsOf = async (file: string) => (await readFile(file, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line) as Record<string, any>);
+
+describe('the demo’s side chat', () => {
+  it('copies no checkpoints with its session’s rows, as forkSession copies none, and its Changes show none of their turns', async () => {
+    const file = transcriptOf('acme-web', SIDE);
+    const rows = await rowsOf(file);
+    const copied = new Set(rows.filter((row) => row.forkedFrom).map((row) => row.uuid));
+    expect(copied.size).toBeGreaterThan(0);
+    const kept = rows.filter((row) => row.type === 'file-history-snapshot').map((row) => row.messageId);
+    expect(kept.filter((id) => copied.has(id))).toEqual([]);
+    expect((await sessionChanges(file, path.join(config.home, 'code', 'acme-web'), true)).turns).toEqual([]);
   });
 });
 

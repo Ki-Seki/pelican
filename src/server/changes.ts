@@ -32,6 +32,8 @@ type Scan = {
   rows: Map<string, EditRow>;
   /** The prompts Claude Code kept the files for (file-history snapshots), by the prompt's id. */
   checkpoints: Set<string>;
+  /** Rows copied from another session (a side chat's, a fork's), which ran there, not here. */
+  copied: Set<string>;
   readAt: number;
 };
 
@@ -112,13 +114,13 @@ const NOT_TYPED = /^\s*(?:<(?:bash-input|bash-stdout|bash-stderr|local-command-s
 const isPrompt = (text: string) => Boolean(text.trim()) && !NOT_TYPED.test(text);
 
 function empty(ino: number): Scan {
-  return { ino, offset: 0, carry: Buffer.alloc(0), rows: new Map(), checkpoints: new Set(), readAt: Date.now() };
+  return { ino, offset: 0, carry: Buffer.alloc(0), rows: new Map(), checkpoints: new Set(), copied: new Set(), readAt: Date.now() };
 }
 
 /** The relative path of a file inside `cwd`, or the path as it is. */
 const relative = (file: string, cwd: string | undefined) => (cwd && file.startsWith(`${cwd}${path.sep}`) ? file.slice(cwd.length + 1) : file);
 
-function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string | undefined): void {
+function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string | undefined, own: string): void {
   if (line.length < 2 || line.charCodeAt(0) !== 123) return;
   const snapshot = line.includes('"file-history-snapshot"');
   const result = line.includes('"toolUseResult"');
@@ -138,6 +140,9 @@ function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string
   }
   const uuid = str(row.uuid);
   if (!uuid || row.isSidechain === true) return;
+  // Copied as Claude Code's forkSession copies (it says from where), or as Claude Desktop's side
+  // chats carry their session's rows (under its id).
+  if ((row.forkedFrom !== undefined && row.forkedFrom !== null) || (typeof row.sessionId === 'string' && row.sessionId !== own)) scan.copied.add(uuid);
   const edit = result ? recordedEdit(row.toolUseResult) : undefined;
   if (!edit) return;
   const content = isRecord(row.message) && Array.isArray(row.message.content) ? row.message.content : [];
@@ -152,6 +157,7 @@ function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string
 }
 
 async function readNew(file: string, scan: Scan, size: number, cwd: string | undefined): Promise<void> {
+  const own = path.basename(file, '.jsonl');
   const handle = await openRegular(file);
   try {
     while (scan.offset < size) {
@@ -169,7 +175,7 @@ async function readNew(file: string, scan: Scan, size: number, cwd: string | und
       scan.carry = Buffer.from(data.subarray(lastBreak + 1));
       for (let from = 0; from <= lastBreak;) {
         const end = data.indexOf(0x0a, from);
-        addRow(scan, data.toString('utf8', from, end), start + from, end - from, cwd);
+        addRow(scan, data.toString('utf8', from, end), start + from, end - from, cwd, own);
         from = end + 1;
       }
     }
@@ -233,13 +239,14 @@ type Turn = { uuid: string; n: number; text: string; at?: number; rows: Array<{ 
  * each, numbered by the prompt's place among the conversation's prompts as /diff counts them
  * (an image sent without words counts too, being a turn here). /diff sees only what followed the
  * last compaction and numbers from there; here, where the turns before it show too, the count
- * runs on through it.
+ * runs on through it. `ownOnly`: without the rows copied from another session (a side chat's).
  */
-function turnsOf(messages: readonly ChatMessage[], scan: Scan): Turn[] {
+function turnsOf(messages: readonly ChatMessage[], scan: Scan, ownOnly: boolean): Turn[] {
   const turns: Turn[] = [];
   let turn: Turn | undefined;
   let place = 0;
   for (const message of messages) {
+    if (ownOnly && scan.copied.has(message.uuid)) continue;
     const text = promptOf(message);
     if (text !== undefined || countsAsPrompt(message)) place += 1;
     if (text !== undefined) {
@@ -269,10 +276,13 @@ function filesOf(turn: Turn): TurnFile[] {
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
-/** What each turn of the session in `file` changed, oldest first. `cwd`: the session's folder, for relative paths. */
-export async function sessionChanges(file: string, cwd: string | undefined): Promise<SessionChanges> {
+/**
+ * What each turn of the session in `file` changed, oldest first. `cwd`: the session's folder, for
+ * relative paths; `ownOnly`: a side chat's, which leaves out the turns it copied of its session.
+ */
+export async function sessionChanges(file: string, cwd: string | undefined, ownOnly = false): Promise<SessionChanges> {
   const scan = await scanned(file, cwd);
-  const turns: TurnChanges[] = turnsOf(await readHistory(file), scan).map((turn) => ({
+  const turns: TurnChanges[] = turnsOf(await readHistory(file), scan, ownOnly).map((turn) => ({
     uuid: turn.uuid,
     n: turn.n,
     text: clip(turn.text, 120),
@@ -281,9 +291,9 @@ export async function sessionChanges(file: string, cwd: string | undefined): Pro
     checkpoint: scan.checkpoints.has(turn.uuid),
   }));
   const lines: Record<string, number> = {};
-  for (const row of scan.rows.values()) {
+  for (const [uuid, row] of scan.rows) {
     const line = row.edits[0]?.line;
-    if (row.toolUseId && line) lines[row.toolUseId] = line;
+    if (row.toolUseId && line && !(ownOnly && scan.copied.has(uuid))) lines[row.toolUseId] = line;
   }
   return { turns, lines };
 }
@@ -310,9 +320,9 @@ const MAX_EDITS_SHOWN = 50;
  * What one turn changed in one file, as Claude Code's /diff shows it: each edit's patch, in the
  * order Claude made them. Empty when the turn did not edit the file.
  */
-export async function turnDiff(file: string, cwd: string | undefined, turnId: string, target: string): Promise<string> {
+export async function turnDiff(file: string, cwd: string | undefined, turnId: string, target: string, ownOnly = false): Promise<string> {
   const scan = await scanned(file, cwd);
-  const turn = turnsOf(await readHistory(file), scan).find((t) => t.uuid === turnId);
+  const turn = turnsOf(await readHistory(file), scan, ownOnly).find((t) => t.uuid === turnId);
   const rows = (turn?.rows ?? []).filter(({ row }) => row.edits.some((e) => e.path === target)).map(({ row }) => row);
   if (rows.length === 0) return '';
   const edits = await Promise.all(rows.slice(0, MAX_EDITS_SHOWN).map((row) => readEdit(file, row)));

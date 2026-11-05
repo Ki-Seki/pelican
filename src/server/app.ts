@@ -721,20 +721,22 @@ app.get('/api/exists', async (c) => {
 
 /**
  * What each turn of a session changed (T1, T2…), from Claude Code's records of its edits: no git,
- * so in any folder. With `turn` and `path`, that turn's diff of that file.
+ * so in any folder. With `turn` and `path`, that turn's diff of that file. A side chat changes
+ * nothing: the turns it copied of its session are that session's.
  */
 app.get('/api/sessions/:id/changes', async (c) => {
   const id = c.req.param('id');
   const file = await transcriptPath(id);
   if (!file) return c.json({ turns: [], lines: {} });
   const cwd = (await sessionInfo(id))?.cwd;
+  const ownOnly = await isSideChat(id);
   const turn = c.req.query('turn');
   const target = c.req.query('path');
   if (turn !== undefined || target !== undefined) {
     if (!turn || !target || target.length > 4096) return c.json({ error: 'Which turn and file?' }, 400);
-    return c.json({ diff: await turnDiff(file, cwd, turn, target) });
+    return c.json({ diff: await turnDiff(file, cwd, turn, target, ownOnly) });
   }
-  return c.json(await sessionChanges(file, cwd));
+  return c.json(await sessionChanges(file, cwd, ownOnly));
 });
 
 /**

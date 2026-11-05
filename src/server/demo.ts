@@ -580,7 +580,8 @@ export async function prepareDemo(): Promise<void> {
         ...(row.result ? { toolUseResult: row.result } : {}),
         ...(from && session.copies ? { forkedFrom: { sessionId: session.copies, messageUuid: from } } : {}),
       }));
-      if (row.checkpoint) {
+      // Files kept for a prompt of the session's own: forkSession copies no checkpoints with the rows.
+      if (row.checkpoint && !from) {
         const at = new Date(row.at).toISOString();
         lines.push(JSON.stringify({ type: 'file-history-snapshot', messageId: uuid, snapshot: { messageId: uuid, trackedFileBackups: {}, timestamp: at }, isSnapshotUpdate: false }));
       }

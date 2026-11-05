@@ -161,3 +161,39 @@ describe('turn numbers, as Claude Code’s /diff gives them', () => {
     }
   });
 });
+
+describe('a side chat’s changes', () => {
+  it('leave out the turns it copied of its session, which changed that session’s files, not its own', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-side-changes-'));
+    try {
+      const app = path.join(work, 'app');
+      // The conversation it copied, then its own question: one conversation, the copy's rows first.
+      const t = transcript(app);
+      t.prompt('Add a dark theme');
+      t.tool('Edit', { file_path: `${app}/theme.css` }, edit(`${app}/theme.css`, 'a\n', 'b\n'));
+      t.reply('Done.');
+      const copiedRows = t.lines.length;
+      t.prompt('Why CSS variables?', false);
+      t.reply('They switch everywhere at once.');
+      const rows = t.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      const write = async (name: string, change: (row: Record<string, unknown>, copied: boolean) => Record<string, unknown>) => {
+        const out = path.join(work, `${name}.jsonl`);
+        await writeFile(out, `${rows.map((row, i) => JSON.stringify(change(row, i < copiedRows))).join('\n')}\n`);
+        return out;
+      };
+      // As Claude Code's forkSession copies a session: each copied row says where it came from.
+      const side = await write('s1', (row, copied) => (copied ? { ...row, forkedFrom: { sessionId: 'parent', messageUuid: 'x' } } : row));
+      expect((await sessionChanges(side, app, true)).turns).toEqual([]);
+      expect((await sessionChanges(side, app, true)).lines).toEqual({});
+      // Read as a session of its own, the copy shows what the conversation it holds changed.
+      expect((await sessionChanges(side, app)).turns).toMatchObject([{ n: 1, text: 'Add a dark theme' }]);
+
+      // Claude Desktop's side chats carry their session's rows under that session's id.
+      const desktop = await write('d1', (row, copied) => (copied ? row : { ...row, sessionId: 'd1' }));
+      expect((await sessionChanges(desktop, app, true)).turns).toEqual([]);
+      expect((await sessionChanges(desktop, app)).turns).toMatchObject([{ n: 1, text: 'Add a dark theme' }]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+});
