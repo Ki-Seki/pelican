@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { GitStatus, SessionChanges } from '../src/shared/protocol';
 
 const CWD = '/code/app';
-const server = vi.hoisted(() => ({ asked: [] as string[] }));
+const server = vi.hoisted(() => ({ asked: [] as string[], diff: '', /** A folder git does not track, where no turn changed files. */ plain: false }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -25,15 +25,17 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       git: async (_cwd: string, scope?: string) => {
         server.asked.push(`git ${scope ?? ''}`);
+        if (server.plain) return { repo: false };
         return scope === 'base' ? since : status;
       },
-      changes: async () => changes,
-      gitDiff: async () => '',
+      changes: async () => (server.plain ? { turns: [], lines: {} } : changes),
+      gitDiff: async () => server.diff,
       turnDiff: async (_id: string, turn: string, path: string) => {
         server.asked.push(`turn ${turn} ${path}`);
         return `--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,1 @@\n+:root {}\n`;
       },
-      tree: async () => [],
+      tree: async () => (server.plain ? [{ name: 'notes.md', path: 'notes.md', dir: false, size: 30 }] : []),
+      file: async (_cwd: string, path: string) => ({ path, size: 40, text: 'const a = 1;\nconst b = 2;\nconst c = 3;\n' }),
     },
   };
 });
@@ -52,10 +54,14 @@ beforeAll(() => {
 });
 
 const { Workspace } = await import('../src/web/components/Workspace');
+const { UnifiedDiff } = await import('../src/web/components/UnifiedDiff');
+const { WorkspaceChanges } = await import('../src/web/components/WorkspaceChanges');
 
 afterEach(() => {
   cleanup();
   server.asked = [];
+  server.diff = '';
+  server.plain = false;
   history.replaceState(null, '', '/');
 });
 
@@ -95,6 +101,36 @@ describe('what Changes shows', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('in a folder git does not track, where no turn changed files: opens on Files, and Changes, tapped, says why it is empty', async () => {
+    server.plain = true;
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    wrap(<Workspace open cwd="/code/notes" sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(location.search).toBe('?s=s1&w=files'));
+    await screen.findByText('notes.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(await screen.findByText('This folder is not a git repository')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(location.search).toBe('?s=s1&w=changes');
+    expect(screen.getByRole('button', { name: 'Changes' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('on a tablet with a keyboard: Esc puts away a comment being written on a file, and the next closes the view', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const onClose = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-line="2"]')!);
+    const box = screen.getByLabelText('Comment for Claude');
+    fireEvent.change(box, { target: { value: 'Rename b' } });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.queryByLabelText('Comment for Claude')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    // The keys are back on the file's text, in the view, as they are on a diff.
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'The text of src/a.ts' }));
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('on a phone, says at its foot that Claude waits for an answer, which leads back to the conversation', async () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onClose = vi.fn();
@@ -103,5 +139,80 @@ describe('what Changes shows', () => {
     expect(onClose).toHaveBeenCalled();
     // What is behind the view takes nothing while it is open.
     expect(screen.getByRole('region', { name: 'Changes and files' }).closest('#root')).toBeNull();
+  });
+});
+
+describe('a diff read again while it is open', () => {
+  const DIFF = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n';
+
+  it('says "No changes in this file" once its change is committed, and shows the lines when Claude edits it again', () => {
+    const view = render(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByRole('group', { name: 'Changes to src/a.ts' })).toBeTruthy();
+    view.rerender(<UnifiedDiff diff="" path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('No changes in this file')).toBeTruthy();
+    view.rerender(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('const b = 3;', { exact: false })).toBeTruthy();
+    view.rerender(<UnifiedDiff diff={'Binary files a/logo.png and b/logo.png differ\n'} path="src/a.ts" cwd={CWD} />);
+    expect(screen.getByText('A binary file changed')).toBeTruthy();
+  });
+
+  it('in Changes, as when the window gets the focus back after a commit: the view stays and says so', async () => {
+    server.diff = DIFF;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent) => errors.push(event.error);
+    window.addEventListener('error', onError);
+    try {
+      const status = { data: { repo: true as const, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified' as const }] }, isLoading: false, isFetching: false, refetch: () => undefined };
+      render(
+        <QueryClientProvider client={client}>
+          <WorkspaceChanges cwd={CWD} sessionId="s1" step={{ tab: 'changes', path: 'src/a.ts' }} looking busy={false} status={status} commentsIn={new Map()} go={() => {}} setScope={() => {}} />
+        </QueryClientProvider>,
+      );
+      await screen.findByText('const b = 3;', { exact: false });
+      server.diff = '';
+      await act(() => client.refetchQueries({ queryKey: ['diff'] }));
+      expect(await screen.findByText('No changes in this file')).toBeTruthy();
+      server.diff = DIFF;
+      await act(() => client.refetchQueries({ queryKey: ['diff'] }));
+      expect(await screen.findByText('const b = 3;', { exact: false })).toBeTruthy();
+    } finally {
+      window.removeEventListener('error', onError);
+    }
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('a file’s Quote and Copy', () => {
+  function select(from: number, to: number) {
+    const first = document.querySelector(`[data-line="${from}"]`)!;
+    const last = document.querySelector(`[data-line="${to}"]`)!;
+    const range = document.createRange();
+    range.setStart(first.lastChild!, 0);
+    range.setEnd(last.lastChild!, 1);
+    act(() => {
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+  }
+
+  it('sit in a row of their own under what scrolls, the lowest of a phone’s view clear of the home indicator', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const view = wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    select(1, 2);
+    const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    expect(bar.textContent).toContain('Lines 1–2');
+    expect(bar.closest('.overflow-y-auto')).toBeNull();
+    expect(bar.closest('[role="region"]')).toBe(screen.getByRole('region', { name: 'Changes and files' }));
+    expect(bar.classList.contains('pb-safe')).toBe(true);
+    // Below it, the bar saying Claude waits is the lowest row, and keeps clear itself.
+    view.rerender(<QueryClientProvider client={new QueryClient()}><Workspace open cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} /></QueryClientProvider>);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    select(1, 2);
+    const under = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    expect(under.classList.contains('pb-safe')).toBe(false);
+    expect(screen.getByText('Claude wants to run npm test').closest('button')!.classList.contains('pb-safe')).toBe(true);
   });
 });

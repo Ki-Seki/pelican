@@ -33,9 +33,14 @@ export const SEARCH_LIMITS = { files: 200, lines: 500, perFile: 20, text: 300, m
  */
 const SKIP = ['node_modules', '__pycache__', 'venv'];
 
-const clipped = (text: string) => {
+/** A line as it is sent: at most 300 characters of it, around what was found when that is further in. */
+const clipped = (text: string, query: string) => {
   const line = text.replace(/\r?\n$/, '');
-  return line.length > SEARCH_LIMITS.text ? `${line.slice(0, SEARCH_LIMITS.text)}…` : line;
+  if (line.length <= SEARCH_LIMITS.text) return line;
+  const caseless = query === query.toLowerCase();
+  const at = (caseless ? line.toLowerCase() : line).indexOf(caseless ? query.toLowerCase() : query);
+  const from = Math.max(0, Math.min(at - 100, line.length - SEARCH_LIMITS.text));
+  return `${from > 0 ? '…' : ''}${line.slice(from, from + SEARCH_LIMITS.text)}${from + SEARCH_LIMITS.text < line.length ? '…' : ''}`;
 };
 
 /** Whether a binary answers as ripgrep when started as `rg`, asked once each. */
@@ -117,7 +122,7 @@ function withRipgrep(binary: string, cwd: string, query: string): Promise<Search
         byPath.set(file, entry);
         result.files.push(entry);
       }
-      entry.lines.push({ n, text: clipped(text) });
+      entry.lines.push({ n, text: clipped(text, query) });
       lines += 1;
       if (lines >= SEARCH_LIMITS.lines) stop(true);
     };
@@ -180,7 +185,7 @@ async function withScan(cwd: string, query: string): Promise<SearchResult> {
       const all = text.split('\n');
       for (let i = 0; i < all.length && found.length < SEARCH_LIMITS.perFile; i += 1) {
         const line = all[i]!;
-        if ((caseless ? line.toLowerCase() : line).includes(needle)) found.push({ n: i + 1, text: clipped(line) });
+        if ((caseless ? line.toLowerCase() : line).includes(needle)) found.push({ n: i + 1, text: clipped(line, query) });
       }
       if (found.length === 0) continue;
       const room = SEARCH_LIMITS.lines - lines;

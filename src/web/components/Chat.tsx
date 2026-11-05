@@ -819,6 +819,7 @@ export function Chat({
         {wide && meter}
         {cwd && (
           <button
+            ref={workspace.toggle}
             type="button"
             aria-label="Changes and files"
             aria-pressed={workspace.dockable ? workspace.open && !side.docked : undefined}

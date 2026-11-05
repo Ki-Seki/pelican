@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { AtSign, Check, Copy, Download, Loader2, Maximize2, Play, Quote } from 'lucide-react';
 import { createContext, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
@@ -146,11 +147,18 @@ function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: num
   return range;
 }
 
+/**
+ * Where Changes and files puts a file's selection bar: a row of its own under what scrolls, so
+ * the file never scrolls under it; `safe`: the lowest row of a phone's view, clear of the home
+ * indicator. A viewer with none keeps the bar at the foot of the file as it scrolls.
+ */
+export const SelectionFoot = createContext<{ at: HTMLElement; safe: boolean } | undefined>(undefined);
+
 /** Under a selection of lines: quote them into the message as `path:7-8` and the lines, or copy the text. */
-function SelectionBar({ from, to, onQuote, text }: { from: number; to: number; onQuote: () => void; text: string }) {
+function SelectionBar({ from, to, onQuote, text, place }: { from: number; to: number; onQuote: () => void; text: string; place: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="sticky bottom-0 z-10 -mx-1 flex items-center gap-1 border-t border-line bg-bg px-3 py-1.5 text-[13px]">
+    <div className={`flex items-center gap-1 border-t border-line bg-bg text-[13px] ${place}`}>
       <span className="min-w-0 flex-1 truncate text-muted">{to > from ? `Lines ${from}–${to}` : `Line ${from}`}</span>
       <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onQuote} className="flex h-9 items-center gap-1.5 rounded-full px-3 hover:bg-hover">
         <Quote className="size-3.5" /> Quote
@@ -176,28 +184,39 @@ const splitText = (text: string) => {
   return lines;
 };
 
-/**
- * A file of the session's folder, to read: with line numbers, wrapped or not, opened at a line
- * when it was asked for one; Markdown and HTML also as they look (HTML in the sandboxed frame
- * where nothing runs until Run). Tap a line to comment on it for Claude, as on a diff; select
- * lines to quote them into the message, or copy them. Read only: Claude changes files.
- */
-export function FileViewer({ cwd, path, line, onAddToMessage }: {
+type FileViewerProps = {
   cwd: string;
   path: string;
   line?: number;
   /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
-}) {
+};
+
+/**
+ * A file of the session's folder, to read: with line numbers, wrapped or not, opened at a line
+ * when it was asked for one; Markdown and HTML also as they look (HTML in the sandboxed frame
+ * where nothing runs until Run). Tap a line to comment on it for Claude, as on a diff; select
+ * lines to quote them into the message, or copy them. Read only: Claude changes files.
+ *
+ * Each file gets a viewer of its own, also when a link goes straight from one to another: what
+ * one had (Preview, Run, a comment being written) never carries over to the next.
+ */
+export function FileViewer(props: FileViewerProps) {
+  return <OpenFile key={`${props.cwd}\0${props.path}`} {...props} />;
+}
+
+function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
   const { data, isLoading, error } = useQuery({ queryKey: ['file', cwd, path], queryFn: () => api.file(cwd, path), staleTime: 5_000 });
   const name = path.split('/').pop() ?? path;
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const previewable = ext === 'md' || ext === 'markdown' || ext === 'html' || ext === 'htm';
   // Markdown opens as it reads, unless a line was asked for; a page opens as its code.
   const [preview, setPreview] = useState(() => (ext === 'md' || ext === 'markdown') && !line);
-  const [run, setRun] = useState(false);
   const wrap = useWrapping();
   const text = data?.text;
+  // Run runs the page as it was when it was tapped: rewritten since (Claude edited it), it waits for Run again.
+  const [ran, setRan] = useState<string>();
+  const run = ran !== undefined && ran === text;
   const texts = useMemo(() => (text === undefined ? [] : splitText(text)), [text]);
   const all = useComments(cwd);
   const mine = useMemo(() => all.filter((c) => c.path === path && c.kind !== 'del'), [all, path]);
@@ -206,6 +225,7 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
   const note = useRef('');
   const [showHint] = useState(() => !tipSeen('line-comments'));
   const sendAll = useSendComments();
+  const foot = useContext(SelectionFoot);
   const box = useRef<HTMLDivElement>(null);
   const selection = useLineSelection(box);
   const pick = useLinePick((n: number) => setEditing(n));
@@ -247,11 +267,14 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
       note.current = '';
       setEditing(undefined);
       markTipSeen('line-comments');
+      // The keys go back to the file's text, as on a diff, where Esc still closes the view.
+      box.current?.focus({ preventScroll: true });
       if (now) send?.();
     },
     cancel: () => {
       note.current = '';
       setEditing(undefined);
+      box.current?.focus({ preventScroll: true });
     },
     remove: (comment) => setComments(latest.current.cwd, commentsOf(latest.current.cwd).filter((c) => c.id !== comment.id)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,6 +287,10 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
     onAddToMessage(quoteLines(path, selection.from, selection.to, texts.slice(selection.from - 1, selection.to)), 'quote');
     window.getSelection()?.removeAllRanges();
   };
+  // Copy takes the lines themselves: a comment shown between them is not part of the file.
+  const bar = selection && ((place: string) => (
+    <SelectionBar from={selection.from} to={selection.to} text={selection.from === selection.to ? selection.text : texts.slice(selection.from - 1, selection.to).join('\n')} onQuote={quote} place={place} />
+  ));
 
   const tool = 'flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] text-muted hover:bg-hover hover:text-fg aria-pressed:text-fg';
   return (
@@ -291,7 +318,7 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
       {text !== undefined && preview && (ext === 'html' || ext === 'htm') && (
         <div className="overflow-hidden rounded-lg border border-line">
           <div className="flex h-9 items-center justify-end gap-1 border-b border-line px-1 text-[12px] text-faint">
-            {!run && <button type="button" onClick={() => setRun(true)} title="Run its scripts" className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg"><Play className="size-3.5" /> Run</button>}
+            {!run && <button type="button" onClick={() => setRan(text)} title="Run its scripts" className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg"><Play className="size-3.5" /> Run</button>}
             <button type="button" aria-label="Open full screen" onClick={() => openPreview({ kind: 'html', code: text, title: name }, run)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"><Maximize2 className="size-3.5" /></button>
           </div>
           {/* A page's height is its own and a still frame cannot say it: the frame takes most of the screen. */}
@@ -313,14 +340,14 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
             <div
               ref={box}
               role="group"
+              tabIndex={-1}
               aria-label={`The text of ${path}`}
               className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] [tab-size:4] ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
             >
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>
           </LinesContext.Provider>
-          {/* Copy takes the lines themselves: a comment shown between them is not part of the file. */}
-      {selection && <SelectionBar from={selection.from} to={selection.to} text={selection.from === selection.to ? selection.text : texts.slice(selection.from - 1, selection.to).join('\n')} onQuote={quote} />}
+          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
         </>
       )}
       {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}

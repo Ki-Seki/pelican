@@ -5,11 +5,12 @@ import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
 import { baseName } from '../lib/format';
-import { composing } from '../lib/keyboard';
+import { closesPane, composing, isApple } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
+import { SelectionFoot } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
 import { WorkspaceChanges } from './WorkspaceChanges';
@@ -35,9 +36,8 @@ function useMedia(query: string): boolean {
 }
 
 /** The keys that show and hide the pane, and that send line comments, as this computer writes them. */
-const MAC = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
-export const PANE_KEYS = MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
-const SEND_KEYS = MAC ? '⌘↵' : 'Ctrl+Enter';
+export const PANE_KEYS = isApple ? '⌘⇧D' : 'Ctrl+Shift+D';
+const SEND_KEYS = isApple ? '⌘↵' : 'Ctrl+Enter';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
@@ -45,9 +45,11 @@ let lastTab: WorkspaceTab = 'changes';
 /**
  * Whether Changes and files is open, and where. On a computer it is a pane beside the conversation
  * that stays open from one session to the next (remembered in this browser), shown and hidden with
- * Cmd/Ctrl+Shift+D as in Claude Desktop. On a phone it is a view of its own over the conversation,
- * open while the address holds one of its steps, so the back gesture closes it. `show` opens it,
- * at a step when given one (a file named in the conversation).
+ * Cmd/Ctrl+Shift+D as in Claude Desktop, and closed with Cmd/Ctrl+\ from inside it. On a phone it
+ * is a view of its own over the conversation, open while the address holds one of its steps, so
+ * the back gesture closes it. `show` opens it, at a step when given one (a file named in the
+ * conversation). `toggle` is for the button that shows and hides it: closed while it had the
+ * keys, the pane gives them to that button.
  */
 export function useWorkspacePane(available: boolean) {
   const dockable = useMedia(DOCKS);
@@ -90,7 +92,15 @@ export function useWorkspacePane(available: boolean) {
     return () => window.removeEventListener('keydown', onKey);
   }, [available, open, setOpen, hide, dockable, roomy]);
   const docked = dockable && open;
-  return { open, setOpen, show, hide, dockable, docked, folded: docked && !roomy };
+  const toggle = useRef<HTMLButtonElement>(null);
+  const wasDocked = useRef(docked);
+  useEffect(() => {
+    const was = wasDocked.current;
+    wasDocked.current = docked;
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (was && !docked && lost) toggle.current?.focus({ preventScroll: true });
+  }, [docked]);
+  return { open, setOpen, show, hide, dockable, docked, folded: docked && !roomy, toggle };
 }
 
 /**
@@ -149,8 +159,11 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** A step further in: on a phone a step of its own in the history, beside the conversation in place. */
   const go = (to: WorkspaceStep) => goTo(to, !docked);
   const up = (to: WorkspaceStep) => (docked ? goTo(to, false) : goUp(to));
+  // A tab tapped since the view opened is the one to show, also where it has little to say.
+  const tapped = useRef(false);
   const switchTab = (to: WorkspaceTab) => {
     lastTab = to;
+    tapped.current = true;
     goTo({ tab: to }, false);
   };
 
@@ -163,10 +176,12 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const turns = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: open && Boolean(sessionId), staleTime: 30_000 });
   const git = status.data?.repo ? status.data : undefined;
 
-  // Not a repository and no turn that changed files: there is nothing to compare, so start in the files.
+  // Not a repository and no turn that changed files: there is nothing to compare, so the view
+  // starts in the files. Changes, tapped, still says why it is empty.
   const nothingToCompare = status.data && !status.data.repo && !status.data.untrusted && turns.data?.turns.length === 0;
   useEffect(() => {
-    if (open && nothingToCompare && tab === 'changes' && !shown) goTo({ tab: 'files' }, false);
+    if (!open) tapped.current = false;
+    else if (nothingToCompare && tab === 'changes' && !shown && !tapped.current) goTo({ tab: 'files' }, false);
   }, [open, nothingToCompare, tab, shown]);
 
   const back = shown ? (
@@ -221,12 +236,18 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     </>
   );
 
+  // On a phone the view's lowest row keeps clear of the home indicator: the bar saying Claude
+  // waits, else the comments, else a selection's Quote and Copy; the end of what scrolls, too.
+  const phone = !docked;
+  const [foot, setFoot] = useState<HTMLDivElement | null>(null);
+  const selectionFoot = useMemo(() => (foot ? { at: foot, safe: phone && comments.length === 0 && !needsYou } : undefined), [foot, phone, comments.length, needsYou]);
+
   // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
   // now (⌘↵) sends them on their own.
   const footer = comments.length > 0 && (
-    <div className="flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4">
+    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${phone && !needsYou ? 'pb-safe' : ''}`}>
       <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
-        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> · sent with your next message</span>
+        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> {comments.length === 1 ? 'goes' : 'go'} with your next message</span>
       </span>
       {onSendComments && (
         <button type="button" onClick={onSendComments} title={`Send now (${SEND_KEYS})`} className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
@@ -235,13 +256,19 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       )}
     </div>
   );
-  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop. Keys pressed in a
-  // sheet opened from here reach this too (React passes them up its own tree): those are the sheet's.
+  // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop; beside the
+  // conversation, ⌘\ closes it, as it closes the side chat there. Keys pressed in a sheet opened
+  // from here reach this too (React passes them up its own tree): those are the sheet's.
   const own = (e: React.KeyboardEvent) => e.currentTarget.contains(e.target as Node);
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!own(e) || e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.defaultPrevented || composing(e.nativeEvent) || comments.length === 0 || !onSendComments) return;
-    e.preventDefault();
-    onSendComments();
+    if (!own(e) || e.defaultPrevented || composing(e.nativeEvent)) return;
+    if (docked && closesPane(e)) {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && comments.length > 0 && onSendComments) {
+      e.preventDefault();
+      onSendComments();
+    }
   };
 
   const view = useRef<HTMLDivElement>(null);
@@ -259,6 +286,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   if (docked) {
     return (
       <SendComments.Provider value={onSendComments}>
+      <SelectionFoot.Provider value={selectionFoot}>
       <aside aria-label="Changes and files" onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
         <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
@@ -268,13 +296,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </div>
         <div className="shrink-0 px-4">{header}</div>
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-4">{body}</div>
+        <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>
+      </SelectionFoot.Provider>
       </SendComments.Provider>
     );
   }
   return createPortal(
     <SendComments.Provider value={onSendComments}>
+    <SelectionFoot.Provider value={selectionFoot}>
     <div
       ref={view}
       role="region"
@@ -298,7 +329,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </div>
         <div className="px-3">{header}</div>
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-4">{body}</div>
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+      <div ref={setFoot} className="shrink-0" />
       {footer}
       {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
       <div aria-live="polite" className="shrink-0">
@@ -311,6 +343,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         )}
       </div>
     </div>
+    </SelectionFoot.Provider>
     </SendComments.Provider>,
     document.body,
   );

@@ -24,6 +24,7 @@ beforeAll(async () => {
   await symlink(path.join(dir, 'outside.txt'), path.join(cwd, 'link.txt'));
   await symlink(dir, path.join(cwd, 'up'));
   await writeFile(path.join(cwd, 'many.txt'), Array.from({ length: 100 }, () => 'theme').join('\n'));
+  await writeFile(path.join(cwd, 'long.md'), `${'A paragraph on one line, as Markdown keeps them. '.repeat(20)}The needle is here, ${'and the line goes on. '.repeat(20)}\n`);
 });
 afterAll(() => rm(dir, { recursive: true, force: true }));
 
@@ -54,6 +55,16 @@ describe('searching the folder’s text', () => {
     expect(files['many.txt']).toHaveLength(SEARCH_LIMITS.perFile);
     expect(Object.keys(files).some((f) => f.startsWith('node_modules') || f.startsWith('up/') || f === 'link.txt' || f === 'binary.bin')).toBe(false);
     expect(Object.keys(found(await searchText(cwd, 'Theme', 'scan')))).toEqual(['src/Toggle.tsx']);
+  });
+
+  it('sends a long line cut around what it found, however far along the line that is', async () => {
+    for (const engine of [undefined, 'scan'] as const) {
+      if (!engine && !bundledClaude()) continue;
+      const [line] = (await searchText(cwd, 'needle', engine)).files.find((f) => f.path === 'long.md')!.lines;
+      expect(line!.text).toContain('The needle is here');
+      expect(line!.text).toMatch(/^….*…$/);
+      expect(line!.text.length).toBeLessThanOrEqual(SEARCH_LIMITS.text + 2);
+    }
   });
 
   it('runs no git and nothing of the folder’s: a repository’s hooks and filters stay still', async () => {

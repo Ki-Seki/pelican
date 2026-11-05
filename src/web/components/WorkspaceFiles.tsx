@@ -8,12 +8,34 @@ import type { WorkspaceStep } from '../lib/workspace-route';
 import { FileViewer } from './FileViewer';
 import { PathLabel } from './PathLabel';
 
-/** A line of a file that holds the text, with the text shown where it is. */
+/** How far along a line what was found may start and still be shown from the line's start. */
+const FROM_START = 20;
+/** Further along, how much of the line comes before it, from the start of a word where one is near. */
+const BEFORE = 12;
+
+/**
+ * A line of a file that holds the text, with the text marked where it is. A row shows one line
+ * and cuts what does not fit at its end, so a line where the text is far along starts shortly
+ * before it, after a "…": the text is always in view.
+ */
 function Found({ text, query }: { text: string; query: string }) {
   const caseless = query === query.toLowerCase();
   const at = (caseless ? text.toLowerCase() : text).indexOf(caseless ? query.toLowerCase() : query);
   if (at < 0) return <>{text}</>;
-  return <>{text.slice(0, at)}<mark className="rounded-sm bg-chip text-fg">{text.slice(at, at + query.length)}</mark>{text.slice(at + query.length)}</>;
+  let from = 0;
+  if (at > FROM_START) {
+    const start = at - BEFORE;
+    const space = text.slice(start - 1, at).search(/\s/);
+    from = space >= 0 ? start + space : start;
+  }
+  return (
+    <>
+      {from > 0 && '…'}
+      {text.slice(from, at)}
+      <mark className="rounded-sm bg-mark text-fg">{text.slice(at, at + query.length)}</mark>
+      {text.slice(at + query.length)}
+    </>
+  );
 }
 
 /**
@@ -103,7 +125,7 @@ export function WorkspaceFiles({ cwd, step, open, go, up, onAddToMessage }: {
                 <PathLabel path={found.path} />
               </button>
               {found.lines.map((l) => (
-                <button key={l.n} type="button" onClick={() => go({ tab: 'files', path: found.path, line: l.n })} className="flex w-full min-w-0 items-baseline gap-2 rounded-md py-1 pr-3 pl-4 text-left font-mono text-[12px] hover:bg-hover">
+                <button key={l.n} type="button" onClick={() => go({ tab: 'files', path: found.path, line: l.n })} className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md py-1 pr-3 pl-4 text-left font-mono text-[12px] hover:bg-hover pointer-fine:min-h-0">
                   <span className="w-8 shrink-0 text-right text-faint tabular-nums">{l.n}</span>
                   <span className="min-w-0 flex-1 truncate text-muted"><Found text={l.text.trim()} query={inText} /></span>
                 </button>

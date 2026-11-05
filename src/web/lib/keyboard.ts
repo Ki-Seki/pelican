@@ -1,6 +1,6 @@
 /**
  * Keys, in one place: what sends a message, and the few shortcuts Pelican shares with Claude
- * Desktop and the CLI (Esc stops Claude, ⌘K searches the sessions, ⌘/ lists the keys).
+ * Desktop and the CLI (Esc stops Claude, ⌘K searches the sessions, ⌘\ closes a pane, ⌘/ lists the keys).
  */
 
 type KeyLike = { key: string; isComposing?: boolean; keyCode?: number; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean };
@@ -20,6 +20,9 @@ export const MOD_ARIA = isApple ? 'Meta' : 'Control';
  * is false by then; that keydown still says 229, the code browsers give keys an input method takes.
  */
 export const composing = (e: KeyLike): boolean => Boolean(e.isComposing) || e.keyCode === 229;
+
+/** Cmd/Ctrl+\: closes the pane beside the conversation it is pressed in, as Close pane does in Claude Desktop. */
+export const closesPane = (e: KeyLike): boolean => e.key === '\\' && Boolean(e.metaKey || e.ctrlKey);
 
 /** ⌘ on Apple keyboards, Ctrl elsewhere, with no other modifier. */
 export const withMod = (e: KeyLike): boolean =>

@@ -54,6 +54,10 @@ from every app.
 - Push and Create PR, on the branch line, show only where the repository has a remote.
 - Changes and files docks from 1024px wide instead of 1440px; below 1280px the session list folds
   away while it is open, and Cmd/Ctrl+K brings it back.
+- Cmd/Ctrl+\ closes Changes and files when pressed in it, as it closes the side chat and as Close
+  pane does in Claude Desktop; closed, the pane gives the keys to the button that opens it.
+- The keyboard shortcuts (Cmd/Ctrl+/) list Changes and files (Cmd/Ctrl+Shift+D), Close pane
+  (Cmd/Ctrl+\) and Send comments (Cmd/Ctrl+Enter), and call Ctrl+O Transcript view.
 - Commit, Push and Create PR, on the branch line, put a request to Claude in the message box, so
   your rules, hooks and attribution apply. Pelican runs no git that changes anything.
 
@@ -77,6 +81,18 @@ from every app.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
 
+### Changes and files
+
+- Search in files shows each hit where it is on its line, after a "…" when it is far along,
+  marked in amber.
+- A file's Quote and Copy sit in a row of their own under the file, so nothing scrolls beneath
+  them.
+- On a touch screen, search results and a step's file name are a finger tall; on a phone the
+  view's lowest row (Quote and Copy, Send now, or the bar saying Claude needs you) keeps clear of
+  the home indicator.
+- Esc in a comment on a file gives the keys back to the file, as on a diff, so the next Esc closes
+  the view.
+
 ### Security
 
 - In a folder kept to your settings only, a `!` command runs git as Claude Code does there, with
@@ -84,6 +100,8 @@ from every app.
 - Changes and files reads only regular files inside the session's folder, links followed and
   checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
   config, an empty environment, no git and no links followed.
+- A page in Files runs its scripts only after Run, and again only after another Run once it has
+  been rewritten; a page opened straight from another file never starts running.
 - A side chat only reads, asks for nothing, and takes no `/` or `!` commands. A side chat branched
   from one of its questions is one too.
 - Notification buttons go through the same checks as the page, and Allow is offered only for what

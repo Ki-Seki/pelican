@@ -402,11 +402,12 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
     <div>
       {fileLink ? (
         // The file's name opens it, as a path does in Claude Desktop; the rest of the row still
-        // opens the step (its toggle lies under the whole row, the name's link above it).
-        <div className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg">
+        // opens the step (its toggle lies under the whole row, the name's link above it). On a
+        // touch screen the row is a finger tall and the name takes taps over all of its height.
+        <div className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg pointer-coarse:min-h-11">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${summary.verb} ${summary.target ?? ''}`.trim()} className="absolute inset-0 rounded-md" />
           {row(
-            <a href={fileLink.href} onClick={fileLink.onClick} title={`Open ${fileLink.path}`} className={`relative z-[1] flex min-w-0 ${STEP_LINK}`}>
+            <a href={fileLink.href} onClick={fileLink.onClick} title={`Open ${fileLink.path}`} className={`relative z-[1] flex min-w-0 ${STEP_LINK} pointer-coarse:self-stretch pointer-coarse:items-center pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-1`}>
               <ToolTarget summary={summary} />
             </a>,
           )}
