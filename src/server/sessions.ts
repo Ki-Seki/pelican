@@ -120,11 +120,17 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
  * only files outside the session's folder the app may show, and only these paths.
  */
 export async function sentFiles(sessionId: string): Promise<Set<string>> {
+  const messages = await loadMessages(sessionId);
+  // Only calls that ran: one Claude only wrote (no app answered it, or it failed) hands over nothing.
+  const ran = new Set<string>();
+  for (const message of messages) {
+    for (const block of message.blocks) if (block.type === 'tool_result' && !block.is_error) ran.add(block.tool_use_id);
+  }
   const paths = new Set<string>();
-  for (const message of await loadMessages(sessionId)) {
+  for (const message of messages) {
     if (message.role !== 'assistant') continue;
     for (const block of message.blocks) {
-      if (block.type !== 'tool_use') continue;
+      if (block.type !== 'tool_use' || !ran.has(block.id)) continue;
       if (block.name === 'SendUserFile' && Array.isArray(block.input.files)) {
         for (const file of block.input.files) if (typeof file === 'string') paths.add(file);
       } else if (block.name === 'Artifact' && typeof block.input.file_path === 'string') {

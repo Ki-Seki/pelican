@@ -302,9 +302,12 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   }, [call]);
 
   if (call.name === 'TodoWrite') return <TodoList input={call.input} />;
-  if (call.name === 'SendUserFile' || (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish'))) return <SentFiles call={call} />;
+  // Files and visuals only from calls that ran: a call Claude only wrote (one no app answered, or
+  // one that failed) shows as a step, with its input as text.
+  const ran = Boolean(call.result && !call.result.is_error);
+  if (ran && (call.name === 'SendUserFile' || (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish')))) return <SentFiles call={call} />;
   // Claude Desktop's visuals (diagrams, charts, small tools): drawn in place, as Desktop shows them.
-  if (/(^|__)show_widget$/.test(call.name) && str(call.input.widget_code)) {
+  if (ran && /(^|__)show_widget$/.test(call.name) && str(call.input.widget_code)) {
     const code = str(call.input.widget_code);
     return (
       <div className="my-1">

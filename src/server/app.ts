@@ -7,6 +7,7 @@ import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import pkg from '../../package.json' with { type: 'json' };
+import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, PermissionMode, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
@@ -725,24 +726,46 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
+const ANCESTORS = `frame-ancestors 'self'${config.frameAncestors.map((o) => ` ${o}`).join('')}`;
+const FRAMING: Record<string, string> = config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {};
+
+/** A host name as browsers send it, and nothing that could end a directive. */
+const plainHost = (value: string | undefined) => (value && /^([a-z0-9.-]+|\[[0-9a-f:.]+\])(:\d+)?$/i.test(value) ? value : undefined);
+
 /**
+ * The app's own page:
  * - Only Pelican's own origin, and pages the config names, may show it in a frame: any other page
  *   could lay its own buttons over Pelican's and have you approve something (clickjacking).
+ * - Scripts only from Pelican, and requests only to Pelican: were something ever to slip HTML into
+ *   the page, it could neither run nor send anything (and here a script could run commands).
  * - Images and media come only from Pelican: a picture in Claude's reply, or in a page it wrote,
- *   could otherwise carry what is in the conversation to another server just by loading. The
- *   preview frames inherit this, on top of their own policy (Preview.tsx).
+ *   could otherwise carry what is in the conversation to another server just by loading. A still
+ *   preview inherits this, on top of its own policy; the styles and fonts it may load from the
+ *   public CDNs are allowed here for that reason only (Preview.tsx).
  */
-const POLICY: Record<string, string> = {
-  'Content-Security-Policy': [
-    `frame-ancestors 'self'${config.frameAncestors.map((o) => ` ${o}`).join('')}`,
-    "frame-src 'self' blob: data:",
+function pagePolicy(c: Context): string {
+  // The page's WebSocket, by the names it reaches Pelican at (older Safari does not count ws: as 'self').
+  const hosts = [...new Set([plainHost(c.req.header('host')), plainHost(c.req.header('x-forwarded-host')?.split(',')[0]?.trim())])].filter(Boolean);
+  return [
+    ANCESTORS,
+    "default-src 'self'",
+    "script-src 'self'",
+    `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com ${PREVIEW_CDNS}`,
+    `font-src 'self' data: https://fonts.gstatic.com ${PREVIEW_CDNS}`,
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
+    `connect-src 'self'${hosts.map((h) => ` ws://${h} wss://${h}`).join('')}`,
+    "frame-src 'self'",
+    "worker-src 'self'",
+    "manifest-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-  ].join('; '),
-  ...(config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
-};
+    "form-action 'self'",
+  ].join('; ');
+}
+
+/** The document a preview runs in once its scripts may run: the preview policy, as a header that stays. */
+const RUNNING_PREVIEW = `${PREVIEW_POLICY}; ${ANCESTORS}`;
 
 /** The web app. Every URL in it is relative, so it works under any path a proxy mounts it at. */
 app.get('/*', async (c) => {
@@ -786,7 +809,8 @@ app.get('/*', async (c) => {
       'Cache-Control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
-      ...POLICY,
+      'Content-Security-Policy': file === path.join(root, 'preview.html') ? RUNNING_PREVIEW : pagePolicy(c),
+      ...FRAMING,
     });
   } catch {
     return c.notFound();

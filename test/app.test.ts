@@ -185,6 +185,28 @@ describe('the page', () => {
     expect(policy).toContain("img-src 'self' data: blob:");
     expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
   });
+
+  it('runs scripts only from Pelican and talks only to Pelican, its WebSocket included', async () => {
+    const policy = (await ask('/', {}, false)).headers.get('content-security-policy') ?? '';
+    expect(policy).toContain("script-src 'self';");
+    expect(policy).toContain("default-src 'self'");
+    expect(policy).toContain("connect-src 'self' ws://localhost:7860 wss://localhost:7860;");
+    expect(policy).toContain("frame-src 'self';");
+    expect(policy).toContain("object-src 'none'");
+    // A host name that would end the directive is left out.
+    const odd = (await ask('/', { headers: { 'x-forwarded-host': 'x.example; script-src *' } }, false)).headers.get('content-security-policy') ?? '';
+    expect(odd).not.toContain('script-src *');
+  });
+
+  it('runs a preview’s scripts in a document of its own, under the preview policy', async () => {
+    await writeFile(path.join(config.webDir!, 'preview.html'), '<!doctype html><script>1</script>');
+    const response = await ask('/preview.html', {}, false);
+    const policy = response.headers.get('content-security-policy') ?? '';
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).toContain("connect-src https://cdnjs.cloudflare.com");
+    expect(policy).toContain("frame-ancestors 'self'");
+    expect(policy).not.toContain("script-src 'self'");
+  });
 });
 
 describe('the demo', () => {

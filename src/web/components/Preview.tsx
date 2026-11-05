@@ -1,42 +1,31 @@
-import { Code2, Eye, Maximize2, X } from 'lucide-react';
+import { Code2, Eye, Maximize2, Play, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 
+import { PREVIEW_POLICY } from '../../shared/preview-policy';
 import { getPrefs } from '../lib/prefs';
 
 /**
  * Rendered HTML and SVG: pages Claude writes, `html`/`svg` blocks in a reply,
  * and the visuals Claude Desktop draws with its show_widget tool.
  *
- * Everything renders in a sandboxed frame with no same-origin access: scripts
- * may run (charts, small apps), but they cannot reach Pelican, its cookies or
- * its API, open windows, submit forms or navigate the page. A content policy,
- * first in every document, keeps the page from talking to any server but the
- * public script and font CDNs, so what it shows stays on this screen.
+ * A preview first shows as a still picture, in a frame where nothing runs (a sandbox that allows
+ * nothing), so seeing a conversation runs nothing Claude wrote. Its scripts run only once you tap
+ * Run, in a document of its own (preview.html) in a sandbox apart from Pelican, with no access to
+ * it, its cookies or its API, under a content policy that lets it load scripts, styles and fonts
+ * from the public CDNs and nothing else. A page whose scripts run can still reach other servers in
+ * ways no policy covers (WebRTC, DNS), so running one is like opening it in a browser.
  */
 
-const CDNS = 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com';
-
-/** What a preview may load: scripts, styles and fonts from public CDNs; images only from itself. */
-export const PREVIEW_POLICY = [
-  "default-src 'none'",
-  `script-src 'unsafe-inline' 'unsafe-eval' ${CDNS}`,
-  `style-src 'unsafe-inline' https://fonts.googleapis.com ${CDNS}`,
-  `font-src data: https://fonts.gstatic.com ${CDNS}`,
-  'img-src data: blob:',
-  'media-src data: blob:',
-  `connect-src ${CDNS}`,
-  'worker-src blob:',
-  "form-action 'none'",
-  "base-uri 'none'",
-].join('; ');
+export { PREVIEW_POLICY };
 
 /**
- * First in every preview, before anything the page brings: the policy, then a script that takes
- * WebRTC away (a peer connection reaches its ICE servers whatever connect-src says, and browsers
- * do not know the policy's own webrtc directive yet).
+ * First in every preview, before anything the page brings: the policy, no prefetching of names,
+ * then a script that takes WebRTC away (a peer connection reaches its ICE servers whatever
+ * connect-src says, and browsers do not know the policy's own webrtc directive yet).
  */
-const PREAMBLE = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_POLICY}"><script>for(const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCIceTransport"])try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false})}catch(e){}</script>`;
+const STILL_PREAMBLE = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_POLICY}"><meta http-equiv="x-dns-prefetch-control" content="off">`;
+const PREAMBLE = `${STILL_PREAMBLE}<script>for(const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCIceTransport"])try{Object.defineProperty(window,k,{value:undefined,writable:false,configurable:false})}catch(e){}</script>`;
 
 /** HTML's own whitespace (not \s, which also takes in characters that HTML reads as text). */
 const LEADING = /^[\t\n\f\r ]*/;
@@ -64,67 +53,130 @@ svg text{fill:var(--text);font-family:inherit}
 [class*="c-"] .th{fill:color-mix(in srgb,var(--tint) 65%,var(--text))}
 `;
 
-/** Tells the parent how tall the content is, so the frame fits it. */
+/** Tells the parent how tall the content is, so the frame fits it (only where scripts run). */
 const RESIZE = `<script>(()=>{const post=()=>parent.postMessage({pelicanPreviewHeight:Math.ceil(document.documentElement.scrollHeight)},"*");new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</script>`;
 
 export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean };
 
-export function documentFor(source: PreviewSource, dark: boolean): string {
+const fullPage = (code: string) => /^(<!doctype|<html)/i.test(code.replace(/^\uFEFF/, '').slice(LEADING.exec(code)?.[0].length ?? 0));
+
+/** The document a preview shows; a still one carries no script of Pelican's (none could run). */
+export function documentFor(source: PreviewSource, dark: boolean, still = false): string {
   const theme = dark ? 'dark' : 'light';
+  const preamble = still ? STILL_PREAMBLE : PREAMBLE;
+  const resize = still ? '' : RESIZE;
   const code = source.code.replace(/^\uFEFF/, '');
   const start = code.slice(LEADING.exec(code)?.[0].length ?? 0);
-  const full = /^(<!doctype|<html)/i.test(start);
-  if (full) {
+  if (fullPage(code)) {
     // A page of its own: its own styles, plus the size report. Our doctype and preamble come
     // first, whatever the page starts with: the parser puts the policy in the head before any
     // of the page's own content, so it covers all of it. The page's doctype is dropped.
-    const page = `<!doctype html>${PREAMBLE}${start.replace(/^<!doctype[^>]*>/i, '')}`;
-    return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${RESIZE}</body>`) : `${page}${RESIZE}`;
+    const page = `<!doctype html>${preamble}${start.replace(/^<!doctype[^>]*>/i, '')}`;
+    return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${resize}</body>`) : `${page}${resize}`;
   }
   const css = source.widget || source.kind === 'svg' ? `<style>${WIDGET_CSS}</style>` : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
-  return `<!doctype html><html data-theme="${theme}"><head>${PREAMBLE}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${code}${RESIZE}</body></html>`;
+  return `<!doctype html><html data-theme="${theme}"><head>${preamble}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${code}${resize}</body></html>`;
 }
 
-/** The rendered content in a sandboxed frame, as tall as it is (up to `max`). */
-export function Sandbox({ source, max = 640, fill = false }: { source: PreviewSource; max?: number; fill?: boolean }) {
+/** Whether the code looks like it has scripts to run (only to offer Run: nothing runs without it). */
+export function hasScripts(code: string): boolean {
+  return /<script\b|\son[a-z]+\s*=|javascript:/i.test(code);
+}
+
+/**
+ * How tall a still SVG is at a width, from its viewBox (or its width and height): a frame where
+ * nothing runs cannot say how tall it is, but a drawing's shape is in its first tag.
+ */
+export function stillHeight(source: PreviewSource, width: number): number | undefined {
+  if (!width) return undefined;
+  const code = source.code.slice(LEADING.exec(source.code)?.[0].length ?? 0);
+  const tag = /^<svg\b[^>]*>/i.exec(code)?.[0];
+  if (!tag) return undefined;
+  const box = /\sviewBox\s*=\s*["']\s*[-\d.eE]+[\s,]+[-\d.eE]+[\s,]+([\d.eE]+)[\s,]+([\d.eE]+)/i.exec(tag);
+  // A width or height in pixels (not a percentage, not stroke-width).
+  const pixels = (name: string) => Number(new RegExp(`\\s${name}\\s*=\\s*["']?\\s*([\\d.]+)(?:px)?["'\\s/>]`, 'i').exec(tag)?.[1]);
+  const [w, h] = box ? [Number(box[1]), Number(box[2])] : [pixels('width'), pixels('height')];
+  if (!(w > 0) || !(h > 0)) return undefined;
+  // The widget styles pad the body by 2px.
+  return Math.ceil(width * (h / w)) + 4;
+}
+
+let runs = 0;
+
+/**
+ * The content in a sandboxed frame, as tall as it is (up to `max`). Still: a frame where nothing
+ * runs, sized from the drawing or to a fixed height. Running: preview.html, which gets the page.
+ */
+export function Sandbox({ source, max = 640, fill = false, run = false }: { source: PreviewSource; max?: number; fill?: boolean; run?: boolean }) {
   const frame = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(source.kind === 'svg' ? 0 : 160);
   const dark = isDark();
-  const doc = useMemo(() => documentFor(source, dark), [source, dark]);
+  const doc = useMemo(() => documentFor(source, dark, !run), [source, dark, run]);
+  // A running frame gets its document once, so a new document takes a new frame.
+  const key = useMemo(() => (run ? `run-${(runs += 1)}` : 'still'), [run, doc]);
+  const [reported, setReported] = useState<number>();
+  const [width, setWidth] = useState(0);
   const name = useId();
+
   useEffect(() => {
+    setReported(undefined);
+    if (!run) return undefined;
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== frame.current?.contentWindow) return;
-      const reported = (event.data as { pelicanPreviewHeight?: unknown } | undefined)?.pelicanPreviewHeight;
-      if (typeof reported === 'number' && reported > 0) setHeight(reported);
+      const target = frame.current?.contentWindow;
+      if (!target || event.source !== target) return;
+      const data = event.data as { pelicanPreviewHeight?: unknown; pelicanPreviewReady?: unknown } | undefined;
+      // The frame's origin is opaque, so there is no origin to name; the page is what it shows anyway.
+      if (data?.pelicanPreviewReady === true) target.postMessage({ pelicanPreview: doc }, '*');
+      else if (typeof data?.pelicanPreviewHeight === 'number' && data.pelicanPreviewHeight > 0) setReported(data.pelicanPreviewHeight);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [run, doc, key]);
+
+  useEffect(() => {
+    const element = frame.current;
+    if (!element || fill) return undefined;
+    const observer = new ResizeObserver(() => setWidth(element.clientWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [fill, key]);
+
+  const still = stillHeight(source, width);
+  const height = reported ?? still ?? (source.kind === 'svg' ? 0 : fullPage(source.code) ? 360 : 240);
   return (
     <iframe
+      key={key}
       ref={frame}
       name={name}
       title={source.title ?? 'Preview'}
-      sandbox="allow-scripts"
+      sandbox={run ? 'allow-scripts' : ''}
       referrerPolicy="no-referrer"
-      srcDoc={doc}
+      {...(run ? { src: './preview.html' } : { srcDoc: doc })}
       className="block w-full border-0 bg-transparent"
       style={fill ? { height: '100%' } : { height: Math.min(Math.max(height, 48), max) }}
     />
   );
 }
 
+/** The quiet button that lets a preview's scripts run. */
+function RunButton({ onRun }: { onRun: () => void }) {
+  return (
+    <button type="button" onClick={onRun} title="Run its scripts" className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg">
+      <Play className="size-3.5" />
+      Run
+    </button>
+  );
+}
+
 // One full-screen preview at a time, opened from anywhere in the chat.
-let current: PreviewSource | undefined;
+let current: { source: PreviewSource; run: boolean } | undefined;
 const listeners = new Set<() => void>();
-export function openPreview(source: PreviewSource | undefined): void {
-  current = source;
+export function openPreview(source: PreviewSource | undefined, run = false): void {
+  current = source ? { source, run } : undefined;
   for (const listener of listeners) listener();
 }
 
 export function PreviewOverlay() {
-  const source = useSyncExternalStore(
+  const shown = useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -132,47 +184,51 @@ export function PreviewOverlay() {
     () => current,
   );
   useEffect(() => {
-    if (!source) return;
+    if (!shown) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') openPreview(undefined);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [source]);
-  if (!source) return null;
+  }, [shown]);
+  if (!shown) return null;
+  const { source, run } = shown;
   return createPortal(
     <div className="animate-fade fixed inset-0 z-[60] flex flex-col bg-bg">
-      <div className="pt-safe flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-        <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{source.title ?? 'Preview'}</span>
-        <button type="button" aria-label="Close preview" onClick={() => openPreview(undefined)} className="grid size-9 place-items-center rounded-full hover:bg-hover">
+      <div className="pt-safe flex shrink-0 items-center gap-2 border-b border-line px-3 py-2 text-[12px] text-faint">
+        <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-fg">{source.title ?? 'Preview'}</span>
+        {!run && hasScripts(source.code) && <RunButton onRun={() => openPreview(source, true)} />}
+        <button type="button" aria-label="Close preview" onClick={() => openPreview(undefined)} className="grid size-9 place-items-center rounded-full text-fg hover:bg-hover">
           <X className="size-5" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto bg-panel"><Sandbox source={source} fill /></div>
+      <div className="min-h-0 flex-1 overflow-auto bg-panel"><Sandbox source={source} run={run} fill /></div>
     </div>,
     document.body,
   );
 }
 
-/** A visual or a page, shown rendered, with a way to see its code and to open it full screen. */
+/** A visual or a page, shown rendered, with a way to run its scripts, see its code and open it full screen. */
 export function PreviewCard({ source, label, defaultCode = false }: { source: PreviewSource; label?: string; defaultCode?: boolean }) {
   const [code, setCode] = useState(defaultCode);
+  const [run, setRun] = useState(false);
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex h-9 items-center gap-1 border-b border-line pr-1 pl-3 text-[12px] text-faint">
         <span className="min-w-0 flex-1 truncate">{label ?? source.title ?? (source.kind === 'svg' ? 'SVG' : 'HTML')}</span>
+        {!code && !run && hasScripts(source.code) && <RunButton onRun={() => setRun(true)} />}
         <button type="button" onClick={() => setCode((v) => !v)} className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg" aria-pressed={code}>
           {code ? <Eye className="size-3.5" /> : <Code2 className="size-3.5" />}
           {code ? 'Preview' : 'Code'}
         </button>
-        <button type="button" aria-label="Open full screen" onClick={() => openPreview(source)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
+        <button type="button" aria-label="Open full screen" onClick={() => openPreview(source, run)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
           <Maximize2 className="size-3.5" />
         </button>
       </div>
       {code ? (
         <pre className="max-h-80 overflow-auto px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted">{source.code}</pre>
       ) : (
-        <div className="bg-bg"><Sandbox source={source} /></div>
+        <div className="bg-bg"><Sandbox source={source} run={run} /></div>
       )}
     </div>
   );
