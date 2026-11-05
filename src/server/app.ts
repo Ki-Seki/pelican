@@ -24,7 +24,7 @@ import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } 
 import { searchFiles } from './project-files.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, sendMessage } from './runner.js';
+import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
@@ -194,11 +194,11 @@ app.get('/api/info', async (c) => {
   return c.json(info);
 });
 
-app.get('/api/sessions', async (c) => c.json({ sessions: await listSummaries(runStatus) }));
+app.get('/api/sessions', async (c) => c.json({ sessions: await listSummaries(runStatus, runTasks) }));
 
 app.get('/api/sessions/:id', async (c) => {
   const id = c.req.param('id');
-  const session = await sessionSummary(id, runStatus);
+  const session = await sessionSummary(id, runStatus, runTasks);
   const run = runState(id);
   if (!session && !run) return c.json({ error: 'No such session' }, 404);
   // The task list needs the whole conversation; the page may only have loaded its end.

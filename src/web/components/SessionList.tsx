@@ -4,7 +4,7 @@ import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, u
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api, isUnreachable } from '../lib/api';
-import { type Entry, fold, foldKey, single } from '../lib/fold';
+import { type Entry, fold, foldKey, isActive, single } from '../lib/fold';
 import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { composing, MOD_ARIA } from '../lib/keyboard';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
@@ -17,31 +17,39 @@ const TEMP = '\u0000temp';
 const ARCHIVED = '\u0000archived';
 const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary', [ARCHIVED]: 'Archived' };
 
-export function statusLabel(status: SessionStatus, runningIn?: string): string {
+/**
+ * What a session is doing, in words. `tasks`: background tasks and subagents still running in it
+ * (and checks Claude stays running for), said between turns as "2 tasks".
+ */
+export function statusLabel(status: SessionStatus, runningIn?: string, tasks = 0): string {
   if (status === 'running') return 'Working';
   if (status === 'waiting') return runningIn ? `Needs you in ${runningIn}` : 'Needs you';
   if (status === 'live') return runningIn ? `Working in ${runningIn}` : 'Working elsewhere';
+  if (tasks > 0) return tasks === 1 ? '1 task' : `${tasks} tasks`;
   return '';
 }
 
 const DOT: Record<SessionStatus, string> = { running: 'bg-run', waiting: 'bg-wait', live: 'bg-live', idle: 'bg-line' };
 const TEXT: Record<SessionStatus, string> = { running: 'text-run', waiting: 'text-wait', live: 'text-live', idle: 'text-faint' };
 
-export function StatusDot({ status }: { status: SessionStatus }) {
+/** Pulsing while a turn runs; background work between turns has Claude's color, still. */
+export function StatusDot({ status, tasks = 0 }: { status: SessionStatus; tasks?: number }) {
+  const color = status === 'idle' && tasks > 0 ? DOT.running : DOT[status];
   return (
     <span className="relative flex size-1.5 shrink-0">
       {(status === 'running' || status === 'live') && <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 ${DOT[status]}`} />}
-      <span className={`relative inline-flex size-1.5 rounded-full ${DOT[status]}`} />
+      <span className={`relative inline-flex size-1.5 rounded-full ${color}`} />
     </span>
   );
 }
 
-export function StatusBadge({ status, runningIn }: { status: SessionStatus; runningIn?: string }) {
-  if (status === 'idle') return null;
+export function StatusBadge({ status, runningIn, tasks = 0 }: { status: SessionStatus; runningIn?: string; tasks?: number }) {
+  const label = statusLabel(status, runningIn, tasks);
+  if (!label) return null;
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium ${TEXT[status]}`}>
-      <StatusDot status={status} />
-      {statusLabel(status, runningIn)}
+    <span className={`inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium ${status === 'idle' ? TEXT.running : TEXT[status]}`}>
+      <StatusDot status={status} tasks={tasks} />
+      {label}
     </span>
   );
 }
@@ -74,7 +82,7 @@ function openHere(e: React.MouseEvent, id: string, onOpen: (id: string) => void)
 function rowName(session: SessionSummary, unread: boolean, showProject: boolean): string {
   return [
     session.title,
-    statusLabel(session.status, session.runningIn),
+    statusLabel(session.status, session.runningIn, session.tasks),
     unread ? 'new activity' : '',
     session.archived ? 'archived' : '',
     showProject ? (session.scratch ? 'scratch' : session.project) : '',
@@ -109,7 +117,7 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
         <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-faint">Stopped: {session.stopped}</div>
       ) : session.preview && <div id={preview} className="mt-0.5 line-clamp-1 text-[13px] leading-snug text-muted">{session.preview}</div>}
       <div className="mt-1 flex items-center gap-2 text-[12.5px] text-muted">
-        <StatusBadge status={session.status} runningIn={session.runningIn} />
+        <StatusBadge status={session.status} runningIn={session.runningIn} tasks={session.tasks} />
         {showProject && <Where session={session} />}
         {session.gitBranch && (
           <span className="flex min-w-0 items-center gap-0.5 truncate text-faint">
@@ -129,11 +137,11 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
       aria-label={rowName(session, unread, showProject)}
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
-      title={statusLabel(session.status, session.runningIn) || undefined}
+      title={statusLabel(session.status, session.runningIn, session.tasks) || undefined}
       className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
     >
       {selected && <OpenMark />}
-      {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} />}
+      {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} tasks={session.tasks} />}
       <span className={`min-w-0 flex-1 truncate text-[14.5px] ${unread ? 'font-semibold' : ''}`}>{session.title}</span>
       {showProject && <span className="max-w-[35%] shrink-0 truncate text-[12px] text-faint">{session.scratch ? 'Scratch' : session.project}</span>}
       <span className="w-8 shrink-0 text-right text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
@@ -507,9 +515,9 @@ export function SessionList({
     }
 
     const out: Group[] = [];
-    const active = filtered.filter((s) => s.status !== 'idle');
+    const active = filtered.filter(isActive);
     if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active.map(single), count: active.length });
-    for (const entry of fold(filtered.filter((s) => s.status === 'idle'))) {
+    for (const entry of fold(filtered.filter((s) => !isActive(s)))) {
       const label = dayGroup(entry.session.lastActivity);
       const last = out.at(-1);
       if (last && last.label === label) last.entries.push(entry);

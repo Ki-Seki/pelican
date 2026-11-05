@@ -40,6 +40,11 @@ export type SessionSummary = {
    * signed in"): the list shows that, not the error's text as Claude's reply.
    */
   stopped?: string;
+  /**
+   * Background tasks and subagents still running in a session this app runs, and the checks it
+   * scheduled, which Claude stays running for. Between turns, the session is still at work.
+   */
+  tasks?: number;
 };
 
 export type TextBlock = { type: 'text'; text: string; truncated?: boolean };
@@ -289,8 +294,8 @@ export type ServerEvent =
    * where its copy ends. A client whose copy does not match subscribes again and gets the whole run.
    */
   | { type: 'partial'; sessionId: string; appends: PartialAppend[] }
-  /** A session's status changed; sent to every client, for session lists. */
-  | { type: 'status'; sessionId: string; status: SessionStatus }
+  /** A session's status, or how much background work it has (`tasks`), changed; sent to every client, for session lists. */
+  | { type: 'status'; sessionId: string; status: SessionStatus; tasks?: number }
   | { type: 'reload'; sessionId: string }
   /** Every 25 s: pages cannot see pings, and a socket that has gone quiet is a dead one. */
   | { type: 'tick' };

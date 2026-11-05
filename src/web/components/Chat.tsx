@@ -504,6 +504,8 @@ export function Chat({
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
   const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
+  // Between turns: background tasks and subagents still running, and the checks Claude stays running for.
+  const working = view.run ? (busy ? 0 : (view.run.tasks?.length ?? 0) + (view.run.scheduled?.length ?? 0)) : session?.tasks ?? 0;
 
   // A `!` command: run in the session's folder, shown in the conversation, read by Claude with the next message.
   const shell = async (command: string) => {
@@ -684,11 +686,11 @@ export function Chat({
               {!wide && status === 'live' && session?.runningIn && !view.run ? (
                 <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] font-medium text-live"><StatusDot status="live" />In {session.runningIn}</span>
               ) : (
-                <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} />
+                <StatusBadge status={status} runningIn={view.run ? undefined : session?.runningIn} tasks={working} />
               )}
               <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
               {/* On a phone the line has room for the branch only when nothing else is going on; the session menu always has it. */}
-              {session?.gitBranch && (wide || status === 'idle') && (
+              {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
                 <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
               )}
             </div>

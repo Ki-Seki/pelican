@@ -15,6 +15,8 @@ import { toChatMessage } from './normalize.js';
 import { firstTurnSession, forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
+/** How much background work runs in a session this app runs (runner's runTasks). */
+export type TaskSource = (sessionId: string) => number;
 
 const infoCache = new Map<string, SDKSessionInfo>();
 
@@ -35,13 +37,14 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
 async function summarize(
-  info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>, archived: Set<string>, fresh?: Seen,
+  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, archived: Set<string>, fresh?: Seen,
 ): Promise<SessionSummary> {
   const file = fresh?.file ?? await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file, fresh) : undefined;
   const lastTurn = times?.lastTurn;
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
+  const working = own ? tasks(info.sessionId) : 0;
   let state: SessionStatus = own ?? 'idle';
   // Another app's Claude process says it waits for an answer, or is busy; failing that, a turn
   // written moments ago (not one a fork just copied over: a new branch is idle until someone
@@ -75,6 +78,7 @@ async function summarize(
     ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
     ...(runningIn ? { runningIn } : {}),
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
+    ...(working > 0 ? { tasks: working } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
     ...(archived.has(info.sessionId) ? { archived: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
@@ -149,10 +153,10 @@ function sessionInfos(): Promise<SDKSessionInfo[]> {
 }
 
 /** Every session on this machine, newest activity first. */
-export async function listSummaries(status: StatusSource): Promise<SessionSummary[]> {
+export async function listSummaries(status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary[]> {
   const infos = await sessionInfos();
   const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, live, archived, files.get(info.sessionId))));
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, archived, files.get(info.sessionId))));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -174,9 +178,9 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
   return merged;
 }
 
-export async function sessionSummary(sessionId: string, status: StatusSource): Promise<SessionSummary | undefined> {
+export async function sessionSummary(sessionId: string, status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status, await liveProcesses(), await archivedIds()) : undefined;
+  return info ? summarize(info, status, tasks, await liveProcesses(), await archivedIds()) : undefined;
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

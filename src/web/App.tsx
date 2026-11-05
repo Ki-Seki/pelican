@@ -149,7 +149,7 @@ function Main() {
       void queryClient.invalidateQueries({ queryKey: ['session'] });
     } else if (event.type === 'status') {
       queryClient.setQueryData<SessionSummary[]>(['sessions'], (list) =>
-        list?.map((s) => (s.id === event.sessionId ? { ...s, status: event.status } : s)));
+        list?.map((s) => (s.id === event.sessionId ? { ...s, status: event.status, tasks: event.tasks } : s)));
     }
   }), [queryClient]);
 
