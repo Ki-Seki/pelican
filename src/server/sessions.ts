@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, getSubagentMessages, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
@@ -11,7 +11,7 @@ import { folderKind } from './folders.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
-import { firstTurnSession, lastTurnTime, transcriptPath } from './transcripts.js';
+import { firstTurnSession, forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
 
@@ -23,8 +23,9 @@ function titleOf(info: SDKSessionInfo): string {
 }
 
 async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<string, LiveProcess>, archived: Set<string>): Promise<SessionSummary> {
-  const file = await transcriptPath(info.sessionId);
-  const times = file ? await lastTurnTime(file) : undefined;
+  const known = files.get(info.sessionId);
+  const file = known?.file ?? await transcriptPath(info.sessionId);
+  const times = file ? await lastTurnTime(file, known) : undefined;
   const lastTurn = times?.lastTurn;
   const lastActivity = lastTurn?.time ?? info.lastModified;
   const own = status(info.sessionId);
@@ -68,29 +69,94 @@ async function summarize(info: SDKSessionInfo, status: StatusSource, live: Map<s
   };
 }
 
+const defined = <T extends object>(value: T): Partial<T> =>
+  Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+/** A transcript as the list last saw it: its size and time then, and what the SDK made of it (null: nothing to list). */
+type Seen = { id: string; file: string; size: number; mtimeMs: number; info: SDKSessionInfo | null; continuedIn?: string };
+
+/** Every transcript the list has seen, by path. */
+const seen = new Map<string, Seen>();
+/** The transcript each listed session is shown from. */
+const files = new Map<string, Seen>();
+const statting = limiter(32);
+const asking = limiter(8);
+let refreshing: Promise<SDKSessionInfo[]> | undefined;
+
+/**
+ * Every session's info, as the SDK's `listSessions` gives it, without reading every transcript
+ * each time: files are only stat'ed, and only those new or changed since the last look are read
+ * again (`getSessionInfo`), a few at a time, so even a first look at thousands never stalls the
+ * server. As in the SDK's listing, the newest copy of a session counts, and a session that went
+ * on in another one with a transcript of its own is that one.
+ */
+async function refresh(): Promise<SDKSessionInfo[]> {
+  const found = await transcriptFiles();
+  const stats = await Promise.all(found.map(({ id, file }) => statting(async () => {
+    const info = await stat(file).catch(() => undefined);
+    return info?.isFile() ? { id, file, size: info.size, mtimeMs: info.mtimeMs } : undefined;
+  })));
+  const present = new Set<string>();
+  const changed: Array<Omit<Seen, 'info'>> = [];
+  for (const entry of stats) {
+    if (!entry) continue;
+    present.add(entry.file);
+    const before = seen.get(entry.file);
+    if (!before || before.size !== entry.size || before.mtimeMs !== entry.mtimeMs) changed.push(entry);
+  }
+  for (const file of seen.keys()) if (!present.has(file)) seen.delete(file);
+  forgetTranscripts(present);
+  await Promise.all(changed.map((entry) => asking(async () => {
+    const turn = (await lastTurnTime(entry.file, entry))?.lastTurn;
+    // The folder it ran in leads straight to the file; without one, every project is searched.
+    const dir = seen.get(entry.file)?.info?.cwd ?? turn?.cwd;
+    const info = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
+      ?? await getSessionInfo(entry.id).catch(() => undefined);
+    seen.set(entry.file, { ...entry, info: info ?? null, ...(turn?.continuedIn ? { continuedIn: turn.continuedIn } : {}) });
+  })));
+  files.clear();
+  for (const entry of seen.values()) {
+    if (!entry.info) continue;
+    const other = files.get(entry.id);
+    if (!other || entry.mtimeMs > other.mtimeMs) files.set(entry.id, entry);
+  }
+  for (const [id, entry] of files) if (entry.continuedIn && files.has(entry.continuedIn)) files.delete(id);
+  const infos = [...files.values()].map((entry) => entry.info!);
+  // What a later look found (a folder the head of the file does not name) stays.
+  for (const info of infos) infoCache.set(info.sessionId, { ...infoCache.get(info.sessionId), ...defined(info), sessionId: info.sessionId, summary: info.summary, lastModified: info.lastModified });
+  return infos;
+}
+
+/** Requests that ask while one is being worked out share it. */
+function sessionInfos(): Promise<SDKSessionInfo[]> {
+  refreshing ??= refresh().finally(() => {
+    refreshing = undefined;
+  });
+  return refreshing;
+}
+
 /** Every session on this machine, newest activity first. */
 export async function listSummaries(status: StatusSource): Promise<SessionSummary[]> {
-  const infos = await listSessions({ includeProgrammatic: true });
-  for (const info of infos) infoCache.set(info.sessionId, info);
+  const infos = await sessionInfos();
   const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(info, status, live, archived)));
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, live, archived)));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
 export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | undefined> {
-  // Without a project dir, `getSessionInfo` leaves `cwd` out; the list has it.
-  if (!infoCache.has(sessionId)) {
-    for (const info of await listSessions({ includeProgrammatic: true }).catch(() => [])) infoCache.set(info.sessionId, info);
-  }
+  // Without a project dir, `getSessionInfo` searches every project and may leave `cwd` out; the
+  // list has both. One it has not seen yet is searched for, never a whole listing.
   const cached = infoCache.get(sessionId);
-  const info = await getSessionInfo(sessionId, cached?.cwd ? { dir: cached.cwd } : {}).catch(() => undefined);
+  // The folder it last ran in may not be the one its transcript is filed under: then search.
+  const info = (cached?.cwd ? await getSessionInfo(sessionId, { dir: cached.cwd }).catch(() => undefined) : undefined)
+    ?? await getSessionInfo(sessionId).catch(() => undefined);
   if (!info) return cached;
   let cwd = info.cwd || cached?.cwd;
   if (!cwd) {
     const file = await transcriptPath(sessionId);
     cwd = file ? (await lastTurnTime(file))?.lastTurn?.cwd : undefined;
   }
-  const merged = { ...cached, ...info, ...(cwd ? { cwd } : {}) };
+  const merged = { ...cached, ...defined(info), sessionId, summary: info.summary, lastModified: info.lastModified, ...(cwd ? { cwd } : {}) };
   infoCache.set(sessionId, merged);
   return merged;
 }
