@@ -946,6 +946,32 @@ describe('notifications', () => {
       expect(notice.body).toBe(oneLine(body));
     }
   });
+
+  it('a notification body stays short, whatever one character holds', async () => {
+    // One character as it shows can hold any number of code points: a letter and its marks.
+    const marked = `Z${'\u0336\u0301'.repeat(1200)}`;
+    const { claude } = await start();
+    void ask(claude, 'Bash', { command: `echo "${marked}algo test"\nrm -rf build` });
+    await settle();
+    expect(notices.at(-1)!.body).toBe('echo "…');
+    // At most 120 characters, cut between them, and within 4 bytes each on average: a character
+    // too long for that is left out, with what follows it.
+    expect(oneLine(`a${'\u0301'.repeat(5000)}`)).toBe('…');
+    const characters = (text: string) => [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text)].length;
+    const family = '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}';
+    for (const text of [marked.repeat(3), '\u0915\u094d\u0937'.repeat(300), family.repeat(300), '\u6d4b'.repeat(300), 'x'.repeat(300)]) {
+      for (const max of [100, 120, 180]) {
+        const line = oneLine(text, max);
+        expect(line.endsWith('…')).toBe(true);
+        expect(characters(line)).toBeLessThanOrEqual(max);
+        expect(Buffer.byteLength(line)).toBeLessThanOrEqual(4 * max);
+      }
+    }
+    // Text in any script is cut by its characters, unless they take more than most.
+    expect(oneLine('\u6d4b'.repeat(300))).toBe(`${'\u6d4b'.repeat(119)}…`);
+    expect(oneLine('\u0915\u094d\u0937'.repeat(300))).toBe(`${'\u0915\u094d\u0937'.repeat(53)}…`);
+    expect(oneLine(family.repeat(300))).toBe(`${family.repeat(19)}…`);
+  });
 });
 
 describe('side chats', () => {

@@ -76,14 +76,26 @@ const UNSHOWN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]+/u;
 const EMOJI_OR_UNSHOWN = new RegExp(`(${EMOJI.source})|${UNSHOWN.source}`, 'gu');
 const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
-/** Text for a lock screen: one line, short, emoji whole, without control, invisible or direction-changing characters. */
+/**
+ * Text for a lock screen: one line, without control, invisible or direction-changing characters
+ * (an emoji keeps those it is made of), and short. It ends at `max` characters as they show, cut
+ * between them, never inside one (an emoji, a letter and its accents), and sooner where they take
+ * more than 4 bytes each on average, and so as many code points: one character can hold any
+ * number of them, and a push carries 4 KB. A character too long for that is left out, with the
+ * rest of the text.
+ */
 export function oneLine(text: string, max = 120): string {
   const flat = text.replace(EMOJI_OR_UNSHOWN, (_, emoji?: string) => emoji ?? ' ').replace(/\s+/g, ' ').trim();
-  // Cut between characters as they show, never inside one: an emoji, a letter and its accent.
-  const shown: string[] = [];
-  for (const { segment } of graphemes.segment(flat)) {
-    if (shown.length === max) return `${shown.slice(0, max - 1).join('')}…`;
-    shown.push(segment);
+  const most = 4 * max;
+  let characters = 0;
+  let bytes = 0;
+  // Where a cut leaves room for the ellipsis, one character of 3 bytes.
+  let cut = 0;
+  for (const { segment, index } of graphemes.segment(flat)) {
+    characters += 1;
+    bytes += Buffer.byteLength(segment);
+    if (characters > max || bytes > most) return `${flat.slice(0, cut)}…`;
+    if (characters < max && bytes + 3 <= most) cut = index + segment.length;
   }
   return flat;
 }
@@ -194,11 +206,19 @@ export function answerable(request: PermissionRequest): Partial<Pick<PushPayload
   return command === undefined ? {} : { body: command, request: request.id };
 }
 
+/**
+ * What a push carries: push services take 4,096 bytes (RFC 8030), and its encryption (aes128gcm,
+ * RFC 8188) takes 103 of them, a header of 86, a padding byte and a tag of 16. A push over it is
+ * refused, and nobody hears that Claude waits.
+ */
+const PUSH_BYTES = 4096 - 103;
+
 /** Sends a notification to every subscribed device; drops subscriptions the push service rejects. */
 export async function notify(payload: PushPayload): Promise<void> {
   if (!keys || subscriptions.length === 0) return;
-  // The title is the session's, which can hold what hides text or turns it around, as any text can.
-  const shown = { ...payload, title: oneLine(payload.title) || 'Claude Code' };
+  // Whoever sends it, its words are a lock screen's: at most 480 bytes of title and 720 of text, far
+  // within a push. The title is the session's, which can hold what hides text or turns it around.
+  const shown = { ...payload, title: oneLine(payload.title) || 'Claude Code', body: oneLine(payload.body, 180) };
   // Devices signed out by a new token or password get nothing more, and are forgotten.
   const signer = cookieName();
   const gone = subscriptions.filter((s) => s.signer !== signer).map((s) => s.endpoint);
@@ -207,7 +227,9 @@ export async function notify(payload: PushPayload): Promise<void> {
     const id = encodeURIComponent(payload.sessionId);
     const url = config.sessionUrl ? config.sessionUrl.replaceAll('{id}', id)
       : subscription.openUrl ? `${subscription.openUrl}${id}` : undefined;
-    const body = JSON.stringify({ ...shown, url });
+    const linked = JSON.stringify({ ...shown, url });
+    // A link too long to go with it (an address of kilobytes) is left out, not the notification.
+    const body = Buffer.byteLength(linked) <= PUSH_BYTES ? linked : JSON.stringify(shown);
     try {
       await webpush.sendNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, body, { TTL: 3600, urgency: 'high' });
     } catch (error) {

@@ -66,3 +66,26 @@ describe('a notification’s title, the session’s', () => {
     expect(await titleOf('\u2066\u2069\u200b')).toBe('Claude Code');
   });
 });
+
+describe('a push', () => {
+  const last = () => sent.at(-1)!.body;
+
+  it('stays within what push services carry, link and all, whatever one character of its words holds', async () => {
+    // A letter and its marks, joined emoji, the quotes and backslashes JSON doubles, halves of characters.
+    for (const text of [`Z${'\u0336\u0301'.repeat(2400)}`, '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}'.repeat(500), '"\\'.repeat(3000), '\ud800'.repeat(3000)]) {
+      await notify({ title: text, body: text, sessionId: 's-1', tag: 's-1:ask', request: 'req-1' });
+      expect(Buffer.byteLength(last()), JSON.stringify(text.slice(0, 4))).toBeLessThanOrEqual(4096 - 103);
+      expect(JSON.parse(last())).toMatchObject({ sessionId: 's-1', request: 'req-1', url: 'https://laptop.example.ts.net/?s=s-1' });
+    }
+  });
+
+  it('leaves out a link too long to go with it, rather than the notification', async () => {
+    config.sessionUrl = `https://laptop.example.ts.net/${'a'.repeat(4000)}?s={id}`;
+    try {
+      await notify({ title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1' });
+    } finally {
+      config.sessionUrl = undefined;
+    }
+    expect(JSON.parse(last())).toEqual({ title: 'Fix the login test', body: 'Run npm test', sessionId: 's-1', tag: 's-1:ask', request: 'req-1' });
+  });
+});

@@ -102,7 +102,9 @@ from every app.
   description of it; edits, other tools, other commands, questions and plans open the session.
 - Notifications and check-ins keep emoji whole, also those made of several pictures, and still
   leave out characters that hide text or turn it around, now also from a notification's title, the
-  session's.
+  session's. Their text is cut between characters as they show, and sooner where those hold many
+  code points (one letter can carry any number of accents), so a notification stays within the
+  4 KB a push service carries.
 - Export as Markdown has the conversation as it shows here: `!` commands with their output and
   `/` commands as typed, without the tags, notes and summaries Claude Code and Pelican add for
   Claude, such as a side chat's note with each question.
