@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
 import { config } from './config.js';
+import { openRegular } from './open.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
 
 /**
@@ -38,13 +39,43 @@ export class NeedsTrust extends Error {
 const exists = (file: string) => stat(file).then(() => true, () => false);
 const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
 
-async function readJson(file: string): Promise<unknown> {
+/** Larger than any settings file; a folder could otherwise make the server read without end. */
+const MAX_READ = 16 * 1024 * 1024;
+
+/**
+ * A file's text, read only when it is a regular file of a sane size (`odd` when something else is
+ * there): a named pipe in its place would hold one of Node's few file threads until someone wrote
+ * to it, and a folder from a tarball can bring one.
+ */
+async function readText(file: string): Promise<{ text?: string; odd?: true }> {
+  let handle: Awaited<ReturnType<typeof openRegular>>;
   try {
-    return JSON.parse(await readFile(file, 'utf8')) as unknown;
+    handle = await openRegular(file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? {} : { odd: true };
+  }
+  try {
+    if ((await handle.stat()).size > MAX_READ) return { odd: true };
+    return { text: await handle.readFile('utf8') };
   } catch {
-    return undefined;
+    return { odd: true };
+  } finally {
+    await handle.close();
   }
 }
+
+/** A JSON file's value (undefined when it is missing or not JSON), and whether it is not a regular file. */
+async function readJsonFile(file: string): Promise<{ value: unknown; odd?: true }> {
+  const { text, odd } = await readText(file);
+  try {
+    return { value: text === undefined ? undefined : JSON.parse(text) as unknown, ...(odd ? { odd } : {}) };
+  } catch {
+    return { value: undefined };
+  }
+}
+
+const readJson = async (file: string): Promise<unknown> => (await readJsonFile(file)).value;
 
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -412,9 +443,15 @@ export async function folderBrings(folder: string): Promise<string[]> {
   const home = os.homedir();
   const top = await gitRoot(dir);
   const found: string[] = [];
+  // A file of the folder's that is not a regular file is not read, and is asked about instead.
+  const json = async (file: string): Promise<unknown> => {
+    const { value, odd } = await readJsonFile(file);
+    if (odd) found.push(`Cannot be read: ${path.relative(dir, file)}`);
+    return value;
+  };
   for (let d = dir; d !== home; d = path.dirname(d)) {
-    for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await readJson(path.join(d, '.claude', name))));
-    found.push(...fromMcp(await readJson(path.join(d, '.mcp.json'))));
+    for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await json(path.join(d, '.claude', name))));
+    found.push(...fromMcp(await json(path.join(d, '.mcp.json'))));
     if (d === top || path.dirname(d) === d) break;
   }
   if (top) found.push(...(await gitBrings(top)));
