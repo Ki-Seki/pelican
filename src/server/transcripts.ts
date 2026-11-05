@@ -278,6 +278,7 @@ export async function lastTurnTime(file: string, known?: { size: number; mtimeMs
 /** Forgets what was read of files that are gone. */
 export function forgetTranscripts(present: Set<string>): void {
   for (const file of lastTurnCache.keys()) if (!present.has(file)) lastTurnCache.delete(file);
+  for (const key of titleScans.keys()) if (!present.has(key.slice(0, key.lastIndexOf('\n')))) titleScans.delete(key);
 }
 
 const HEAD_SCAN = 64 * 1024 * 1024;
@@ -327,6 +328,75 @@ export async function firstTurnSession(file: string): Promise<string | undefined
     headCache.set(file, found);
   }
   return found;
+}
+
+/** How much of a transcript a look for a title reads at a time. */
+export const TITLE_READ = 1024 * 1024;
+/** A title row is far shorter: a line longer than this is something else, and is not kept while it is read. */
+const TITLE_LINE = 64 * 1024;
+const titleScans = new Map<string, { ino: number; size: number; offset: number; found: boolean }>();
+
+/**
+ * Whether a transcript's session was ever given this title, anywhere in the file: a custom-title
+ * row under the file's own id, not one copied with another session's rows. Claude Code and Claude
+ * Desktop add title rows as they go, so the last title need not be it. A file only grows at its
+ * end: each look reads on from the last whole line the one before read, and a title once found
+ * stays found.
+ */
+export async function everTitled(file: string, title: string): Promise<boolean> {
+  const key = `${file}\n${title}`;
+  const known = titleScans.get(key);
+  if (known?.found) return true;
+  const own = path.basename(file, '.jsonl');
+  // As Claude Code writes the row; quotes inside a string are escaped, so text that names it never matches.
+  const needle = Buffer.from(`"customTitle":${JSON.stringify(title)}`);
+  const isTitle = (line: Buffer) => {
+    if (!line.includes(needle)) return false;
+    try {
+      const row = JSON.parse(line.toString('utf8')) as { type?: unknown; customTitle?: unknown; sessionId?: unknown };
+      return row.type === 'custom-title' && row.customTitle === title && row.sessionId === own;
+    } catch {
+      return false;
+    }
+  };
+  let handle: Awaited<ReturnType<typeof openRegular>> | undefined;
+  try {
+    handle = await openRegular(file);
+    const { size, ino } = await handle.stat();
+    // Rewritten rather than grown: from the start again.
+    const again = !known || known.ino !== ino || known.size > size;
+    if (!again && known.size === size) return false;
+    let offset = again ? 0 : known.offset;
+    let found = false;
+    // The start of the line the last read left open; undefined once it is too long to be a title row.
+    let open: Buffer | undefined = Buffer.alloc(0);
+    for (let position = offset; position < size && !found;) {
+      const chunk = Buffer.alloc(Math.min(TITLE_READ, size - position));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      const data = chunk.subarray(0, bytesRead);
+      position += bytesRead;
+      const first = data.indexOf(0x0a);
+      if (first < 0) {
+        open = open && open.length + data.length <= TITLE_LINE ? Buffer.concat([open, data]) : undefined;
+        continue;
+      }
+      if (open && open.length + first <= TITLE_LINE && isTitle(Buffer.concat([open, data.subarray(0, first)]))) found = true;
+      const last = data.lastIndexOf(0x0a);
+      for (let at = data.indexOf(needle, first); at >= 0 && at < last && !found; at = data.indexOf(needle, at + 1)) {
+        if (isTitle(data.subarray(data.lastIndexOf(0x0a, at) + 1, data.indexOf(0x0a, at)))) found = true;
+      }
+      const rest = data.subarray(last + 1);
+      open = rest.length <= TITLE_LINE ? rest : undefined;
+      offset = position - rest.length;
+    }
+    titleScans.set(key, { ino, size, offset, found });
+    return found;
+  } catch {
+    return false; // Missing or unreadable.
+  } finally {
+    await handle?.close();
+  }
 }
 
 /** An image of a prompt as the transcript holds it, in full (the message list leaves big ones out). */

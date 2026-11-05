@@ -35,7 +35,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   signed in under: a new token or password stops notifications to every device, and signing out
   turns them off on that device first. Allow and Deny on a notification send the request the page
   would, with its header, from its origin and under its sign-in, and do nothing for a request that
-  was already answered.
+  was already answered. They are offered only for a command the notification shows whole, on one
+  line and without hidden characters, never on Claude's description of it.
 - **A browser signed out keeps nothing to show.** Signing out forgets its drafts and asks the
   browser to drop what it keeps of Pelican, and the pictures of a conversation are checked with
   Pelican each time they are shown, so a signed-out browser gets none from its cache.
@@ -98,7 +99,7 @@ can read your sessions and have Claude run commands as you, so treat access to i
   changed is read from Claude Code's transcript, not from git, so it shows in any folder.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
-  Pelican resumes it.
+  Pelican resumes it or a branch of it.
 - **What gets installed is what was tested.** The package ships `npm-shrinkwrap.json`, so npm
   installs the exact dependency tree CI tested, with integrity hashes, and the Agent SDK, with the
   Claude Code it bundles, is pinned to one version.
