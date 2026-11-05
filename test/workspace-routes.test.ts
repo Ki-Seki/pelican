@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { readdirSync, readlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +43,20 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+/** How many descriptors this process holds open on a file. */
+function openOn(file: string): number {
+  if (process.platform === 'linux') {
+    return readdirSync('/proc/self/fd').filter((fd) => {
+      try {
+        return readlinkSync(`/proc/self/fd/${fd}`) === file;
+      } catch {
+        return false;
+      }
+    }).length;
+  }
+  return execFileSync('lsof', ['-p', String(process.pid)], { encoding: 'utf8' }).split('\n').filter((line) => line.endsWith(file)).length;
+}
+
 const ask = (url: string, headers: Record<string, string> = {}) =>
   app.request(url, { headers: { host: 'localhost:7860', 'x-pelican': '1', authorization: `Bearer ${accessToken()}`, ...headers } });
 
@@ -73,6 +89,18 @@ describe('a file downloaded', () => {
     for (const bad of ['link.txt', '../secret.txt', '/etc/hosts', 'src']) {
       expect((await ask(`/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(bad)}`)).status).toBe(404);
     }
+  });
+
+  it('answers a HEAD with the headers alone, and leaves the file closed', async () => {
+    await writeFile(path.join(cwd, 'big.bin'), Buffer.alloc(1024 * 1024, 1));
+    const url = `/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=big.bin`;
+    for (let i = 0; i < 20; i += 1) {
+      const head = await app.request(url, { method: 'HEAD', headers: { host: 'localhost:7860', 'x-pelican': '1', authorization: `Bearer ${accessToken()}` } });
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-length')).toBe(String(1024 * 1024));
+      expect(head.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''big.bin");
+    }
+    expect(openOn(path.join(cwd, 'big.bin'))).toBe(0);
   });
 
   it('is a plain link the page cannot mark, so it is let through only as the page itself would ask', async () => {

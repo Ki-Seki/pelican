@@ -680,14 +680,19 @@ app.get('/api/file/raw', async (c) => {
     await opened.handle.close();
     return c.json({ error: 'That file is larger than 200 MB' }, 413);
   }
-  const stream = opened.handle.createReadStream();
-  return c.body(Readable.toWeb(stream) as ReadableStream, 200, {
+  const headers = {
     'Content-Type': 'application/octet-stream',
     'Content-Length': String(opened.size),
     'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`,
     'Cache-Control': 'private, no-store',
     ...INERT,
-  });
+  };
+  // HEAD takes this route too and wants no body: a stream nobody reads would hold the file open.
+  if (c.req.method === 'HEAD') {
+    await opened.handle.close();
+    return c.body(null, 200, headers);
+  }
+  return c.body(Readable.toWeb(opened.handle.createReadStream()) as ReadableStream, 200, headers);
 });
 
 /**
