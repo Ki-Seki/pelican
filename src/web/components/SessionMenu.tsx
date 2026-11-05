@@ -240,7 +240,7 @@ export function SessionMenu({
             <button
               type="button"
               disabled={busy}
-              className="h-9 rounded-full bg-danger px-4 text-[14px] font-medium text-white disabled:opacity-40"
+              className="h-10 rounded-full bg-danger px-4 text-[14px] font-medium text-bg disabled:opacity-40"
               onClick={() => act(async () => {
                 await api.remove(sessionId);
                 onDeleted();
@@ -248,7 +248,7 @@ export function SessionMenu({
             >
               Delete
             </button>
-            <button type="button" className="h-9 rounded-full bg-chip px-4 text-[14px]" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button type="button" className="h-10 rounded-full bg-chip px-4 text-[14px]" onClick={() => setConfirmDelete(false)}>Cancel</button>
           </div>
         </div>
       ) : (

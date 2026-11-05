@@ -284,8 +284,9 @@ export function SessionList({
                 className={`h-8 shrink-0 rounded-full px-3 text-[13px] ${project === p ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
               >
                 {p && SPECIAL[p] ? SPECIAL[p] : (p ?? 'All')}
-                {p === TEMP && <span className="ml-1 opacity-60">{tempCount}</span>}
-                {p === ARCHIVED && <span className="ml-1 opacity-60">{archivedCount}</span>}
+                {/* Faint on a plain chip; see-through on the chosen one, where faint would vanish. */}
+                {p === TEMP && <span className={`ml-1 ${project === p ? 'opacity-60' : 'text-faint'}`}>{tempCount}</span>}
+                {p === ARCHIVED && <span className={`ml-1 ${project === p ? 'opacity-60' : 'text-faint'}`}>{archivedCount}</span>}
               </button>
             ))}
           </div>
