@@ -179,5 +179,9 @@ export function toChatMessage(raw: Raw, address?: ImageAddress): ChatMessage | u
   // and synthetic in the live stream; either way it is not something you typed.
   if (raw.is_meta === true || raw.isMeta === true || raw.isSynthetic === true) out.meta = true;
   if (raw.isCompactSummary === true) out.compactSummary = true;
+  // Claude Code marks the row that answers a refused call; its text alone may be just the user's note.
+  if (typeof raw.toolDenialKind === 'string' && raw.toolDenialKind !== 'interrupted') {
+    for (const block of out.blocks) if (block.type === 'tool_result') block.denied = true;
+  }
   return out;
 }

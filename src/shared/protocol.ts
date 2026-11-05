@@ -51,6 +51,8 @@ export type ToolResultBlock = {
   content: string | Array<TextBlock | ImageBlock>;
   is_error?: boolean;
   truncated?: boolean;
+  /** The call was refused before it ran (by the user, a rule or auto mode), as the transcript records it. */
+  denied?: boolean;
 };
 export type Block = TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
@@ -162,6 +164,8 @@ export type RunState = {
   /** Folder the session runs in. */
   cwd: string;
   busy: boolean;
+  /** When the running turn began, ms since epoch; present while busy. */
+  startedAt?: number;
   settings: RunSettings;
   permissions: PermissionRequest[];
   partial: PartialBlock[];

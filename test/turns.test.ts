@@ -60,3 +60,18 @@ describe('toChatMessage', () => {
     expect(toChatMessage({ type: 'user', uuid: 'c', message: { role: 'user', content: 'typed' } })?.meta).toBeUndefined();
   });
 });
+
+describe('toChatMessage: refusals', () => {
+  it('marks the result of a call Claude Code records as refused, whatever its words', async () => {
+    const { toChatMessage } = await import('../src/server/normalize');
+    const row = (toolDenialKind?: string) => toChatMessage({
+      type: 'user', uuid: 'r', ...(toolDenialKind ? { toolDenialKind } : {}),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'Put it in .env.local instead.', is_error: true }] },
+    });
+    expect(row('user-rejected')?.blocks[0]).toMatchObject({ type: 'tool_result', denied: true });
+    expect(row('permission-rule')?.blocks[0]).toMatchObject({ denied: true });
+    // Stopped is not refused, and a plain error is neither.
+    expect(row('interrupted')?.blocks[0]).not.toHaveProperty('denied');
+    expect(row()?.blocks[0]).not.toHaveProperty('denied');
+  });
+});

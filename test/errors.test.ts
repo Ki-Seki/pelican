@@ -30,7 +30,7 @@ describe('Claude Code’s errors in plain words', () => {
       { uuid: 's3', role: 'system', blocks: [{ type: 'text', text: 'Prompt blocked by a hook: no secrets' }] },
     ];
     expect(buildItems(messages)).toEqual([
-      { kind: 'user', key: 's1', text: '', images: [], command: { name: '/cost', args: '' } },
+      { kind: 'user', key: 's1', text: '', images: [], files: [], command: { name: '/cost', args: '' } },
       { kind: 'notice', key: 's2', tone: 'output', text: 'Total cost: $0.12' },
       { kind: 'notice', key: 's3', tone: 'info', text: 'Prompt blocked by a hook: no secrets' },
     ]);

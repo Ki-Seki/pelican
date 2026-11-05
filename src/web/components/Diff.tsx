@@ -15,7 +15,11 @@ function toLines(before: string, after: string): Line[] {
 
 const CONTEXT = 3;
 
-/** Line diff with unchanged stretches folded, like a pull request view. */
+/**
+ * Line diff with unchanged stretches folded, like a pull request view. Long lines wrap, under
+ * the text and not under the +/− column: a change you are asked to approve is read whole, not
+ * scrolled sideways in a small box.
+ */
 export function Diff({ before, after, maxLines = 400 }: { before: string; after: string; maxLines?: number }) {
   const lines = useMemo(() => toLines(before, after), [before, after]);
   const [expanded, setExpanded] = useState(false);
@@ -44,12 +48,13 @@ export function Diff({ before, after, maxLines = 400 }: { before: string; after:
 
   const shown = rows.slice(0, maxLines);
   return (
-    <div className="overflow-x-auto rounded-lg border border-line bg-panel font-mono text-[12px] leading-[1.55]">
+    <div className="overflow-hidden rounded-lg border border-line bg-panel font-mono text-[12px] leading-[1.55] [tab-size:4]">
       {shown.map((row) =>
         'gap' in row ? (
           <button
             key={`gap-${row.i}`}
             type="button"
+            aria-expanded={false}
             className="block w-full bg-hover px-3 py-0.5 text-left text-[11px] text-faint hover:text-fg"
             onClick={() => setExpanded(true)}
           >
@@ -58,12 +63,12 @@ export function Diff({ before, after, maxLines = 400 }: { before: string; after:
         ) : (
           <div
             key={row.i}
-            className={`flex min-w-max ${row.line.kind === 'add' ? 'bg-add-bg text-add' : row.line.kind === 'del' ? 'bg-del-bg text-del' : 'text-muted'}`}
+            className={`flex ${row.line.kind === 'add' ? 'bg-add-bg text-add' : row.line.kind === 'del' ? 'bg-del-bg text-del' : 'text-muted'}`}
           >
             <span className="w-6 shrink-0 select-none text-center opacity-70">
               {row.line.kind === 'add' ? '+' : row.line.kind === 'del' ? '−' : ''}
             </span>
-            <span className="whitespace-pre pr-3">{row.line.text || ' '}</span>
+            <span className="min-w-0 flex-1 pr-3 whitespace-pre-wrap [overflow-wrap:anywhere]">{row.line.text || ' '}</span>
           </div>
         ),
       )}

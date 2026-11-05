@@ -21,7 +21,8 @@ export function CopyButton({ text, className = '' }: { text: string; className?:
     <button
       type="button"
       aria-label="Copy"
-      className={`grid size-7 place-items-center rounded-md text-faint hover:bg-hover hover:text-fg ${className}`}
+      // Looks 28px, takes a finger's 44px.
+      className={`relative grid size-7 place-items-center rounded-md text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg ${className}`}
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => {
           setCopied(true);
@@ -78,11 +79,15 @@ const components: Components = {
     if (language === 'html' || language === 'svg') {
       return <div className="my-2"><PreviewCard source={{ kind: language, code: textOf(children) }} label={language.toUpperCase()} defaultCode /></div>;
     }
+    // The copy button has a bar of its own, as in Claude's apps: over the code, it hid the first
+    // line of every block that scrolls sideways.
     return (
-      <div className="group relative">
-        {/* Room on the right for the copy button, so it never covers the end of a line. */}
-        <pre className="pr-10">{children}</pre>
-        <CopyButton text={textOf(children)} className="absolute top-1.5 right-1.5 bg-panel opacity-70 group-hover:opacity-100" />
+      <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
+        <div className="flex h-8 items-center gap-2 border-b border-line pr-1 pl-3 text-[11.5px] text-faint">
+          <span className="min-w-0 flex-1 truncate">{language}</span>
+          <CopyButton text={textOf(children)} />
+        </div>
+        <pre className="m-0! rounded-none! border-0!">{children}</pre>
       </div>
     );
   },
@@ -90,7 +95,7 @@ const components: Components = {
     if (typeof src !== 'string' || !src) return null;
     if (!loadsInPlace(src)) return <RemoteImage src={src} {...(alt ? { alt } : {})} />;
     return (
-      <button type="button" className="block max-w-full" onClick={() => openImage(src)}>
+      <button type="button" aria-label={alt || 'Open image'} className="block max-w-full" onClick={() => openImage(src)}>
         <img src={src} alt={alt ?? ''} className="max-h-80 max-w-full rounded-lg border border-line" />
       </button>
     );

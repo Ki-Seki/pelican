@@ -1,11 +1,14 @@
 import { plainError } from '../../shared/errors';
 import type { ChatMessage, ImageBlock, ToolResultBlock } from '../../shared/protocol';
+import { todosOf } from '../../shared/tasks';
 
 export type ToolCall = {
   id: string;
   name: string;
   input: Record<string, unknown>;
   result?: ToolResultBlock;
+  /** A TodoWrite that only moves the same tasks along, which a line says better than the whole list again. */
+  sameTasks?: true;
 };
 
 export type Part =
@@ -14,12 +17,16 @@ export type Part =
   | { kind: 'tool'; key: string; call: ToolCall }
   | { kind: 'image'; key: string; image: ImageBlock };
 
+/** A file sent with a prompt; `id` is its upload and `path` where Claude reads it, once the server has written the prompt down. */
+export type SentFile = { name: string; id?: string; path?: string };
+
 export type Item =
   | {
     kind: 'user';
     key: string;
     text: string;
     images: ImageBlock[];
+    files: SentFile[];
     command?: { name: string; args: string };
     timestamp?: number;
     pending?: boolean;
@@ -37,13 +44,63 @@ const tag = (text: string, name: string) => {
   return match?.[1]?.trim();
 };
 
-// eslint-disable-next-line no-control-regex
-const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '');
+/* eslint-disable no-control-regex */
+/**
+ * Output as a terminal would leave it on screen: colors, links and other escape codes gone (a
+ * link keeps its text), a line rewritten with \r (a progress bar) as it ended, and Claude Code's
+ * error tags taken off.
+ */
+export function cleanOutput(text: string): string {
+  const unwrapped = text.match(/^\s*<tool_use_error>([\s\S]*)<\/tool_use_error>\s*$/)?.[1] ?? text;
+  return unwrapped
+    // OSC, DCS and the like run to BEL or ST; one cut off ends at the line's end.
+    .replace(/\u001b[P\]X^_][^\u0007\u001b\n]*(?:\u0007|\u001b\\)?/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[ -/]*[0-~]/g, '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => (line.includes('\r') ? line.split('\r').filter(Boolean).at(-1) ?? '' : line))
+    .join('\n')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+}
+/* eslint-enable no-control-regex */
 
 type Classified =
   | { kind: 'user'; text: string; images: ImageBlock[]; command?: { name: string; args: string } }
   | { kind: 'notice'; tone: 'output' | 'task' | 'interrupt' | 'info'; text: string; detail?: string }
   | { kind: 'shell'; command: string; stdout: string; stderr: string };
+
+/**
+ * The files sent with a prompt, out of its text. Pelican tells Claude where they are in an
+ * "Attached files:" block of paths, which is for Claude, not for reading; a prompt still on its
+ * way names them on lines of their own, "📎 name".
+ */
+export function splitFiles(text: string, pending = false): { text: string; files: SentFile[] } {
+  const block = text.match(/(?:^|\n\n)Attached files:\n((?:- .+ \(.+\)(?:\n|$))+)$/);
+  if (block) {
+    const files = block[1]!.trimEnd().split('\n').map((line): SentFile => {
+      // The path ends in the file's own name, which may hold " (" itself.
+      const upload = line.match(/^- (.*\/uploads\/([0-9a-f-]{36})\/(.+)) \(\3\)$/);
+      if (upload) return { name: upload[3]!, id: upload[2]!, path: upload[1]! };
+      const other = line.match(/^- (.+) \((.+)\)$/);
+      return other ? { name: other[2]!, path: other[1]! } : { name: line.slice(2) };
+    });
+    return { text: text.slice(0, block.index).trimEnd(), files };
+  }
+  if (pending) {
+    const lines = text.split('\n');
+    let at = lines.length;
+    while (at > 0 && lines[at - 1]!.startsWith('📎 ')) at -= 1;
+    if (at < lines.length) return { text: lines.slice(0, at).join('\n').trimEnd(), files: lines.slice(at).map((line) => ({ name: line.slice(3) })) };
+  }
+  return { text, files: [] };
+}
+
+/** A prompt's text with its files' block put back, for sending it again with the same files. */
+export function withFiles(text: string, files: SentFile[]): string {
+  const lines = files.flatMap((file) => (file.path ? [`- ${file.path} (${file.name})`] : []));
+  return lines.length > 0 ? `${text}${text ? '\n\n' : ''}Attached files:\n${lines.join('\n')}` : text;
+}
 
 const unescape = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
@@ -64,7 +121,7 @@ function classifyUserText(raw: string): Classified | undefined {
   }
   const stdout = tag(text, 'local-command-stdout') ?? tag(text, 'local-command-stderr');
   if (stdout !== undefined) {
-    const clean = stripAnsi(stdout).trim();
+    const clean = cleanOutput(stdout).trim();
     return clean ? { kind: 'notice', tone: 'output', text: clean } : undefined;
   }
   if (text.startsWith('<task-notification>')) {
@@ -88,6 +145,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
   const items: Item[] = [];
   let turn: Extract<Item, { kind: 'assistant' }> | undefined;
   let lastDay: string | undefined;
+  let tasks: { names: string; done: boolean } | undefined;
 
   const push = (item: Item, timestamp?: number) => {
     if (timestamp && item.kind === 'user') {
@@ -115,7 +173,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       const classified = classifyUserText(message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
       if (!classified) continue;
       if (classified.kind === 'user' && !classified.command) push({ kind: 'notice', key: message.uuid, tone: 'info', text: classified.text });
-      else if (classified.kind === 'user') push({ ...classified, key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) }, message.timestamp);
+      else if (classified.kind === 'user') push({ ...classified, files: [], key: message.uuid, ...(message.timestamp ? { timestamp: message.timestamp } : {}) }, message.timestamp);
       else if (classified.kind === 'notice') push({ ...classified, key: message.uuid });
       turn = undefined;
       continue;
@@ -136,6 +194,7 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       if (classified.kind === 'user') {
         push({
           ...classified,
+          ...splitFiles(classified.text, message.pending),
           key: message.uuid,
           images,
           ...(message.timestamp ? { timestamp: message.timestamp } : {}),
@@ -170,7 +229,16 @@ export function buildItems(messages: ChatMessage[]): Item[] {
       else if (block.type === 'image') turn!.parts.push({ kind: 'image', key, image: block });
       else if (block.type === 'tool_use') {
         const result = results.get(block.id);
-        turn!.parts.push({ kind: 'tool', key, call: { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}) } });
+        let sameTasks = false;
+        if (block.name === 'TodoWrite') {
+          // The list shows in full when it is new, its tasks change, or the last one is done;
+          // an update that only moves along the same tasks shows as one line.
+          const todos = todosOf(block.input);
+          const next = { names: JSON.stringify(todos.map((t) => t.content)), done: todos.length > 0 && todos.every((t) => t.status === 'completed') };
+          sameTasks = next.names === tasks?.names && !(next.done && !tasks.done);
+          tasks = next;
+        }
+        turn!.parts.push({ kind: 'tool', key, call: { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}), ...(sameTasks ? { sameTasks: true } : {}) } });
       }
     });
   }
@@ -187,4 +255,80 @@ export function resultText(result: ToolResultBlock | undefined): string {
 export function resultImages(result: ToolResultBlock | undefined): ImageBlock[] {
   if (!result || typeof result.content === 'string') return [];
   return result.content.filter((part): part is ImageBlock => part.type === 'image');
+}
+
+/**
+ * How a tool call ended. Refused (denied: by you, a rule or auto mode) and stopped (interrupted)
+ * are not failures: the call never ran, or was cut short, and its result is only a note to Claude.
+ */
+export type Outcome =
+  | { kind: 'pending' }
+  | { kind: 'done' }
+  | { kind: 'failed' }
+  | { kind: 'denied'; note?: string }
+  | { kind: 'stopped' };
+
+// What Claude Code answers in place of a refused call, before the user's own words if any.
+const REFUSED = [
+  "The user doesn't want to proceed with this tool use.",
+  'Permission for this tool use was denied.',
+  'The agent proposed a plan that was rejected by the user.',
+  'User rejected tool use',
+];
+const SAID = /[Tt]he user said:\n([\s\S]*)$/;
+// What Pelican itself answered a refusal with, before it used Claude Code's words.
+const PELICAN_REFUSED = new Set(['The user declined this.', 'The user chose not to answer.']);
+// Claude Code's notes for a call cut short (Stop, a message that ended the turn, a session that
+// ended), and Pelican's own for a request Stop or closing answered.
+const STOPPED = /this call was stopped while running|^The user doesn't want to take this action right now\.|^\[(?:Request interrupted|Tool call|Agent call interrupted)|^Interrupted by the user\.$|^Cancelled\.$|^Session closed\.$/;
+
+export function outcomeOf(call: ToolCall): Outcome {
+  const result = call.result;
+  if (!result) return { kind: 'pending' };
+  if (!result.is_error) return { kind: 'done' };
+  const text = resultText(result).trim();
+  if (STOPPED.test(text)) return { kind: 'stopped' };
+  if (REFUSED.some((start) => text.startsWith(start))) {
+    // A plan sent back without a word carries the plan after it, which is not a note.
+    const note = text.match(SAID)?.[1]?.trim();
+    return { kind: 'denied', ...(note ? { note } : {}) };
+  }
+  if (PELICAN_REFUSED.has(text)) return { kind: 'denied' };
+  // A refusal in other words (Pelican's with a note) is known by the transcript, or by the tool:
+  // a plan or a question can only fail by being turned down, unless Claude Code says otherwise.
+  const tagged = /^<tool_use_error>/.test(text);
+  if (result.denied || (!tagged && (call.name === 'ExitPlanMode' || call.name === 'AskUserQuestion'))) {
+    return { kind: 'denied', ...(text ? { note: text } : {}) };
+  }
+  return { kind: 'failed' };
+}
+
+export type Answer = { answer?: string; notes?: string };
+
+/**
+ * Your answers to Claude's questions, from the text Claude Code gave Claude for them:
+ * `"question"="answer"` pairs, each maybe with ` notes: …`, in the order asked. The questions
+ * are known, so an answer may hold quotes and commas.
+ */
+export function answersOf(questions: string[], text: string): Record<string, Answer> {
+  const found = questions
+    .map((question) => ({ question, at: text.indexOf(`"${question}"=`) }))
+    .filter((f) => f.at >= 0)
+    .sort((a, b) => a.at - b.at);
+  const out: Record<string, Answer> = {};
+  found.forEach(({ question, at }, i) => {
+    const next = found[i + 1];
+    let part = text.slice(at + question.length + 3, next?.at);
+    part = next ? part.replace(/,\s*$/, '') : part.replace(/\.(?: You can now continue[\s\S]*| Read the answers carefully[\s\S]*| They also wrote: [\s\S]*| Call [\s\S]*)?$/, '');
+    let answer: string | undefined;
+    if (part.startsWith('"')) {
+      const ends = ['" selected preview:\n', '" notes: '].map((end) => part.indexOf(end)).filter((end) => end > 0);
+      const end = ends.length > 0 ? Math.min(...ends) : part.lastIndexOf('"');
+      answer = part.slice(1, end > 0 ? end : undefined);
+      part = end > 0 ? part.slice(end + 1) : '';
+    }
+    const notes = part.match(/ notes: ([\s\S]*)$/)?.[1]?.trim();
+    out[question] = { ...(answer ? { answer } : {}), ...(notes ? { notes } : {}) };
+  });
+  return out;
 }

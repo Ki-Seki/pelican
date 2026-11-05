@@ -1,20 +1,23 @@
-import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { ArrowDown, Brain, ChevronRight, Copy, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, PartialBlock, RunState } from '../../shared/protocol';
+import { apiUrl } from '../lib/api';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
 import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { loadOlder, type SessionView } from '../lib/store';
 import { describeTool } from '../lib/tools';
-import { buildItems, type Item, type Part } from '../lib/turns';
+import { buildItems, cleanOutput, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
+
+const matches = (query: string) => typeof matchMedia === 'function' && matchMedia(query).matches;
 
 function Thinking({ text, live, defaultOpen = false }: { text: string; live?: boolean; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -28,7 +31,7 @@ function Thinking({ text, live, defaultOpen = false }: { text: string; live?: bo
   }
   return (
     <div>
-      <button type="button" className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen((v) => !v)}>
+      <button type="button" aria-expanded={open} className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen((v) => !v)}>
         <Brain className="size-3.5" />
         <span className={live ? 'shimmer-text' : ''}>{live ? 'Thinking…' : 'Thought'}</span>
         <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
@@ -65,7 +68,7 @@ function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; 
   return (
     <div className="my-1.5">
       {fold && (
-        <button type="button" className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen(true)}>
+        <button type="button" aria-expanded={false} className="flex min-h-8 items-center gap-2 text-[13px] text-muted hover:text-fg" onClick={() => setOpen(true)}>
           <Layers className="size-3.5" />
           <span>{tools} steps</span>
           <span className="text-faint">· show all</span>
@@ -84,7 +87,7 @@ function Steps({ parts, cwd, running, verbose }: { parts: Part[]; cwd?: string; 
 
 function TurnFooter({ text, timestamp, stats }: { text?: string; timestamp?: number; stats?: RunState['lastTurn'] }) {
   return (
-    <div className="-ml-1.5 flex h-7 items-center gap-1 text-[11px] text-faint opacity-0 transition-opacity group-hover/turn:opacity-100 [@media(hover:none)]:opacity-100">
+    <div className="-ml-1.5 flex h-7 items-center gap-1 text-[11px] text-faint opacity-0 transition-opacity group-focus-within/turn:opacity-100 group-hover/turn:opacity-100 [@media(hover:none)]:opacity-100">
       {text && <CopyButton text={text} />}
       {timestamp && <span>{clockTime(timestamp)}</span>}
       {stats && (
@@ -97,6 +100,11 @@ function TurnFooter({ text, timestamp, stats }: { text?: string; timestamp?: num
     </div>
   );
 }
+
+// Headings only a screen reader sees, one per turn, so moving by headings steps through the
+// conversation. Their levels sit under any heading Claude writes in a reply.
+const PromptHeading = () => <h5 className="sr-only">You said:</h5>;
+const TurnHeading = () => <h6 className="sr-only">Claude said:</h6>;
 
 const AssistantTurn = memo(function AssistantTurn({
   item, cwd, running, view, stats,
@@ -114,6 +122,7 @@ const AssistantTurn = memo(function AssistantTurn({
     }
     return (
       <div className="group/turn">
+        <TurnHeading />
         {steps > 0 && <div className="flex items-center gap-2 text-[12px] text-faint"><Layers className="size-3" />{steps} step{steps === 1 ? '' : 's'}</div>}
         {visuals.map((part) => <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} />)}
         {lastText && <Markdown text={lastText.text} className="my-2" />}
@@ -124,6 +133,7 @@ const AssistantTurn = memo(function AssistantTurn({
 
   return (
     <div className="group/turn">
+      <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
           <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} verbose={view === 'verbose'} />
@@ -132,7 +142,7 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
-          <button key={seg.key} type="button" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
+          <button key={seg.key} type="button" aria-label="Open image" className="my-2 block" onClick={() => openImage(imageSrc(seg.image))}>
             <img alt="" loading="lazy" decoding="async" className="max-h-80 rounded-lg border border-line" src={imageSrc(seg.image)} />
           </button>
         ),
@@ -142,6 +152,72 @@ const AssistantTurn = memo(function AssistantTurn({
   );
 });
 
+
+/** A file that went with a prompt; once the prompt is written down, a tap opens it. */
+function FileChip({ file }: { file: SentFile }) {
+  const style = 'flex h-9 max-w-full items-center gap-1.5 rounded-xl border border-line bg-panel px-3 font-mono text-[12.5px]';
+  const body = <><Paperclip className="size-3.5 shrink-0 text-faint" /><span className="min-w-0 truncate">{file.name}</span></>;
+  if (!file.id) return <span className={style}>{body}</span>;
+  return <a href={apiUrl(`uploads/${file.id}`)} target="_blank" rel="noreferrer" className={`${style} hover:bg-hover`}>{body}</a>;
+}
+
+/**
+ * A prompt's words, selectable like any text. Past about twelve lines (a pasted log, a file) it
+ * folds, with a way to read it all. On a touch screen a tap shows the prompt's actions.
+ */
+function PromptText({ text, command, onTap }: { text: string; command: boolean; onTap: () => void }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [all, setAll] = useState(false);
+  const [long, setLong] = useState(false);
+  // Whether it can be long at all; the screen's width decides whether it is.
+  const foldable = text.length > 300 || text.split('\n').length > 12;
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (!el || !foldable || all) return;
+    const check = () => setLong(el.scrollHeight > el.clientHeight + 1);
+    check();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [foldable, all, text]);
+  return (
+    <div
+      onClick={() => {
+        // A tap, not the end of selecting some of it.
+        if (matches('(hover: none)') && !getSelection()?.toString()) onTap();
+      }}
+      className={`max-w-[85%] rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
+    >
+      <div
+        ref={body}
+        className={`whitespace-pre-wrap ${foldable && !all ? 'max-h-[19.5em] overflow-hidden' : ''} ${long && !all ? '[mask-image:linear-gradient(to_bottom,black_70%,transparent)]' : ''}`}
+      >
+        {text}
+      </div>
+      {long && (
+        <button
+          type="button"
+          aria-expanded={all}
+          className="relative mt-1 text-[13px] text-muted after:absolute after:-inset-2.5 hover:text-fg"
+          onClick={(e) => {
+            e.stopPropagation();
+            setAll((v) => !v);
+          }}
+        >
+          {all ? 'Show less' : 'Show all'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The prompt's actions: with a pointer, quiet icons that show on hover or focus and keep their
+// row; on a touch screen, labelled pills a finger can hit, laid out only once the prompt is tapped,
+// so a prompt sits as close to its answer as any other item.
+const ACTION = 'flex h-7 items-center gap-1.5 rounded-md px-1.5 hover:bg-hover hover:text-fg [@media(hover:none)]:relative [@media(hover:none)]:h-9 [@media(hover:none)]:rounded-full [@media(hover:none)]:px-3 [@media(hover:none)]:text-[12.5px] [@media(hover:none)]:text-muted [@media(hover:none)]:after:absolute [@media(hover:none)]:after:-inset-y-1 [@media(hover:none)]:active:bg-hover';
+const LABEL = '[@media(hover:hover)]:sr-only';
+const ROW_HIDDEN = 'pointer-events-none opacity-0 group-hover/user:pointer-events-auto group-hover/user:opacity-100 group-focus-within/user:pointer-events-auto group-focus-within/user:opacity-100 [@media(hover:none)]:sr-only [@media(hover:none)]:focus-within:not-sr-only';
 
 const UserBubble = memo(function UserBubble({
   item, last, onEdit, onRewind,
@@ -162,9 +238,10 @@ const UserBubble = memo(function UserBubble({
       <EditPrompt
         text={item.text}
         images={item.images}
+        files={item.files}
         last={last}
         onCancel={() => setEditing(undefined)}
-        onSend={(next, keep) => onEdit(item.key, next, editing, keep).then((sent) => {
+        onSend={(next, keep) => onEdit(item.key, withFiles(next, item.files), editing, keep).then((sent) => {
           if (sent) setEditing(undefined);
         })}
       />
@@ -174,56 +251,47 @@ const UserBubble = memo(function UserBubble({
   // the composer or the list must never land on one (Edit makes a branch).
   const shown = actions && !item.pending;
   return (
-    <div className={`group/user flex flex-col items-end gap-1.5 ${item.pending ? 'opacity-60' : ''}`}>
-      {item.images.length > 0 && (
+    <div className={`group/user flex flex-col items-end gap-1.5 pt-2 ${item.pending ? 'opacity-60' : ''}`}>
+      <PromptHeading />
+      {(item.images.length > 0 || item.files.length > 0) && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
           {item.images.map((image, i) =>
             image.omitted ? null : !loadsInPlace(imageSrc(image)) ? (
               <RemoteImage key={i} src={imageSrc(image)} />
             ) : (
-              <button key={i} type="button" onClick={() => openImage(imageSrc(image))}>
+              <button key={i} type="button" aria-label="Open image" onClick={() => openImage(imageSrc(image))}>
                 <img alt="" loading="lazy" decoding="async" className="max-h-44 rounded-xl border border-line object-cover" src={imageSrc(image)} />
               </button>
             ),
           )}
+          {item.files.map((file, i) => <FileChip key={`file-${i}`} file={file} />)}
         </div>
       )}
-      {text && (
-        <button
-          type="button"
-          onClick={() => !item.pending && setActions((v) => !v)}
-          className={`max-w-[85%] rounded-2xl bg-chip px-3.5 py-2 text-left whitespace-pre-wrap break-words ${item.command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
-        >
-          {text}
-        </button>
-      )}
+      {text && <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} />}
       {item.pending ? (
         <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
       ) : text && (
-        <div
-          className={`flex h-7 items-center gap-0.5 text-[11px] text-faint transition-opacity ${shown ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover/user:pointer-events-auto group-hover/user:opacity-100'}`}
-        >
+        <div className={`flex items-center gap-0.5 text-[11px] text-faint transition-opacity [@media(hover:none)]:gap-1 ${shown ? '' : ROW_HIDDEN}`}>
           {item.timestamp && <span className="mr-1">{clockTime(item.timestamp)}{item.steered ? ' · while Claude worked' : ''}</span>}
-          <button type="button" aria-label="Copy" title="Copy" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => void navigator.clipboard?.writeText(text)}>
-            <Copy className="size-3.5" />
+          <button type="button" title="Copy" className={ACTION} onClick={() => void navigator.clipboard?.writeText(text)}>
+            <Copy className="size-3.5" /><span className={LABEL}>Copy</span>
           </button>
           {onEdit && !item.command && (
             <button
               type="button"
-              aria-label="Edit"
               title={last ? 'Edit and send again, in place of this prompt' : 'Edit and send again, as a new branch'}
-              className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"
+              className={ACTION}
               onClick={() => {
                 setActions(false);
                 setEditing(newId());
               }}
             >
-              <Pencil className="size-3.5" />
+              <Pencil className="size-3.5" /><span className={LABEL}>Edit</span>
             </button>
           )}
           {onRewind && !item.command && (
-            <button type="button" aria-label="Rewind code to here" title="Rewind code: put files back the way they were before this prompt" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg" onClick={() => onRewind(item.key)}>
-              <History className="size-3.5" />
+            <button type="button" title="Rewind code: put files back the way they were before this prompt" className={ACTION} onClick={() => onRewind(item.key)}>
+              <History className="size-3.5" /><span className={LABEL}>Rewind</span>
             </button>
           )}
         </div>
@@ -237,9 +305,11 @@ const UserBubble = memo(function UserBubble({
  * before this prompt and the new text, with the images kept, goes there; this session stays as
  * it was. While it sends there is nothing to cancel: the branch is being made.
  */
-function EditPrompt({ text, images, last, onCancel, onSend }: {
+function EditPrompt({ text, images, files, last, onCancel, onSend }: {
   text: string;
   images: ImageBlock[];
+  /** Files sent with the prompt; they go along with the edit. */
+  files: SentFile[];
   last: boolean;
   onCancel: () => void;
   onSend: (text: string, keepImages: number[]) => Promise<void>;
@@ -295,6 +365,12 @@ function EditPrompt({ text, images, last, onCancel, onSend }: {
           })}
         </div>
       )}
+      {files.some((file) => file.path) && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5 px-1 pt-1">
+          {files.filter((file) => file.path).map((file, i) => <FileChip key={i} file={{ name: file.name }} />)}
+        </div>
+      )}
+      {/* 16px: a smaller field makes Safari on iOS zoom the page when it gets focus. */}
       <textarea
         ref={field}
         value={value}
@@ -305,7 +381,7 @@ function EditPrompt({ text, images, last, onCancel, onSend }: {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
         }}
         aria-label="Edit the prompt"
-        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed outline-none"
+        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[16px] leading-relaxed outline-none"
       />
       <div className="mt-1 flex items-center gap-1.5">
         <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">
@@ -338,7 +414,7 @@ function Notice({ item }: { item: Extract<Item, { kind: 'notice' }> }) {
   }
   return (
     <div className="text-[13px] text-muted">
-      <button type="button" className="flex min-h-7 items-center gap-2 text-left hover:text-fg" onClick={() => setOpen((v) => !v)}>
+      <button type="button" {...(item.detail ? { 'aria-expanded': open } : {})} className="flex min-h-7 items-center gap-2 text-left hover:text-fg" onClick={() => setOpen((v) => !v)}>
         <SquareTerminal className="size-3.5 shrink-0" />
         <span>{item.text}</span>
         {item.detail && <ChevronRight className={`size-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />}
@@ -357,11 +433,10 @@ function readableSummary(summary: string): string {
     .trim();
 }
 
-/** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
 /** A `!` command someone ran in the session, with its output. */
 function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   const [all, setAll] = useState(false);
-  const output = [item.stdout, item.stderr].filter((part) => part.trim()).join('\n').trimEnd();
+  const output = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').trimEnd(), [item.stdout, item.stderr]);
   const long = output.split('\n').length > 14 || output.length > 1600;
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-panel">
@@ -374,7 +449,7 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
         <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${long && !all ? 'max-h-60 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]' : ''}`}>{output}</pre>
       )}
       {long && (
-        <button type="button" className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
+        <button type="button" aria-expanded={all} className="w-full border-t border-line py-1.5 text-[12px] text-faint hover:text-fg" onClick={() => setAll((v) => !v)}>
           {all ? 'Show less' : 'Show all'}
         </button>
       )}
@@ -382,6 +457,7 @@ function ShellItem({ item }: { item: Extract<Item, { kind: 'shell' }> }) {
   );
 }
 
+/** Where Claude Code condensed the conversation: everything above, Claude now knows from this summary. */
 function Compacted({ summary }: { summary: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -413,14 +489,16 @@ function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Reco
   }
 }
 
-function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
+function LiveOutput({ run, cwd, since }: { run: RunState; cwd?: string; since?: number }) {
   const [now, setNow] = useState(Date.now());
-  const [since] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
   const hasText = run.partial.some((b) => b.type === 'text' && b.text);
+  // How long Claude has waited for you, or worked on this turn, as the terminal counts it; not
+  // since this page opened. With neither known, no number.
+  const start = run.permissions[0]?.createdAt ?? run.startedAt ?? since;
   return (
     <div>
       {run.partial.map((block, i) => {
@@ -440,7 +518,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
       {!hasText && (
         <div className="flex min-h-8 items-center gap-2 text-[13px]">
           <span className="relative flex size-2">
-            <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
+            <span className={`absolute inline-flex size-full animate-ping rounded-full opacity-60 motion-reduce:animate-none ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
             <span className={`relative inline-flex size-2 rounded-full ${run.permissions.length > 0 ? 'bg-wait' : 'bg-run'}`} />
           </span>
           <span className="shimmer-text">
@@ -449,7 +527,7 @@ function LiveOutput({ run, cwd }: { run: RunState; cwd?: string }) {
                 : run.activity?.kind === 'retrying' ? `The API is busy; trying again (${run.activity.attempt} of ${run.activity.max})`
                   : 'Working'}
           </span>
-          <span className="text-faint tabular-nums">{duration(now - since)}</span>
+          {start !== undefined && <span className="text-faint tabular-nums">{duration(Math.max(0, now - start))}</span>}
         </div>
       )}
     </div>
@@ -471,7 +549,8 @@ export function MessageList({
   const sending = useMemo(() => [...items].reverse().find((i) => i.kind === 'user' && i.pending)?.key, [items]);
   const lastSending = useRef<string | undefined>(undefined);
   const scroller = useRef<HTMLDivElement>(null);
-  /** Following the newest output. Stops the moment the reader scrolls up, touches the list or opens something. */
+  const content = useRef<HTMLDivElement>(null);
+  /** Following the newest output. Stops the moment the reader scrolls up or opens something; any other tap leaves it be. */
   const atBottom = useRef(true);
   /** A finger is on the list: never move it under them. */
   const touching = useRef(false);
@@ -483,6 +562,25 @@ export function MessageList({
   // A failed turn's error, said once: the conversation may already end on Claude Code's note of it.
   const lastItem = items.at(-1);
   const endsOnError = lastItem?.kind === 'notice' && lastItem.tone === 'error';
+
+  // When the running turn began, for a run that does not say: the prompt that started it.
+  const promptAt = items.findLast((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user' && !i.steered)?.timestamp;
+
+  /**
+   * After anything that changes the list's size or position: back to the end while following,
+   * and the jump button whenever there is more below. The position is noted before the browser
+   * reports the scroll, so a page that grew or shrank is not taken for the reader scrolling up.
+   */
+  const settle = () => {
+    const el = scroller.current;
+    if (!el) return;
+    // Text being selected stays where it is, still following; the jump button says there is more.
+    const selection = typeof getSelection === 'function' ? getSelection() : null;
+    const selecting = Boolean(selection && !selection.isCollapsed && selection.anchorNode && el.contains(selection.anchorNode));
+    if (atBottom.current && !touching.current && !selecting) el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
+    setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > 80);
+  };
 
   // Older messages are about to go in above: note where the reader is before the page changes,
   // so the same lines stay on screen. (The browser's own scroll anchoring is off for this list.)
@@ -507,16 +605,28 @@ export function MessageList({
     if (snapshot.current) {
       el.scrollTop = snapshot.current.top + (el.scrollHeight - snapshot.current.height);
       snapshot.current = undefined;
-    } else if (atBottom.current && !touching.current) {
-      el.scrollTop = el.scrollHeight;
     }
-    lastTop.current = el.scrollTop;
+    settle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, view.run?.partial, mode]);
+
+  // What grows or shrinks after it is drawn keeps the end in view too: pictures and frames that
+  // get their height once loaded, an approval card or a notice that takes room from the list.
+  useEffect(() => {
+    const el = scroller.current;
+    const inner = content.current;
+    if (!el || !inner || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => settle());
+    observer.observe(el);
+    observer.observe(inner);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     atBottom.current = true;
-    const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    settle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // Near the top, or with too little to scroll at all, the next older page loads by itself:
@@ -549,19 +659,28 @@ export function MessageList({
   return (
     <SessionContext.Provider value={sessionId}>
     <div className="relative min-h-0 flex-1">
-      {/* Opening a step makes the page longer without a scroll: from then on the reader is reading,
-          not following, so new output must not pull them to the end. Scrolling back down follows again. */}
+      {/* Opening or closing something (a step, a long output) is reading, not following: what
+          arrives next must not pull it away. A tap that opens nothing (selecting text, a link,
+          Copy) leaves following as it was. Scrolling back down to the end follows again. */}
       <div
         ref={scroller}
         onScroll={onScroll}
-        onClickCapture={() => { atBottom.current = false; }}
+        onClickCapture={(e) => {
+          if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary')) atBottom.current = false;
+        }}
         onTouchStart={() => { touching.current = true; }}
-        onTouchEnd={() => { touching.current = false; }}
-        onTouchCancel={() => { touching.current = false; }}
+        onTouchEnd={() => {
+          touching.current = false;
+          settle();
+        }}
+        onTouchCancel={() => {
+          touching.current = false;
+          settle();
+        }}
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
-        <div className="mx-auto max-w-3xl px-4 pt-3 pb-6">
+        <div ref={content} className="mx-auto max-w-3xl px-4 pt-3 pb-6">
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
               {view.loadingOlder ? (
@@ -609,7 +728,7 @@ export function MessageList({
                   return null;
               }
             })}
-            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} />}
+            {busy && view.run && <LiveOutput run={view.run} cwd={cwd} {...(promptAt ? { since: promptAt } : {})} />}
             {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
@@ -623,12 +742,12 @@ export function MessageList({
         <button
           type="button"
           aria-label="Jump to latest"
-          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md"
+          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
           onClick={() => {
             const el = scroller.current;
             if (!el) return;
             atBottom.current = true;
-            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+            el.scrollTo({ top: el.scrollHeight, behavior: matches('(prefers-reduced-motion: reduce)') ? 'auto' : 'smooth' });
           }}
         >
           <ArrowDown className="size-4" />
