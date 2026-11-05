@@ -6,6 +6,7 @@ import type { McpServer, RunState, SessionSummary } from '../../shared/protocol'
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shortPath } from '../lib/format';
 import { setSessionView, usePrefs, viewOf, type ViewMode } from '../lib/prefs';
+import { DEMO_NOTE } from '../lib/static-demo';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 
 const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
@@ -173,7 +174,8 @@ export function SessionMenu({
       />
 
       <SheetHeading>Actions</SheetHeading>
-      {error && <div className="mx-3 mb-1 rounded-lg bg-chip px-3 py-2 text-[13px] text-danger">{error}</div>}
+      {/* The demo's note is not an error. */}
+      {error && <div className={`mx-3 mb-1 rounded-lg bg-chip px-3 py-2 text-[13px] ${error === DEMO_NOTE ? 'text-muted' : 'text-danger'}`}>{error}</div>}
       {renaming ? (
         <form onSubmit={rename} className="flex items-center gap-2 px-3 py-1.5">
           <input

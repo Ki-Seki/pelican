@@ -111,6 +111,8 @@ body {
 .app-height {
   height: 100vh;
   height: 100dvh;
+  /* What is visible, keyboard taken off where the browser lays it over the page (lib/viewport). */
+  height: var(--app-h, 100dvh);
 }
 
 .pb-safe {

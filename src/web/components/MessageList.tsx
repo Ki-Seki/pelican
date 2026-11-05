@@ -304,7 +304,7 @@ function EditPrompt({ text, images, last, onCancel, onSend }: {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
         }}
         aria-label="Edit the prompt"
-        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[15px] leading-relaxed outline-none"
+        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[16px] leading-relaxed outline-none"
       />
       <div className="mt-1 flex items-center gap-1.5">
         <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">

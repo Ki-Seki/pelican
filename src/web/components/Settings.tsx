@@ -6,10 +6,12 @@ import type { ServerInfo } from '../../shared/protocol';
 import { qrSvg } from '../../shared/qr';
 import { api, appBase, type AuthState } from '../lib/api';
 import { untilTime } from '../lib/format';
+import { hasKeyboard, MOD } from '../lib/keyboard';
 import type { NotificationState } from '../lib/notifications';
 import { loadDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, type ViewMode } from '../lib/prefs';
 import { ModelSheet, ModelSummary } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
+import { showShortcuts } from './Shortcuts';
 
 const isLoopback = (host: string) => host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host.startsWith('127.');
 
@@ -102,6 +104,7 @@ export function SettingsSheet({
         options={[{ value: 'auto', label: 'Auto' }, { value: 'always', label: 'Sends' }, { value: 'never', label: 'New line' }]}
       />
       {prefs.enterToSend === 'auto' && <p className="px-3 pt-1 text-[12px] leading-snug text-faint">Sends on a computer, a new line on a phone.</p>}
+      {hasKeyboard() && <SheetOption label="Keyboard shortcuts" trailing={<span className="text-[13px] text-faint">{MOD} /</span>} onSelect={() => showShortcuts(true)} />}
       <div className="h-1.5" />
       <SheetToggle label="Suggest what to ask next" checked={prefs.suggestions} onChange={(suggestions) => setPrefs({ suggestions })} />
 
