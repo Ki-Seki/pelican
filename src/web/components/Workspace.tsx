@@ -186,6 +186,7 @@ function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; cwd: str
       )}
       <div
         ref={box}
+        role="group"
         tabIndex={0}
         aria-label={`Changes to ${path}`}
         onKeyDown={onKeyDown}
