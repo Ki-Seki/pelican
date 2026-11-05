@@ -1,6 +1,8 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage } from '../shared/protocol.js';
+// The conversation as the app shows it: the export leaves out what the view leaves out.
+import { buildItems, cleanOutput } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { loadMessages, sessionInfo } from './sessions.js';
 import { refreshTranscriptIndex } from './transcripts.js';
@@ -46,7 +48,17 @@ const toolLine = (name: string, input: Record<string, unknown>) => {
   return `- ${name}${target ? `: \`${String(target).split('\n')[0]}\`` : ''}`;
 };
 
-/** The conversation as Markdown: prompts and replies in full, tool calls as one line each. */
+/** Backticks around code, more of them than any run inside it, so nothing in it ends the code. */
+const fence = (code: string, fewest: number) => '`'.repeat(Math.max(fewest, ...Array.from(code.matchAll(/`+/g), (run) => run[0].length + 1)));
+const inlineCode = (code: string) => (code.includes('`') ? `${fence(code, 1)} ${code} ${fence(code, 1)}` : `\`${code}\``);
+const codeBlock = (code: string) => `${fence(code, 3)}\n${code}\n${fence(code, 3)}`;
+
+/**
+ * The conversation as Markdown, as the conversation shows it: prompts and replies in full, a `!`
+ * command with its output, tool calls as one line each. What the conversation leaves out stays
+ * out: the notes Claude Code and Pelican give Claude with a prompt (a side chat's note, in a
+ * system reminder), the tags around commands, Claude Code's own lines, and a compaction's summary.
+ */
 export async function exportMarkdown(sessionId: string): Promise<{ title: string; markdown: string }> {
   const info = await sessionInfo(sessionId);
   const title = info?.customTitle || info?.summary || 'Claude Code session';
@@ -54,23 +66,39 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   const out: string[] = [`# ${title}`, ''];
   if (info?.cwd) out.push(`Folder: \`${info.cwd}\``, '');
   let speaker: string | undefined;
-  for (const message of messages) {
-    // Claude Code's own notes (a local command's output) are neither side of the conversation.
-    if (message.meta || message.parentToolUseId || message.role === 'system') continue;
-    const parts: string[] = [];
-    const tools: string[] = [];
-    for (const block of message.blocks) {
-      if (block.type === 'text' && block.text.trim()) parts.push(block.text.trim());
-      else if (block.type === 'tool_use') tools.push(toolLine(block.name, block.input));
+  const say = (who: 'You' | 'Claude', blocks: string[]) => {
+    if (blocks.length === 0) return;
+    if (who !== speaker) out.push(`## ${who}`, '');
+    speaker = who;
+    for (const block of blocks) out.push(block, '');
+  };
+  // What the conversation view shows, read the same way.
+  for (const item of buildItems(messages)) {
+    if (item.kind === 'user') {
+      const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
+      say('You', [...(text ? [text] : []), ...(item.files.length > 0 ? [`Attached: ${item.files.map((file) => file.name).join(', ')}`] : [])]);
+    } else if (item.kind === 'shell') {
+      const output = [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd();
+      say('You', [inlineCode(`!${item.command}`), ...(output ? [codeBlock(output)] : [])]);
+    } else if (item.kind === 'assistant') {
+      const blocks: string[] = [];
+      let tools: string[] = [];
+      for (const part of item.parts) {
+        if (part.kind === 'tool') tools.push(toolLine(part.call.name, part.call.input));
+        else if (part.kind === 'text' && part.text.trim()) {
+          if (tools.length > 0) blocks.push(tools.join('\n'));
+          tools = [];
+          blocks.push(part.text.trim());
+        }
+      }
+      if (tools.length > 0) blocks.push(tools.join('\n'));
+      say('Claude', blocks);
+    } else if (item.kind === 'compact') {
+      out.push('*Context compacted*', '');
+      speaker = undefined;
     }
-    if (parts.length === 0 && tools.length === 0) continue;
-    const who = message.role === 'user' ? 'You' : 'Claude';
-    if (who !== speaker) {
-      out.push(`## ${who}`, '');
-      speaker = who;
-    }
-    if (tools.length > 0) out.push(...tools, '');
-    if (parts.length > 0) out.push(parts.join('\n\n'), '');
+    // Claude Code's notes (a command's output, an interruption, a failed request) and the days
+    // are neither side of the conversation.
   }
   return { title, markdown: `${out.join('\n').trim()}\n` };
 }

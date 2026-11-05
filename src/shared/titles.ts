@@ -5,7 +5,7 @@
  */
 
 /** Characters drawn two columns wide: CJK, kana, Hangul, full-width forms and emoji. */
-const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︐-︙︰-﹯＀-｠￠-￦\u{20000}-\u{3fffd}]|\p{Emoji_Presentation}/u;
+const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]|\p{Emoji_Presentation}/u;
 
 const width = (char: string) => (WIDE.test(char) ? 2 : 1);
 

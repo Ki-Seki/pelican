@@ -71,29 +71,93 @@ export type PushPayload = {
 };
 
 /**
- * Characters a notification would not show as they are: controls and line breaks, invisible and
- * direction-changing ones, private and unassigned ones, and spaces other than a plain one. With
- * any of them, a command can read as one thing and run as another.
+ * Text every notification shows as it is, in any system font: printable ASCII, one space between
+ * words. Any other character may be drawn wider than counted (an emoji, CJK), blank (a Braille
+ * blank, U+FFFC), joined to its neighbours, or not at all, and a command could then read as one
+ * thing and run as another.
  */
-const UNSHOWN = /[\p{C}\p{Z}\p{Default_Ignorable_Code_Point}]/u;
+const PLAIN = /^[!-~]+(?: [!-~]+)*$/;
 
-/** The longest command a notification offers to allow: about two lines, all a computer's notification may show. */
-export const ALLOWED_COMMAND_MAX = 80;
+/**
+ * How wide each printable ASCII character may be drawn, in tenths of an em: the widest of SF Pro
+ * (macOS), Helvetica and Arial (as Roboto, on Android) and Tahoma (as Segoe UI, on Windows), as
+ * Chrome measures them, rounded up.
+ */
+const WIDTHS: ReadonlyArray<readonly [number, string]> = [
+  [3, "'ijl"],
+  [4, ' !(),./:;I[\\]frt|'],
+  [5, '"-{}'],
+  [6, '*127?JL_`acehknosuvxyz'],
+  [7, '$0345689ABEFKPSTVXYZbdgpq'],
+  [8, '#&+<=>CDGHNOQRU^w~'],
+  [9, 'Mm'],
+  [10, '%W'],
+  [11, '@'],
+];
+const tenths = new Map(WIDTHS.flatMap(([width, chars]) => [...chars].map((char) => [char, width] as const)));
+const widthOf = (text: string) => [...text].reduce((sum, char) => sum + tenths.get(char)!, 0);
+
+/**
+ * The narrowest notification body, in tenths of an em, and the lines of it every notification
+ * shows: a macOS banner beside the site's icon has about 220 px of 13 px text (17 em) on two
+ * lines, and 16.5 em leaves a margin. Windows' toasts and GNOME's banners are wider, and Android
+ * shows more lines once a notification is expanded.
+ */
+const LINE = 165;
+const LINES = 2;
+
+/**
+ * Whether a line may break at the space between two words on every device. Unicode's line
+ * breaking (UAX #14, rules LB13 to LB15) never breaks before ) ] } ! ? , . : ; or /, after ( [ or
+ * {, or between a quote and an opening bracket, even at a space.
+ */
+const breaksBetween = (before: string, after: string) => {
+  const last = before.at(-1)!;
+  const first = after[0]!;
+  return !')]}!?,.:;/'.includes(first) && !'([{'.includes(last) && !('"\''.includes(last) && '([{'.includes(first));
+};
+
+/**
+ * Whether plain text shows whole in any notification: within two lines at the narrowest, wrapped
+ * only where every device may break a line, which takes the most lines, and with no word wider
+ * than a line, since devices cut those in different places.
+ */
+function fitsTwoLines(text: string): boolean {
+  const words = text.split(' ');
+  const space = tenths.get(' ')!;
+  // The widths of what no device breaks: words, joined across a space no line breaks at.
+  const pieces = [widthOf(words[0]!)];
+  for (let i = 1; i < words.length; i += 1) {
+    const width = widthOf(words[i]!);
+    pieces.push(breaksBetween(words[i - 1]!, words[i]!) ? width : pieces.pop()! + space + width);
+  }
+  let lines = 0;
+  let room = 0;
+  for (const width of pieces) {
+    if (width > LINE) return false;
+    if (lines > 0 && space + width <= room) {
+      room -= space + width;
+    } else {
+      lines += 1;
+      room = LINE - width;
+    }
+  }
+  return lines <= LINES;
+}
 
 /** What a Bash or PowerShell request may hold besides its command, none of which changes what runs. */
 const BESIDES_COMMAND = new Set(['description', 'timeout', 'run_in_background']);
 
 /**
- * The command of a request, when a notification can show all that Allow would approve: Bash or
- * PowerShell with nothing more that changes how it runs (such as leaving the sandbox), on one line
- * that shows uncut, only characters that show as they are, a single space between words. Never
- * Claude's own description of it.
+ * The command of a request, when a notification surely shows all that Allow would approve: Bash
+ * or PowerShell with nothing more that changes how it runs (such as leaving the sandbox), in
+ * printable ASCII with one space between words, short enough to show whole in two lines of the
+ * narrowest notification. Never Claude's own description of it.
  */
 function shownWhole(request: PermissionRequest): string | undefined {
   if (request.toolName !== 'Bash' && request.toolName !== 'PowerShell') return undefined;
   const { command, ...rest } = request.input;
-  if (typeof command !== 'string' || !command || [...command].length > ALLOWED_COMMAND_MAX) return undefined;
-  if (UNSHOWN.test(command.replaceAll(' ', '')) || command !== command.trim() || command.includes('  ')) return undefined;
+  if (typeof command !== 'string' || !PLAIN.test(command) || !fitsTwoLines(command)) return undefined;
   const more = Object.entries(rest).some(([key, value]) => !BESIDES_COMMAND.has(key) && value !== undefined && value !== null && value !== false);
   return more ? undefined : command;
 }
@@ -102,9 +166,10 @@ function shownWhole(request: PermissionRequest): string | undefined {
  * What a notification for a request may answer, Allow and Deny, and the body it then has: a
  * command Claude wants to run, shown whole, since only then does the notification show all that
  * Allow approves. Anything else opens the session: an edit, an MCP tool or another tool whose
- * input it does not show, a longer command, a question or a plan, and a request Claude Code says
- * must not be allowed by a stray tap. Not even Deny is offered there: it would answer, unseen,
- * a request the page shows in full, and one rule for when a notification answers stays clear.
+ * input it does not show, a command too long or with other characters, a question or a plan, and
+ * a request Claude Code says must not be allowed by a stray tap. Not even Deny is offered there:
+ * it would answer, unseen, a request the page shows in full, and one rule for when a notification
+ * answers stays clear.
  */
 export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request'>> {
   const command = request.elicitation || request.defaultToNo ? undefined : shownWhole(request);
