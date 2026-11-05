@@ -81,43 +81,58 @@ const FIXES_SUMMARY = 'Fix the two confirmed findings, then run the checkout tes
 const tool = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'tool_use', id, name, input });
 const text = (value: string) => ({ type: 'text', text: value });
 
+/** How many tool calls an agent made: as many as its transcript holds, so its figures and its steps agree. */
+function toolCalls(agentId: string): number {
+  const own = steps('')[agentId]?.steps ?? [];
+  return own.filter((s) => s.role === 'assistant').flatMap((s) => s.content).filter((b) => (b as { type?: unknown }).type === 'tool_use').length;
+}
+
 /** The finished review: when it started and ended, and its agents as Claude Code's record keeps them. */
 function reviewAgents(start: number): WorkflowAgent[] {
-  const agent = (index: number, label: string, phase: 1 | 2, agentId: string, at: number, ms: number, tokens: number, toolCalls: number, result: unknown, prompt: string, lastToolName: string): WorkflowAgent => ({
+  const agent = (index: number, label: string, phase: 1 | 2, agentId: string, at: number, ms: number, tokens: number, result: unknown, prompt: string, lastToolName: string): WorkflowAgent => ({
     index, label, phaseIndex: phase, phaseTitle: phase === 1 ? 'Review' : 'Verify', agentId, model: 'claude-opus-5-5', state: 'done',
-    queuedAt: start + at, startedAt: start + at, lastProgressAt: start + at + ms, durationMs: ms, tokens, toolCalls, attempt: 1, lastToolName,
+    queuedAt: start + at, startedAt: start + at, lastProgressAt: start + at + ms, durationMs: ms, tokens, toolCalls: toolCalls(agentId), attempt: 1, lastToolName,
     resultPreview: JSON.stringify(result), promptPreview: prompt,
   });
   return [
-    agent(1, 'review:server', 1, 'a1c3e5a7b9d1f3a52', 20, 181_000, 120_800, 31, { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:48' }] }, 'Review the server side of the checkout flow and list real defects.', 'StructuredOutput'),
-    agent(2, 'review:client', 1, 'a2d4f6b8c0e2a4b63', 22, 95_300, 88_200, 18, { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:21' }] }, 'Review the client side of the checkout flow and list real defects.', 'StructuredOutput'),
-    agent(3, 'verify:server', 2, 'a3e5a7c9d1f3b5c74', 181_100, 180_000, 131_900, 29, RESULT[0], 'Re-check each finding for the server: [The checkout accepts an empty card holder name]', 'StructuredOutput'),
-    agent(4, 'verify:client', 2, 'a4f6b8d0e2a4c6d85', 95_400, 52_000, 71_400, 9, RESULT[1], 'Re-check each finding for the client: [The order summary shows the customer name unescaped]', 'StructuredOutput'),
+    agent(1, 'review:server', 1, 'a1c3e5a7b9d1f3a52', 20, 181_000, 120_800, { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:48' }] }, 'Review the server side of the checkout flow and list real defects.', 'StructuredOutput'),
+    agent(2, 'review:client', 1, 'a2d4f6b8c0e2a4b63', 22, 95_300, 88_200, { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:21' }] }, 'Review the client side of the checkout flow and list real defects.', 'StructuredOutput'),
+    agent(3, 'verify:server', 2, 'a3e5a7c9d1f3b5c74', 181_100, 180_000, 131_900, RESULT[0], 'Re-check each finding for the server: [The checkout accepts an empty card holder name]', 'StructuredOutput'),
+    agent(4, 'verify:client', 2, 'a4f6b8d0e2a4c6d85', 95_400, 52_000, 71_400, RESULT[1], 'Re-check each finding for the client: [The order summary shows the customer name unescaped]', 'StructuredOutput'),
   ];
 }
 
-/** The fixes, still at work: one agent done, one running, the tests up next. */
+/** The review's totals, as Claude Code sums its agents'. */
+const reviewTotals = () => {
+  const agents = reviewAgents(0);
+  return { tokens: agents.reduce((sum, a) => sum + (a.tokens ?? 0), 0), toolCalls: agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0) };
+};
+
+/** The fixes, still at work: one agent done, one running (its edit under way), the tests up next. */
 function fixAgents(start: number, now: number): WorkflowAgent[] {
   return [
     {
       index: 1, label: 'fix:empty-name', phaseIndex: 1, phaseTitle: 'Fix', agentId: 'b1a3c5e7d9f1a3b52', model: 'claude-opus-5-5', state: 'done',
-      queuedAt: start + 30, startedAt: start + 30, lastProgressAt: start + 61_000, durationMs: 61_000, tokens: 54_300, toolCalls: 7, attempt: 1,
+      queuedAt: start + 30, startedAt: start + 30, lastProgressAt: start + 61_000, durationMs: 61_000, tokens: 54_300, toolCalls: toolCalls('b1a3c5e7d9f1a3b52'), attempt: 1,
       lastToolName: 'Bash', resultPreview: 'The checkout now refuses an empty card holder name, with a test that fails without the fix.',
       promptPreview: 'Fix this finding, with a test that fails without the fix: The checkout accepts an empty card holder name (src/server/checkout.ts:48)',
     },
     {
       index: 2, label: 'fix:unescaped-name', phaseIndex: 1, phaseTitle: 'Fix', agentId: 'b2b4d6f8e0a2b4c63', model: 'claude-opus-5-5', state: 'progress',
-      queuedAt: start + 32, startedAt: start + 32, lastProgressAt: now - 6_000, tokens: 48_200, toolCalls: 6, attempt: 1,
+      queuedAt: start + 32, startedAt: start + 32, lastProgressAt: now - 6_000, tokens: 48_200, toolCalls: toolCalls('b2b4d6f8e0a2b4c63'), attempt: 1,
       lastToolName: 'Edit', lastToolSummary: 'src/checkout/Summary.tsx',
       promptPreview: 'Fix this finding, with a test that fails without the fix: The order summary shows the customer name unescaped (src/checkout/Summary.tsx:21)',
     },
   ];
 }
 
-/** The fixes as this Pelican's Claude would report them while they run. */
+/**
+ * The fixes as this Pelican's Claude would report them while they run: as the runner sends them,
+ * without the agents' prompts and results, which an agent opened reads from its own files.
+ */
 export function demoFixes(now = Date.now()): Workflow {
   const start = now - 2 * MIN - 41_000;
-  const agents = fixAgents(start, now);
+  const agents = fixAgents(start, now).map(({ promptPreview: _prompt, resultPreview: _result, ...agent }) => agent);
   return {
     runId: FIXES.run, taskId: FIXES.task, name: FIXES.name, description: FIXES_SUMMARY, status: 'running', startedAt: start,
     totalTokens: agents.reduce((sum, a) => sum + (a.tokens ?? 0), 0), totalToolCalls: agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0),
@@ -232,6 +247,8 @@ function steps(cwd: string): Record<string, { prompt: string; steps: Array<{ at:
         { at: 5_000, role: 'user', content: [result('g1', '    21\t<div dangerouslySetInnerHTML={{ __html: order.customerName }} />')] },
         { at: 50_000, role: 'assistant', content: [tool('g2', 'Grep', { pattern: 'customerName', path: `${cwd}/src` })] },
         { at: 51_000, role: 'user', content: [result('g2', 'src/checkout/Summary.tsx:21\nsrc/checkout/Receipt.tsx:9')] },
+        // At work on it now: the edit its row names, not answered yet.
+        { at: 95_000, role: 'assistant', content: [tool('g3', 'Edit', { file_path: `${cwd}/src/checkout/Summary.tsx`, old_string: '      <div dangerouslySetInnerHTML={{ __html: order.customerName }} />', new_string: '      <div>{order.customerName}</div>' })] },
       ],
     },
   };
@@ -255,7 +272,7 @@ function files(cwd: string, dir: string, sessionId: string, reviewStart: number,
       durationMs: 361_250, summary: REVIEW_SUMMARY, workflowName: REVIEW.name, status: 'completed', startTime: reviewStart,
       phases: [{ title: 'Review', detail: 'one agent per area' }, { title: 'Verify', detail: 'a skeptic re-checks each finding' }], defaultModel: 'claude-opus-5-5',
       workflowProgress: [{ type: 'workflow_phase', index: 1, title: 'Review' }, { type: 'workflow_phase', index: 2, title: 'Verify' }, ...review.map((a) => ({ type: 'workflow_agent', ...a }))],
-      totalTokens: review.reduce((sum, a) => sum + (a.tokens ?? 0), 0), totalToolCalls: review.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0),
+      totalTokens: reviewTotals().tokens, totalToolCalls: reviewTotals().toolCalls,
     }),
   };
   const journal = (run: string, agents: WorkflowAgent[]) => [
@@ -286,7 +303,7 @@ const notice = () => [
   `<summary>Dynamic workflow "${REVIEW_SUMMARY}" completed</summary>`,
   `<result>${JSON.stringify(RESULT)}</result>`,
   '<usage><agent_count>4</agent_count><agents_done>4</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result>'
-  + `<subagent_tokens>412300</subagent_tokens><tool_uses>87</tool_uses><duration_ms>${361_250}</duration_ms></usage>`,
+  + `<subagent_tokens>${reviewTotals().tokens}</subagent_tokens><tool_uses>${reviewTotals().toolCalls}</tool_uses><duration_ms>${361_250}</duration_ms></usage>`,
   '</task-notification>',
 ].join('\n');
 

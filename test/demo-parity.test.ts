@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
 import { readLastTurn } from '../src/server/transcripts';
-import { workflowView } from '../src/server/workflows';
+import { workflowAgentPage, workflowView } from '../src/server/workflows';
 
 const DEV = 'c4b7d2e9-8888-4c8d-9e1f-000000000010';
 const STOPPED = 'e6f9a3b1-9999-4e9f-a0b2-000000000011';
@@ -51,6 +51,26 @@ describe('the demo shows workflows', () => {
     expect(run?.tasks).toEqual([{ id: 'w7p3m0rtc', description: 'checkout-fixes', type: 'local_workflow', summary: '1/2 agents' }]);
     expect(demoRunStatus(WORKFLOWS)).toBe('idle');
     expect(demoRunTasks(WORKFLOWS)).toBe(1);
+  });
+
+  it('whose agents made as many tool calls as their steps show, and the runs as many as their agents', async () => {
+    const runs = [
+      { call: 'toolu_demo_wf_review', workflow: (await workflowView(WORKFLOWS, 'toolu_demo_wf_review'))!.workflow },
+      { call: 'toolu_demo_wf_fixes', workflow: demoRunState(WORKFLOWS)!.workflows!.toolu_demo_wf_fixes! },
+    ];
+    for (const { call, workflow } of runs) {
+      for (const agent of workflow.agents) {
+        const page = await workflowAgentPage(WORKFLOWS, call, agent.agentId!, {});
+        const calls = page!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_use').length;
+        expect([agent.label, agent.toolCalls]).toEqual([agent.label, calls]);
+      }
+      expect(workflow.totalToolCalls).toBe(workflow.agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0));
+    }
+    // The agent at work is at the step its row names.
+    const working = runs[1]!.workflow.agents.find((a) => a.state === 'progress')!;
+    const page = await workflowAgentPage(WORKFLOWS, 'toolu_demo_wf_fixes', working.agentId!, {});
+    const last = page!.messages.at(-1)!.blocks.at(-1)!;
+    expect([last.type, last.type === 'tool_use' ? last.name : undefined]).toEqual(['tool_use', working.lastToolName]);
   });
 });
 
