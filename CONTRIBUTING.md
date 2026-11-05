@@ -93,6 +93,13 @@ release too. A release candidate goes to npm under the `next` tag, and a fix for
 (0.2.4 after 0.3.0) under `latest-0.2`; only the newest version becomes `latest`, what
 `npm install -g pelican-cc` installs.
 
+A fix for an older line is made on a branch from that line's last tag
+(`git switch -c 0.2.x v0.2.3`). A release runs the workflows of the commit it tags, and the
+`release.yml` of 0.2.3 and earlier publishes every version as `latest`, which npm refuses for a
+version below it. So copy the current one onto the branch, and commit it, before you tag:
+`git checkout main -- .github/workflows/release.yml`. Create its release with `--latest=false`, so
+GitHub keeps showing the newest release first.
+
 ## Style
 
 - Keep the interface calm: few colors, no decoration that does not carry meaning, plain words and
