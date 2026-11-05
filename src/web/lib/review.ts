@@ -1,5 +1,7 @@
 import { createContext, useContext, useSyncExternalStore } from 'react';
 
+import { COMMENTS_KEY, whenDraftsForgotten } from './drafts';
+
 /** One line of a unified diff, numbered in the old file, the new one, or both. */
 export type DiffLine =
   | { kind: 'hunk'; text: string }
@@ -99,13 +101,13 @@ export function withComments(text: string, comments: readonly LineComment[]): st
  * Comments not sent yet, by the chat they were written in (its view id: a session, or a new
  * session in a folder), as Claude Desktop keeps them per session: they go with the next message
  * sent there, or all at once with Send now, never with another session's, even in the same folder.
- * Kept with the drafts in this browser, so a reload loses none, and forgotten with them when it
- * signs out.
+ * Kept with the drafts in this browser (lib/drafts), so a reload loses none, and forgotten with them
+ * when it signs out.
  *
  * Stored as `{ chats: { [chat]: comments } }`. Earlier builds of 0.4.0 kept them by folder, at the
  * top level: those are dropped, since nothing says which of the folder's sessions each was written in.
  */
-const KEY = 'pelican:comments';
+const KEY = COMMENTS_KEY;
 const KEEP_CHATS = 50;
 const KEEP_EACH = 200;
 const listeners = new Set<() => void>();
@@ -191,9 +193,8 @@ export function putBackComments(chat: string, comments: readonly LineComment[]):
   setComments(chat, [...comments, ...commentsOf(chat).filter((c) => !back.has(c.id))]);
 }
 
-/** Signing out leaves no comments behind in this browser. */
-export function forgetComments(): void {
+// Signing out leaves no comments behind in this browser: lib/drafts takes them out of storage.
+whenDraftsForgotten(() => {
   byChat.clear();
-  keep();
   for (const listener of listeners) listener();
-}
+});

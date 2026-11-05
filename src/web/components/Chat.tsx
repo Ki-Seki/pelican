@@ -50,6 +50,7 @@ import { SideChat, useSideChat } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
+import { prefetchWorkspace } from './WorkspaceTabs';
 
 /**
  * /clear, /reset and /new, as in Claude Code: a fresh conversation in the same folder, going on
@@ -653,6 +654,13 @@ export function Chat({
       return false;
     }
   };
+
+  // The pane's tabs load once the conversation is up, ready before they are asked for.
+  useEffect(() => {
+    if (!cwd) return undefined;
+    const timer = setTimeout(prefetchWorkspace, 1500);
+    return () => clearTimeout(timer);
+  }, [cwd]);
 
   // Files changed in the session's folder, for the badge on the Changes button: read when the chat
   // opens and as each turn ends; Changes and files reads it more often only while it is looked at.

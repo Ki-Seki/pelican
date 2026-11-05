@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, LogOut } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { MODE_INFO, START_MODES, startMode } from '../../shared/modes';
 import type { RunSettings, ServerInfo } from '../../shared/protocol';
@@ -13,7 +13,10 @@ import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, use
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
-import { UsageSheet } from './Usage';
+
+// The usage page loads once Settings is open, not with it: Settings shows sooner on a slow link.
+const loadUsage = () => import('./Usage');
+const UsageSheet = lazy(() => loadUsage().then((m) => ({ default: m.UsageSheet })));
 
 const isLoopback = (host: string) => host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host.startsWith('127.');
 
@@ -65,8 +68,13 @@ export function SettingsSheet({
   const [modelOpen, setModelOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  // There from the first time it is asked for, and loaded ahead of that while Settings is open: a
+  // load that fails ahead is tried again when asked for, and only then says it did not load.
+  const [usageUsed, setUsageUsed] = useState(false);
+  if (usageOpen && !usageUsed) setUsageUsed(true);
   useEffect(() => {
     if (!open) setUsageOpen(false);
+    else void loadUsage().catch(() => undefined);
   }, [open]);
   const keep = (next: RunSettings) => {
     setDefaults(next);
@@ -240,7 +248,11 @@ export function SettingsSheet({
         model={model}
         onPick={(permissionMode) => keep({ ...defaults, permissionMode })}
       />
-      <UsageSheet open={open && usageOpen} onClose={() => setUsageOpen(false)} limits={planBars} {...(onOpenSession ? { onOpenSession } : {})} />
+      {usageUsed && (
+        <Suspense fallback={null}>
+          <UsageSheet open={open && usageOpen} onClose={() => setUsageOpen(false)} limits={planBars} {...(onOpenSession ? { onOpenSession } : {})} />
+        </Suspense>
+      )}
     </Sheet>
   );
 }

@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react';
 
 import type { Attachment } from '../../shared/protocol';
-import { messageWithQuotes } from './quote';
-import { forgetComments } from './review';
 
 /**
  * Half-written messages, one per chat (a session, or a new session in a folder), kept in this
@@ -17,6 +15,25 @@ const MAX_TEXT = 100_000;
 
 /** `quotes`: those waiting above the message box (lib/quote), which go above the words when sent. */
 export type Draft = { text: string; attachments?: Attachment[]; quotes?: string[]; at: number };
+
+/**
+ * A message with its quotes above the words, as Claude reads it: each block apart from the next.
+ * Here, with the drafts, which load with the first screen, rather than with the rest of lib/quote.
+ */
+export function messageWithQuotes(quotes: readonly string[], text: string): string {
+  return [...quotes.map((q) => q.trim()), text.trim()].filter(Boolean).join('\n\n');
+}
+
+/**
+ * The line comments waiting to go with a message (lib/review) are kept with the drafts, under a key
+ * of their own: signing out takes them out of storage with the drafts, also in a page where
+ * lib/review has not loaded, and lib/review, once loaded, forgets its copy in memory then too.
+ */
+export const COMMENTS_KEY = 'pelican:comments';
+const forgetting = new Set<() => void>();
+export function whenDraftsForgotten(forget: () => void): void {
+  forgetting.add(forget);
+}
 
 function readAll(): Record<string, Draft> {
   try {
@@ -86,12 +103,14 @@ export function moveDraft(from: string, to: string): void {
 
 /** Signing out leaves no prompts behind in this browser, nor line comments waiting to go with one. */
 export function forgetDrafts(): void {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    // Nothing was kept.
+  for (const key of [KEY, COMMENTS_KEY]) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Nothing was kept.
+    }
   }
-  forgetComments();
+  for (const forget of forgetting) forget();
 }
 
 /**

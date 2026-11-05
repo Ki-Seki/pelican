@@ -12,8 +12,7 @@ import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type
 import { SendComments } from './Comments';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
-import { WorkspaceChanges } from './WorkspaceChanges';
-import { WorkspaceFiles } from './WorkspaceFiles';
+import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
 
 /**
  * From this width Changes and files sits beside the conversation instead of over it; under the

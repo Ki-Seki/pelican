@@ -67,10 +67,8 @@ export function quoteText(selection: Selection): string {
   return body.length > MAX_QUOTE_CHARS ? `${capped(body)}\n> …` : body;
 }
 
-/** A message with its quotes above the words, as Claude reads it: each block apart from the next. */
-export function messageWithQuotes(quotes: readonly string[], text: string): string {
-  return [...quotes.map((q) => q.trim()), text.trim()].filter(Boolean).join('\n\n');
-}
+// A message with its quotes above the words: lib/drafts has it, as it loads with the first screen.
+export { messageWithQuotes } from './drafts';
 
 /**
  * The quotes a message starts with, as messageWithQuotes put them there, and the words after
