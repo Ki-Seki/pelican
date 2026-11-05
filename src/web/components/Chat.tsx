@@ -371,7 +371,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean }>();
+  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; attachments?: Attachment[] }>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -497,7 +497,7 @@ export function Chat({
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back and give the text back to edit.
+      // Nothing reached Claude: take the message back and give it back to edit, files and all.
       removeLocalMessage(viewId, uuid);
       if (error instanceof ApiError && error.trust) {
         // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
@@ -511,12 +511,12 @@ export function Chat({
         setTrustAsk({
           brings: error.trust.brings,
           answer: (choice) => once(() => void send(text, attachments, mode, choice)),
-          cancel: () => once(() => setDraftText({ text, key: Date.now() })),
+          cancel: () => once(() => setDraftText({ text, attachments, key: Date.now() })),
         });
         return;
       }
       failed(error);
-      setDraftText({ text, key: Date.now() });
+      setDraftText({ text, attachments, key: Date.now() });
     }
   };
 

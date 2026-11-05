@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment, RunState, SessionSummary } from '../src/shared/protocol';
@@ -131,5 +131,41 @@ describe('a folder nobody trusted', () => {
     await waitFor(() => expect(server.sent).toHaveLength(2));
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(server.sent.map((body) => body.trust)).toEqual([undefined, 'trusted']);
+  });
+});
+
+describe('a message that did not go', () => {
+  const attach = async (name: string) => {
+    const picker = document.querySelector('input[type=file]') as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [new File(['ERROR export failed\n'], name, { type: 'text/plain' })] } });
+    await screen.findByLabelText(`Remove ${name}`);
+  };
+  const stored = () => (JSON.parse(localStorage.getItem('pelican:drafts') ?? '{}') as Record<string, { text: string; attachments?: Attachment[] }>)[SESSION];
+
+  it('comes back with its files when the computer is out of reach, in the box and in the saved draft', async () => {
+    server.answers.push(new ApiError('Can’t reach studio', 0));
+    session();
+    await loaded();
+    await attach('export.log');
+    sendText('Why does this log say the export failed?');
+    await waitFor(() => expect(box().value).toBe('Why does this log say the export failed?'));
+    expect(screen.getByLabelText('Remove export.log')).toBeTruthy();
+    await waitFor(() => expect(stored()?.attachments).toEqual([expect.objectContaining({ id: 'up-export.log' })]), { timeout: 2000 });
+  });
+
+  it('comes back with its files when the trust question is put away', async () => {
+    server.answers.push(untrusted());
+    session();
+    await loaded();
+    await attach('notes.txt');
+    sendText('Summarise these notes');
+    const sheet = await screen.findByRole('dialog', { name: 'Trust this folder?' });
+    act(() => {
+      sheet.dispatchEvent(new Event('cancel', { cancelable: true }));
+    });
+    await waitFor(() => expect(box().value).toBe('Summarise these notes'));
+    expect(screen.getByLabelText('Remove notes.txt')).toBeTruthy();
+    await waitFor(() => expect(stored()?.attachments).toEqual([expect.objectContaining({ id: 'up-notes.txt' })]), { timeout: 2000 });
+    expect(server.sent).toHaveLength(1);
   });
 });

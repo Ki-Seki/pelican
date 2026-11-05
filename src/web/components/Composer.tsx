@@ -221,8 +221,11 @@ export function Composer({
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
   cwd?: string;
-  /** Text to put in the box, e.g. a prompt being edited, or one that failed to send; a new `key` puts it in again. `append` adds it after what is there. */
-  draft?: { text: string; key: number; append?: boolean };
+  /**
+   * Text to put in the box, e.g. a prompt being edited, or one that failed to send (with its
+   * files); a new `key` puts it in again. `append` adds it after what is there.
+   */
+  draft?: { text: string; key: number; append?: boolean; attachments?: Attachment[] };
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
@@ -270,6 +273,9 @@ export function Composer({
     if (!draft) return;
     const next = draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : draft.text;
     setText(next);
+    // A message given back (its send failed) brings its files back too, beside any added since.
+    const back = draft.attachments;
+    if (back?.length) setUploads((list) => [...back.map(restored), ...list.filter((u) => !back.some((a) => a.id === u.attachment?.id))]);
     requestAnimationFrame(() => {
       const el = area.current;
       if (!el) return;
