@@ -121,8 +121,22 @@ export type PermissionRequest = {
   sessionId: string;
   toolName: string;
   input: Record<string, unknown>;
-  /** Present when the CLI can remember the decision ("always allow"). */
-  canRemember: boolean;
+  /**
+   * What allowing it from now on saves, in words, as Claude Code offers it ("Don't ask again for
+   * npm test * in this project", "Allow all edits this session"). Absent when there is no such choice.
+   */
+  always?: string;
+  /** Claude Code's own sentence for the request, and a line under it. */
+  title?: string;
+  description?: string;
+  /** Open on Deny: this one must not be approved by a stray tap. */
+  defaultToNo?: boolean;
+  /** The subagent asking, when the request does not come from the main conversation. */
+  agent?: string;
+  /** For a plan: the mode the session was in before planning, and whether auto mode can carry it out. */
+  plan?: { before?: PermissionMode; auto: boolean };
+  /** An MCP server asking for values (a form) or a step in the browser (a link), not a tool call. */
+  elicitation?: { server: string; message: string; mode: 'form' | 'url'; url?: string; schema?: Record<string, unknown> };
   reason?: string;
   blockedPath?: string;
   createdAt: number;
@@ -148,7 +162,10 @@ export type RunState = {
   partial: PartialBlock[];
   /** Error of the last turn, if it failed. */
   error?: string;
-  /** The last finished turn: how long it took and what it used. */
+  /**
+   * The last finished turn: how long it took and what it used. The cost is that turn's alone,
+   * an estimate, and absent where it is not known or a subscription pays.
+   */
   lastTurn?: { durationMs: number; costUsd?: number; outputTokens?: number };
   /** How full the context window is, when Claude Code reported it. */
   context?: { percent: number; tokens: number; max: number };
@@ -156,13 +173,39 @@ export type RunState = {
   activity?: { kind: 'compacting' } | { kind: 'retrying'; attempt: number; max: number; delayMs: number };
   /** Commands and agents running in the background; each can be stopped. */
   tasks?: BackgroundTask[];
-  /** Messages sent to run after the current turn, oldest first. */
-  queued?: string[];
+  /**
+   * Prompts sent to wait for the turn to end, oldest first. They are not part of the conversation
+   * until Claude gets them, all together, when the turn ends; until then each can be taken back.
+   */
+  queued?: QueuedPrompt[];
+  /** Stop was asked for; the turn is ending. */
+  stopping?: boolean;
+  /** What a running subagent or background task last reported, by the id of the tool call that started it. */
+  progress?: Record<string, TaskProgress>;
+  /** Check-ins Claude scheduled in this session (/loop, reminders): Claude stays running here for them. */
+  scheduled?: ScheduledCheck[];
+  /** The permission mode changed without being picked here: said once, until the next message. */
+  modeChanged?: PermissionMode;
   /** Claude Code's guess at what you will ask next, after a turn. */
   suggestion?: string;
 };
 
-export type BackgroundTask = { id: string; description: string; type: string };
+export type QueuedPrompt = { uuid: string; text: string; attachments?: Attachment[] };
+
+export type TaskProgress = {
+  /** One line on what it is doing now (Claude Code's summary), else the tool it used last. */
+  summary?: string;
+  lastTool?: string;
+  toolUses?: number;
+  durationMs?: number;
+};
+
+export type ScheduledCheck = { id: string; what: string; next?: number; repeats: boolean };
+
+/** `output`: a command or watcher whose output can be read while it runs; `summary`: what an agent says it is doing. */
+export type BackgroundTask = { id: string; description: string; type: string; output?: boolean; summary?: string };
+
+export type TaskOutput = { output: string; truncated: boolean };
 
 /**
  * What a session last ran with, as its transcript records it: the model Claude Code asked for,

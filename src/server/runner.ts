@@ -1,10 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, type UUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
   EffortLevel,
+  ElicitationResult,
+  OnElicitation,
   Options,
   PermissionResult,
   PermissionUpdate,
@@ -13,6 +15,9 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { plainError } from '../shared/errors.js';
+import { pickerValue } from '../shared/model-names.js';
+import type { PermissionMode } from '../shared/modes.js';
 import type {
   Attachment,
   BackgroundTask,
@@ -21,16 +26,21 @@ import type {
   PartialBlock,
   PermissionDecision,
   PermissionRequest,
+  QueuedPrompt,
   RewindResult,
   RunSettings,
   RunState,
+  ScheduledCheck,
   SendMode,
   SessionStatus,
   ShellResult,
+  TaskOutput,
+  TaskProgress,
 } from '../shared/protocol.js';
+import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
 import { DEMO_WAITING_SESSION, demoRunState } from './demo.js';
-import { toMcpServers } from './models.js';
+import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
@@ -69,12 +79,19 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-type Pending = {
-  request: PermissionRequest;
-  input: Record<string, unknown>;
-  suggestions?: PermissionUpdate[];
-  resolve: (result: PermissionResult) => void;
-};
+/** A request Claude Code waits on: a tool to approve, or an MCP server asking for input. */
+type Pending =
+  | {
+    kind: 'tool';
+    request: PermissionRequest;
+    input: Record<string, unknown>;
+    /** What "always" applies, when the request offers it. */
+    suggestions?: PermissionUpdate[];
+    /** Asked in the main conversation, not by a subagent: a plain Deny ends the turn there. */
+    main: boolean;
+    resolve: (result: PermissionResult) => void;
+  }
+  | { kind: 'elicitation'; request: PermissionRequest; resolve: (result: ElicitationResult) => void };
 
 export type SendInput = {
   text: string;
@@ -86,17 +103,113 @@ export type SendInput = {
   mode?: SendMode;
 };
 
+type Prompt = { uuid: string; text: string; attachments: Attachment[] };
+
+/** What a user message holds, as the SDK types it, so an SDK change fails the typecheck here. */
+type UserContent = Exclude<Extract<SDKUserMessage['message'], { role: 'user' }>['content'], string>;
+
 const sdkModel = (model: string | undefined) => (model && model !== 'default' ? model : undefined);
 
-/** One Claude Code process driving one session. It stays alive between turns until idle. */
-/** Claude Code's error, or what it means for someone who edited their last prompt. */
-function readableError(text: string): string {
+/** The image types the API takes inline; other pictures go to Claude as files to read. */
+const INLINE_IMAGES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+const inlineImage = (mime: string): mime is (typeof INLINE_IMAGES)[number] => (INLINE_IMAGES as readonly string[]).includes(mime);
+
+async function contentOf(text: string, attachments: Attachment[]): Promise<UserContent> {
+  const content: UserContent = [];
+  const fileLines: string[] = [];
+  for (const attachment of attachments) {
+    const mime = attachment.mime;
+    if (inlineImage(mime) && attachment.size <= 5 * 1024 * 1024) {
+      const data = await readFile(attachment.path).catch(() => undefined);
+      if (data) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: mime, data: data.toString('base64') } });
+        continue;
+      }
+    }
+    fileLines.push(`- ${attachment.path} (${attachment.name})`);
+  }
+  let body = text;
+  if (fileLines.length > 0) body = `${body}${body ? '\n\n' : ''}Attached files:\n${fileLines.join('\n')}`;
+  if (body) content.push({ type: 'text', text: body });
+  return content;
+}
+
+/** Claude Code's own words for a refused tool use, so Claude takes a Deny here as it takes the CLI's No. */
+const REFUSED = 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).';
+const STOP_AND_WAIT = `${REFUSED} STOP what you are doing and wait for the user to tell you how to proceed.`;
+const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, the user said:\n${note}`;
+
+/** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
+const CLEARS = /^\/(clear|reset|new)(\s|$)/;
+
+/** Claude Code's error, or what it means for someone who edited their last prompt, in plain words. */
+export function readableError(text: string): string {
   if (text.includes('Resume rejected by --resume-drops-turn')) {
     return 'The conversation changed after that prompt (another app added to it), so the prompt was not replaced. Reload, then edit it again or send a new message.';
   }
-  return text;
+  return startError(text) ?? plainError(text, config.machine) ?? text;
 }
 
+/** Text for a lock screen: one line, short, without control or direction-changing characters. */
+export function oneLine(text: string, max = 120): string {
+  // eslint-disable-next-line no-control-regex
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+const str = (value: unknown) => (typeof value === 'string' ? value : '');
+
+/** What a waiting request asks for, as a notification says it: the command, the file, the question. */
+export function askedFor(request: PermissionRequest, cwd: string): string {
+  const input = request.input;
+  const file = (value: unknown) => {
+    const full = str(value);
+    return full.startsWith(`${cwd}/`) ? full.slice(cwd.length + 1) : full;
+  };
+  if (request.elicitation) return `${request.elicitation.server}: ${request.elicitation.message}`;
+  switch (request.toolName) {
+    case 'AskUserQuestion': {
+      const first = Array.isArray(input.questions) ? (input.questions[0] as Record<string, unknown> | undefined) : undefined;
+      return str(first?.question) || 'Claude has a question for you';
+    }
+    case 'ExitPlanMode':
+      return 'Claude’s plan is ready for you to review';
+    case 'Bash':
+    case 'PowerShell':
+      return str(input.description) || `Run ${str(input.command).split('\n')[0]}`;
+    case 'Edit':
+    case 'MultiEdit':
+      return `Edit ${file(input.file_path)}`;
+    case 'NotebookEdit':
+      return `Edit ${file(input.notebook_path)}`;
+    case 'Write':
+      return `Write ${file(input.file_path)}`;
+    case 'WebFetch': {
+      try {
+        return `Fetch ${new URL(str(input.url)).host}`;
+      } catch {
+        return 'Fetch a page';
+      }
+    }
+    default:
+      return request.title || `Use ${request.toolName.startsWith('mcp__') ? request.toolName.split('__').slice(1).join(' · ') : request.toolName}`;
+  }
+}
+
+/** Form values as an MCP server takes them: strings, numbers, booleans and lists of strings. */
+function formValues(input: Record<string, unknown>): Record<string, string | number | boolean | string[]> {
+  const out: Record<string, string | number | boolean | string[]> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') out[key] = value;
+    else if (Array.isArray(value) && value.every((v) => typeof v === 'string')) out[key] = value;
+  }
+  return out;
+}
+
+/** A scheduled check stays counted this long after it was due, in case it fires late. */
+const DUE_GRACE_MS = 10 * 60_000;
+
+/** One Claude Code process driving one session. It stays alive between turns until idle. */
 export class SessionRun {
   busy = false;
   closed = false;
@@ -109,18 +222,33 @@ export class SessionRun {
   private q?: Query;
   private emitTimer?: NodeJS.Timeout;
   private title = '';
-  /** Set by Stop: the turn then ends with an error result that is not a failure. */
+  /** Set by Stop during a turn: it then ends with an error result that is not a failure. */
   private interrupted = false;
   private lastTurn?: RunState['lastTurn'];
   private context?: RunState['context'];
   private activity?: RunState['activity'];
+  /** Background tasks to show (and stop), and how many run in all, watchers included. */
   private tasks: BackgroundTask[] = [];
-
-  get hasBackgroundTasks(): boolean {
-    return this.tasks.length > 0;
-  }
-  /** Messages waiting for the turn to end, published when it does. */
-  private queued: ChatMessage[] = [];
+  private taskCount = 0;
+  /** What each running subagent or task last reported, the tool call that started it, and its name. */
+  private progress = new Map<string, TaskProgress>();
+  private taskTools = new Map<string, string>();
+  private agentNames = new Map<string, string>();
+  /** Claude's calls to schedule tools, until their results say what was scheduled. */
+  private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
+  private wakeup?: ScheduledCheck;
+  private crons = new Map<string, ScheduledCheck>();
+  /** Prompts waiting for the turn to end; Claude gets them together when it does. */
+  private queued: Prompt[] = [];
+  /** The turn ended with prompts waiting, which went out at once: the idle that follows is not the end. */
+  private continuing = false;
+  /** The session's total cost after the last turn; unknown for a resumed session until its first turn. */
+  private costSoFar?: number;
+  /** While settings picked here are being applied, Claude Code's reports of the old ones are stale. */
+  private applying = 0;
+  private modeChanged?: PermissionMode;
+  private modeBeforePlan?: PermissionMode;
+  private lastReply = '';
   private started!: { resolve: () => void; reject: (error: Error) => void };
   /** Settles once Claude has started (its first message), or fails when it ends before that. */
   readonly ready = new Promise<void>((resolve, reject) => {
@@ -137,7 +265,23 @@ export class SessionRun {
     private readonly resume: boolean,
     /** Resume only up to this entry, dropping the turn after it (an edited last prompt). */
     private readonly resumeAt?: { entry: string; dropsTurn: string },
-  ) {}
+  ) {
+    if (!resume) this.costSoFar = 0;
+  }
+
+  /**
+   * Work in this process that ends with it and says nothing while it runs: background tasks
+   * (watchers included), a wake-up Claude scheduled, session crons. Closing or restarting the
+   * process would cut it off.
+   */
+  get hasBackgroundTasks(): boolean {
+    const now = Date.now();
+    const before = (this.wakeup ? 1 : 0) + this.crons.size;
+    if (this.wakeup && (this.wakeup.next ?? 0) + DUE_GRACE_MS < now) this.wakeup = undefined;
+    for (const [id, cron] of this.crons) if (!cron.repeats && (cron.next ?? 0) + DUE_GRACE_MS < now) this.crons.delete(id);
+    if ((this.wakeup ? 1 : 0) + this.crons.size !== before) this.emit();
+    return this.taskCount > 0 || Boolean(this.wakeup) || this.crons.size > 0;
+  }
 
   start(): void {
     const settings = this.settings;
@@ -162,10 +306,16 @@ export class SessionRun {
       // Lets "Rewind code" put files back the way they were before a prompt.
       enableFileCheckpointing: true,
       promptSuggestions: true,
+      // Running subagents say what they are doing, for the line under their step.
+      agentProgressSummaries: true,
+      // Each background task has its own Stop here, so Stop ends the turn and spares them, as Esc does.
+      perTaskStopAffordance: true,
+      toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       settingSources: ['user', 'project', 'local'],
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
+      onElicitation: this.onElicitation,
       ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
       stderr: (data) => {
         if (process.env.PELICAN_DEBUG) process.stderr.write(`[claude ${this.sessionId.slice(0, 8)}] ${data}`);
@@ -179,6 +329,11 @@ export class SessionRun {
   }
 
   state(): RunState {
+    const progress = Object.fromEntries([...this.progress].flatMap(([task, report]) => {
+      const tool = this.taskTools.get(task);
+      return tool ? [[tool, report]] : [];
+    }));
+    const scheduled = [...(this.wakeup ? [this.wakeup] : []), ...this.crons.values()];
     return {
       sessionId: this.sessionId,
       cwd: this.cwd,
@@ -190,8 +345,18 @@ export class SessionRun {
       ...(this.lastTurn ? { lastTurn: this.lastTurn } : {}),
       ...(this.context ? { context: this.context } : {}),
       ...(this.activity ? { activity: this.activity } : {}),
-      ...(this.tasks.length > 0 ? { tasks: this.tasks } : {}),
-      ...(this.queued.length > 0 ? { queued: this.queued.map((m) => m.uuid) } : {}),
+      ...(this.tasks.length > 0 ? {
+        tasks: this.tasks.map((task) => {
+          const report = this.progress.get(task.id);
+          const summary = report?.summary ?? report?.lastTool;
+          return summary ? { ...task, summary } : task;
+        }),
+      } : {}),
+      ...(this.queued.length > 0 ? { queued: this.queued.map(queuedPrompt) } : {}),
+      ...(this.busy && this.interrupted ? { stopping: true } : {}),
+      ...(Object.keys(progress).length > 0 ? { progress } : {}),
+      ...(scheduled.length > 0 ? { scheduled } : {}),
+      ...(this.modeChanged ? { modeChanged: this.modeChanged } : {}),
       ...(this.suggestion && !this.busy ? { suggestion: this.suggestion } : {}),
     };
   }
@@ -242,45 +407,51 @@ export class SessionRun {
   }
 
   async send(input: SendInput): Promise<void> {
+    // In the same process Claude Code would go on under a new id, beside this session's.
+    if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
     await this.applySettings(input.settings);
-    const uuid = input.uuid ?? randomUUID();
-    const content: Array<Record<string, unknown>> = [];
-    const fileLines: string[] = [];
-    for (const attachment of input.attachments) {
-      if (attachment.mime.startsWith('image/') && attachment.size <= 5 * 1024 * 1024) {
-        const data = await readFile(attachment.path).catch(() => undefined);
-        if (data) {
-          content.push({ type: 'image', source: { type: 'base64', media_type: attachment.mime, data: data.toString('base64') } });
-          continue;
-        }
-      }
-      fileLines.push(`- ${attachment.path} (${attachment.name})`);
+    const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
+    // Queued: not part of the conversation until the turn ends and Claude gets it.
+    if (this.busy && input.mode === 'queue') {
+      this.queued.push(prompt);
+      this.emit();
+      return;
     }
-    let text = input.text;
-    if (fileLines.length > 0) text = `${text}${text ? '\n\n' : ''}Attached files:\n${fileLines.join('\n')}`;
-    if (text) content.push({ type: 'text', text });
-    // A running turn takes a new message at Claude's next step, unless it should wait for the turn to end.
-    const queue = this.busy && input.mode === 'queue';
-    const message = {
+    // While a turn runs, Claude reads it at its next step.
+    await this.deliver(prompt, this.busy);
+  }
+
+  private async deliver(prompt: Prompt, steer: boolean): Promise<void> {
+    const content = await contentOf(prompt.text, prompt.attachments);
+    const message: SDKUserMessage = {
       type: 'user',
-      uuid,
+      uuid: prompt.uuid as UUID,
       session_id: this.sessionId,
       parent_tool_use_id: null,
       origin: { kind: 'human' },
-      ...(this.busy ? { priority: queue ? 'later' : 'next' } : {}),
+      ...(steer ? { priority: 'next' as const } : {}),
       message: { role: 'user', content },
-    } as unknown as SDKUserMessage;
+    };
     this.error = undefined;
     this.suggestion = undefined;
-    const chat = toChatMessage({ type: 'user', uuid, message: { role: 'user', content } });
-    if (queue) {
-      if (chat) this.queued.push({ ...chat, timestamp: Date.now() });
-      this.emit();
-    } else {
-      this.setBusy(true);
-      if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
+    this.modeChanged = undefined;
+    if (!this.busy) {
+      this.interrupted = false;
+      this.lastReply = '';
     }
+    this.setBusy(true);
+    const chat = toChatMessage({ type: 'user', uuid: prompt.uuid, message: { role: 'user', content } });
+    if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     this.input.push(message);
+  }
+
+  /** Takes a queued prompt back before Claude gets it; false when it is not waiting any more. */
+  unqueue(uuid: string): boolean {
+    const before = this.queued.length;
+    this.queued = this.queued.filter((p) => p.uuid !== uuid);
+    if (this.queued.length === before) return false;
+    this.emit();
+    return true;
   }
 
   /**
@@ -290,7 +461,7 @@ export class SessionRun {
   async appendShell(result: ShellResult): Promise<void> {
     const uuid = randomUUID();
     const text = bashModeText(result);
-    const message = {
+    const message: SDKUserMessage = {
       type: 'user',
       uuid,
       session_id: this.sessionId,
@@ -298,7 +469,7 @@ export class SessionRun {
       origin: { kind: 'human' },
       shouldQuery: false,
       message: { role: 'user', content: text },
-    } as unknown as SDKUserMessage;
+    };
     const chat = toChatMessage({ type: 'user', uuid, message: { role: 'user', content: text } });
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     this.input.push(message);
@@ -328,14 +499,38 @@ export class SessionRun {
     if (change.enabled !== undefined) await this.q.toggleMcpServer(name, change.enabled);
   }
 
+  /** The commands and agents of this very session, up to date (skills it found as it worked included). */
+  async completions(): Promise<Completions> {
+    if (!this.q) throw new Error('Claude is not running in this session');
+    const [commands, agents] = await Promise.all([this.q.supportedCommands(), this.q.supportedAgents().catch(() => [])]);
+    return toCompletions(commands, agents);
+  }
+
   async stopTask(taskId: string): Promise<void> {
     await this.q?.stopTask(taskId);
   }
 
-  async applySettings(next: RunSettings): Promise<void> {
+  /** The end of what a background command printed (the last 8 KiB), as the terminal's /tasks shows it. */
+  async taskOutput(taskId: string): Promise<TaskOutput> {
+    // A control request the SDK has but does not type yet.
+    const q = this.q as (Query & { getTaskOutput?: (taskId: string) => Promise<{ output: string; truncated: boolean }> }) | undefined;
+    if (!q?.getTaskOutput) throw new Error('This Claude Code cannot show a task’s output');
+    const answer = await q.getTaskOutput(taskId);
+    return { output: String(answer?.output ?? ''), truncated: Boolean(answer?.truncated) };
+  }
+
+  /**
+   * Settings picked here, applied to Claude now: from its next step, also mid-turn. A mode picked
+   * here (`pick`) is always sent, even when Pelican thinks Claude is in it already.
+   */
+  async applySettings(next: RunSettings, pick = false): Promise<void> {
     const q = this.q;
     if (!q) return;
     const prev = this.settings;
+    this.settings = { ...prev, ...next };
+    if (next.permissionMode) this.modeChanged = undefined;
+    if (next.permissionMode === 'plan' && prev.permissionMode !== 'plan') this.modeBeforePlan = prev.permissionMode ?? 'default';
+    this.applying += 1;
     try {
       if ((next.model ?? 'default') !== (prev.model ?? 'default')) await q.setModel(sdkModel(next.model));
       // A new effort level sent without the ultracode key turns ultracode off, so both go together.
@@ -347,15 +542,16 @@ export class SessionRun {
         });
       }
       if (Boolean(next.fast) !== Boolean(prev.fast)) await q.applyFlagSettings({ fastMode: Boolean(next.fast) });
-      if (next.permissionMode && next.permissionMode !== (prev.permissionMode ?? 'default')) await q.setPermissionMode(next.permissionMode);
+      if (next.permissionMode && (pick || next.permissionMode !== (prev.permissionMode ?? 'default'))) await q.setPermissionMode(next.permissionMode);
     } catch (error) {
       console.warn('[pelican] could not apply settings', (error as Error).message);
+    } finally {
+      this.applying -= 1;
     }
-    this.settings = { ...prev, ...next };
   }
 
-  async setPermissionMode(mode: RunSettings['permissionMode']): Promise<void> {
-    await this.applySettings({ ...this.settings, permissionMode: mode });
+  async setPermissionMode(mode: PermissionMode): Promise<void> {
+    await this.applySettings({ ...this.settings, permissionMode: mode }, true);
     this.emit();
   }
 
@@ -365,33 +561,104 @@ export class SessionRun {
     this.emit();
   }
 
-  private canUseTool: CanUseTool = (toolName, input, { signal, suggestions, blockedPath, decisionReason }) => {
-    const id = randomUUID();
+  /** The mode Claude Code says the session is in now; said once when it was not picked here. */
+  private noteMode(mode: PermissionMode): void {
+    if (this.applying > 0) return;
+    const before = this.settings.permissionMode ?? 'default';
+    if (mode === before) return;
+    if (mode === 'plan') this.modeBeforePlan = before;
+    this.settings = { ...this.settings, permissionMode: mode };
+    this.modeChanged = mode;
+    this.emit();
+  }
+
+  /** Each turn starts with what it runs with: the chips show that, not what was last picked. */
+  private noteInit(init: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>): void {
+    if (init.terminal_slash_commands) noteTerminalCommands(init.terminal_slash_commands);
+    if (this.applying > 0) return;
+    const next = { ...this.settings };
+    // Named as the picker names it: an id the list does not know would show raw, so it is left.
+    const models = knownModels();
+    if (init.model && models?.some((m) => m.value === init.model || m.resolvedModel === init.model)) next.model = pickerValue(init.model, models, next.model ?? 'default');
+    if (typeof init.effort === 'string') next.effort = init.effort;
+    if (init.fast_mode_state === 'on' || init.fast_mode_state === 'off') next.fast = init.fast_mode_state === 'on';
+    const changed = JSON.stringify(next) !== JSON.stringify(this.settings);
+    this.settings = next;
+    if (init.permissionMode) this.noteMode(init.permissionMode);
+    if (changed) this.emit();
+  }
+
+  /** Whether auto mode can carry out a plan with the model this session runs, when that is known. */
+  private autoAvailable(): boolean {
+    const model = this.settings.model ?? 'default';
+    return knownModels()?.find((m) => m.value === model)?.supportsAuto === true;
+  }
+
+  private park(pending: Pending, signal: AbortSignal, onAbort: () => void): void {
+    const id = pending.request.id;
+    this.permissions.set(id, pending);
+    signal.addEventListener('abort', () => {
+      if (this.permissions.delete(id)) {
+        onAbort();
+        this.emit();
+        sessionsChanged();
+      }
+    });
+    this.emit();
+    sessionsChanged();
+    void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask` });
+  }
+
+  private canUseTool: CanUseTool = (toolName, input, options) => {
+    const { signal, suggestions, blockedPath, decisionReason, title, description, defaultToNo, suppressAlwaysAllowRule, agentID } = options;
+    // No "always" where Claude Code says the rule would grant more than this request, or a plugin asked.
+    const always = suppressAlwaysAllowRule ? undefined : describeAlways(suggestions, config.home);
+    const agent = agentID ? this.agentNames.get(agentID) ?? 'a subagent' : undefined;
     const request: PermissionRequest = {
-      id,
+      id: randomUUID(),
       sessionId: this.sessionId,
       toolName,
       input,
-      canRemember: Boolean(suggestions && suggestions.length > 0),
+      ...(always ? { always } : {}),
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
+      ...(defaultToNo ? { defaultToNo: true } : {}),
+      ...(agent ? { agent } : {}),
+      ...(toolName === 'ExitPlanMode' ? { plan: { ...(this.modeBeforePlan ? { before: this.modeBeforePlan } : {}), auto: this.autoAvailable() } } : {}),
       ...(decisionReason ? { reason: decisionReason } : {}),
       ...(blockedPath ? { blockedPath } : {}),
       createdAt: Date.now(),
     };
     return new Promise<PermissionResult>((resolve) => {
-      this.permissions.set(id, { request, input, ...(suggestions ? { suggestions } : {}), resolve });
-      signal.addEventListener('abort', () => {
-        if (this.permissions.delete(id)) {
-          resolve({ behavior: 'deny', message: 'Cancelled.' });
-          this.emit();
-          sessionsChanged();
-        }
-      });
-      this.emit();
-      sessionsChanged();
-      const what = toolName === 'AskUserQuestion' ? 'has a question for you'
-        : toolName === 'ExitPlanMode' ? 'has a plan for you to review'
-          : `wants to use ${toolName}`;
-      void notify({ title: this.title || 'Claude Code', body: `Claude ${what}`, sessionId: this.sessionId, tag: `${this.sessionId}:ask` });
+      this.park(
+        { kind: 'tool', request, input, ...(always && suggestions ? { suggestions } : {}), main: !agentID, resolve },
+        signal,
+        () => resolve({ behavior: 'deny', message: 'Cancelled.' }),
+      );
+    });
+  };
+
+  private onElicitation: OnElicitation = (asked, { signal }) => {
+    // Only a web page may be offered to open.
+    const url = asked.mode === 'url' && asked.url && /^https?:\/\//i.test(asked.url) ? asked.url : undefined;
+    const request: PermissionRequest = {
+      id: randomUUID(),
+      sessionId: this.sessionId,
+      toolName: `mcp__${asked.serverName}`,
+      input: {},
+      ...(asked.title ? { title: asked.title } : {}),
+      ...(asked.description ? { description: asked.description } : {}),
+      elicitation: {
+        server: asked.serverName,
+        message: asked.message,
+        mode: asked.mode === 'url' ? 'url' : 'form',
+        ...(url ? { url } : {}),
+        ...(asked.requestedSchema ? { schema: asked.requestedSchema } : {}),
+      },
+      createdAt: Date.now(),
+    };
+    return new Promise<ElicitationResult>((resolve) => {
+      this.park({ kind: 'elicitation', request, resolve }, signal, () => resolve({ action: 'cancel' }));
     });
   };
 
@@ -399,24 +666,67 @@ export class SessionRun {
     const pending = this.permissions.get(id);
     if (!pending) return false;
     this.permissions.delete(id);
-    if (decision.behavior === 'allow') {
+    if (pending.kind === 'elicitation') {
+      pending.resolve(decision.behavior === 'allow'
+        ? { action: 'accept', ...(decision.updatedInput ? { content: formValues(decision.updatedInput) } : {}) }
+        : { action: 'decline' });
+    } else if (decision.behavior === 'allow') {
+      const remember = Boolean(decision.remember && pending.suggestions);
+      // A plan approved into a mode: Claude Code switches with the approval, as its own options do.
+      const updates: PermissionUpdate[] = [
+        ...(remember ? pending.suggestions! : []),
+        ...(decision.permissionMode ? [{ type: 'setMode' as const, mode: decision.permissionMode, destination: 'session' as const }] : []),
+      ];
+      const mode = sessionModeOf(updates);
+      if (mode) {
+        if (mode === 'plan' && this.settings.permissionMode !== 'plan') this.modeBeforePlan = this.settings.permissionMode ?? 'default';
+        this.settings = { ...this.settings, permissionMode: mode };
+        this.modeChanged = undefined;
+      }
       pending.resolve({
         behavior: 'allow',
         updatedInput: decision.updatedInput ?? pending.input,
-        ...(decision.remember && pending.suggestions ? { updatedPermissions: pending.suggestions } : {}),
+        ...(updates.length > 0 ? { updatedPermissions: updates } : {}),
+        decisionClassification: remember ? 'user_permanent' : 'user_temporary',
       });
-      if (decision.permissionMode) void this.setPermissionMode(decision.permissionMode);
     } else {
-      pending.resolve({ behavior: 'deny', message: decision.message?.trim() || 'The user declined this.' });
+      pending.resolve(this.refusal(pending, decision.message));
     }
     this.emit();
     sessionsChanged();
     return true;
   }
 
+  /** A Deny, as Claude Code's No: without a note the turn stops and Claude waits; with one, Claude goes on with it. */
+  private refusal(pending: Extract<Pending, { kind: 'tool' }>, message: string | undefined): PermissionResult {
+    const note = message?.trim();
+    // A question skipped and a plan sent back are answers, not refusals: Claude carries on with them.
+    if (pending.request.toolName === 'AskUserQuestion' || pending.request.toolName === 'ExitPlanMode') {
+      return { behavior: 'deny', message: note || 'The user declined this.', decisionClassification: 'user_reject' };
+    }
+    if (note) return { behavior: 'deny', message: refusedWith(note), decisionClassification: 'user_reject' };
+    // A subagent's request ends only that step of the subagent, as in Claude Code.
+    if (!pending.main) return { behavior: 'deny', message: STOP_AND_WAIT, decisionClassification: 'user_reject' };
+    if (this.busy) this.interrupted = true;
+    return { behavior: 'deny', message: STOP_AND_WAIT, interrupt: true, decisionClassification: 'user_reject' };
+  }
+
+  /** Answers a request nobody decided: the turn was stopped, or the session closed. */
+  private settleAll(why: string): void {
+    for (const [id, pending] of this.permissions) {
+      this.permissions.delete(id);
+      if (pending.kind === 'elicitation') pending.resolve({ action: 'cancel' });
+      else pending.resolve({ behavior: 'deny', message: why });
+    }
+  }
+
   async interrupt(): Promise<void> {
+    // A Stop that comes after the turn ended stops nothing, and must not cost the next turn its notice.
+    if (!this.busy) return;
     this.interrupted = true;
-    for (const [id] of this.permissions) this.decide(id, { behavior: 'deny', message: 'Interrupted by the user.' });
+    this.settleAll('Interrupted by the user.');
+    this.emit();
+    sessionsChanged();
     try {
       await this.q?.interrupt();
     } catch (error) {
@@ -427,7 +737,7 @@ export class SessionRun {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    for (const [id] of this.permissions) this.decide(id, { behavior: 'deny', message: 'Session closed.' });
+    this.settleAll('Session closed.');
     this.input.close();
     try {
       this.q?.close();
@@ -439,12 +749,64 @@ export class SessionRun {
   /** How full the context window is now; shown in the session header. */
   private async readContext(): Promise<void> {
     try {
-      const usage = await this.q?.getContextUsage();
+      // The summary comes from the last response's usage: no token-count calls after every turn.
+      const usage = await this.q?.getContextUsage({ detail: 'summary' });
       if (!usage) return;
       this.context = { percent: Math.round(usage.percentage), tokens: usage.totalTokens, max: usage.maxTokens };
       this.emit();
     } catch {
       // Older Claude Code; the header just shows no meter.
+    }
+  }
+
+  /** This turn's cost: the result carries the session's running total. */
+  private turnCost(total: number | undefined): number | undefined {
+    if (typeof total !== 'number' || !Number.isFinite(total)) return undefined;
+    const before = this.costSoFar;
+    this.costSoFar = total;
+    if (before === undefined) return undefined;
+    // A total that went down started again (/clear, or a result after a crash).
+    return total >= before ? total - before : total;
+  }
+
+  /** Remembers Claude's calls to the tools that schedule work, to read what their results scheduled. */
+  private noteCalls(content: unknown): void {
+    if (!Array.isArray(content)) return;
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block?.type !== 'tool_use' || typeof block.id !== 'string') continue;
+      const name = str(block.name);
+      if (name === 'ScheduleWakeup' || name === 'CronCreate' || name === 'CronDelete') {
+        this.scheduling.set(block.id, { name, input: (block.input ?? {}) as Record<string, unknown> });
+      }
+    }
+  }
+
+  private noteResults(raw: Record<string, unknown>): void {
+    const content = (raw.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;
+      const call = this.scheduling.get(block.tool_use_id);
+      if (!call) continue;
+      this.scheduling.delete(block.tool_use_id);
+      if (block.is_error === true) continue;
+      const output = (raw.tool_use_result ?? {}) as Record<string, unknown>;
+      if (call.name === 'ScheduleWakeup') {
+        const at = typeof output.scheduledFor === 'number' ? output.scheduledFor : undefined;
+        this.wakeup = call.input.stop === true || !at ? undefined : { id: 'wakeup', what: str(call.input.reason) || 'Claude checks back', next: at, repeats: false };
+      } else if (call.name === 'CronCreate') {
+        const id = str(output.id);
+        if (!id) continue;
+        const prompt = str(call.input.prompt);
+        this.crons.set(id, {
+          id,
+          what: oneLine(`${str(output.humanSchedule) || str(call.input.cron)}${prompt ? `: ${prompt}` : ''}`, 100),
+          ...(typeof output.nextFireAt === 'number' ? { next: output.nextFireAt } : {}),
+          repeats: output.recurring !== false,
+        });
+      } else {
+        this.crons.delete(str(call.input.id));
+      }
     }
   }
 
@@ -480,6 +842,12 @@ export class SessionRun {
     this.emit(true);
   }
 
+  /** A line Claude Code shows in the conversation that is no message of Claude's: hook feedback, a command's output. */
+  private async publishNotice(uuid: string, text: string): Promise<void> {
+    if (!text.trim()) return;
+    await feedFor(this.sessionId).publish({ uuid, role: 'system', blocks: [{ type: 'text', text }], timestamp: Date.now() });
+  }
+
   private async pump(): Promise<void> {
     const q = this.q!;
     try {
@@ -494,7 +862,14 @@ export class SessionRun {
           case 'assistant':
           case 'user': {
             if (raw.parent_tool_use_id) break;
-            if (message.type === 'assistant') this.completedBlocks += 1;
+            if (message.type === 'assistant') {
+              this.completedBlocks += 1;
+              this.noteCalls(message.message.content);
+              const text = message.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
+              if (text) this.lastReply = text;
+            } else {
+              this.noteResults(raw);
+            }
             if (this.activity?.kind === 'retrying') this.activity = undefined;
             const chat = toChatMessage(raw);
             if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: chat.timestamp ?? Date.now() } satisfies ChatMessage);
@@ -504,21 +879,60 @@ export class SessionRun {
           case 'system':
             if (message.subtype === 'session_state_changed') {
               const state = (raw as { state?: string }).state;
-              if (state === 'running' || state === 'requires_action') this.setBusy(true);
-              else if (state === 'idle') this.setBusy(false);
+              if (state === 'running' || state === 'requires_action') {
+                this.continuing = false;
+                if (!this.busy) this.interrupted = false;
+                this.setBusy(true);
+              } else if (state === 'idle') {
+                if (this.continuing) this.continuing = false;
+                else this.setBusy(false);
+              }
             } else if (message.subtype === 'init') {
+              this.noteInit(message);
               void refreshTranscriptIndex().then(sessionsChanged);
             } else if (message.subtype === 'status') {
               this.activity = message.status === 'compacting' ? { kind: 'compacting' } : undefined;
+              if (message.permissionMode) this.noteMode(message.permissionMode);
               this.emit();
             } else if (message.subtype === 'api_retry') {
               this.activity = { kind: 'retrying', attempt: message.attempt, max: message.max_retries, delayMs: message.retry_delay_ms };
               this.emit();
             } else if (message.subtype === 'background_tasks_changed') {
+              // Watchers count for keeping Claude running, not as something to show.
+              this.taskCount = message.tasks.length;
               this.tasks = message.tasks
                 .filter((t) => !t.ambient)
-                .map((t) => ({ id: t.task_id, description: t.description, type: t.subagent_type ?? t.task_type }));
+                .map((t) => ({
+                  id: t.task_id,
+                  description: t.description,
+                  type: t.subagent_type ?? t.task_type,
+                  ...(t.task_type === 'local_bash' || t.task_type.startsWith('monitor') ? { output: true } : {}),
+                }));
               this.emit();
+            } else if (message.subtype === 'task_started') {
+              if (message.tool_use_id) this.taskTools.set(message.task_id, message.tool_use_id);
+              if (message.subagent_type) this.agentNames.set(message.task_id, message.subagent_type);
+            } else if (message.subtype === 'task_progress') {
+              if (message.tool_use_id) this.taskTools.set(message.task_id, message.tool_use_id);
+              this.progress.set(message.task_id, {
+                ...(message.summary ? { summary: message.summary } : {}),
+                ...(message.last_tool_name ? { lastTool: message.last_tool_name } : {}),
+                toolUses: message.usage.tool_uses,
+                durationMs: message.usage.duration_ms,
+              });
+              this.emit(true);
+            } else if (message.subtype === 'task_notification') {
+              this.progress.delete(message.task_id);
+              this.taskTools.delete(message.task_id);
+              this.agentNames.delete(message.task_id);
+              this.emit(true);
+            } else if (message.subtype === 'commands_changed') {
+              void forgetCompletions(this.cwd);
+            } else if (message.subtype === 'informational') {
+              // Hook feedback (why a prompt was blocked), warnings and notices; 'info' lines are the terminal's transcript view only.
+              if (message.level !== 'info') await this.publishNotice(message.uuid, message.content);
+            } else if (message.subtype === 'local_command_output') {
+              await this.publishNotice(message.uuid, `<local-command-stdout>${message.content}</local-command-stdout>`);
             }
             break;
           case 'rate_limit_event':
@@ -531,25 +945,38 @@ export class SessionRun {
           case 'result': {
             const stopped = this.interrupted;
             this.interrupted = false;
+            this.continuing = false;
             const failed = !stopped && (message.subtype !== 'success' || message.is_error);
             this.error = failed
               ? readableError('errors' in message && message.errors.length > 0 ? message.errors.join('\n') : ('result' in message ? String(message.result) : message.subtype))
               : undefined;
+            const cost = this.turnCost(message.total_cost_usd);
             this.lastTurn = {
               durationMs: message.duration_ms,
-              ...(typeof message.total_cost_usd === 'number' ? { costUsd: message.total_cost_usd } : {}),
+              // A plan's subscription pays, not per turn: a dollar figure would only mislead.
+              ...(cost !== undefined && !onSubscription() ? { costUsd: cost } : {}),
               ...(typeof message.usage?.output_tokens === 'number' ? { outputTokens: message.usage.output_tokens } : {}),
             };
             this.activity = undefined;
-            // Messages that waited for this turn go in now: the next turn answers them.
-            for (const waiting of this.queued.splice(0)) await feedFor(this.sessionId).publish(waiting);
-            this.setBusy(false);
+            const reply = this.lastReply;
+            // What waited for this turn goes out now, together, as Claude Code sends what was queued.
+            const waiting = this.queued.splice(0);
+            if (waiting.length > 0) {
+              this.continuing = true;
+              await this.deliver({
+                uuid: waiting[0]!.uuid,
+                text: waiting.map((p) => p.text).filter(Boolean).join('\n\n'),
+                attachments: waiting.flatMap((p) => p.attachments),
+              }, false);
+            } else {
+              this.setBusy(false);
+            }
             this.emit();
             void this.readContext();
-            if (!stopped) {
+            if (!stopped && waiting.length === 0) {
               void notify({
                 title: this.title || 'Claude Code',
-                body: failed ? `Stopped: ${this.error ?? 'error'}`.slice(0, 180) : 'Finished',
+                body: failed ? oneLine(`Stopped: ${this.error ?? 'error'}`, 180) : oneLine(reply.split('\n').find((line) => line.trim()) ?? '') || 'Finished',
                 sessionId: this.sessionId,
                 tag: `${this.sessionId}:done`,
               });
@@ -566,8 +993,8 @@ export class SessionRun {
     } finally {
       this.closed = true;
       this.started.reject(new Error(this.error ?? 'Claude Code stopped before it started'));
-      for (const [, pending] of this.permissions) pending.resolve({ behavior: 'deny', message: 'Session closed.' });
-      this.permissions.clear();
+      this.settleAll('Session closed.');
+      this.queued = [];
       this.setBusy(false);
       this.emit();
       // A newer run may have taken this session's place already (see sendMessage).
@@ -577,11 +1004,19 @@ export class SessionRun {
   }
 }
 
+const queuedPrompt = ({ uuid, text, attachments }: Prompt): QueuedPrompt => ({ uuid, text, ...(attachments.length > 0 ? { attachments } : {}) });
+
 const runs = new Map<string, SessionRun>();
 
 export function getRun(sessionId: string): SessionRun | undefined {
   const run = runs.get(sessionId);
   return run && !run.closed ? run : undefined;
+}
+
+/** A Claude running in this folder, to ask instead of starting another. */
+export function runIn(cwd: string): SessionRun | undefined {
+  for (const run of runs.values()) if (!run.closed && run.cwd === cwd) return run;
+  return undefined;
 }
 
 /** Status of a session this app runs; undefined when it has no Claude process here. */
@@ -599,10 +1034,6 @@ async function isDirectory(dir: string): Promise<boolean> {
   return stat(dir).then((s) => s.isDirectory(), () => false);
 }
 
-/**
- * Sends a message, starting (or resuming) the session's Claude process when
- * none is running. Without a session id a new session starts in `cwd`.
- */
 /**
  * Whether another app (Claude Desktop, the terminal) has worked on the session since this
  * run's Claude last did. Its process then holds a conversation this one has not seen, and a
@@ -630,8 +1061,13 @@ async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
   return run;
 }
 
+/**
+ * Sends a message, starting (or resuming) the session's Claude process when
+ * none is running. Without a session id a new session starts in `cwd`.
+ */
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
+  if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
   if (target.sessionId) {
     const existing = await currentRun(target.sessionId);
     if (existing) {
@@ -701,12 +1137,18 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
   return run;
 }
 
-/** Closes Claude processes that have been idle for a while; the next message resumes them. */
-setInterval(() => {
+/**
+ * Closes Claude processes that have been idle for a while; the next message resumes them. Not
+ * those with work that says nothing while it runs (a dev server, a watcher, a scheduled check):
+ * Claude Code ends that work with the process, where the terminal and Desktop keep it going.
+ */
+export function closeIdle(now = Date.now()): void {
   for (const run of runs.values()) {
-    if (!run.busy && run.status() === 'idle' && Date.now() - run.lastActive > config.idleCloseMs) run.close();
+    if (!run.busy && run.status() === 'idle' && !run.hasBackgroundTasks && now - run.lastActive > config.idleCloseMs) run.close();
   }
-}, 60_000).unref();
+}
+
+setInterval(() => closeIdle(), 60_000).unref();
 
 export function closeAll(): void {
   for (const run of runs.values()) run.close();

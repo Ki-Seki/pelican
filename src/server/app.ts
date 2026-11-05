@@ -17,10 +17,10 @@ import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
+import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, replaceLastTurn, runState, runStatus, sendMessage } from './runner.js';
+import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
 import { usageLimits } from './usage.js';
 import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
@@ -461,7 +461,17 @@ app.get('/api/models', async (c) => c.json(await listModels()));
 app.get('/api/commands', async (c) => {
   const cwd = await folderOf(c);
   if (!cwd) return c.json({ commands: [], agents: [] });
-  return c.json(await listCompletions(cwd));
+  // A Claude running there knows its list as it is now, and asking it starts nothing.
+  const live = await runIn(cwd)?.completions().catch(() => undefined);
+  return c.json(live ?? await listCompletions(cwd));
+});
+
+/** What a new session in a folder starts with, from the user's Claude Code settings (no folder: a scratch session). */
+app.get('/api/defaults', async (c) => {
+  const asked = c.req.query('cwd');
+  const cwd = asked ? await checkedFolder(asked) : undefined;
+  if (asked && !cwd) return c.json({ error: 'No such folder' }, 404);
+  return c.json({ permissionMode: (await defaultMode(cwd)) ?? null });
 });
 
 /** What `/usage` shows in Claude Code: asked of claude.ai when Settings opens, kept a minute. */
@@ -575,6 +585,19 @@ app.post('/api/sessions/:id/mcp/:name', async (c) => {
 app.post('/api/sessions/:id/tasks/:task/stop', async (c) => {
   await getRun(c.req.param('id'))?.stopTask(c.req.param('task'));
   return c.json({ ok: true });
+});
+
+/** The end of what a background command printed, read while it runs. */
+app.get('/api/sessions/:id/tasks/:task/output', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Claude is not running in this session' }, 409);
+  return c.json(await run.taskOutput(c.req.param('task')));
+});
+
+/** Takes back a prompt waiting for the turn to end, before Claude gets it. */
+app.delete('/api/sessions/:id/queued/:uuid', (c) => {
+  const ok = getRun(c.req.param('id'))?.unqueue(c.req.param('uuid')) ?? false;
+  return ok ? c.json({ ok }) : c.json({ error: 'That message is no longer waiting' }, 409);
 });
 
 app.get('/api/sessions/:id/sent', async (c) => {

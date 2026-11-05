@@ -55,7 +55,8 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   if (info?.cwd) out.push(`Folder: \`${info.cwd}\``, '');
   let speaker: string | undefined;
   for (const message of messages) {
-    if (message.meta || message.parentToolUseId) continue;
+    // Claude Code's own notes (a local command's output) are neither side of the conversation.
+    if (message.meta || message.parentToolUseId || message.role === 'system') continue;
     const parts: string[] = [];
     const tools: string[] = [];
     for (const block of message.blocks) {
