@@ -315,7 +315,8 @@ describe('a message from the box that does not go', () => {
     fireEvent.change(box(), { target: { value: 'Also: the logs' } });
     release();
     await screen.findByText('Can’t reach studio');
-    expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs');
+    // The box takes it back once it has the message, a moment after the notice shows.
+    await waitFor(() => expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs'));
   });
 
   /** What waits above the box to be put back. */
@@ -331,8 +332,8 @@ describe('a message from the box that does not go', () => {
     fireEvent.change(box(), { target: { value: 'next question' } });
     release();
     await screen.findByText('Can’t reach studio');
+    await waitFor(() => expect(waiting()).toEqual(['/compact']));
     expect(box().value).toBe('next question');
-    expect(waiting()).toEqual(['/compact']);
     // Put back, it takes the box, and the words wait in its place until they are put back in turn.
     fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
     expect(box().value).toBe('/compact');
@@ -351,8 +352,8 @@ describe('a message from the box that does not go', () => {
     fireEvent.change(box(), { target: { value: 'Then fix what fails' } });
     release();
     await screen.findByText('Can’t reach studio');
+    await waitFor(() => expect(waiting()).toEqual(['!npm test']));
     expect(box().value).toBe('Then fix what fails');
-    expect(waiting()).toEqual(['!npm test']);
     await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: 'Then fix what fails', held: ['!npm test'] }), { timeout: 2000 });
     // Sent, the words go; the command still waits, in the box's draft too.
     sendText('Then fix what fails');
