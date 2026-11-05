@@ -376,6 +376,13 @@ describe('approvals', () => {
     expect(await answer).not.toHaveProperty('interrupt');
   });
 
+  it('an MCP tool’s request names its server as configured', async () => {
+    const { claude, state } = await start();
+    void ask(claude, 'mcp__linear__create_issue', { title: 'Flaky test' }, { mcpServer: { name: 'linear', source: 'user' } });
+    await settle();
+    expect(state().permissions[0]!.server).toBe('linear');
+  });
+
   it('a request Claude Code withdraws goes away', async () => {
     const { claude, state, run } = await start();
     const { answer, controller } = ask(claude, 'Bash', { command: 'make' });

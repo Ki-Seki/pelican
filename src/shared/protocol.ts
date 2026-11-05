@@ -135,6 +135,8 @@ export type PermissionRequest = {
   defaultToNo?: boolean;
   /** The subagent asking, when the request does not come from the main conversation. */
   agent?: string;
+  /** For an MCP tool: the server's name as configured (someone else's text, shown as text). */
+  server?: string;
   /** For a plan: the mode the session was in before planning, and whether auto mode can carry it out. */
   plan?: { before?: PermissionMode; auto: boolean };
   /** An MCP server asking for values (a form) or a step in the browser (a link), not a tool call. */

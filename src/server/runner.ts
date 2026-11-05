@@ -611,7 +611,7 @@ export class SessionRun {
   }
 
   private canUseTool: CanUseTool = (toolName, input, options) => {
-    const { signal, suggestions, blockedPath, decisionReason, title, description, defaultToNo, suppressAlwaysAllowRule, agentID } = options;
+    const { signal, suggestions, blockedPath, decisionReason, title, description, defaultToNo, suppressAlwaysAllowRule, agentID, mcpServer } = options;
     // No "always" where Claude Code says the rule would grant more than this request, or a plugin asked.
     const always = suppressAlwaysAllowRule ? undefined : describeAlways(suggestions, config.home);
     const agent = agentID ? this.agentNames.get(agentID) ?? 'a subagent' : undefined;
@@ -625,6 +625,7 @@ export class SessionRun {
       ...(description ? { description } : {}),
       ...(defaultToNo ? { defaultToNo: true } : {}),
       ...(agent ? { agent } : {}),
+      ...(mcpServer?.name ? { server: mcpServer.name } : {}),
       ...(toolName === 'ExitPlanMode' ? { plan: { ...(this.modeBeforePlan ? { before: this.modeBeforePlan } : {}), auto: this.autoAvailable() } } : {}),
       ...(decisionReason ? { reason: decisionReason } : {}),
       ...(blockedPath ? { blockedPath } : {}),

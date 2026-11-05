@@ -121,6 +121,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
         <span>{headline(request, cwd)}</span>
       </div>
       {request.agent && <div className="mt-0.5 text-[12.5px] text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${request.agent} agent`}</div>}
+      {request.server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {request.server}</div>}
       {request.description && <div className="mt-1 text-[12.5px] leading-snug text-muted">{request.description}</div>}
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
       {target && (summary.prose || !command) && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{target.text}</div>}
