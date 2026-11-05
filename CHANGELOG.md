@@ -55,7 +55,9 @@ from every app.
 - An MCP server that needs you to sign in says where: `claude mcp login <name>` in a terminal on
   the computer, or claude.ai's connectors page.
 - Approval notifications have Allow and Deny where the device shows buttons on notifications
-  (Chrome on a computer or Android); questions and plans open the session.
+  (Chrome on a computer or Android), for a command short enough to show whole. A notification
+  shows the command itself, not Claude's description of it; edits, other tools, longer commands,
+  questions and plans open the session.
 - The session menu shows the session's tokens, the share from the cache, its models and
   compactions, and its cost where Claude Code counts one.
 
@@ -65,7 +67,9 @@ from every app.
   checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
   config, an empty environment, no git and no links followed.
 - A side chat only reads, asks for nothing, and takes no `/` or `!` commands.
-- Notification buttons go through the same checks as the page.
+- Notification buttons go through the same checks as the page, and Allow is offered only for what
+  the notification shows in full: a command on one line, without hidden characters, that runs as
+  shown.
 
 ### Site, docs and project
 

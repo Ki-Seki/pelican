@@ -71,13 +71,44 @@ export type PushPayload = {
 };
 
 /**
- * What a notification for a request may answer: a tool Claude wants to use, yes or no. Not a
- * question or a plan, which want more than that, not an MCP server's form, and not a request
- * Claude Code says must not be allowed by a stray tap.
+ * Characters a notification would not show as they are: controls and line breaks, invisible and
+ * direction-changing ones, private and unassigned ones, and spaces other than a plain one. With
+ * any of them, a command can read as one thing and run as another.
  */
-export function answerable(request: PermissionRequest): Pick<PushPayload, 'request'> {
-  const yesOrNo = !request.elicitation && !request.defaultToNo && request.toolName !== 'AskUserQuestion' && request.toolName !== 'ExitPlanMode';
-  return yesOrNo ? { request: request.id } : {};
+const UNSHOWN = /[\p{C}\p{Z}\p{Default_Ignorable_Code_Point}]/u;
+
+/** The longest command a notification offers to allow: about two lines, all a computer's notification may show. */
+export const ALLOWED_COMMAND_MAX = 80;
+
+/** What a Bash or PowerShell request may hold besides its command, none of which changes what runs. */
+const BESIDES_COMMAND = new Set(['description', 'timeout', 'run_in_background']);
+
+/**
+ * The command of a request, when a notification can show all that Allow would approve: Bash or
+ * PowerShell with nothing more that changes how it runs (such as leaving the sandbox), on one line
+ * that shows uncut, only characters that show as they are, a single space between words. Never
+ * Claude's own description of it.
+ */
+function shownWhole(request: PermissionRequest): string | undefined {
+  if (request.toolName !== 'Bash' && request.toolName !== 'PowerShell') return undefined;
+  const { command, ...rest } = request.input;
+  if (typeof command !== 'string' || !command || [...command].length > ALLOWED_COMMAND_MAX) return undefined;
+  if (UNSHOWN.test(command.replaceAll(' ', '')) || command !== command.trim() || command.includes('  ')) return undefined;
+  const more = Object.entries(rest).some(([key, value]) => !BESIDES_COMMAND.has(key) && value !== undefined && value !== null && value !== false);
+  return more ? undefined : command;
+}
+
+/**
+ * What a notification for a request may answer, Allow and Deny, and the body it then has: a
+ * command Claude wants to run, shown whole, since only then does the notification show all that
+ * Allow approves. Anything else opens the session: an edit, an MCP tool or another tool whose
+ * input it does not show, a longer command, a question or a plan, and a request Claude Code says
+ * must not be allowed by a stray tap. Not even Deny is offered there: it would answer, unseen,
+ * a request the page shows in full, and one rule for when a notification answers stays clear.
+ */
+export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request'>> {
+  const command = request.elicitation || request.defaultToNo ? undefined : shownWhole(request);
+  return command === undefined ? {} : { body: command, request: request.id };
 }
 
 /** Sends a notification to every subscribed device; drops subscriptions the push service rejects. */

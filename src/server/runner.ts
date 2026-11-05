@@ -162,11 +162,12 @@ export function readableError(text: string): string {
   return startError(text) ?? plainError(text, config.machine) ?? text;
 }
 
-/** Text for a lock screen: one line, short, without control or direction-changing characters. */
+/** Text for a lock screen: one line, short, without control, invisible or direction-changing characters. */
 export function oneLine(text: string, max = 120): string {
-  // eslint-disable-next-line no-control-regex
-  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  const flat = text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  // Cut between characters, never inside one.
+  const chars = [...flat];
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : flat;
 }
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -187,8 +188,11 @@ export function askedFor(request: PermissionRequest, cwd: string): string {
     case 'ExitPlanMode':
       return 'Claude’s plan is ready for you to review';
     case 'Bash':
-    case 'PowerShell':
-      return str(input.description) || `Run ${str(input.command).split('\n')[0]}`;
+    case 'PowerShell': {
+      // The command itself, never Claude's words about it; of several lines, the first and "…".
+      const lines = str(input.command).split(/\r?\n/).filter((line) => line.trim());
+      return lines.length > 1 ? `${lines[0]} …` : lines[0] || 'Run a command';
+    }
     case 'Edit':
     case 'MultiEdit':
       return `Edit ${file(input.file_path)}`;
@@ -730,6 +734,7 @@ export class SessionRun {
     });
     this.emit();
     sessionsChanged();
+    // A notification that can answer says, as its whole body, all that Allow approves.
     void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask`, ...answerable(pending.request) });
   }
 
