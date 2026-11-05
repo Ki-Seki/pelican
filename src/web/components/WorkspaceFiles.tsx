@@ -125,7 +125,7 @@ export function WorkspaceFiles({ cwd, step, open, go, up, onAddToMessage }: {
                 <PathLabel path={found.path} />
               </button>
               {found.lines.map((l) => (
-                <button key={l.n} type="button" onClick={() => go({ tab: 'files', path: found.path, line: l.n })} className="flex w-full min-w-0 items-baseline gap-2 rounded-md py-1 pr-3 pl-4 text-left font-mono text-[12px] hover:bg-hover">
+                <button key={l.n} type="button" onClick={() => go({ tab: 'files', path: found.path, line: l.n })} className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md py-1 pr-3 pl-4 text-left font-mono text-[12px] hover:bg-hover pointer-fine:min-h-0">
                   <span className="w-8 shrink-0 text-right text-faint tabular-nums">{l.n}</span>
                   <span className="min-w-0 flex-1 truncate text-muted"><Found text={l.text.trim()} query={inText} /></span>
                 </button>
