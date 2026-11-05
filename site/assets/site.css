@@ -137,16 +137,41 @@ pre.code code, .docs pre code { display: block; overflow-x: auto; }
   .device { justify-self: center; }
 }
 @media (max-width: 640px) {
-  /* A phone inside a phone helps nobody: one screen of the app, right under the two lines, opens
-     the demo full size. The rest of the first screen is the two ways in and the command. */
+  /* The demo is better opened full size than tapped in a small phone, so the first screen is the
+     two lines, the two ways in and the command, with the top of a phone under them: the
+     computer's phone, whole, with a picture of the list in it, which opens the demo. What Pelican
+     is comes after it. */
   .hero { padding: 24px 0 64px; }
+  .hero-copy { display: flex; flex-direction: column; align-items: flex-start; }
   .hero .second { margin-top: 12px; }
-  .device, .lede { display: none; }
-  .hero-shot { display: block; width: 74%; aspect-ratio: 4 / 4.6; margin: 22px auto 0; overflow: hidden; border: 1px solid var(--line); border-radius: 24px; background: var(--surface); box-shadow: var(--shadow); }
-  .hero-shot picture, .hero-shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .device { display: none; }
   .ctas { margin-top: 22px; gap: 10px; }
   .btn { padding: 0 16px; }
-  .plain { margin-top: 16px; }
+  /* Where the two do not fit side by side (a narrow phone, a wider font, zoom), each takes the
+     whole row, centred, instead of one hanging alone under the other. */
+  .hero .ctas .btn { flex: 1 1 auto; justify-content: center; }
+  .plain { margin-top: 16px; text-wrap: balance; }
+  .lede { order: 1; margin-top: 36px; }
+  /* The computer's phone, 351.6px wide there, scaled as one to 60% of the screen's width: every
+     size in it is its own, times --px. The phone further down is the same size. */
+  .hero-shot { --px: calc(clamp(216px, 60vw, 300px) / 351.6); display: block; align-self: center; margin-top: 40px; border-radius: calc(56 * var(--px)); }
+  .shot-side { --px: calc(clamp(216px, 60vw, 300px) / 351.6); }
+  .shot-side .phone { --scale: 0.84; }
+  :is(.hero-shot, .shot-side) .phone { width: calc((390 * var(--scale) + 24) * var(--px)); padding: calc(12 * var(--px)); border-radius: calc(56 * var(--px)); }
+  :is(.hero-shot, .shot-side) .screen { width: calc(390 * var(--scale) * var(--px)); height: calc(844 * var(--scale) * var(--px)); border-radius: calc(44 * var(--px)); }
+  :is(.hero-shot, .shot-side) .island { top: calc(10 * var(--px)); width: calc(92 * var(--px)); height: calc(26 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status { height: calc(40 * var(--px)); padding: calc(4 * var(--px)) calc(30 * var(--px)) 0 calc(34 * var(--px)); font-size: calc(13.5 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .bars { gap: calc(5 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .battery { width: calc(23 * var(--px)); height: calc(11 * var(--px)); border-width: calc(1.5 * var(--px)); border-radius: calc(3.5 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .battery::after { inset: calc(1.5 * var(--px)) calc(5 * var(--px)) calc(1.5 * var(--px)) calc(1.5 * var(--px)); border-radius: calc(1.5 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .signal { gap: calc(1.5 * var(--px)); height: calc(10 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .signal i { width: calc(3 * var(--px)); border-radius: calc(1 * var(--px)); }
+  :is(.hero-shot, .shot-side) .status .signal i:nth-child(1) { height: calc(4 * var(--px)); } :is(.hero-shot, .shot-side) .status .signal i:nth-child(2) { height: calc(6 * var(--px)); } :is(.hero-shot, .shot-side) .status .signal i:nth-child(3) { height: calc(8 * var(--px)); } :is(.hero-shot, .shot-side) .status .signal i:nth-child(4) { height: calc(10 * var(--px)); }
+}
+/* Below 390px the two buttons share their row a little tighter. */
+@media (max-width: 389px) {
+  .ctas { gap: 8px; }
+  .btn { gap: 6px; padding: 0 12px; font-size: 14px; }
 }
 
 /* ------------------------------------------------------------------ sections */

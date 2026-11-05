@@ -41,12 +41,6 @@
       <div class="hero-copy">
         <h1>Every Claude Code session on your computer, <span class="soft">on your phone.</span></h1>
         <p class="second">No wrapper, no relay, no account.</p>
-        <a class="hero-shot" href="demo/" aria-label="Open the live demo">
-          <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="assets/shots/list-dark.png">
-            <img src="assets/shots/list-light.png" width="1170" height="2388" alt="Pelican on a phone: the session list, with one session waiting for approval and one Claude Desktop is working on">
-          </picture>
-        </a>
         <p class="lede">The sessions you started in the terminal, Claude Desktop or your editor, live, with their whole history. Continue any of them from your phone, approve Claude’s edits with the diff, or start new work.</p>
         <div class="ctas">
           <a class="btn primary" href="demo/">Open the live demo <svg class="i go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
@@ -54,6 +48,18 @@
         </div>
         <div class="cmd"><code>npm install -g pelican-cc</code></div>
         <p class="plain">Open source, MIT · No account · No telemetry · macOS and Linux</p>
+        <a class="hero-shot" href="demo/" aria-label="Open the live demo">
+          <div class="phone">
+            <div class="screen">
+              <span class="island" aria-hidden="true"></span>
+              <div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div>
+              <picture>
+                <source media="(prefers-color-scheme: dark)" srcset="assets/shots/list-dark.png">
+                <img class="shot" src="assets/shots/list-light.png" width="1170" height="2388" alt="Pelican on a phone: the session list, with one session waiting for approval and one Claude Desktop is working on">
+              </picture>
+            </div>
+          </div>
+        </a>
       </div>
       <figure class="device">
         <div class="phone">

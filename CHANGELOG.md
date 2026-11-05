@@ -71,6 +71,8 @@ from every app.
 
 - The docs cover Changes and files, side chats, quotes, live `!` commands, the views and the
   usage page, and the coverage table moves side questions, views, quotes and Create PR to Yes.
+- On a phone, the website leads with the two buttons and the install command, then shows the app
+  in the same phone frame as on a computer, whole when you scroll, instead of a cropped card.
 - The browser smoke test checks the docked pane at 1024, 1280 and 1440px and the side chat pane,
   and opens older sessions at one size only, to keep CI quick.
 
