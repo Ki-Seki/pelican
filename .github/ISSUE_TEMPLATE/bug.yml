@@ -1,0 +1,48 @@
+name: Something is wrong
+description: Pelican does something it should not, or does not do what it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: pelican
+    attributes:
+      label: Pelican version
+      description: Settings → About, or `pelican --version`.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: "`claude --version`, if Claude Code is installed on its own."
+  - type: input
+    id: computer
+    attributes:
+      label: Computer
+      description: The system Pelican runs on, and `node --version`.
+      placeholder: "macOS 26.1, Node 24.11.0"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Phone and browser
+      placeholder: "iPhone 17, Safari, added to the Home Screen"
+  - type: dropdown
+    id: reach
+    attributes:
+      label: How the browser reaches Pelican
+      options:
+        - On the same computer
+        - Tailscale
+        - An SSH tunnel
+        - A reverse proxy
+        - The home network (--host 0.0.0.0)
+        - Something else
