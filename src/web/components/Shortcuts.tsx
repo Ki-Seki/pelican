@@ -52,10 +52,14 @@ export function ShortcutsSheet() {
       <Row label="New line" keys={enter ? ['Shift', 'Enter'] : ['Enter']} />
       <Row label="Stop Claude" keys={['Esc']} />
       <Row label="Search sessions" keys={[MOD, 'K']} />
-      <Row label="Cycle view modes" keys={['Ctrl', 'O']} />
+      <Row label="Transcript view" keys={['Ctrl', 'O']} />
+      <Row label="Changes and files" keys={[MOD, 'Shift', 'D']} />
       <Row label="Side chat" keys={[MOD, ';']} />
+      <Row label="Close pane" keys={[MOD, '\\']} />
       <Row label="Close a sheet" keys={['Esc']} />
       <Row label="Keyboard shortcuts" keys={[MOD, '/']} />
+      <SheetHeading>In Changes and files</SheetHeading>
+      <Row label="Send comments" keys={[MOD, 'Enter']} />
       <SheetHeading>In the message box</SheetHeading>
       <Row label="Commands" keys={['/']} />
       <Row label="Files and agents" keys={['@']} />

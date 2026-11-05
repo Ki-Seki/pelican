@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
 import { baseName } from '../lib/format';
-import { closesPane, composing } from '../lib/keyboard';
+import { closesPane, composing, isApple } from '../lib/keyboard';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
@@ -36,9 +36,8 @@ function useMedia(query: string): boolean {
 }
 
 /** The keys that show and hide the pane, and that send line comments, as this computer writes them. */
-const MAC = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
-export const PANE_KEYS = MAC ? '⌘⇧D' : 'Ctrl+Shift+D';
-const SEND_KEYS = MAC ? '⌘↵' : 'Ctrl+Enter';
+export const PANE_KEYS = isApple ? '⌘⇧D' : 'Ctrl+Shift+D';
+const SEND_KEYS = isApple ? '⌘↵' : 'Ctrl+Enter';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
@@ -248,7 +247,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const footer = comments.length > 0 && (
     <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${phone && !needsYou ? 'pb-safe' : ''}`}>
       <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
-        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> · sent with your next message</span>
+        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> {comments.length === 1 ? 'goes' : 'go'} with your next message</span>
       </span>
       {onSendComments && (
         <button type="button" onClick={onSendComments} title={`Send now (${SEND_KEYS})`} className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
