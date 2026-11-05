@@ -280,57 +280,67 @@ function serviceFlags(values: ReturnType<typeof parse>['values']): string[] {
 
 async function serviceCommand(action: string, flags: string[]): Promise<void> {
   const service = await import('./service.js');
+  const { runningServer } = await import('./running.js');
   const ctx = service.thisComputer(flags);
   const say = (line: string) => console.log(line);
   if (action === 'install') {
     const problem = await service.cannotInstall(ctx);
     if (problem) throw new Error(problem);
     // Another Pelican on the same port would take it, and the service would stop at once.
-    const { runningServer } = await import('./running.js');
     const running = await runningServer();
     const state = await service.serviceState(ctx);
     if (running && running.port === config.port && running.pid !== state.pid) {
       throw new Error(`Pelican is already running here (pid ${running.pid}, port ${running.port}). Stop it, then run \`${NAME} service install\` again.`);
     }
     await service.installService(ctx, say);
-    await afterStart(ctx);
+    await afterStart(ctx, running?.pid);
   } else if (action === 'uninstall') {
     await service.uninstallService(ctx, say);
   } else if (action === 'restart') {
+    const before = (await runningServer())?.pid;
     await service.restartService(ctx, say);
-    await afterStart(ctx);
+    await afterStart(ctx, before);
   } else {
     const state = await service.serviceState(ctx);
     if (!state.installed) {
       say(`Pelican is not set up as a service. \`${NAME} service install\` keeps it running.`);
       return;
     }
-    const base = callable(config.host, config.port);
-    const answering = Boolean(await pelicanAt(base));
-    say(state.running ? `Running${state.pid ? ` (pid ${state.pid})` : ''}${answering ? `, at ${addressFor(config.host, config.port)}` : ', but not answering yet'}.` : `Not running${state.lastExit ? ` (last exit: ${state.lastExit})` : ''}.`);
+    // Where the service listens is what it was installed with, which the note its process left
+    // says; the shell's own settings only when there is no such note.
+    const running = await runningServer();
+    const ours = running && state.pid !== undefined && running.pid === state.pid ? running : undefined;
+    const answering = Boolean(await pelicanAt(ours?.url ?? callable(config.host, config.port)));
+    const address = ours ? addressFor(ours.host, ours.port) : addressFor(config.host, config.port);
+    say(state.running ? `Running${state.pid ? ` (pid ${state.pid})` : ''}${answering ? `, at ${address}` : ', but not answering yet'}.` : `Not running${state.lastExit ? ` (last exit: ${state.lastExit})` : ''}.`);
     say(ctx.platform === 'darwin' ? `Log: ${service.logFile(ctx.home)}` : 'Log: journalctl --user -u pelican');
   }
 }
 
-/** Once a service (re)starts: wait until it answers, then say how to sign in, as at a start in a terminal. */
-async function afterStart(ctx: import('./service.js').ServiceContext): Promise<void> {
-  const base = callable(config.host, config.port);
-  let answer: Awaited<ReturnType<typeof pelicanAt>>;
-  for (let i = 0; i < 40 && !answer; i += 1) {
+/**
+ * Once a service (re)starts: wait until it answers, then say how to sign in, as at a start in a
+ * terminal. It is the Pelican whose note is not the one from before (`before`, the process it
+ * replaced), wherever it listens; the link with the token is shown only for it.
+ */
+async function afterStart(ctx: import('./service.js').ServiceContext, before: number | undefined): Promise<void> {
+  let found: Awaited<ReturnType<typeof thisPelican>>;
+  for (let i = 0; i < 40 && !found; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    answer = await pelicanAt(base);
+    const pelican = await thisPelican();
+    if (pelican && pelican.running.pid !== before) found = pelican;
   }
   const { logFile } = await import('./service.js');
-  if (!answer) {
+  if (!found) {
     console.log(`Pelican has not answered yet. See ${ctx.platform === 'darwin' ? logFile(ctx.home) : 'journalctl --user -u pelican'}, or \`${NAME} service status\`.`);
     return;
   }
   const { accessToken, loadAuth } = await import('./auth.js');
   await loadAuth();
+  const address = addressFor(found.running.host, found.running.port);
   // The link with the token goes to a terminal only, never into a pipe or a log.
-  const token = answer.mode === 'token' && process.stdout.isTTY ? accessToken() : undefined;
-  const signIn = answer.mode === 'token' && !token ? `\n  \`${NAME} token\` prints the link that signs a browser in` : '';
-  console.log(`\n  ${token ? tokenLink(addressFor(config.host, config.port), token) : addressFor(config.host, config.port)}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
+  const token = found.mode === 'token' && process.stdout.isTTY ? accessToken() : undefined;
+  const signIn = found.mode === 'token' && !token ? `\n  \`${NAME} token\` prints the link that signs a browser in` : '';
+  console.log(`\n  ${token ? tokenLink(address, token) : address}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
 }
 
 /** One line with every version a bug report needs. */

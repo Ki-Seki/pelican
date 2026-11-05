@@ -186,6 +186,49 @@ describe.skipIf(!ipv6)('a Pelican on --host ::1', () => {
   }, 40_000);
 });
 
+describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('`pelican service` for a service installed on its own port', () => {
+  it('finds it there, not on the port of the shell it runs in: status, and restart', async () => {
+    const c = await computer();
+    const port = await freePort();
+    const shellPort = await freePort();
+    const pidFile = path.join(c.root, 'service.pid');
+    pidFiles.push(pidFile);
+    // The service manager, standing in for launchctl and systemctl: it says the service's process,
+    // and restarts it as installed, with --port.
+    // Started with nothing of its caller's open, so whoever runs this does not wait on it.
+    const startService = `cd '${repo}'; '${process.execPath}' --import tsx '${CLI}' --port ${port} >> '${c.root}/service.log' 2>&1 < /dev/null & echo $! > '${pidFile}'`;
+    const manager = `#!/bin/sh
+pid=$(cat '${pidFile}' 2>/dev/null)
+restart() { kill "$pid" 2>/dev/null; while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done; ${startService}; }
+case "$*" in
+  print*) printf '\\tstate = running\\n\\tpid = %s\\n\\tlast exit code = 0\\n' "$pid";;
+  kickstart*) restart;;
+  "--user show pelican.service"*) printf 'ActiveState=active\\nMainPID=%s\\nExecMainStatus=0\\n' "$pid";;
+  "--user restart pelican.service") restart;;
+esac
+exit 0
+`;
+    for (const name of ['launchctl', 'systemctl']) {
+      await writeFile(path.join(c.root, 'bin', name), manager);
+      await chmod(path.join(c.root, 'bin', name), 0o755);
+    }
+    const unit = process.platform === 'darwin'
+      ? path.join(c.env.HOME!, 'Library', 'LaunchAgents', 'io.github.ki-seki.pelican.plist')
+      : path.join(c.env.HOME!, '.config', 'systemd', 'user', 'pelican.service');
+    await mkdir(path.dirname(unit), { recursive: true });
+    await writeFile(unit, 'installed with --port\n');
+    spawnSync('sh', ['-c', startService], { env: c.env, stdio: 'ignore' });
+    for (let i = 0; i < 150 && !(await readFile(path.join(c.root, 'state', 'server.json'), 'utf8').catch(() => '')).includes(`"port": ${port},`); i += 1) await sleep(100);
+
+    const status = await run(c, ['service', 'status'], { PELICAN_PORT: String(shellPort) });
+    expect(status.out).toContain(`, at http://localhost:${port}/.`);
+    const restart = await run(c, ['service', 'restart'], { PELICAN_PORT: String(shellPort) });
+    expect(restart.out).toContain('Pelican is starting again.');
+    expect(restart.out).toContain(`http://localhost:${port}/`);
+    expect(restart.out).not.toMatch(/has not answered yet/);
+  }, 60_000);
+});
+
 describe.skipIf(!python || process.platform === 'win32')('a Pelican started in the background of a terminal (`pelican &`)', () => {
   it('keeps answering when the terminal is used, with a phone address known', async () => {
     const c = await computer();
