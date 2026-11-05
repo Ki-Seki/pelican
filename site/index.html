@@ -20,6 +20,7 @@
 <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/site.css">
 <script type="module" src="assets/site.js"></script>
+<noscript><style>.device iframe { display: none; }</style></noscript>
 </head>
 <body>
 
@@ -38,25 +39,21 @@
   <section class="hero">
     <div class="wrap">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="dot"></span>Open source · for Claude Code</span>
         <h1>Every Claude Code session on your computer, <span class="soft">on your phone.</span></h1>
+        <p class="second">No wrapper, no relay, no account.</p>
         <a class="hero-shot" href="demo/" aria-label="Open the live demo">
           <picture>
             <source media="(prefers-color-scheme: dark)" srcset="assets/shots/list-dark.png">
             <img src="assets/shots/list-light.png" width="1170" height="2532" alt="Pelican on a phone: the session list, with one session waiting for approval and one Claude Desktop is working on">
           </picture>
         </a>
-        <p class="lede">No wrapper, no relay, no account. <span class="more">Pelican shows the sessions you started in the terminal, Claude Desktop or your editor, live, with their whole history. Continue any of them from your phone, approve Claude’s edits with the diff, or start new work.</span></p>
+        <p class="lede">The sessions you started in the terminal, Claude Desktop or your editor, live, with their whole history. Continue any of them from your phone, approve Claude’s edits with the diff, or start new work.</p>
         <div class="ctas">
           <a class="btn primary" href="demo/">Open the live demo <svg class="i go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
           <a class="btn" href="docs.html">Read the docs</a>
         </div>
         <div class="cmd"><code>npm install -g pelican-cc</code></div>
-        <div class="trust">
-          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Runs on your computer</span>
-          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8 3 12l4 4"/><path d="m17 8 4 4-4 4"/><path d="m14 4-4 16"/></svg>MIT licensed</span>
-          <span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>macOS and Linux</span>
-        </div>
+        <p class="plain">Open source, MIT · No account · No telemetry · macOS and Linux</p>
       </div>
       <figure class="device">
         <div class="phone">
@@ -64,6 +61,7 @@
             <span class="island" aria-hidden="true"></span>
             <div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div>
             <iframe src="demo/" title="Pelican, running with made-up sessions" loading="lazy"></iframe>
+            <noscript><picture><source media="(prefers-color-scheme: dark)" srcset="assets/shots/list-dark.png"><img class="shot" src="assets/shots/list-light.png" width="1170" height="2532" alt="Pelican on a phone: the session list"></picture></noscript>
           </div>
         </div>
         <figcaption class="device-note">The real app, with made-up sessions. Tap around.</figcaption>
@@ -71,20 +69,23 @@
     </div>
   </section>
 
-  <section class="band tint" id="sessions">
+  <section class="band" id="how">
     <div class="wrap">
       <div class="feature-row">
-        <div class="copy-side">
-          <div class="kicker">Every session</div>
-          <h2>Wherever you started it</h2>
-          <p class="sub">Pelican reads Claude Code’s own transcripts. The sessions you began in the terminal, in Claude Desktop or in your editor are all here, live while they run, with their whole history back past every compaction.</p>
-          <ul class="points">
-            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span><b>Live.</b> A session another app is working on shows up as it works, and you can see which app. Once it is idle, continue it here.</span></li>
-            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span><b>Whole history.</b> Scroll up to the first prompt, through each compaction, with what Claude kept.</span></li>
-            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span><b>Three ways to read.</b> Just the replies, the replies with steps folded, or every step open.</span></li>
-          </ul>
+        <div>
+          <div class="kicker">How it works</div>
+          <h2>Every session, wherever you started it</h2>
+          <ol class="steps">
+            <li><b>Claude Code writes it down.</b> Every session it runs, in the terminal, Claude Desktop or your editor, goes into a transcript in <code>~/.claude</code>.</li>
+            <li><b>Pelican reads it, live.</b> One small process on your computer follows those transcripts, back past every compaction, and continues a session through the official Agent SDK, with your login, settings, <code>CLAUDE.md</code>, skills and MCP servers. Claude Code talks to Anthropic, or your provider, as it always does.</li>
+            <li><b>Your phone opens Pelican.</b> Over Tailscale or an SSH tunnel, signed in. Nothing sits in between.</li>
+          </ol>
+          <p class="after">A session another app is working on says which app, and when it waits for you there. Once it is idle, continue it here.</p>
         </div>
-        <div class="phone"><div class="screen"><span class="island" aria-hidden="true"></span><div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div><picture><source media="(prefers-color-scheme: dark)" srcset="assets/shots/live-dark.png"><img class="shot" src="assets/shots/live-light.png" width="1170" height="2532" alt="A session Claude Desktop is working on, followed live in Pelican: Claude found why the nightly export is slow" loading="lazy"></picture></div></div>
+        <figure class="shot-side">
+          <div class="phone"><div class="screen"><span class="island" aria-hidden="true"></span><div class="status" aria-hidden="true"><span>9:41</span><span class="bars"><span class="signal"><i></i><i></i><i></i><i></i></span><span class="battery"></span></span></div><picture><source media="(prefers-color-scheme: dark)" srcset="assets/shots/live-dark.png"><img class="shot" src="assets/shots/live-light.png" width="1170" height="2532" alt="A session Claude Desktop is working on, followed live in Pelican: Claude found why the nightly export is slow" loading="lazy"></picture></div></div>
+          <figcaption>A session Claude Desktop is working on, followed in Pelican.</figcaption>
+        </figure>
       </div>
     </div>
   </section>
@@ -93,36 +94,42 @@
     <div class="wrap">
       <div class="kicker">All of Claude Code</div>
       <h2>What you do at your desk, from your phone</h2>
-      <p class="sub">Pelican drives Claude Code through the official Agent SDK, so your login, settings, <code>CLAUDE.md</code>, skills and MCP servers all apply. On top of that, everything you would reach for in the terminal.</p>
-      <div class="grid">
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg><h3>Approve with the diff</h3><p>Every edit and command waits for you, shown the way you would review it. Or let Claude work: plan, accept edits, auto, bypass.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m17 11-5-5-5 5"/><path d="M12 6v14"/></svg><h3>Steer or queue</h3><p>Tell Claude something while it works and it reads it at its next step, or line up what comes after this turn.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><h3><code>!</code> commands</h3><p>Run a command in the session’s folder. The output lands in the conversation, and Claude reads it with your next message.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v3a3 3 0 0 0 3 3h6"/></svg><h3>Changes and files</h3><p>Each changed file with its diff, and the whole folder to browse, read and mention.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-3M11 15V8M15 15v-5M19 15V5"/></svg><h3>Visuals and pages</h3><p>Charts and diagrams Claude draws, and the pages it writes, rendered in place, in a sandbox.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg><h3>Rewind and branch</h3><p>Put files back the way they were before any prompt, or change an earlier prompt and send it again on a branch.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.8L20 10l-5 3.6L16.8 20 12 16.6 7.2 20 9 13.6 4 10l6.1-1.2Z"/></svg><h3>Every model and mode</h3><p>Opus to Haiku, effort up to max, fast mode and ultracode; <code>/</code> commands, <code>@</code> files and subagents, photos and files.</p></div>
-        <div class="cell"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><h3>Notifications</h3><p>A push when Claude finishes or needs you, for the work you send from Pelican. Add it to your Home Screen and it opens like an app.</p></div>
-      </div>
+      <p class="sub">Pelican runs Claude Code itself, so everything you set up for it applies. On top of that, what you would reach for in the terminal:</p>
+      <ul class="features">
+        <li><b>Approve with the diff.</b> Every edit and command waits for you, shown the way you would review it. Or pick a mode, as in Claude Code: Accept edits, Plan, Auto or Bypass.</li>
+        <li><b>Steer or queue.</b> Tell Claude something while it works, and it reads it at its next step; or line up what comes after this turn.</li>
+        <li><b><code>!</code> commands.</b> Run a command in the session’s folder. Claude reads the output with your next message.</li>
+        <li><b>Changes and files.</b> Each changed file with its diff; tap a line to comment. Browse, read and mention any file.</li>
+        <li><b>Visuals and pages.</b> Charts Claude draws and pages it writes, in place, as still pictures until you tap Run.</li>
+        <li><b>Rewind and branch.</b> Put files back as they were before a prompt, or change an earlier prompt and try again on a branch.</li>
+        <li><b>Every model, every command.</b> Opus to Haiku, effort up to max, fast mode; <code>/</code> commands and skills, <code>@</code> files and subagents, photos and files.</li>
+        <li><b>Notifications.</b> When Claude finishes or needs you, and when a session waits for you in another app. Add Pelican to your Home Screen and it opens like an app.</li>
+      </ul>
+      <figure class="window">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="assets/shots/desktop-dark.png">
+          <img src="assets/shots/desktop-light.png" width="2560" height="1600" alt="Pelican on a computer: the session list beside a session where Claude waits for approval of an edit, with its diff" loading="lazy">
+        </picture>
+        <figcaption>On a computer, the list sits beside the conversation. <a class="link" href="docs.html#coverage">What Pelican covers of Claude Code</a></figcaption>
+      </figure>
     </div>
   </section>
 
-  <section class="band tint" id="local">
+  <section class="band" id="security">
     <div class="wrap">
-      <div class="local">
+      <div class="split">
         <div>
-          <div class="kicker">Yours</div>
-          <h2>Nothing in between</h2>
-          <p class="sub">Pelican is one small Node process next to Claude Code. No service sits between your phone and your computer, there is no account to make, and your sessions stay where Claude Code keeps them. Claude Code itself talks to Anthropic, or your provider, as it always does.</p>
-          <p class="sub"><a class="link" href="docs.html#phone">Reach it from your phone</a> through Tailscale, an SSH tunnel or your own proxy.</p>
+          <div class="kicker">Security</div>
+          <h2>Only you get in</h2>
+          <p class="sub">Whoever can use Pelican can run commands as you, so it keeps everyone else out.</p>
         </div>
         <div>
-          <div class="facts">
-            <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg><div><b>Only this computer, unless you say otherwise</b><span>It listens on 127.0.0.1, and every browser signs in, there too.</span></div></div>
-            <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><div><b>A link that signs you in</b><span>A random token in the link Pelican prints, kept only on your computer, or a password you set there.</span></div></div>
-            <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg><div><b>Guarded against other websites</b><span>Host and origin checks stop DNS rebinding and cross-site requests.</span></div></div>
-            <div class="fact"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8 3 12l4 4"/><path d="m17 8 4 4-4 4"/><path d="m14 4-4 16"/></svg><div><b>Open source, no telemetry</b><span>MIT licensed. Read every line of it.</span></div></div>
-          </div>
+          <dl class="facts">
+            <div><dt>Only this computer, unless you say otherwise</dt><dd>It listens on 127.0.0.1, and every browser signs in, there too: with the link Pelican prints, a QR code that works once, or a password.</dd></div>
+            <div><dt>Guarded against other websites</dt><dd>Host and origin checks stop DNS rebinding and cross-site requests, and no other site may frame it.</dd></div>
+            <div><dt>What Claude writes stays on the screen</dt><dd>Pages and visuals render in a sandbox that cannot reach Pelican, as still pictures until you tap Run.</dd></div>
+            <div><dt>Folders run nothing of their own</dt><dd>The hooks, MCP servers and git filters a folder brings wait until you trust it.</dd></div>
+          </dl>
           <p class="after"><a class="link" href="docs.html#security">Read the security model</a></p>
         </div>
       </div>
@@ -133,14 +140,14 @@
     <div class="wrap">
       <div class="kicker">Compared with</div>
       <h2>Other ways to reach Claude Code</h2>
-      <p class="sub">As each project documents it, November 2026.</p>
+      <p class="sub">As each project documents it, checked on 5 November 2026.</p>
       <table class="compare">
         <thead><tr><th scope="col"><span class="visually-hidden">Tool</span></th><th scope="col">Your sessions</th><th scope="col">Between phone and computer</th></tr></thead>
         <tbody>
           <tr class="ours"><th scope="row">Pelican</th><td data-label="Your sessions">All of them, from any app, with their whole history</td><td data-label="Between phone and computer">Nothing: Tailscale, an SSH tunnel or your proxy</td></tr>
           <tr><th scope="row">Remote Control</th><td data-label="Your sessions">Those with Remote Control turned on; Claude plans only</td><td data-label="Between phone and computer">Anthropic’s servers, which keep the transcript while connected</td></tr>
           <tr><th scope="row">Yep Anywhere</th><td data-label="Your sessions">Resumes those from the CLI, VS Code and desktop apps</td><td data-label="Between phone and computer">Nothing, or its end-to-end encrypted relay</td></tr>
-          <tr><th scope="row">Happy, HAPI</th><td data-label="Your sessions">Those started with <code>happy</code> or <code>hapi</code></td><td data-label="Between phone and computer">An end-to-end encrypted relay, or with HAPI your own tunnel</td></tr>
+          <tr><th scope="row">Happy, HAPI</th><td data-label="Your sessions">Those started in Happy or HAPI</td><td data-label="Between phone and computer">An end-to-end encrypted relay, or with HAPI your own tunnel</td></tr>
           <tr><th scope="row">CloudCLI</th><td data-label="Your sessions">Every session in <code>~/.claude</code></td><td data-label="Between phone and computer">Nothing on your network, or CloudCLI Cloud</td></tr>
           <tr><th scope="row">SSH and tmux</th><td data-label="Your sessions">The ones running in tmux</td><td data-label="Between phone and computer">Nothing</td></tr>
         </tbody>
@@ -149,32 +156,50 @@
     </div>
   </section>
 
-  <section class="band tint" id="questions">
+  <section class="band" id="questions">
     <div class="wrap">
-      <div class="kicker">Questions</div>
-      <h2>Before you install it</h2>
-      <dl class="qa-grid">
-        <div><dt>Does it work with my Claude plan?</dt><dd>Pelican runs Anthropic’s own Claude Code, unmodified, on your computer, signed in the way you signed in to <code>claude</code>; it never sees your credentials, and it is for your own use. Signed in with a plan, what you send from Pelican draws from that plan’s limits. <a class="link" href="docs.html#plan">The details</a></dd></div>
-        <div><dt>What if my computer sleeps?</dt><dd>A computer that is asleep runs nothing, and Pelican cannot wake it. While Claude works, Pelican keeps it awake; <a class="link" href="docs.html#running">keep it awake</a> yourself to reach Pelican at any time.</dd></div>
-        <div><dt>Does it cost anything, or phone home?</dt><dd>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browser and, for notifications, to the browser’s push service, with the content encrypted.</dd></div>
-        <div><dt>Why is the install about 150 MB?</dt><dd>The Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code. The live demo needs no install at all.</dd></div>
-      </dl>
-      <p class="after"><a class="link" href="docs.html#faq">More questions</a></p>
+      <div class="split">
+        <div>
+          <div class="kicker">Questions</div>
+          <h2>Before you install it</h2>
+        </div>
+        <div class="qa">
+          <details><summary>Does it work with my Claude plan?</summary><p>Pelican runs Anthropic’s own Claude Code, unmodified, on your computer, signed in the way you signed in to <code>claude</code>; it never sees your credentials, and it is for your own use. Signed in with a plan, what you send from Pelican draws from that plan’s limits. <a class="link" href="docs.html#plan">The details</a></p></details>
+          <details><summary>Why not Remote Control?</summary><p>Use it if you are on a Claude plan and want to answer, from your phone, the prompt waiting in your terminal: Pelican cannot. Pelican shows every session without turning anything on, keeps nothing on anyone’s servers, and works with any login, API keys and cloud providers included.</p></details>
+          <details><summary>Why not SSH and tmux?</summary><p>That works, and needs nothing new on the computer. Pelican is for what a terminal on a phone does badly: long transcripts, diffs, approvals in one tap, notifications, charts and pages, and history across compactions.</p></details>
+          <details><summary>What if my computer sleeps?</summary><p>A computer that is asleep runs nothing, and Pelican cannot wake it. While Claude works, Pelican keeps it from going to sleep on its own; <a class="link" href="docs.html#running">keep it awake</a> yourself to reach Pelican at any time.</p></details>
+          <details><summary>Does it cost anything, or phone home?</summary><p>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browser and, for notifications, to the browser’s push service, with the content encrypted.</p></details>
+          <details><summary>Why is the install about 150 MB?</summary><p>The Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code. The live demo needs no install at all.</p></details>
+          <p class="after"><a class="link" href="docs.html#faq">More questions</a></p>
+        </div>
+      </div>
     </div>
   </section>
 
   <section class="band" id="start">
     <div class="wrap">
-      <div class="start">
-        <div>
-          <div class="kicker">Get started</div>
-          <h2>One command, then your phone</h2>
-          <p class="sub">On the computer where you use Claude Code, with Node 22.12 or newer. <code>pelican</code> prints the link that signs you in.</p>
-          <p class="note">About 150 MB, most of it the copy of Claude Code the Agent SDK brings. Then <a class="link" href="docs.html#phone">set it up for your phone</a>, or <a class="link" href="demo/">try the live demo</a> first.</p>
-        </div>
-        <pre class="code"><code>npm install -g pelican-cc
+      <div class="kicker">Get started</div>
+      <h2>One command, then your phone</h2>
+      <ol class="start">
+        <li>
+          <h3>Install it</h3>
+          <p>On the computer where you use Claude Code, with Node 22.12 or newer. <code>pelican</code> prints the link that signs this browser in.</p>
+          <pre class="code"><code>npm install -g pelican-cc
 pelican</code></pre>
-      </div>
+        </li>
+        <li>
+          <h3>Open it on your phone</h3>
+          <p>With <a class="link" href="https://tailscale.com">Tailscale</a> on the computer and the phone. Scan the QR code, and Pelican opens there, signed in.</p>
+          <pre class="code"><code>tailscale serve --bg 7860
+pelican phone</code></pre>
+        </li>
+        <li>
+          <h3>Keep it running</h3>
+          <p>It starts when you log in, and again if it stops.</p>
+          <pre class="code"><code>pelican service install</code></pre>
+        </li>
+      </ol>
+      <p class="after">About 150 MB, most of it the copy of Claude Code the Agent SDK brings. <a class="link" href="docs.html#phone">Other ways in</a>, or <a class="link" href="demo/">try the live demo</a> first.</p>
     </div>
   </section>
 </main>

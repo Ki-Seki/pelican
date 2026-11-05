@@ -1,6 +1,7 @@
 // The project site (site/) with its live demo: the web app built to run without a server,
 // reading what `pelican --demo` answers, saved as files. Needs the app built first.
 //   npm run build && node scripts/site.mjs <out dir>      then serve <out dir>, e.g. npx serve <out dir>
+// PELICAN_DEMO_PORT if 47861 is taken.
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,7 +9,7 @@ import path from 'node:path';
 import { MARK, startDemo } from './demo-server.mjs';
 
 const out = path.resolve(process.argv[2] ?? '_site');
-const PORT = 47861;
+const PORT = Number(process.env.PELICAN_DEMO_PORT ?? 47861);
 const BASE = `http://127.0.0.1:${PORT}/api/`;
 
 /** The same key the web app uses for a saved answer (src/web/lib/static-demo.ts). */

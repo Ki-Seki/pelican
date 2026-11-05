@@ -51,22 +51,23 @@ can read your sessions and have Claude run commands as you, so treat access to i
   `null` and the like are refused at start, with a warning.
 - **What Claude writes stays on the screen.** Images in a reply load only from Pelican itself;
   another site's image is a link you can open. Pages and visuals Claude makes show as still
-  pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: one Claude
-  merely wrote shows as text. Their scripts run only when you tap Run, in a frame of their own with
-  no access to Pelican, its cookies or its API, under a content policy that lets them load
-  scripts, styles and fonts from the public CDNs (cdnjs, jsDelivr, unpkg, Google Fonts) and talk
-  to no other server; WebRTC is taken away. Still, a page whose scripts run can reach the network
-  in ways no policy covers (WebRTC from a frame it opens, DNS lookups) and send what it shows, so
-  run a page only as you would open it in your browser. Uploaded files are served with no sniffing
-  and no scripts, and anything but an image downloads.
+  pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: a visual
+  Claude merely wrote into its reply shows as text. Their scripts run only when you tap Run, in a
+  frame of their own with no access to Pelican, its cookies or its API. Its content policy lets
+  them load scripts, styles and fonts from the public CDNs (cdnjs, jsDelivr, unpkg, Google Fonts)
+  and talk to no other server, and WebRTC is taken away. Still, a page whose scripts run can reach
+  the network in ways no policy covers (WebRTC from a frame it opens, DNS lookups) and send what it
+  shows, so run a page only as you would open it in your browser. Uploaded files are served with
+  no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,
   helper commands and environment variables in its Claude Code settings, servers in its
   `.mcp.json`, filters in its git config. Claude Code asks before it runs them in a terminal, but
-  never in a session started through its SDK, so Pelican asks: before Claude Code first starts in
-  a folder nobody has trusted, Pelican lists what the folder would run, read from its files, and
-  offers **Trust and start** or **Use my settings only** (Claude Code then loads only your user
-  settings, and git runs none of the repository's filters, file-system monitor or hooks folder). A
-  folder is trusted when Claude Code's own record says so (its trust dialog, read and never
+  never in a session started through its SDK, so Pelican asks. Before Claude Code first starts in
+  a folder nobody has trusted that brings any of these, Pelican lists them, read from the folder's
+  files, and offers **Trust and start** or **Use my settings only**. With your settings only,
+  Claude Code loads just your user settings, and git runs none of the repository's filters, its
+  file-system monitor or its hooks folder.
+  A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
   written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
   Claude Code has worked there before, unless you chose your settings only for it. Listing a
   folder's slash commands or MCP servers starts Claude Code with hooks off and, in a folder nobody
