@@ -649,6 +649,23 @@ describe('work that runs on its own', () => {
   });
 });
 
+describe('the last prompt edited in place', () => {
+  it('into /clear is turned away before the running Claude is touched, and the next message carries on the whole conversation', async () => {
+    const { sessionId, claude, run } = await start();
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    const before = claudes.length;
+    await expect(replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: '/clear', attachments: [], settings: {} })).rejects.toThrow(/new session/);
+    // No Claude resumed from before the last turn is left to take the next message.
+    expect(claudes).toHaveLength(before);
+    expect(claude.called('close')).toHaveLength(0);
+    expect(getRun(sessionId)).toBe(run);
+    await sendMessage({ sessionId }, { text: 'Carry on', attachments: [], settings: {} });
+    await settle();
+    expect(claude.prompts.map(textOf)).toEqual(['Fix the login test', 'Carry on']);
+  });
+});
+
 describe('when Claude Code ends', () => {
   it('a run replaced by a newer one says nothing after it: the page keeps the newer one, at work', async () => {
     // A real process exits a while after it is closed, after the newer run has started.

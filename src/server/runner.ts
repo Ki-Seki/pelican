@@ -143,6 +143,7 @@ const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, th
 
 /** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
 const CLEARS = /^\/(clear|reset|new)(\s|$)/;
+const AFRESH = 'To start afresh, open a new session in this folder.';
 
 /** Claude Code's error, or what it means for someone who edited their last prompt, in plain words. */
 export function readableError(text: string): string {
@@ -455,7 +456,7 @@ export class SessionRun {
 
   async send(input: SendInput): Promise<void> {
     // In the same process Claude Code would go on under a new id, beside this session's.
-    if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
+    if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     await this.applySettings(input.settings);
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
     // Queued: not part of the conversation until the turn ends and Claude gets it.
@@ -1153,7 +1154,7 @@ async function currentRun(sessionId: string): Promise<SessionRun | undefined> {
  */
 export async function sendMessage(target: { sessionId?: string; cwd?: string }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
-  if (CLEARS.test(input.text.trim())) throw new Error('To start afresh, open a new session in this folder.');
+  if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   if (target.sessionId) {
     const existing = await currentRun(target.sessionId);
     if (existing) {
@@ -1192,6 +1193,8 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
  */
 export async function replaceLastTurn(sessionId: string, cwd: string, entry: string, prompt: string, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
+  // Turned away before anything changes: the running Claude stays as it is.
+  if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
   const launch = await launchFor(cwd);
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
@@ -1202,7 +1205,15 @@ export async function replaceLastTurn(sessionId: string, cwd: string, entry: str
   const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch);
   runs.set(sessionId, run);
   run.start();
-  await run.send(input);
+  try {
+    await run.send(input);
+  } catch (error) {
+    // This Claude resumed from before the last turn: left running, it would take the next message
+    // and the last turn would drop out of the conversation. Without it, that message resumes it whole.
+    run.close();
+    if (runs.get(sessionId) === run) runs.delete(sessionId);
+    throw error;
+  }
   return sessionId;
 }
 
