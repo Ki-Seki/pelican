@@ -11,7 +11,7 @@ on:
       - docs/**
       - scripts/site.mjs
       - package.json
-      - package-lock.json
+      - npm-shrinkwrap.json
       - .github/workflows/pages.yml
   workflow_dispatch:
 
