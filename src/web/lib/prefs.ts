@@ -94,11 +94,13 @@ export type Prefs = {
   suggestions: boolean;
   /** Sessions shown in a view of their own, not `view` (set in each session's menu). */
   sessionViews: Record<string, ViewMode>;
+  /** On a wide screen, Changes and files stays open beside the conversation, from one session to the next. */
+  workspacePane: boolean;
 };
 
 const DEFAULT_PREFS: Prefs = {
   theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, showSideChats: false, listGroup: 'time', listDensity: 'detailed',
-  sendWhileBusy: 'steer', suggestions: true, sessionViews: {},
+  sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false,
 };
 
 let prefs: Prefs = read(PREFS_KEY, DEFAULT_PREFS);

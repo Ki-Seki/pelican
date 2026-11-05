@@ -114,6 +114,11 @@ body {
   height: 100dvh;
 }
 
+/* Changes and files, when it sits beside the conversation on a wide screen. */
+:root {
+  --pane-w: clamp(400px, 34vw, 640px);
+}
+
 .pb-safe {
   padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
 }

@@ -31,7 +31,7 @@ import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
-import { Workspace } from './Workspace';
+import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
 
 /** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
 const withoutBypass = (settings: RunSettings): RunSettings =>
@@ -279,7 +279,6 @@ export function Chat({
   const [note, setNote] = useState(initialDraft?.note);
   const [sendError, setSendError] = useState<string>();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
   const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
   const [running, setRunning] = useState<string>();
@@ -374,6 +373,7 @@ export function Chat({
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
   const title = session?.title ?? (firstText?.type === 'text' ? firstText.text.slice(0, 80) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
+  const workspace = useWorkspacePane(Boolean(cwd));
   const permissions = view.run?.permissions ?? [];
   const status = view.run ? (permissions.length > 0 ? 'waiting' : busy ? 'running' : session?.status === 'live' ? 'live' : 'idle') : session?.status ?? 'idle';
 
@@ -462,7 +462,7 @@ export function Chat({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={`flex h-full min-h-0 flex-col ${workspace.docked ? 'relative pr-(--pane-w)' : ''}`}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {!wide && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-hover">
@@ -486,7 +486,14 @@ export function Chat({
         {/* On a phone the meter shows up once the context is filling; the session menu always has the number. */}
         {view.run?.context && (wide || view.run.context.percent >= 60) && <ContextMeter context={view.run.context} onClick={() => setMenuOpen(true)} />}
         {cwd && (
-          <button type="button" aria-label="Changes and files" onClick={() => setWorkspaceOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+          <button
+            type="button"
+            aria-label="Changes and files"
+            aria-pressed={workspace.dockable ? workspace.open : undefined}
+            title={`Changes and files (${PANE_KEYS})`}
+            onClick={() => workspace.setOpen(!workspace.open)}
+            className={`relative grid size-10 shrink-0 place-items-center rounded-full hover:bg-hover hover:text-fg ${workspace.docked ? 'bg-hover text-fg' : 'text-muted'}`}
+          >
             <FolderGit2 className="size-[18px]" />
             {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
           </button>
@@ -567,12 +574,13 @@ export function Chat({
 
       {cwd && (
         <Workspace
-          open={workspaceOpen}
-          onClose={() => setWorkspaceOpen(false)}
+          open={workspace.open}
+          docked={workspace.docked}
+          onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          onMention={(path) => {
-            setWorkspaceOpen(false);
-            setDraftText({ text: `@${path} `, key: Date.now(), append: true });
+          onAddToMessage={(text) => {
+            if (!workspace.docked) workspace.setOpen(false);
+            setDraftText({ text, key: Date.now(), append: true });
           }}
         />
       )}
