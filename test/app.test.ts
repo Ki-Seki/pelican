@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
-import { accessToken, issueCode, loadAuth, resetAttempts } from '../src/server/auth';
+import { accessToken, issueCode, loadAuth, newSessionCookie, resetAttempts } from '../src/server/auth';
 import { config } from '../src/server/config';
 
 let dir: string;
@@ -94,6 +94,24 @@ describe('signing in', () => {
     expect(prefixed.headers.get('location')).toBe('./');
   });
 
+  it('an old link or a used code says why on the sign-in page, and only there', async () => {
+    expect((await ask('/?token=nope&s=abc', {}, false)).headers.get('location')).toBe('./?s=abc&signin=link');
+    const { code } = await (await ask('/api/access/code', { method: 'POST' })).json() as { code: string };
+    await ask(`/?code=${code}`, {}, false);
+    expect((await ask(`/?code=${code}`, {}, false)).headers.get('location')).toBe('./?signin=code');
+    const cookie = newSessionCookie();
+    expect((await ask('/?token=nope', { headers: { cookie: `${cookie.name}=${cookie.value}` } }, false)).headers.get('location')).toBe('./');
+  });
+
+  it('use keeps a browser signed in: an older cookie is renewed', async () => {
+    const old = newSessionCookie(Date.now() - 3 * 86_400_000);
+    const response = await ask('/api/info', { headers: { cookie: `${old.name}=${old.value}` } }, false);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toMatch(new RegExp(`^${old.name}=\\d+\\.[\\w-]+; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`));
+    const fresh = newSessionCookie();
+    expect((await ask('/api/info', { headers: { cookie: `${fresh.name}=${fresh.value}` } }, false)).headers.get('set-cookie')).toBeNull();
+  });
+
   it('logs in with the token, and counts wrong ones', async () => {
     const login = (token: string) => ask('/api/auth/login', { method: 'POST', body: JSON.stringify({ token }), headers: { 'content-type': 'application/json' } }, false);
     expect((await login('wrong')).status).toBe(401);
@@ -166,6 +184,28 @@ describe('the page', () => {
     expect(policy).toContain("frame-ancestors 'self'");
     expect(policy).toContain("img-src 'self' data: blob:");
     expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+
+  it('runs scripts only from Pelican and talks only to Pelican, its WebSocket included', async () => {
+    const policy = (await ask('/', {}, false)).headers.get('content-security-policy') ?? '';
+    expect(policy).toContain("script-src 'self';");
+    expect(policy).toContain("default-src 'self'");
+    expect(policy).toContain("connect-src 'self' ws://localhost:7860 wss://localhost:7860;");
+    expect(policy).toContain("frame-src 'self';");
+    expect(policy).toContain("object-src 'none'");
+    // A host name that would end the directive is left out.
+    const odd = (await ask('/', { headers: { 'x-forwarded-host': 'x.example; script-src *' } }, false)).headers.get('content-security-policy') ?? '';
+    expect(odd).not.toContain('script-src *');
+  });
+
+  it('runs a preview’s scripts in a document of its own, under the preview policy', async () => {
+    await writeFile(path.join(config.webDir!, 'preview.html'), '<!doctype html><script>1</script>');
+    const response = await ask('/preview.html', {}, false);
+    const policy = response.headers.get('content-security-policy') ?? '';
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).toContain("connect-src https://cdnjs.cloudflare.com");
+    expect(policy).toContain("frame-ancestors 'self'");
+    expect(policy).not.toContain("script-src 'self'");
   });
 });
 

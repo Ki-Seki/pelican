@@ -46,6 +46,31 @@ function origins(name: string, value: string | undefined, wildcardHost = false):
   return kept;
 }
 
+/**
+ * The address phones use to reach Pelican (a tunnel's, a proxy's): an http(s) URL, perhaps under a
+ * path, with nothing else in it. It is Pelican's own address, so its origin is allowed too.
+ */
+function publicUrl(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  let url: URL | undefined;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    url = undefined;
+  }
+  if (url && /^https?:$/.test(url.protocol) && !url.username && !url.password && !url.search && !url.hash
+    && /^([a-z0-9.-]+|\[[0-9a-f:.]+\])$/.test(url.hostname)) {
+    if (!url.pathname.endsWith('/')) url.pathname += '/';
+    return url.href;
+  }
+  configWarnings.push(`PELICAN_PUBLIC_URL: ignored "${value}"; use an address like https://laptop.example.ts.net/`);
+  return undefined;
+}
+
+const publicAddress = publicUrl(process.env.PELICAN_PUBLIC_URL);
+const allowedOrigins = origins('PELICAN_ALLOWED_ORIGINS', process.env.PELICAN_ALLOWED_ORIGINS);
+if (publicAddress && !allowedOrigins.includes(new URL(publicAddress).origin)) allowedOrigins.push(new URL(publicAddress).origin);
+
 export type AuthMode = 'auto' | 'none';
 
 /**
@@ -71,7 +96,9 @@ export const config = {
    */
   auth: (process.env.PELICAN_AUTH === 'none' ? 'none' : 'auto') as AuthMode,
   /** Origins, besides the page's own, allowed to send requests (for example a proxy's public URL). */
-  allowedOrigins: origins('PELICAN_ALLOWED_ORIGINS', process.env.PELICAN_ALLOWED_ORIGINS),
+  allowedOrigins,
+  /** The address phones use, when it is not this computer's own (PELICAN_PUBLIC_URL). */
+  publicUrl: publicAddress,
   /** Host names the server answers to, besides this machine's own names and addresses (and *.ts.net). */
   allowedHosts: list(process.env.PELICAN_ALLOWED_HOSTS),
   /**
@@ -88,6 +115,8 @@ export const config = {
   /** A transcript written by someone else this recently counts as live. */
   liveWindowMs: 45_000,
   claudeExecutable: process.env.PELICAN_CLAUDE_PATH || undefined,
+  /** Keep the computer from sleeping while Claude works; PELICAN_KEEP_AWAKE=0 turns it off. */
+  keepAwake: process.env.PELICAN_KEEP_AWAKE !== '0',
   /** Demo mode: made-up sessions, nothing runs. */
   demo: false,
 };

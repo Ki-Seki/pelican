@@ -56,6 +56,9 @@ export function SettingsSheet({
   // What new sessions start with. Changed only here: a choice in a session stays with that session.
   const [defaults, setDefaults] = useState(loadDefaults);
   const [modelOpen, setModelOpen] = useState(false);
+  // On this computer's own address, the phone needs another one: the server's, when it knows one.
+  const onLoopback = isLoopback(location.hostname);
+  const { data: phoneAddress } = useQuery({ queryKey: ['phone-address'], queryFn: api.phoneAddress, enabled: open && onLoopback && !info?.demo, staleTime: 60_000 });
   return (
     <Sheet open={open} onClose={onClose} title="Settings" done>
       <SheetHeading>Appearance</SheetHeading>
@@ -157,12 +160,14 @@ export function SettingsSheet({
       {!info?.demo && (
         <>
           <SheetHeading>On your phone</SheetHeading>
-          {isLoopback(location.hostname) ? (
-            <p className="px-3 pb-1 text-[13px] leading-relaxed text-muted">
-              This address works only on this computer. <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#phone" target="_blank" rel="noreferrer">Reach it from your phone</a>
-            </p>
+          {!onLoopback ? (
+            <PhoneCode open={open} base={appBase.href} />
+          ) : phoneAddress ? (
+            <PhoneCode open={open} base={phoneAddress} />
           ) : (
-            <PhoneCode open={open} />
+            <p className="px-3 pb-1 text-[13px] leading-relaxed text-muted">
+              This address works only on this computer. <code className="font-mono text-[12px]">pelican phone</code> in a terminal sets up your phone.
+            </p>
           )}
         </>
       )}
@@ -171,6 +176,13 @@ export function SettingsSheet({
       <div className="px-3 pb-2 text-[13px] leading-relaxed text-muted">
         Pelican {info?.version ?? ''} on <span className="text-fg">{info?.machine ?? '…'}</span>
         {info?.demo && <> · demo</>}
+        {info?.claudeCode?.version && (
+          <>
+            <br />
+            Claude Code {info.claudeCode.version}
+            {info.claudeCode.path && <> from <span className="font-mono text-[12px] break-all">{info.claudeCode.path}</span></>}
+          </>
+        )}
         <br />
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>
       </div>
@@ -193,11 +205,12 @@ export function SettingsSheet({
 const qrImage = (text: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrSvg(text))}`;
 
 /**
- * This page's address as a QR code, for opening Pelican on a phone. When browsers sign in,
- * the code carries a one-time sign-in code instead of the token or the password: it works
- * once, within two minutes, so it shows only on a tap.
+ * Pelican's address for a phone as a QR code: this page's, or the one the server knows when this
+ * page is on this computer's own address. When browsers sign in, the code carries a one-time
+ * sign-in code instead of the token or the password: it works once, within two minutes, so it
+ * shows only on a tap.
  */
-function PhoneCode({ open }: { open: boolean }) {
+function PhoneCode({ open, base }: { open: boolean; base: string }) {
   const { data: auth } = useQuery<AuthState>({ queryKey: ['auth'], enabled: false });
   const signsIn = auth?.mode === 'token' || auth?.mode === 'password';
   const [code, setCode] = useState<{ value: string; expires: number }>();
@@ -221,7 +234,7 @@ function PhoneCode({ open }: { open: boolean }) {
       })
       .catch((err: Error) => setError(err.message));
   };
-  const link = live ? `${appBase.href}?code=${encodeURIComponent(code.value)}` : appBase.href;
+  const link = live ? `${base}?code=${encodeURIComponent(code.value)}` : base;
   return (
     <div className="flex items-center gap-4 px-3 pb-1">
       {signsIn && !live ? (
@@ -234,7 +247,7 @@ function PhoneCode({ open }: { open: boolean }) {
       <p className="min-w-0 text-[13px] leading-relaxed text-muted">
         {signsIn ? <>Scan to open Pelican on your phone, signed in. Works once, for two minutes.</> : <>Scan to open Pelican on your phone.</>}
         <br />
-        <span className="font-mono text-[12px] break-all text-faint">{appBase.href}</span>
+        <span className="font-mono text-[12px] break-all text-faint">{base}</span>
         {error && <><br /><span className="text-danger">{error}</span></>}
       </p>
     </div>

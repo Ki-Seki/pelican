@@ -1,4 +1,5 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -6,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   accessToken, attemptAllowed, authMode, beginAttempt, checkPassword, checkToken, clearPassword, cookieName, issueCode, loadAuth,
-  newSessionCookie, noteFailure, passwordSet, redeemCode, resetAttempts, resetToken, setPassword, signedIn,
+  newSessionCookie, noteFailure, passwordSet, redeemCode, refreshAuth, renewedCookie, resetAttempts, resetToken, setPassword, signedIn,
 } from '../src/server/auth';
 import { config } from '../src/server/config';
 
@@ -152,5 +153,60 @@ describe('one-time codes', () => {
     expect(redeemCode(late, 1_000 + 2 * 60_000 + 1)).toBe(false);
     expect(redeemCode('made-up', 1_000)).toBe(false);
     expect(redeemCode(undefined)).toBe(false);
+  });
+});
+
+describe('a change made by another process (`pelican token --reset`, `pelican password`)', () => {
+  it('applies within a second, without a restart, and retires the codes made before it', async () => {
+    const old = accessToken()!;
+    const cookie = cookieOf();
+    const code = issueCode();
+    // What `pelican token --reset` writes, from another process.
+    await writeFile(path.join(dir, 'token.json'), JSON.stringify({ version: 1, token: 'a-new-token-from-the-cli-000000', secret: randomBytes(32).toString('base64') }));
+    refreshAuth(Date.now() + 1500);
+    expect(accessToken()).toBe('a-new-token-from-the-cli-000000');
+    expect(checkToken(old)).toBe(false);
+    expect(signedIn(cookie)).toBe(false);
+    expect(redeemCode(code)).toBe(false);
+  });
+
+  it('a password set or removed elsewhere applies too', async () => {
+    const written = path.join(dir, 'auth.json');
+    await setPassword('from the terminal');
+    const saved = await import('node:fs/promises').then((fs) => fs.readFile(written, 'utf8'));
+    await clearPassword();
+    expect(authMode()).toBe('token');
+    await writeFile(written, saved);
+    refreshAuth(Date.now() + 3000);
+    expect(authMode()).toBe('password');
+    await rm(written);
+    refreshAuth(Date.now() + 4500);
+    expect(authMode()).toBe('token');
+  });
+});
+
+describe('a file caught half-written', () => {
+  it('changes nothing until it can be read whole', async () => {
+    await setPassword('a good password');
+    const written = path.join(dir, 'auth.json');
+    await writeFile(written, '{"version": 1, "salt": "');
+    refreshAuth(Date.now() + 6000);
+    expect(authMode()).toBe('password');
+    expect(await checkPassword('a good password')).toBe(true);
+    await clearPassword();
+  });
+});
+
+describe('a sign-in in use', () => {
+  it('is renewed, at most once a day, so only 30 days without use sign a browser out', () => {
+    const now = Date.now();
+    const fresh = newSessionCookie(now);
+    expect(renewedCookie(`${fresh.name}=${fresh.value}`, now)).toBeUndefined();
+    const older = newSessionCookie(now - 2 * 86_400_000);
+    const renewed = renewedCookie(`${older.name}=${older.value}`, now);
+    expect(renewed?.maxAge).toBe(30 * 86_400);
+    expect(signedIn(`${renewed!.name}=${renewed!.value}`)).toBe(true);
+    expect(renewedCookie(`${older.name}=${older.value}.forged`, now)).toBeUndefined();
+    expect(renewedCookie(undefined, now)).toBeUndefined();
   });
 });

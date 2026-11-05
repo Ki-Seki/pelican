@@ -1,0 +1,270 @@
+import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+/**
+ * `pelican service`: keeps Pelican running, started at login and again if it stops, as a launchd
+ * agent on macOS or a systemd user unit on Linux. The service gets the installing shell's PATH (a
+ * login item's own is too thin to find Node, `npx` MCP servers or the tools `!` commands use) and
+ * Pelican's settings, never a secret. Its output goes to a log, where Pelican prints no sign-in link.
+ */
+
+export const LABEL = 'io.github.ki-seki.pelican';
+const UNIT = 'pelican.service';
+
+export type Run = (command: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+export type ServiceContext = {
+  platform: NodeJS.Platform;
+  home: string;
+  uid: number;
+  user: string;
+  /** Node and Pelican's own script, as the service starts them. */
+  node: string;
+  script: string;
+  /** Flags for Pelican: --port, --host, --name, --no-auth. */
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  run: Run;
+};
+
+export const runCommand: Run = (command, args) => new Promise((resolve) => {
+  execFile(command, args, { timeout: 30_000 }, (error, stdout, stderr) => {
+    const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 127) : 0;
+    resolve({ code, stdout: String(stdout), stderr: String(stderr || (error && code === 127 ? error.message : '')) });
+  });
+});
+
+/** Variables the service carries over from the installing shell. */
+const KEEP = /^(PATH|SHELL|LANG|LC_[A-Z]+|TZ|PELICAN_.+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_.+|ANTHROPIC_.+|AWS_PROFILE|AWS_REGION|CLOUD_ML_REGION|NODE_EXTRA_CA_CERTS|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy)$/;
+/** Never written to a file: a service has no business holding them, and Claude Code keeps its own sign-in. */
+const SECRET = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH_HEADER/i;
+
+/** The environment written into the service, and the names left out because they look like secrets. */
+export function serviceEnvironment(env: NodeJS.ProcessEnv): { kept: Record<string, string>; secrets: string[] } {
+  const kept: Record<string, string> = {};
+  const secrets: string[] = [];
+  for (const [name, value] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
+    if (value === undefined || !KEEP.test(name)) continue;
+    if (SECRET.test(name)) secrets.push(name);
+    else kept[name] = value;
+  }
+  return { kept, secrets };
+}
+
+export const plistFile = (home: string) => path.join(home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
+export const unitFile = (home: string) => path.join(home, '.config', 'systemd', 'user', UNIT);
+export const logFile = (home: string) => path.join(home, 'Library', 'Logs', 'pelican.log');
+
+const xml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** The launchd agent: started at login, started again when it stops with an error. */
+export function launchdPlist(ctx: ServiceContext): string {
+  const { kept } = serviceEnvironment(ctx.env);
+  const strings = (values: string[]) => values.map((v) => `    <string>${xml(v)}</string>`).join('\n');
+  const env = Object.entries(kept).map(([k, v]) => `    <key>${xml(k)}</key>\n    <string>${xml(v)}</string>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+${strings([ctx.node, ctx.script, ...ctx.args])}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${env}
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>${xml(ctx.home)}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xml(logFile(ctx.home))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xml(logFile(ctx.home))}</string>
+</dict>
+</plist>
+`;
+}
+
+/** A value for a unit file: quoted, with systemd's specifiers and variables kept literal. */
+const unitQuote = (text: string) => `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`;
+
+/** The systemd user unit: started with the user's session (or at boot, with lingering on), again on failure. */
+export function systemdUnit(ctx: ServiceContext): string {
+  const { kept } = serviceEnvironment(ctx.env);
+  const env = Object.entries(kept).map(([k, v]) => `Environment=${unitQuote(`${k}=${v}`)}`).join('\n');
+  return `[Unit]
+Description=Pelican: Claude Code sessions from your phone
+
+[Service]
+ExecStart=${[ctx.node, ctx.script, ...ctx.args].map(unitQuote).join(' ')}
+${env}
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+/** Why the service cannot be set up from here, if it cannot. */
+export async function cannotInstall(ctx: ServiceContext): Promise<string | undefined> {
+  if (ctx.platform === 'win32') return 'Not available on Windows. Run Pelican in WSL, next to Claude Code; there `pelican service install` sets up a systemd service.';
+  if (ctx.platform !== 'darwin' && ctx.platform !== 'linux') return `Not available on ${ctx.platform}: start Pelican from your own login script.`;
+  if (!ctx.script.endsWith('.js')) return 'Build Pelican first (npm run build), or install it with npm install -g pelican-cc.';
+  // npx keeps its copy in a cache that may be cleared at any time, taking the service with it.
+  if (/[\\/]_npx[\\/]/.test(ctx.script)) return 'Install Pelican first (npm install -g pelican-cc), then run `pelican service install`: the copy npx runs can be removed at any time.';
+  if (ctx.platform === 'linux' && (await ctx.run('systemctl', ['--user', 'show-environment'])).code !== 0) {
+    return 'systemd is not running for your user here, so there is no service to set up. Keep Pelican running in tmux or screen instead.';
+  }
+  return undefined;
+}
+
+const domain = (ctx: ServiceContext) => `gui/${ctx.uid}`;
+const target = (ctx: ServiceContext) => `${domain(ctx)}/${LABEL}`;
+
+async function failed(result: { code: number; stderr: string; stdout: string }, what: string): Promise<never> {
+  throw new Error(`${what} failed: ${(result.stderr || result.stdout).trim() || `exit code ${result.code}`}`);
+}
+
+/** Writes the service and starts it; lines to print go to `say`. */
+export async function installService(ctx: ServiceContext, say: (line: string) => void): Promise<void> {
+  const problem = await cannotInstall(ctx);
+  if (problem) throw new Error(problem);
+  const { secrets } = serviceEnvironment(ctx.env);
+  if (ctx.platform === 'darwin') {
+    const file = plistFile(ctx.home);
+    await mkdir(path.dirname(file), { recursive: true });
+    await mkdir(path.dirname(logFile(ctx.home)), { recursive: true });
+    await writeFile(file, launchdPlist(ctx), { mode: 0o600 });
+    // Loaded already (an earlier install): unload it first, so the new file applies.
+    if ((await ctx.run('launchctl', ['print', target(ctx)])).code === 0) await ctx.run('launchctl', ['bootout', target(ctx)]);
+    await ctx.run('launchctl', ['enable', target(ctx)]);
+    const loaded = await ctx.run('launchctl', ['bootstrap', domain(ctx), file]);
+    if (loaded.code !== 0) await failed(loaded, 'launchctl bootstrap');
+    say(`Pelican runs as a login item now (${file}).`);
+    say(`Its log: ${logFile(ctx.home)}`);
+  } else {
+    const file = unitFile(ctx.home);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, systemdUnit(ctx), { mode: 0o600 });
+    for (const args of [['daemon-reload'], ['enable', UNIT], ['restart', UNIT]]) {
+      const result = await ctx.run('systemctl', ['--user', ...args]);
+      if (result.code !== 0) await failed(result, `systemctl --user ${args.join(' ')}`);
+    }
+    say(`Pelican runs as a systemd user service now (${file}).`);
+    say('Its log: journalctl --user -u pelican');
+    const linger = await ctx.run('loginctl', ['show-user', ctx.user, '--property=Linger']);
+    if (linger.code === 0 && /Linger=no/.test(linger.stdout)) {
+      say('It stops when you log out. To keep it running then, and to start it at boot: loginctl enable-linger');
+    }
+  }
+  if (secrets.length > 0) say(`Left out of the service, as secrets: ${secrets.join(', ')}.`);
+}
+
+/** Stops the service and removes it. */
+export async function uninstallService(ctx: ServiceContext, say: (line: string) => void): Promise<void> {
+  if (ctx.platform === 'darwin') {
+    const file = plistFile(ctx.home);
+    const had = await stat(file).then(() => true, () => false);
+    await ctx.run('launchctl', ['bootout', target(ctx)]);
+    await rm(file, { force: true });
+    say(had ? 'Pelican no longer runs as a login item.' : 'Pelican was not set up as a login item.');
+  } else if (ctx.platform === 'linux') {
+    const file = unitFile(ctx.home);
+    const had = await stat(file).then(() => true, () => false);
+    await ctx.run('systemctl', ['--user', 'disable', '--now', UNIT]);
+    await rm(file, { force: true });
+    await ctx.run('systemctl', ['--user', 'daemon-reload']);
+    say(had ? 'Pelican no longer runs as a systemd user service.' : 'Pelican was not set up as a systemd user service.');
+  } else {
+    throw new Error((await cannotInstall(ctx)) ?? 'Not available here.');
+  }
+}
+
+/** Starts the service again (after an update, or a change to its settings). */
+export async function restartService(ctx: ServiceContext, say: (line: string) => void): Promise<void> {
+  if (!(await serviceInstalled(ctx))) throw new Error('Pelican is not set up as a service: `pelican service install` sets it up.');
+  const result = ctx.platform === 'darwin'
+    ? await ctx.run('launchctl', ['kickstart', '-k', target(ctx)])
+    : await ctx.run('systemctl', ['--user', 'restart', UNIT]);
+  if (result.code !== 0) await failed(result, 'Restarting Pelican');
+  say('Pelican is starting again.');
+}
+
+export async function serviceInstalled(ctx: ServiceContext): Promise<boolean> {
+  const file = ctx.platform === 'darwin' ? plistFile(ctx.home) : ctx.platform === 'linux' ? unitFile(ctx.home) : undefined;
+  return file ? stat(file).then(() => true, () => false) : false;
+}
+
+export type ServiceState = { installed: boolean; running: boolean; pid?: number; lastExit?: string };
+
+/** Whether the service is set up and running, as launchd or systemd say. */
+export async function serviceState(ctx: ServiceContext): Promise<ServiceState> {
+  const installed = await serviceInstalled(ctx);
+  if (!installed) return { installed, running: false };
+  if (ctx.platform === 'darwin') {
+    const { code, stdout } = await ctx.run('launchctl', ['print', target(ctx)]);
+    if (code !== 0) return { installed, running: false };
+    const pid = Number(/^\s*pid = (\d+)/m.exec(stdout)?.[1]);
+    const lastExit = /^\s*last exit code = (.+)$/m.exec(stdout)?.[1]?.trim();
+    return { installed, running: /^\s*state = running/m.test(stdout), ...(pid ? { pid } : {}), ...(lastExit ? { lastExit } : {}) };
+  }
+  const { stdout } = await ctx.run('systemctl', ['--user', 'show', UNIT, '--property=ActiveState,MainPID,ExecMainStatus']);
+  const value = (name: string) => new RegExp(`^${name}=(.*)$`, 'm').exec(stdout)?.[1]?.trim();
+  const pid = Number(value('MainPID'));
+  const status = value('ExecMainStatus');
+  return { installed, running: value('ActiveState') === 'active', ...(pid ? { pid } : {}), ...(status && status !== '0' ? { lastExit: status } : {}) };
+}
+
+/** `node` on PATH when it is the very Node running now: a stable path that survives a Node update. */
+export function stableNode(execPath: string, pathValue: string | undefined): string {
+  let real: string;
+  try {
+    real = realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+  for (const dir of (pathValue ?? '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node');
+    try {
+      if (realpathSync(candidate) === real) return candidate;
+    } catch {
+      // Not there.
+    }
+  }
+  return execPath;
+}
+
+/** The context for this computer and this Pelican. */
+export function thisComputer(args: string[]): ServiceContext {
+  let script = process.argv[1] ?? '';
+  try {
+    script = realpathSync(script);
+  } catch {
+    // Kept as given; cannotInstall says what is wrong with it.
+  }
+  return {
+    platform: process.platform,
+    home: os.homedir(),
+    uid: process.getuid?.() ?? 0,
+    user: os.userInfo().username,
+    node: stableNode(process.execPath, process.env.PATH),
+    script,
+    args,
+    env: process.env,
+    run: runCommand,
+  };
+}

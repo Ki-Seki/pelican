@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync, statSync } from 'node:fs';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { config } from './config.js';
@@ -19,6 +20,9 @@ import { config } from './config.js';
  *
  * Signing in sets a cookie signed with a secret that belongs to the token or
  * the password and changes with it, so resetting either signs every browser out.
+ * The running server notices a change made with `pelican token --reset` or
+ * `pelican password` within a second; no restart is needed. A cookie in use is
+ * renewed, so a browser stays signed in until it goes unused for 30 days.
  */
 export type AuthMode = 'none' | 'password' | 'token';
 
@@ -28,11 +32,60 @@ type Token = { version: 1; token: string; secret: string };
 const passwordFile = () => path.join(config.configDir, 'auth.json');
 const tokenFile = () => path.join(config.configDir, 'token.json');
 const SESSION_DAYS = 30;
+/** A cookie with less than this left is replaced by a fresh one when it is used. */
+const RENEW_BELOW_MS = (SESSION_DAYS - 1) * 24 * 3600_000;
 const PARAMS = { N: 16384, r: 8, p: 1 };
 
 let password: Password | undefined;
 let token: Token | undefined;
 let loaded = false;
+/** The two files as last read, and when they were last looked at. */
+let seen: string | undefined;
+let checkedAt = 0;
+
+const signature = (file: string) => {
+  try {
+    const info = statSync(file);
+    return `${info.ino}:${info.size}:${info.mtimeMs}`;
+  } catch {
+    return '-';
+  }
+};
+const filesSignature = () => `${signature(passwordFile())}|${signature(tokenFile())}`;
+
+const readJsonSync = <T>(file: string): T | undefined => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as T;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Reads the files again when another process changed them (`pelican token --reset`, `pelican
+ * password`), at most once a second. One-time codes made under the old secret stop working too:
+ * a reset is what you do when a link leaked, and a code is as good as the link for two minutes.
+ */
+export function refreshAuth(now = Date.now(), force = false): void {
+  if (!loaded || (!force && now - checkedAt < 1000)) return;
+  checkedAt = now;
+  const current = filesSignature();
+  if (current === seen) return;
+  seen = current;
+  const before = secret();
+  // A file that cannot be read whole is read again next time; until then nothing changes.
+  const nextPassword = readJsonSync<Password>(passwordFile());
+  if (nextPassword?.hash && nextPassword.secret) password = nextPassword;
+  else if (signature(passwordFile()) === '-') password = undefined;
+  else seen = undefined;
+  if (config.auth !== 'none') {
+    const next = readJsonSync<Token>(tokenFile());
+    // Removed by hand: the token in use stays until a new one is made.
+    if (next?.token && next.secret) token = next;
+    else if (signature(tokenFile()) !== '-') seen = undefined;
+  }
+  if (secret() !== before) codes.clear();
+}
 
 function derive(text: string, salt: Buffer, params: { N: number; r: number; p: number }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -40,9 +93,12 @@ function derive(text: string, salt: Buffer, params: { N: number; r: number; p: n
   });
 }
 
+/** Written whole or not at all: a running server reading it meanwhile never sees half of it. */
 async function writePrivate(file: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  const temp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await rename(temp, file);
 }
 
 const readJson = async <T>(file: string): Promise<T | undefined> => {
@@ -61,11 +117,14 @@ export async function loadAuth(): Promise<void> {
     token = await readJson<Token>(tokenFile());
     if (!token?.token || !token.secret) await resetToken();
   }
+  seen = filesSignature();
+  checkedAt = Date.now();
   loaded = true;
 }
 
 export function authMode(): AuthMode {
   if (config.auth === 'none') return 'none';
+  refreshAuth();
   return password ? 'password' : 'token';
 }
 
@@ -130,9 +189,9 @@ function sign(expires: number): string {
   return createHmac('sha256', Buffer.from(secret() ?? '', 'base64')).update(String(expires)).digest('base64url');
 }
 
-export function newSessionCookie(): { name: string; value: string; maxAge: number } {
+export function newSessionCookie(now = Date.now()): { name: string; value: string; maxAge: number } {
   const maxAge = SESSION_DAYS * 24 * 3600;
-  const expires = Date.now() + maxAge * 1000;
+  const expires = now + maxAge * 1000;
   return { name: cookieName(), value: `${expires}.${sign(expires)}`, maxAge };
 }
 
@@ -152,15 +211,30 @@ export function signedIn(cookieHeader: string | undefined, authorization?: strin
   const mode = authMode();
   if (mode === 'none') return true;
   if (mode === 'token' && authorization?.startsWith('Bearer ') && checkToken(authorization.slice(7).trim())) return true;
-  if (!secret()) return false;
+  return cookieExpiry(cookieHeader) !== undefined;
+}
+
+/** When the request's sign-in cookie expires, if it carries a valid one. */
+function cookieExpiry(cookieHeader: string | undefined, now = Date.now()): number | undefined {
+  if (!secret()) return undefined;
   const value = cookieValue(cookieHeader, cookieName());
-  if (!value) return false;
-  const [expires, mac] = value.split('.');
+  if (!value) return undefined;
+  const [expires, mac, ...rest] = value.split('.');
   const when = Number(expires);
-  if (!mac || !Number.isFinite(when) || when < Date.now()) return false;
+  if (!mac || rest.length > 0 || !Number.isFinite(when) || when < now) return undefined;
   const expected = Buffer.from(sign(when));
   const given = Buffer.from(mac);
-  return expected.length === given.length && timingSafeEqual(expected, given);
+  return expected.length === given.length && timingSafeEqual(expected, given) ? when : undefined;
+}
+
+/**
+ * A fresh cookie for a browser whose cookie is valid but no longer new, so that using Pelican keeps
+ * it signed in; undefined when there is nothing to renew.
+ */
+export function renewedCookie(cookieHeader: string | undefined, now = Date.now()): ReturnType<typeof newSessionCookie> | undefined {
+  if (authMode() === 'none') return undefined;
+  const expires = cookieExpiry(cookieHeader, now);
+  return expires !== undefined && expires - now < RENEW_BELOW_MS ? newSessionCookie(now) : undefined;
 }
 
 // Failed sign-ins: at most 10 per client and 30 in all every 10 minutes, so neither

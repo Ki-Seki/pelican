@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Preview</title>
+<script>
+  // Where a preview runs once you tap Run: a sandboxed frame with no access to Pelican, under the
+  // preview policy this document is served with. Pelican's page hands it the page to show.
+  addEventListener('message', function show(event) {
+    if (event.source !== parent || !event.data || typeof event.data.pelicanPreview !== 'string') return;
+    removeEventListener('message', show);
+    document.open();
+    document.write(event.data.pelicanPreview);
+    document.close();
+  });
+  parent.postMessage({ pelicanPreviewReady: true }, '*');
+</script>

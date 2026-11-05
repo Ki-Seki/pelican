@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO } from '../../shared/modes';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
-import { api, apiUrl } from '../lib/api';
+import { api, ApiError, apiUrl, type TrustChoice } from '../lib/api';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { loadDefaults, markSeen, markTipSeen, saveSessionChoice, sessionChoice, tipSeen, usePrefs, viewOf } from '../lib/prefs';
@@ -31,6 +31,7 @@ import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { TodoList } from './ToolCall';
+import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { Workspace } from './Workspace';
 
 /** What a branch starts with: the settings it came from, but asking first instead of Bypass. */
@@ -344,6 +345,7 @@ export function Chat({
   const [openElsewhereSeen, setOpenElsewhereSeen] = useState(() => tipSeen('open-elsewhere'));
   const [running, setRunning] = useState<string>();
   const [modeSeen, setModeSeen] = useState<string>();
+  const [trustAsk, setTrustAsk] = useState<TrustAsk>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
 
   useEffect(() => clearDraft(viewId), [viewId]);
@@ -414,7 +416,7 @@ export function Chat({
     }
   };
 
-  const send = async (text: string, attachments: Attachment[], mode: SendMode) => {
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     if (demo) {
@@ -430,7 +432,7 @@ export function Chat({
     const uuid = newId();
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, text, attachments));
-    const body = { text, attachments: attachments.map((a) => a.id), settings, uuid, ...(busy ? { mode } : {}) };
+    const body = { text, attachments: attachments.map((a) => a.id), settings, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
     try {
       if (sessionId) {
         await api.send(sessionId, body);
@@ -445,6 +447,11 @@ export function Chat({
     } catch (error) {
       // Nothing reached Claude: take the message back and give the text back to edit.
       removeLocalMessage(viewId, uuid);
+      if (error instanceof ApiError && error.trust) {
+        // The folder has programs of its own and nobody trusted it: ask, then send it again.
+        setTrustAsk({ brings: error.trust.brings, answer: (choice) => void send(text, attachments, mode, choice), cancel: () => setDraftText({ text, key: Date.now() }) });
+        return;
+      }
       setSendError((error as Error).message);
       setDraftText({ text, key: Date.now() });
     }
@@ -674,6 +681,7 @@ export function Chat({
           }}
         />
       )}
+      <TrustSheet ask={trustAsk} {...(cwd ? { folder: cwd } : {})} {...(home ? { home } : {})} onDone={() => setTrustAsk(undefined)} />
       {sessionId && (
         <RewindSheet
           sessionId={sessionId}

@@ -14,7 +14,7 @@ const scratch = vi.hoisted(() => {
 });
 
 const trusted = new Set<string>();
-vi.mock('../src/server/trust', () => ({ claudeRanIn: async (dir: string) => trusted.has(dir) }));
+vi.mock('../src/server/trust', () => ({ claudeRanIn: async (dir: string) => trusted.has(dir), folderTrusted: async (dir: string) => trusted.has(dir) }));
 
 const { defaultMode, signedInFrom, startError, toCompletions } = await import('../src/server/models');
 

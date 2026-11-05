@@ -296,4 +296,6 @@ export type ServerInfo = {
   /** A password protects this server; the page can offer to sign out. */
   auth: boolean;
   demo: boolean;
+  /** The Claude Code this server runs: its version, and its path when it is not the one Pelican brings. */
+  claudeCode?: { version?: string; path?: string };
 };

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
+import { listCompletions } from '../src/server/models';
 import { gitDiff, gitStatus } from '../src/server/workspace';
 
 let root: string;
@@ -22,6 +23,8 @@ beforeAll(async () => {
   marker = path.join(root, 'ran');
   // No Claude Code sessions anywhere: no folder counts as one Claude has worked in.
   process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
+  config.claudeHome = path.join(root, 'claude');
+  config.stateDir = path.join(root, 'state');
   await mkdir(repo);
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo });
   git('init', '-q', '-b', 'main');
@@ -61,6 +64,24 @@ describe('git', () => {
   it('reads a path as a name, and never one with ..', async () => {
     expect(await gitDiff(repo, ':/')).toBe('');
     await expect(gitDiff(repo, 'x/../a.txt')).rejects.toThrow(/outside/);
+  });
+
+  it('in a folder nobody trusted, does not run for / and @ either: Claude Code looks from the home folder', async () => {
+    const launched = path.join(root, 'launched');
+    const fake = path.join(root, 'claude-fake');
+    await writeFile(fake, `#!/bin/sh\n{ echo "cwd=$(pwd)"; for a in "$@"; do echo "arg=$a"; done; } > ${launched}\nexit 1\n`);
+    await chmod(fake, 0o755);
+    config.claudeExecutable = fake;
+    // A tracked file the filter applies to, changed on disk: git status would run the filter.
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', '-c', 'filter.evil.clean=cat', '-c', 'core.fsmonitor=false', 'add', '-A'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', '-c', 'filter.evil.clean=cat', '-c', 'core.fsmonitor=false', 'commit', '-q', '-m', 'dat'], { cwd: repo });
+    await writeFile(path.join(repo, 'c.dat'), 'changed\n');
+    await expect(listCompletions(repo)).rejects.toThrow();
+    const log = await readFile(launched, 'utf8');
+    expect(log).toContain(`cwd=${await realpath(os.homedir())}\n`);
+    expect(log).toContain('arg=--setting-sources=user\n');
+    expect(log).toContain('arg={"disableAllHooks":true}\n');
+    expect(await ran()).toBe('');
   });
 
   it('in a folder Claude has not worked in, does not run at all', async () => {

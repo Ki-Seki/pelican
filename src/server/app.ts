@@ -9,17 +9,20 @@ import { compress } from 'hono/compress';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { isPermissionMode } from '../shared/modes.js';
+import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
-import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, signedIn } from './auth.js';
+import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, listDirs, MAX_UPLOAD_BYTES, readUpload, removeUpload, saveUpload } from './files.js';
+import { claudeCodeInfo } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { defaultMode, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
+import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, sendMessage } from './runner.js';
 import { runCommand } from './shell.js';
@@ -28,8 +31,9 @@ import { gitDiff, gitStatus, listTree, readProjectFile } from './workspace.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { transcriptImage } from './history.js';
+import { instance } from './running.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
-import { claudeRanIn } from './trust.js';
+import { folderTrusted, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 
 export const app = new Hono();
 
@@ -106,6 +110,9 @@ app.use('/api/*', async (c, next) => {
   if (!c.req.path.startsWith('/api/auth') && !signedIn(c.req.header('cookie'), c.req.header('authorization'))) {
     return c.json({ error: 'Sign in to continue', signIn: true }, 401);
   }
+  // Use keeps a browser signed in: its cookie is replaced by a fresh one (at most once a day).
+  const renewed = c.req.path.startsWith('/api/auth/logout') ? undefined : renewedCookie(c.req.header('cookie'));
+  if (renewed) c.header('Set-Cookie', cookieHeader(c, renewed.name, renewed.value, renewed.maxAge));
   if (config.demo && c.req.method !== 'GET' && c.req.method !== 'HEAD') {
     return c.json({ error: 'This is the demo: nothing runs and nothing changes. Start Pelican without --demo to talk to Claude.' }, 403);
   }
@@ -127,6 +134,8 @@ app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth
 app.use('/api/*', compress({ threshold: 1024 }));
 
 app.onError((error, c) => {
+  // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
+  if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings }, 409);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });
@@ -135,6 +144,8 @@ app.get('/api/auth', (c) => c.json({
   required: authMode() !== 'none',
   mode: authMode(),
   signedIn: signedIn(c.req.header('cookie'), c.req.header('authorization')),
+  // Not a secret: lets `pelican phone` tell this server from another behind an address.
+  instance,
 }));
 
 app.post('/api/auth/login', async (c) => {
@@ -163,10 +174,23 @@ app.post('/api/access/code', (c) => {
   return c.json({ code: issueCode() });
 });
 
-app.get('/api/info', (c) => {
+/** The address a phone uses to reach this Pelican, when one is known: looked up at most once a minute. */
+let phoneLookup: { at: number; url: Promise<string | null> } | undefined;
+app.get('/api/access/phone', async (c) => {
+  if (config.demo) return c.json({ url: null });
+  if (!phoneLookup || Date.now() - phoneLookup.at > 60_000) {
+    phoneLookup = { at: Date.now(), url: findPhoneAddress(config.port, config.host).then((found) => found.address?.url ?? null, () => null) };
+  }
+  return c.json({ url: await phoneLookup.url });
+});
+
+app.get('/api/info', async (c) => {
   const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
   const key = pushKey();
   if (key) info.pushKey = key;
+  // Which Claude Code this Pelican runs, for About (and bug reports).
+  const code = await claudeCodeInfo();
+  if (code.version || code.path) info.claudeCode = { ...(code.version ? { version: code.version } : {}), ...(code.path ? { path: code.path } : {}) };
   return c.json(info);
 });
 
@@ -188,7 +212,7 @@ app.get('/api/sessions/:id/messages', async (c) => {
   return c.json(await loadPage(c.req.param('id'), before === undefined ? undefined : Number(before), limit));
 });
 
-type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode };
+type SendBody = { text?: string; attachments?: string[]; settings?: RunSettings; uuid?: string; cwd?: string; scratch?: boolean; mode?: SendMode; trust?: TrustChoice };
 
 const permissionMode = (value: unknown) => (isPermissionMode(value) ? value : undefined);
 
@@ -220,6 +244,7 @@ function sendBody(raw: unknown): SendBody | string {
   if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null)) return 'Settings must be an object';
   if (body.cwd !== undefined && typeof body.cwd !== 'string') return 'The folder must be a path';
   if (body.scratch !== undefined && typeof body.scratch !== 'boolean') return 'scratch must be true or false';
+  if (body.trust !== undefined && body.trust !== 'trusted' && body.trust !== 'user-only') return 'trust must be trusted or user-only';
   return body as SendBody;
 }
 
@@ -234,6 +259,14 @@ app.post('/api/sessions', async (c) => {
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
   const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
   if (!cwd) return c.json({ error: 'No such folder' }, 400);
+  // A folder Pelican made is trusted; any other that nobody trusted is asked about first, every new
+  // session, until the answer is to trust it.
+  if (body.scratch) await rememberChoice(cwd, 'trusted');
+  else if (body.trust) await rememberChoice(cwd, body.trust);
+  else {
+    const question = await trustQuestion(cwd);
+    if (question) return c.json({ error: 'Trust this folder before Claude Code starts in it.', needsTrust: true, brings: question.brings }, 409);
+  }
   const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {
     text: typeof body.text === 'string' ? body.text : '',
@@ -247,6 +280,10 @@ app.post('/api/sessions', async (c) => {
 app.post('/api/sessions/:id/messages', async (c) => {
   const body = sendBody(await c.req.json().catch(() => undefined));
   if (typeof body === 'string') return c.json({ error: body }, 400);
+  if (body.trust) {
+    const folder = getRun(c.req.param('id'))?.cwd ?? (await sessionInfo(c.req.param('id')))?.cwd;
+    if (folder && (await isDirectory(folder))) await rememberChoice(folder, body.trust);
+  }
   const uuid = uuidOf(body.uuid);
   const mode = sendMode(body.mode);
   const sessionId = await sendMessage({ sessionId: c.req.param('id') }, {
@@ -521,8 +558,8 @@ async function insideRepository(cwd: string): Promise<boolean> {
   }
 }
 
-/** Git runs only where Claude Code has run: a folder you are only shown runs nothing of its own. */
-const gitAllowed = (cwd: string) => (config.demo ? Promise.resolve(true) : claudeRanIn(cwd));
+/** Git runs only in a trusted folder (trust.ts): a folder you are only shown runs nothing of its own. */
+const gitAllowed = (cwd: string) => folderTrusted(cwd);
 
 app.get('/api/git', async (c) => {
   const cwd = await folderOf(c);
@@ -745,24 +782,46 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
+const ANCESTORS = `frame-ancestors 'self'${config.frameAncestors.map((o) => ` ${o}`).join('')}`;
+const FRAMING: Record<string, string> = config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {};
+
+/** A host name as browsers send it, and nothing that could end a directive. */
+const plainHost = (value: string | undefined) => (value && /^([a-z0-9.-]+|\[[0-9a-f:.]+\])(:\d+)?$/i.test(value) ? value : undefined);
+
 /**
+ * The app's own page:
  * - Only Pelican's own origin, and pages the config names, may show it in a frame: any other page
  *   could lay its own buttons over Pelican's and have you approve something (clickjacking).
+ * - Scripts only from Pelican, and requests only to Pelican: were something ever to slip HTML into
+ *   the page, it could neither run nor send anything (and here a script could run commands).
  * - Images and media come only from Pelican: a picture in Claude's reply, or in a page it wrote,
- *   could otherwise carry what is in the conversation to another server just by loading. The
- *   preview frames inherit this, on top of their own policy (Preview.tsx).
+ *   could otherwise carry what is in the conversation to another server just by loading. A still
+ *   preview inherits this, on top of its own policy; the styles and fonts it may load from the
+ *   public CDNs are allowed here for that reason only (Preview.tsx).
  */
-const POLICY: Record<string, string> = {
-  'Content-Security-Policy': [
-    `frame-ancestors 'self'${config.frameAncestors.map((o) => ` ${o}`).join('')}`,
-    "frame-src 'self' blob: data:",
+function pagePolicy(c: Context): string {
+  // The page's WebSocket, by the names it reaches Pelican at (older Safari does not count ws: as 'self').
+  const hosts = [...new Set([plainHost(c.req.header('host')), plainHost(c.req.header('x-forwarded-host')?.split(',')[0]?.trim())])].filter(Boolean);
+  return [
+    ANCESTORS,
+    "default-src 'self'",
+    "script-src 'self'",
+    `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com ${PREVIEW_CDNS}`,
+    `font-src 'self' data: https://fonts.gstatic.com ${PREVIEW_CDNS}`,
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
+    `connect-src 'self'${hosts.map((h) => ` ws://${h} wss://${h}`).join('')}`,
+    "frame-src 'self'",
+    "worker-src 'self'",
+    "manifest-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-  ].join('; '),
-  ...(config.frameAncestors.length === 0 ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
-};
+    "form-action 'self'",
+  ].join('; ');
+}
+
+/** The document a preview runs in once its scripts may run: the preview policy, as a header that stays. */
+const RUNNING_PREVIEW = `${PREVIEW_POLICY}; ${ANCESTORS}`;
 
 /** Compressed copies the build wrote next to each file, best first. */
 const ENCODINGS = [['br', '.br'], ['gzip', '.gz']] as const;
@@ -807,10 +866,14 @@ app.get('/*', async (c) => {
     const url = new URL(c.req.url);
     url.searchParams.delete('token');
     url.searchParams.delete('code');
+    url.searchParams.delete('signin');
+    const ok = token !== undefined ? checkToken(token) : redeemCode(code);
+    // The sign-in page says why a link or a code did not work (it carries no secret), unless this
+    // browser is signed in anyway.
+    if (!ok && !signedIn(c.req.header('cookie'))) url.searchParams.set('signin', token !== undefined ? 'link' : 'code');
     // Relative to where the page is, so it works under a proxy's path prefix, and can never
     // name another site (`//other.example/` would).
     const location = `./${url.pathname.split('/').pop() ?? ''}${url.search}`;
-    const ok = token !== undefined ? checkToken(token) : redeemCode(code);
     if (!ok) return c.body(null, 302, { Location: location, 'Cache-Control': 'no-store' });
     const cookie = newSessionCookie();
     return c.body(null, 302, { Location: location, 'Set-Cookie': cookieHeader(c, cookie.name, cookie.value, cookie.maxAge), 'Cache-Control': 'no-store' });
@@ -840,6 +903,7 @@ app.get('/*', async (c) => {
     Vary: 'Accept-Encoding',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
-    ...POLICY,
+    'Content-Security-Policy': file === path.join(root, 'preview.html') ? RUNNING_PREVIEW : pagePolicy(c),
+    ...FRAMING,
   });
 });

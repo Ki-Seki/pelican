@@ -49,6 +49,7 @@ import { notify } from './push.js';
 import { sessionInfo } from './sessions.js';
 import { bashModeText } from './shell.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
+import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
 
 /** Messages the user sends, handed to the Claude process as they come. */
@@ -266,6 +267,8 @@ export class SessionRun {
     private readonly resume: boolean,
     /** Resume only up to this entry, dropping the turn after it (an edited last prompt). */
     private readonly resumeAt?: { entry: string; dropsTurn: string },
+    /** Which settings Claude Code loads: a folder nobody trusted runs none of its own (trust.ts). */
+    private readonly launch: Launch = FULL_SETTINGS,
   ) {
     if (!resume) this.costSoFar = 0;
   }
@@ -312,7 +315,8 @@ export class SessionRun {
       // Each background task has its own Stop here, so Stop ends the turn and spares them, as Esc does.
       perTaskStopAffordance: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
-      settingSources: ['user', 'project', 'local'],
+      settingSources: this.launch.settingSources,
+      ...(this.launch.env ? { env: { ...process.env, ...this.launch.env } } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
@@ -1077,13 +1081,14 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
     const info = await sessionInfo(target.sessionId);
     const cwd = info?.cwd ?? target.cwd;
     if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+    const launch = await launchFor(cwd);
     // Another request may have started one while this one looked the folder up.
     const started = getRun(target.sessionId);
     if (started) {
       await started.send(input);
       return started.sessionId;
     }
-    const run = new SessionRun(target.sessionId, cwd, input.settings, true);
+    const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch);
     runs.set(run.sessionId, run);
     run.start();
     await run.send(input);
@@ -1091,7 +1096,7 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
   }
   const cwd = target.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`Not a folder: ${cwd ?? '(none)'}`);
-  const run = new SessionRun(randomUUID(), cwd, input.settings, false);
+  const run = new SessionRun(randomUUID(), cwd, input.settings, false, undefined, await launchFor(cwd));
   runs.set(run.sessionId, run);
   run.start();
   await run.send(input);
@@ -1105,13 +1110,14 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string }, 
  */
 export async function replaceLastTurn(sessionId: string, cwd: string, entry: string, prompt: string, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
+  const launch = await launchFor(cwd);
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
   if (existing) {
     existing.close();
     runs.delete(sessionId);
   }
-  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt });
+  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch);
   runs.set(sessionId, run);
   run.start();
   await run.send(input);
@@ -1129,9 +1135,10 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
   const info = await sessionInfo(sessionId);
   const cwd = info?.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const launch = await launchFor(cwd);
   const started = getRun(sessionId);
   if (started) return started;
-  const run = new SessionRun(sessionId, cwd, settings, true);
+  const run = new SessionRun(sessionId, cwd, settings, true, undefined, launch);
   runs.set(sessionId, run);
   run.start();
   return run;
@@ -1152,4 +1159,10 @@ setInterval(() => closeIdle(), 60_000).unref();
 
 export function closeAll(): void {
   for (const run of runs.values()) run.close();
+}
+
+/** Whether Claude is in a turn in any session this app runs (working, or waiting for an answer). */
+export function anyRunBusy(): boolean {
+  for (const run of runs.values()) if (!run.closed && run.busy) return true;
+  return false;
 }

@@ -8,7 +8,7 @@ import { isPermissionMode, type PermissionMode } from '../shared/modes.js';
 import type { Account, Agent, Command, McpServer, ModelOption, PlanUsage } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
-import { claudeRanIn } from './trust.js';
+import { folderTrusted } from './trust.js';
 
 const TTL_MS = 10 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 30_000;
@@ -40,6 +40,10 @@ const inflight = new Map<string, Promise<unknown>>();
  * Starts Claude Code without a conversation in `cwd`, asks it something, and
  * stops it. Costs no tokens and writes no transcript. One probe per folder and
  * question at a time; it gives up after PROBE_TIMEOUT_MS.
+ *
+ * A probe is only a look, so it fires no hooks. In a folder nobody trusted it starts in the home
+ * folder with the user's settings only: Claude Code runs git where it starts, and the folder's own
+ * git config can name programs git runs (trust.ts).
  */
 async function probe<T>(key: string, cwd: string, ask: (q: ReturnType<typeof query>) => Promise<T>): Promise<T> {
   const dir = await realpath(cwd);
@@ -47,12 +51,14 @@ async function probe<T>(key: string, cwd: string, ask: (q: ReturnType<typeof que
   const pending = inflight.get(id);
   if (pending) return pending as Promise<T>;
   const work = slot(async () => {
+    const trusted = await folderTrusted(dir);
     const q = query({
       prompt: idlePrompt,
       options: {
-        cwd: dir,
+        cwd: trusted ? dir : os.homedir(),
         persistSession: false,
-        settingSources: (await claudeRanIn(dir)) ? ['user', 'project', 'local'] : ['user'],
+        settingSources: trusted ? ['user', 'project', 'local'] : ['user'],
+        settings: { disableAllHooks: true },
         ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
       },
     });
@@ -179,7 +185,7 @@ export async function defaultMode(cwd?: string): Promise<PermissionMode | undefi
     const resolved = await resolveSettings({ cwd: dir ?? os.homedir(), settingSources });
     return filterEscalatingDefaultMode(resolved).permissions?.defaultMode;
   };
-  const trusted = dir ? await claudeRanIn(dir) : false;
+  const trusted = dir ? await folderTrusted(dir) : false;
   const mode = (await read(trusted ? ['user', 'project', 'local'] : ['user']).catch(() => undefined))
     ?? (trusted ? await read(['user']).catch(() => undefined) : undefined);
   return isPermissionMode(mode) && mode !== 'bypassPermissions' ? mode : undefined;

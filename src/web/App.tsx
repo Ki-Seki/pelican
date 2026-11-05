@@ -150,7 +150,11 @@ function Main() {
   };
 
   const signOut = () => {
-    void api.logout().finally(() => {
+    // A device signed out gets no more notifications: they tell what Claude is doing.
+    void disableNotifications().catch(() => 'off').then(() => {
+      setNotifications('off');
+      return api.logout();
+    }).finally(() => {
       setSettingsOpen(false);
       // Everything but the sign-in state goes; that one is asked again, so the sign-in screen shows.
       queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'auth' });
