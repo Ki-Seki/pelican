@@ -47,6 +47,8 @@ afterEach(() => {
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
+/** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
+const LAZY = { timeout: 5000 };
 const imeEscapes = (el: Element) => {
   for (const key of IME_ESCAPES) fireEvent.keyDown(el, key);
 };
@@ -54,7 +56,7 @@ const imeEscapes = (el: Element) => {
 describe('the Esc of an input method', () => {
   it('leaves a line comment in Changes open, with what was written', async () => {
     wrap(<Workspace open docked cwd="/code/app" onClose={() => {}} onAddToMessage={() => {}} />);
-    fireEvent.click(await screen.findByText('theme.css'));
+    fireEvent.click(await screen.findByText('theme.css', {}, LAZY));
     fireEvent.click(await screen.findByText('--bg: #0b0b0c;', { exact: false }));
     const box = screen.getByLabelText('Comment for Claude');
     fireEvent.change(box, { target: { value: '変数を使って' } });

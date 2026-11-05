@@ -17,6 +17,8 @@ import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
 import { forgetDrafts } from './lib/drafts';
 import { withMod } from './lib/keyboard';
+import { retried } from './lib/load';
+import { useMedia } from './lib/media';
 import {
   disableNotifications,
   enableNotifications,
@@ -39,8 +41,6 @@ const loadSettings = () => import('./components/Settings');
 /** Loaded ahead of need; one that fails here is asked for again when it is needed. */
 const prefetch = (load: () => Promise<unknown>) => void load().catch(() => undefined);
 if (new URLSearchParams(location.search).has('s')) prefetch(loadChat);
-/** On a flaky link one request can drop: it is made once more, a moment later, before giving up. */
-const retried = <T,>(load: () => Promise<T>) => load().catch(() => new Promise((resolve) => setTimeout(resolve, 800)).then(load));
 const LazyChat = lazy(() => retried(loadChat).then((m) => ({ default: m.Chat })));
 const LazySettings = lazy(() => retried(loadSettings).then((m) => ({ default: m.SettingsSheet })));
 
@@ -113,18 +113,6 @@ function useRoute() {
   };
 }
 
-function useWide() {
-  const query = '(min-width: 1024px)';
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const onChange = () => setWide(media.matches);
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, []);
-  return wide;
-}
-
 /** The sign-in gate: shown until this browser signs in, unless the server asks no one to (--no-auth, the demo). */
 export function App() {
   const queryClient = useQueryClient();
@@ -164,7 +152,8 @@ export function App() {
 
 function Main() {
   const { sessionId, isNew, newCwd, scratch, navigate } = useRoute();
-  const wide = useWide();
+  // The session list beside the conversation.
+  const wide = useMedia('(min-width: 1024px)');
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
   const [connected, setConnected] = useState(socket.connected);

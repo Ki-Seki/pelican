@@ -56,7 +56,8 @@ describe('Settings', () => {
     expect(screen.queryByRole('dialog', { name: 'Usage and activity' })).toBeNull();
     expect(asked.ranges).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: /^Usage and activity/ }));
-    expect(await screen.findByRole('dialog', { name: 'Usage and activity' })).toBeTruthy();
+    // It loads when first asked for, which takes longer on a busy machine.
+    expect(await screen.findByRole('dialog', { name: 'Usage and activity' }, { timeout: 5000 })).toBeTruthy();
     expect(asked.ranges.length).toBeGreaterThan(0);
   });
 });

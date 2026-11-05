@@ -1,6 +1,8 @@
 import { Loader2 } from 'lucide-react';
 import { Component, type ComponentProps, lazy, type ReactNode, Suspense } from 'react';
 
+import { retried } from '../lib/load';
+
 /**
  * Changes and Files, the tabs of Changes and files, with the diffs, the file viewer and search:
  * most of the pane's code, loaded when it first shows one of them, so a conversation opens without
@@ -8,8 +10,8 @@ import { Component, type ComponentProps, lazy, type ReactNode, Suspense } from '
  */
 const loadChanges = () => import('./WorkspaceChanges');
 const loadFiles = () => import('./WorkspaceFiles');
-const LazyChanges = lazy(() => loadChanges().then((m) => ({ default: m.WorkspaceChanges })));
-const LazyFiles = lazy(() => loadFiles().then((m) => ({ default: m.WorkspaceFiles })));
+const LazyChanges = lazy(() => retried(loadChanges).then((m) => ({ default: m.WorkspaceChanges })));
+const LazyFiles = lazy(() => retried(loadFiles).then((m) => ({ default: m.WorkspaceFiles })));
 
 /** Loads both ahead of need, once the conversation is up; one that fails here is asked for again when shown. */
 export function prefetchWorkspace(): void {

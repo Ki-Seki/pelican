@@ -212,11 +212,29 @@ function takeKeys(box: HTMLTextAreaElement | null, put: () => void): void {
 /**
  * Text to put in the box, a new `key` each time: a prompt to edit, a suggestion. `append` adds it
  * after what is written; `block` too, on lines of its own (a request to Claude). `back`: a message
- * that did not go, given back with its quotes and files: into an empty box as it was, else above
- * what was typed since. A `!` command goes back only into an empty box: words typed under it would
- * become part of the command.
+ * that did not go, given back with its quotes and files (givenBack).
  */
 export type ComposerDraft = { text: string; key: number; append?: boolean; block?: boolean; back?: boolean; attachments?: Attachment[] };
+
+/** A `!` or `/` command: the whole box is the command, so it shares the box with nothing. */
+const isCommand = (text: string) => /^\s*[!/]/.test(text);
+
+/**
+ * Where the words of a message that did not go go back to (its quotes and files go back above
+ * the box in any case): into an empty box as they were, else above what was typed since, a blank
+ * line apart. A command never shares the box: words typed under it would become part of it (its
+ * arguments, or more of the shell command), and words above it would make it a message. Then it,
+ * or the message that came back while one is typed, waits above the box (`held`), to be put back.
+ */
+function givenBack(typed: string, back: string): { text: string; held?: string } {
+  if (!back.trim()) return { text: typed };
+  if (!typed.trim()) return { text: back };
+  if (isCommand(back) || isCommand(typed)) return { text: typed, held: back };
+  return { text: `${back.trimEnd()}\n\n${typed}` };
+}
+
+/** How a text waiting to be put back is shown: its first line. */
+const firstLine = (text: string) => text.trim().split('\n')[0]!;
 
 export function Composer({
   busy,
@@ -274,6 +292,8 @@ export function Composer({
   const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
   // Quotes of what was selected (lib/quote), above the box until they go above the words.
   const [quotes, setQuotes] = useState<string[]>(() => saved?.quotes ?? []);
+  // What came back from a send that failed but could not share the box (givenBack).
+  const [held, setHeld] = useState<string[]>(() => saved?.held ?? []);
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
   const [highlight, setHighlight] = useState(0);
   const [dismissed, setDismissed] = useState<string>();
@@ -295,8 +315,8 @@ export function Composer({
       justSent.current = false;
       return;
     }
-    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes);
-  }, [text, uploads, quotes, draftSaver]);
+    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes, held);
+  }, [text, uploads, quotes, held, draftSaver]);
 
   // A quote made anywhere in this chat (a reply, a file) comes here. On a computer the box takes
   // the keys, to say what about it; a phone keeps its keyboard down, so more can be quoted first.
@@ -325,12 +345,13 @@ export function Composer({
     // A message given back (its send failed) brings its quotes back above the box, before any added since.
     const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
     if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
-    const typed = text.trim().length > 0;
+    const back = draft.back ? givenBack(text, given.text) : undefined;
     const next = draft.block ? withQuote(text, draft.text)
       : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
-        : draft.back && typed ? (given.text.startsWith('!') ? text : `${given.text.trimEnd()}\n\n${text}`)
+        : back ? back.text
           : given.text;
     setText(next);
+    if (back?.held) setHeld((list) => (list.includes(back.held!) ? list : [...list, back.held!]));
     // Its files come back too, beside any added since.
     const files = draft.attachments;
     if (files?.length) setUploads((list) => [...files.map(restored), ...list.filter((u) => !files.some((a) => a.id === u.attachment?.id))]);
@@ -440,7 +461,7 @@ export function Composer({
   };
   useImperativeHandle(ref, () => ({
     addFiles,
-    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes),
+    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes, held),
     focus: () => area.current?.focus({ preventScroll: true }),
   }));
 
@@ -458,13 +479,36 @@ export function Composer({
     requestAnimationFrame(() => (chips.current?.querySelectorAll('button')[at] ?? area.current)?.focus({ preventScroll: true }));
   };
 
+  /**
+   * Puts a text that waited back in the box, by the rule it came back by: above what is typed, or,
+   * where one of the two is a command, in its place, what was typed waiting where it was.
+   */
+  const putBack = (at: number) => {
+    const back = held[at];
+    if (back === undefined) return;
+    const joined = givenBack(text, back);
+    const next = joined.held ? back : joined.text;
+    setHeld((list) => (joined.held ? list.map((h, i) => (i === at ? text : h)) : list.filter((_, i) => i !== at)));
+    setText(next);
+    requestAnimationFrame(() => {
+      const el = area.current;
+      el?.focus();
+      el?.setSelectionRange(next.length, next.length);
+      setCaret(next.length);
+    });
+  };
+  const discard = (at: number, byKeys: boolean) => {
+    setHeld((list) => list.filter((_, i) => i !== at));
+    if (byKeys || hasKeyboard()) requestAnimationFrame(() => area.current?.focus({ preventScroll: true }));
+  };
+
   const submit = () => {
     if (!canSend) return;
     if (shell) {
       const command = text.slice(1).trim();
       if (!command) return;
       // The quotes stay for the next message: a command is not about them.
-      draftSaver.now(`!${command}`, [], quotes);
+      draftSaver.now(`!${command}`, [], quotes, held);
       onShell!(command);
       justSent.current = true;
       setText('');
@@ -486,7 +530,7 @@ export function Composer({
     // A / command has to start its message: the quotes wait for the next one, as with a ! command.
     const command = words.startsWith('/');
     const attachments = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
-    draftSaver.now(words, attachments, quotes);
+    draftSaver.now(words, attachments, quotes, held);
     onSend(command ? words : messageWithQuotes(quotes, words), attachments, mode);
     justSent.current = true;
     setText('');
@@ -647,6 +691,17 @@ export function Composer({
         )}
         {problems.length > 0 && <div className="px-4 pt-2 text-[12.5px] leading-snug text-danger">{problems.join(' · ')}</div>}
         {notes.length > 0 && <div className="flex items-start gap-1.5 px-4 pt-2 text-[12.5px] leading-snug text-muted"><Info className="mt-px size-3.5 shrink-0" />{notes.join(' · ')}</div>}
+        {held.map((h, i) => (
+          <div key={`${i}:${h}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
+            <span title={h} className="min-w-0 flex-1 truncate">Not sent: <span className={`text-fg ${isCommand(h) ? 'font-mono text-[12px]' : ''}`}>{firstLine(h)}</span></span>
+            <button type="button" onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover">
+              Put back
+            </button>
+            <button type="button" aria-label={`Discard ${firstLine(h).slice(0, 60)}`} onClick={(e) => discard(i, e.detail === 0)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg">
+              <X className="size-3.5" />
+            </button>
+          </div>
+        ))}
         {dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-danger">{dictationError}</div>}
         {busy && modeHint && !dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-muted">{MODE_HINT[mode]}</div>}
         <textarea

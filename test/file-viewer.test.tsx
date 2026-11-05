@@ -61,6 +61,24 @@ describe('a file', () => {
     expect(screen.getByText('Name it c3')).toBeTruthy();
   });
 
+  it('numbers the lines it has, highlighted or plain: the line break a file ends with starts no line', async () => {
+    const numbered = () => [...document.querySelectorAll('[data-line]')].map((row) => row.textContent);
+    const shown = async (path: string, text: string) => {
+      server.files = { [path]: text };
+      const view = wrap(<FileViewer cwd={CWD} path={path} onAddToMessage={() => {}} />);
+      await waitFor(() => expect(document.querySelector('[data-line="1"]')).toBeTruthy());
+      const lines = numbered();
+      view.unmount();
+      return lines;
+    };
+    expect(await shown('src/a.ts', TEXT)).toEqual(['1const a = 1;', '2const b = 2;', '3const c = 3;']);
+    expect(await shown('notes.txt', TEXT)).toEqual(['1const a = 1;', '2const b = 2;', '3const c = 3;']);
+    expect(await shown('src/b.ts', 'let x = 1;')).toEqual(['1let x = 1;']);
+    // A blank last line is a line of the file, numbered as in an editor.
+    expect(await shown('src/c.ts', 'let x = 1;\n\n')).toEqual(['1let x = 1;', '2 ']);
+    expect(await shown('notes.txt', 'one\n\n')).toEqual(['1one', '2 ']);
+  });
+
   it('quotes the lines selected into the message as path:7-8 and the lines', async () => {
     const add = vi.fn();
     wrap(<FileViewer cwd={CWD} path="src/a.ts" onAddToMessage={add} />);

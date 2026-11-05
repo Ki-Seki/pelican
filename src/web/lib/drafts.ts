@@ -13,8 +13,12 @@ const KEY = 'pelican:drafts';
 const KEEP = 50;
 const MAX_TEXT = 100_000;
 
-/** `quotes`: those waiting above the message box (lib/quote), which go above the words when sent. */
-export type Draft = { text: string; attachments?: Attachment[]; quotes?: string[]; at: number };
+/**
+ * `quotes`: those waiting above the message box (lib/quote), which go above the words when sent.
+ * `held`: what came back from a send that failed but could not share the box with what was typed
+ * since (a `!` or `/` command, or a message beside one), waiting above the box to be put back.
+ */
+export type Draft = { text: string; attachments?: Attachment[]; quotes?: string[]; held?: string[]; at: number };
 
 /**
  * A message with its quotes above the words, as Claude reads it: each block apart from the next.
@@ -53,17 +57,21 @@ function writeAll(all: Record<string, Draft>): void {
   }
 }
 
+/** The texts of a list kept in storage, without anything else that may be there. */
+const texts = (list: unknown): string[] => (Array.isArray(list) ? list.filter((q): q is string => typeof q === 'string' && q.trim().length > 0) : []);
+
 export function loadDraft(viewId: string): Draft | undefined {
   const draft = readAll()[viewId];
   if (!draft || typeof draft.text !== 'string') return undefined;
-  const { quotes, ...rest } = draft;
-  const kept = Array.isArray(quotes) ? quotes.filter((q): q is string => typeof q === 'string' && q.trim().length > 0) : [];
-  return kept.length > 0 ? { ...rest, quotes: kept } : rest;
+  const { quotes, held, ...rest } = draft;
+  const keptQuotes = texts(quotes);
+  const keptHeld = texts(held);
+  return { ...rest, ...(keptQuotes.length > 0 ? { quotes: keptQuotes } : {}), ...(keptHeld.length > 0 ? { held: keptHeld } : {}) };
 }
 
-export function saveDraft(viewId: string, text: string, attachments: Attachment[] = [], quotes: string[] = []): void {
+export function saveDraft(viewId: string, text: string, attachments: Attachment[] = [], quotes: string[] = [], held: string[] = []): void {
   const all = readAll();
-  if (!text.trim() && attachments.length === 0 && quotes.length === 0) {
+  if (!text.trim() && attachments.length === 0 && quotes.length === 0 && held.length === 0) {
     if (!(viewId in all)) return;
     delete all[viewId];
   } else {
@@ -71,6 +79,7 @@ export function saveDraft(viewId: string, text: string, attachments: Attachment[
       text: text.slice(0, MAX_TEXT),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(quotes.length > 0 ? { quotes: quotes.map((q) => q.slice(0, MAX_TEXT)) } : {}),
+      ...(held.length > 0 ? { held: held.map((h) => h.slice(0, MAX_TEXT)) } : {}),
       at: Date.now(),
     };
   }
@@ -80,15 +89,19 @@ export function saveDraft(viewId: string, text: string, attachments: Attachment[
 /**
  * Forgets a chat's draft once its message went through; with `sent`, only when the draft is still
  * that message, its quotes above its words (another may have been started while it was on its
- * way). A `!` command takes only the words: the quotes wait for a message.
+ * way). A `!` command takes only the words: the quotes wait for a message. What waits to be put
+ * back stays, unless the whole draft goes (`sent` left out).
  */
 export function clearDraft(viewId: string, sent?: string): void {
   const all = readAll();
   const draft = all[viewId];
   if (!draft) return;
   const quotes = Array.isArray(draft.quotes) ? draft.quotes : [];
-  if (sent === undefined || messageWithQuotes(quotes, draft.text) === sent.trim()) delete all[viewId];
-  else if (quotes.length > 0 && draft.text.trim() === sent.trim()) all[viewId] = { ...draft, text: '' };
+  const held = texts(draft.held);
+  if (sent === undefined || messageWithQuotes(quotes, draft.text) === sent.trim()) {
+    if (sent !== undefined && held.length > 0) all[viewId] = { text: '', held, at: draft.at };
+    else delete all[viewId];
+  } else if (quotes.length > 0 && draft.text.trim() === sent.trim()) all[viewId] = { ...draft, text: '' };
   else return;
   writeAll(all);
 }
@@ -98,7 +111,7 @@ export function moveDraft(from: string, to: string): void {
   const draft = loadDraft(from);
   if (!draft || from === to) return;
   clearDraft(from);
-  saveDraft(to, draft.text, draft.attachments, draft.quotes);
+  saveDraft(to, draft.text, draft.attachments, draft.quotes, draft.held);
 }
 
 /** Signing out leaves no prompts behind in this browser, nor line comments waiting to go with one. */
@@ -118,10 +131,10 @@ export function forgetDrafts(): void {
  * goes to the background (a phone may drop a background tab without warning). `now` saves at once:
  * a message on its way is its chat's draft until the send went through.
  */
-type Saving = (text: string, attachments: Attachment[], quotes?: string[]) => void;
+type Saving = (text: string, attachments: Attachment[], quotes?: string[], held?: string[]) => void;
 
 export function useDraftSaver(viewId: string | undefined, wait = 300): { save: Saving; now: Saving } {
-  const pending = useRef<{ text: string; attachments: Attachment[]; quotes: string[] } | undefined>(undefined);
+  const pending = useRef<{ text: string; attachments: Attachment[]; quotes: string[]; held: string[] } | undefined>(undefined);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const id = useRef(viewId);
   id.current = viewId;
@@ -131,15 +144,15 @@ export function useDraftSaver(viewId: string | undefined, wait = 300): { save: S
       clearTimeout(timer.current);
       const next = pending.current;
       pending.current = undefined;
-      if (next && id.current) saveDraft(id.current, next.text, next.attachments, next.quotes);
+      if (next && id.current) saveDraft(id.current, next.text, next.attachments, next.quotes, next.held);
     },
-    save: (text: string, attachments: Attachment[], quotes: string[] = []) => {
-      pending.current = { text, attachments, quotes };
+    save: (text: string, attachments: Attachment[], quotes: string[] = [], held: string[] = []) => {
+      pending.current = { text, attachments, quotes, held };
       clearTimeout(timer.current);
       timer.current = setTimeout(saver.current.flush, wait);
     },
-    now: (text: string, attachments: Attachment[], quotes: string[] = []) => {
-      pending.current = { text, attachments, quotes };
+    now: (text: string, attachments: Attachment[], quotes: string[] = [], held: string[] = []) => {
+      pending.current = { text, attachments, quotes, held };
       saver.current.flush();
     },
   });
