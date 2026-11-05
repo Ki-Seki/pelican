@@ -104,6 +104,39 @@ describe('the release workflow', () => {
   });
 });
 
+describe('the site workflow', () => {
+  let text: string;
+  let check: string;
+  beforeAll(async () => {
+    text = await workflow('pages.yml');
+    check = stepRun(text, 'Compare with main as it is now');
+    await stub('gh', '[ "$HEAD" = fail ] && exit 1; echo "$HEAD"');
+  });
+  const compare = async (sha: string, head: string) => {
+    const output = path.join(dir, 'output');
+    await writeFile(output, '');
+    const { code, calls } = await runStep(check, { SHA: sha, HEAD: head, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: 'Ki-Seki/pelican' });
+    return { code, calls, output: await readFile(output, 'utf8') };
+  };
+
+  it('publishes a commit only while main is still at it', async () => {
+    const newest = await compare('b'.repeat(40), 'b'.repeat(40));
+    expect(newest).toMatchObject({ code: 0, output: 'newest=true\n' });
+    expect(newest.calls).toEqual(['gh api repos/Ki-Seki/pelican/git/ref/heads/main --jq .object.sha']);
+    // An older commit whose checks were run again and passed after a newer one went out.
+    expect(await compare('a'.repeat(40), 'b'.repeat(40))).toMatchObject({ code: 0, output: 'newest=false\n' });
+    // Not knowing where main is publishes nothing either.
+    expect(await compare('a'.repeat(40), 'fail')).toMatchObject({ code: 1, output: '' });
+  });
+
+  it('builds and deploys only after that check', () => {
+    expect(job(text, 'newest')).toContain('newest: ${{ steps.main.outputs.newest }}');
+    expect(job(text, 'build')).toMatch(/\n {4}needs: newest\n {4}if: needs\.newest\.outputs\.newest == 'true'\n/);
+    expect(job(text, 'deploy')).toMatch(/\n {4}needs: build\n/);
+    expect(job(text, 'deploy')).not.toMatch(/\n {4}if:/);
+  });
+});
+
 describe('the package check in CI', () => {
   it('installs the package as people get it from npm, through a registry, never a tarball by its path', async () => {
     const text = job(await workflow('ci.yml'), 'package');
