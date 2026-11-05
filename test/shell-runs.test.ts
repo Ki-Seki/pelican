@@ -280,6 +280,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to y
       const marker = path.join(dir, 'fsmonitor-ran');
       await mkdir(repo);
       execFileSync('git', ['init', '-q'], { cwd: repo });
+      await writeFile(path.join(repo, 'README.md'), 'hello\n');
       const program = path.join(dir, 'fsmonitor.sh');
       await writeFile(program, `#!/bin/sh\necho ran >> '${marker}'\nexit 1\n`, { mode: 0o755 });
       execFileSync('git', ['config', 'core.fsmonitor', program], { cwd: repo });
