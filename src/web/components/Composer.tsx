@@ -314,7 +314,7 @@ export function Composer({
   onSideChat?: (question: string) => void;
   /** A side chat's own box: questions only, without files, settings, `!` or `/` commands. */
   side?: boolean;
-  /** At the bottom of the screen, clear of a phone's edge; a side chat's pane or sheet keeps clear of it itself. */
+  /** At the foot of the screen, clear of a phone's or a tablet's home indicator; a sheet keeps clear of it itself. */
   atBottom?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {

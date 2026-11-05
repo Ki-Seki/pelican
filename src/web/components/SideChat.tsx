@@ -308,9 +308,10 @@ export function SideChat({
       {error && (
         <div role="status" className={`mx-3 mb-1.5 rounded-xl px-3 py-2 text-[12.5px] leading-snug ${error.note ? 'text-muted' : 'border border-line bg-panel text-danger'}`}>{error.text}</div>
       )}
+      {/* Beside the conversation it is at the foot of the screen, as the conversation's box is; a sheet keeps clear of the edge itself. */}
       <Composer
         side
-        atBottom={false}
+        atBottom={state.docked}
         busy={busy}
         settings={settings}
         onSettings={() => {}}

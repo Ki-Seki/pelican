@@ -380,6 +380,30 @@ describe('the side chat', () => {
     expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
   });
 
+  it('beside the conversation on a tablet, keeps its box clear of the home indicator, as the conversation’s box beside it is; a phone’s sheet keeps clear itself', async () => {
+    /** How deep the box's foot is padded: as deep as the home indicator where there is one, 8px at least, or 8px. */
+    const foot = (box: HTMLElement) => (box.closest('.pb-safe, .pb-2')!.classList.contains('pb-safe') ? 'clear of the edge' : '8px');
+    media = { '(min-width: 1024px)': true, '(pointer: coarse)': true };
+    session();
+    await loaded();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    expect(pane()).not.toBeNull();
+    expect(foot(within(pane()!).getByLabelText('Side question'))).toBe('clear of the edge');
+    expect(foot(screen.getByLabelText('Message Claude'))).toBe('clear of the edge');
+    cleanup();
+    media = { '(pointer: coarse)': true };
+    session();
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
+    const box = within(sheet).getByLabelText('Side question');
+    expect(foot(box)).toBe('8px');
+    expect(box.closest('.pb-safe')).not.toBeNull();
+  });
+
   it('is a sheet over the conversation on a phone', async () => {
     media = {};
     session();

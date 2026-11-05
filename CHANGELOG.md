@@ -122,8 +122,10 @@ from every app.
   is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
   files.
-- Side chat in the session menu leaves the keys in the side chat's box. Quotes that do not fit above
-  the message box fade at its edge, and removing one with the keyboard moves on to the next.
+- Side chat in the session menu leaves the keys in the side chat's box, which, beside the
+  conversation on a tablet, keeps clear of the home indicator, level with the conversation's.
+  Quotes that do not fit above the message box fade at its edge, and removing one with the
+  keyboard moves on to the next.
 - A conversation opens without the code of Changes and files, which follows once it is up, and
   Settings without the usage page.
 
