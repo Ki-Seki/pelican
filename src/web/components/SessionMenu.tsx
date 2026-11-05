@@ -272,6 +272,11 @@ export function SessionMenu({
       {session?.gitBranch && <Detail label="Branch" mono>{session.gitBranch}</Detail>}
       {session?.createdAt && <Detail label="Started">{when(session.createdAt)}</Detail>}
       {session?.lastActivity ? <Detail label="Last active">{when(session.lastActivity)}</Detail> : null}
+      {session?.openIn && (
+        <Detail label="Also open">
+          In {session.openIn}. Pelican catches up with what was said there before it sends; {session.openIn} sees what you send here once the session is reopened there.
+        </Detail>
+      )}
       {run?.context && (
         <Detail label="Context">
           {run.context.percent}% used · {Math.round(run.context.tokens / 1000)}k of {Math.round(run.context.max / 1000)}k tokens

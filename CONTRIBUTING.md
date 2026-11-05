@@ -46,6 +46,17 @@ running Pelican (the link it printed, with the token).
 | `src/web/` | The web app (React, Tailwind) |
 | `scripts/` | Build, development, screenshots and icons |
 
+## Releasing
+
+1. Bump the version (`npm version <x.y.z> --no-git-tag-version`) and add its section to
+   `CHANGELOG.md`; commit and push.
+2. `gh release create v<x.y.z> --title v<x.y.z> --notes-file <the changelog section>`.
+
+The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
+publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the
+`npm` environment, for a `v*` tag, may publish `pelican-cc`. The package is attached to the
+release too.
+
 ## Style
 
 Keep the interface calm: few colors, no decoration that does not carry meaning, and text that says

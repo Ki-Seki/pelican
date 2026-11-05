@@ -1,6 +1,6 @@
 {
   "name": "pelican-cc",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Your Claude Code sessions, from any browser: a phone-first web app that runs next to Claude Code.",
   "keywords": [
     "claude",

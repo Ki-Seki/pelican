@@ -463,6 +463,8 @@ export function Chat({
             {session?.gitBranch && (
               <span className="flex min-w-0 shrink items-center gap-0.5 truncate"><GitBranch className="size-3 shrink-0" />{session.gitBranch}</span>
             )}
+            {/* Open, idle, in another app too: worth knowing, not worth a banner (the menu says more). */}
+            {session?.openIn && status !== 'live' && <span className="shrink-0 truncate">· also in {session.openIn}</span>}
           </div>
         </button>
         {/* On a phone the meter shows up once the context is filling; the session menu always has the number. */}
@@ -512,11 +514,6 @@ export function Chat({
         {session?.status === 'live' && !view.run && (
           <Notice tone="live">
             Claude is working on this session {session.runningIn ? `in ${session.runningIn}` : 'elsewhere'} right now. Sending here runs a second Claude on the same conversation.
-          </Notice>
-        )}
-        {session?.openIn && session.status !== 'live' && !busy && (
-          <Notice>
-            Also open in {session.openIn}. Continue in one place: Pelican catches up with what was said there before it sends, but {session.openIn} does not see what you send here until the session is reopened there.
           </Notice>
         )}
         {modelList?.signedIn === false && (
