@@ -57,10 +57,10 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/awake.ts` | Keeping the computer awake while Claude works |
 | `src/server/running.ts` | The note a running Pelican leaves, so `pelican token` and `pelican phone` find it |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
-| `src/shared/` | Types and logic both sides use |
-| `src/web/` | The web app (React, Tailwind) |
 | `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
+| `src/shared/` | Types and logic both sides use |
+| `src/web/` | The web app (React, Tailwind) |
 | `scripts/` | Build, development, the browser smoke test, the site, screenshots and icons |
 
 ## Releasing
@@ -72,11 +72,10 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 3. `gh release create v<x.y.z> --verify-tag --title v<x.y.z> --notes-file <the changelog section>`,
    with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
-Before the bump, move to the newest Agent SDK, which brings the newest Claude Code, once it passes
-the tests, the typecheck and the browser smoke test; read what changed in its `sdk.d.ts` and in
-Claude Code's changelog since the version before. Then bring the docs' Claude Code coverage table
-(`site/docs.html#coverage`) up to date, and the "checked on" dates of the comparison in
-`README.md`, `site/index.html` and `site/docs.html`.
+Before the bump, take the newest Agent SDK, and the Claude Code it brings, if all its checks pass.
+Then bring the docs' Claude Code coverage table (`site/docs.html#coverage`) up to date with what
+changed, and the "checked on" dates of the comparison in `README.md`, `site/index.html` and
+`site/docs.html`.
 
 The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
 publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the
