@@ -45,7 +45,7 @@ import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { toChatMessage } from './normalize.js';
-import { notify } from './push.js';
+import { answerable, notify } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages } from './shell.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
@@ -719,7 +719,7 @@ export class SessionRun {
     });
     this.emit();
     sessionsChanged();
-    void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask` });
+    void notify({ title: this.title || 'Claude Code', body: oneLine(askedFor(pending.request, this.cwd)), sessionId: this.sessionId, tag: `${this.sessionId}:ask`, ...answerable(pending.request) });
   }
 
   private canUseTool: CanUseTool = (toolName, input, options) => {
