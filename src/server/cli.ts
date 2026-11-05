@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 
 import pkg from '../../package.json' with { type: 'json' };
 import { config } from './config.js';
+import { callable, reachable } from './local.js';
 import { listensLocally } from './security.js';
 
 const DOCS = 'https://ki-seki.github.io/pelican/docs.html';
@@ -163,9 +164,6 @@ function addressFor(host: string, port: number): string {
   const name = ['0.0.0.0', '::', '127.0.0.1', 'localhost', '::1'].includes(host) ? 'localhost' : host.includes(':') ? `[${host}]` : host;
   return `http://${name}:${port}/`;
 }
-
-/** Where this computer reaches a Pelican from the command line (a wildcard address is reached on loopback). */
-const callable = (host: string, port: number) => (host === '0.0.0.0' || host === '::' ? `http://127.0.0.1:${port}/` : addressFor(host, port).replace('://localhost:', '://127.0.0.1:'));
 
 /**
  * The Pelican a command is about: the one running with this state folder, unless a port was given;
@@ -468,8 +466,9 @@ async function main(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') return portTaken();
     throw error;
   }
+  // Where it really listens (`localhost` may be ::1), so the commands that talk to it reach it.
   const { recordRunning } = await import('./running.js');
-  await recordRunning({ port: config.port, host: config.host, url: callable(config.host, config.port), version: pkg.version }).catch(() => undefined);
+  await recordRunning({ port: config.port, host: config.host, url: reachable(url), version: pkg.version }).catch(() => undefined);
 
   const shown = url.replace('://127.0.0.1:', '://localhost:');
   const token = accessToken();

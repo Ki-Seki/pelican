@@ -10,6 +10,8 @@ import path from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
+import { callable, reachable } from '../src/server/local';
+
 const repo = path.resolve('.');
 const CLI = path.join(repo, 'src', 'server', 'cli.ts');
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -116,6 +118,44 @@ const ipv6 = await new Promise<boolean>((resolve) => {
   server.listen(0, '::1', () => server.close(() => resolve(true)));
 });
 const python = spawnSync('python3', ['--version']).status === 0;
+
+describe('where a command reaches Pelican', () => {
+  it('is where it listens: a wildcard on loopback, ::1 as itself, a name as it resolves', () => {
+    expect(callable('127.0.0.1', 7860)).toBe('http://127.0.0.1:7860/');
+    expect(callable('0.0.0.0', 7860)).toBe('http://127.0.0.1:7860/');
+    expect(callable('::1', 7860)).toBe('http://[::1]:7860/');
+    expect(callable('::', 7860)).toBe('http://[::1]:7860/');
+    expect(callable('localhost', 7860)).toBe('http://localhost:7860/');
+    expect(callable('192.168.1.5', 7860)).toBe('http://192.168.1.5:7860/');
+    expect(callable('fd7a::5', 7860)).toBe('http://[fd7a::5]:7860/');
+    // What a server reports it listens at, as its note keeps it.
+    expect(reachable('http://0.0.0.0:7860/')).toBe('http://127.0.0.1:7860/');
+    expect(reachable('http://[::]:7860/')).toBe('http://[::1]:7860/');
+    expect(reachable('http://[::1]:7860/')).toBe('http://[::1]:7860/');
+  });
+});
+
+describe.skipIf(!ipv6)('a Pelican on --host ::1', () => {
+  it('is found where it listens: a second start says it runs, and `pelican phone` signs a phone in with it alone', async () => {
+    const c = await computer();
+    const port = await freePort('::1');
+    const pelican = await start(c, ['--host', '::1', '--port', String(port)]);
+    const again = await run(c, ['--host', '::1', '--port', String(port)]);
+    expect(again.out).toMatch(/Pelican is already running at/);
+    expect(again.code).toBe(0);
+    // Another program on the same port of 127.0.0.1 gets nothing either.
+    const other = await squatter(port, '127.0.0.1').catch(() => undefined);
+    try {
+      const phone = await run(c, ['phone', `http://[::1]:${port}/`]);
+      expect(phone.out).toMatch(/It works once, for two minutes/);
+      expect(phone.code).toBe(0);
+      expect(other?.seen ?? []).toEqual([]);
+    } finally {
+      other?.server.close();
+      pelican.kill('SIGTERM');
+    }
+  }, 40_000);
+});
 
 describe.skipIf(!python || process.platform === 'win32')('a Pelican started in the background of a terminal (`pelican &`)', () => {
   it('keeps answering when the terminal is used, with a phone address known', async () => {
