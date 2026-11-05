@@ -238,6 +238,10 @@ describe('a message that did not go, given back while more was typed', () => {
     expect(screen.getAllByRole('button', { name: /^Discard / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Discard /compact', 'Discard !npm test with trace.txt']);
     // Named as it reads: the visible Put back starts each name.
     expect(screen.getAllByRole('button', { name: /^Put back / }).every((b) => b.textContent === 'Put back')).toBe(true);
+    // A long first line is named by its start, cut between words.
+    give({ text: '/review the export job, its retries, its logging and the tests that cover them all' });
+    await frame();
+    expect(screen.getByRole('button', { name: 'Put back /review the export job, its retries, its logging and the…' })).toBeTruthy();
   });
 
   it('a ! command waits above the box too, and Put back puts it in once the box is empty', async () => {

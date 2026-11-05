@@ -229,8 +229,8 @@ type Content = { text: string; files: boolean };
  * would become part of it (its arguments, or more of the shell command), words above it would make
  * it a message, and files would go with it as a list after it. Then it, or the message that comes
  * back while one is typed, waits above the box with its files (`held`), to be put back. In a side
- * chat nothing is a command. Words the box holds already, word for word, are not put in twice:
- * typed again, or kept as its draft while they were on their way, and the box shown again since.
+ * chat nothing is a command. Words the box holds already, word for word, go in once: typed again,
+ * or kept as its draft while on their way and the box shown again since (a side chat reopened).
  */
 function givenBack(box: Content, back: Content, commands: boolean): { text: string; held?: boolean } {
   const words = back.text.trim();
@@ -259,7 +259,8 @@ function heldWords(held: Held): { words: string; files: string; name: string } {
   const names = (held.attachments ?? []).map((a) => a.name);
   const words = held.text.trim() ? firstLine(held.text) : '';
   const files = names.length > 1 ? `${names.length} files` : names[0] ?? '';
-  return { words, files, name: [words.slice(0, 60), files].filter(Boolean).join(' with ') };
+  const short = words.length > 60 ? `${words.slice(0, 60).replace(/\s+\S*$/, '')}…` : words;
+  return { words, files, name: [short, files].filter(Boolean).join(' with ') };
 }
 
 const sameHeld = (a: Held, b: Held) =>
@@ -318,7 +319,7 @@ export function Composer({
   atBottom?: boolean;
   ref?: Ref<ComposerHandle>;
 }) {
-  // What was typed here, and the draft given, if this box has not taken it yet, put in once it is up.
+  // The box starts from what was typed in it; a draft it is given goes in once it is up (taken).
   const [saved] = useState(() => (draftKey ? loadDraft(draftKey) : undefined));
   const [text, setText] = useState(saved?.text ?? '');
   const [caret, setCaret] = useState(0);
@@ -745,9 +746,11 @@ export function Composer({
           const { words, files, name } = heldWords(h);
           return (
             <div key={`${i}:${h.text}:${files}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
-              <span title={[h.text.trim(), ...(h.attachments ?? []).map((a) => a.name)].filter(Boolean).join('\n')} className="min-w-0 flex-1 truncate">
-                {h.aside ? 'Set aside' : 'Not sent'}: <span className={`text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
-                {words && files && <span className="text-faint"> · {files}</span>}
+              {/* Long words are cut before the files that wait with them. */}
+              <span title={[h.text.trim(), ...(h.attachments ?? []).map((a) => a.name)].filter(Boolean).join('\n')} className="flex min-w-0 flex-1 items-baseline gap-1 whitespace-nowrap">
+                {h.aside ? 'Set aside: ' : 'Not sent: '}
+                <span className={`min-w-0 truncate text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
+                {words && files && <span className="max-w-[45%] shrink-0 truncate text-faint">{' · '}{files}</span>}
               </span>
               <button type="button" aria-label={`Put back ${name}`} disabled={uploading} onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover disabled:opacity-40">
                 Put back
