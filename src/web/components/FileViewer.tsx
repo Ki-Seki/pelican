@@ -176,28 +176,39 @@ const splitText = (text: string) => {
   return lines;
 };
 
-/**
- * A file of the session's folder, to read: with line numbers, wrapped or not, opened at a line
- * when it was asked for one; Markdown and HTML also as they look (HTML in the sandboxed frame
- * where nothing runs until Run). Tap a line to comment on it for Claude, as on a diff; select
- * lines to quote them into the message, or copy them. Read only: Claude changes files.
- */
-export function FileViewer({ cwd, path, line, onAddToMessage }: {
+type FileViewerProps = {
   cwd: string;
   path: string;
   line?: number;
   /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
-}) {
+};
+
+/**
+ * A file of the session's folder, to read: with line numbers, wrapped or not, opened at a line
+ * when it was asked for one; Markdown and HTML also as they look (HTML in the sandboxed frame
+ * where nothing runs until Run). Tap a line to comment on it for Claude, as on a diff; select
+ * lines to quote them into the message, or copy them. Read only: Claude changes files.
+ *
+ * Each file gets a viewer of its own, also when a link goes straight from one to another: what
+ * one had (Preview, Run, a comment being written) never carries over to the next.
+ */
+export function FileViewer(props: FileViewerProps) {
+  return <OpenFile key={`${props.cwd}\0${props.path}`} {...props} />;
+}
+
+function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
   const { data, isLoading, error } = useQuery({ queryKey: ['file', cwd, path], queryFn: () => api.file(cwd, path), staleTime: 5_000 });
   const name = path.split('/').pop() ?? path;
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const previewable = ext === 'md' || ext === 'markdown' || ext === 'html' || ext === 'htm';
   // Markdown opens as it reads, unless a line was asked for; a page opens as its code.
   const [preview, setPreview] = useState(() => (ext === 'md' || ext === 'markdown') && !line);
-  const [run, setRun] = useState(false);
   const wrap = useWrapping();
   const text = data?.text;
+  // Run runs the page as it was when it was tapped: rewritten since (Claude edited it), it waits for Run again.
+  const [ran, setRan] = useState<string>();
+  const run = ran !== undefined && ran === text;
   const texts = useMemo(() => (text === undefined ? [] : splitText(text)), [text]);
   const all = useComments(cwd);
   const mine = useMemo(() => all.filter((c) => c.path === path && c.kind !== 'del'), [all, path]);
@@ -291,7 +302,7 @@ export function FileViewer({ cwd, path, line, onAddToMessage }: {
       {text !== undefined && preview && (ext === 'html' || ext === 'htm') && (
         <div className="overflow-hidden rounded-lg border border-line">
           <div className="flex h-9 items-center justify-end gap-1 border-b border-line px-1 text-[12px] text-faint">
-            {!run && <button type="button" onClick={() => setRun(true)} title="Run its scripts" className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg"><Play className="size-3.5" /> Run</button>}
+            {!run && <button type="button" onClick={() => setRan(text)} title="Run its scripts" className="flex h-7 items-center gap-1 rounded-md px-2 hover:bg-hover hover:text-fg"><Play className="size-3.5" /> Run</button>}
             <button type="button" aria-label="Open full screen" onClick={() => openPreview({ kind: 'html', code: text, title: name }, run)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg"><Maximize2 className="size-3.5" /></button>
           </div>
           {/* A page's height is its own and a still frame cannot say it: the frame takes most of the screen. */}

@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const CWD = '/code/app';
 const TEXT = 'const a = 1;\nconst b = 2;\nconst c = 3;\n';
-const server = vi.hoisted(() => ({ searched: [] as string[] }));
+const server = vi.hoisted(() => ({ searched: [] as string[], files: {} as Record<string, string> }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -13,7 +13,10 @@ vi.mock('../src/web/lib/api', async (original) => {
     ...actual,
     api: {
       ...actual.api,
-      file: async (_cwd: string, path: string) => ({ path, size: TEXT.length, text: TEXT }),
+      file: async (_cwd: string, path: string) => {
+        const text = server.files[path] ?? TEXT;
+        return { path, size: text.length, text };
+      },
       files: async (_cwd: string, q: string) => ['src/a.ts', 'src/'].filter((f) => f.includes(q)),
       search: async (_cwd: string, q: string) => {
         server.searched.push(q);
@@ -39,6 +42,7 @@ afterEach(() => {
   cleanup();
   setComments(CWD, []);
   server.searched = [];
+  server.files = {};
 });
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
@@ -86,5 +90,71 @@ describe('searching Files', () => {
     fireEvent.click(await screen.findByText('const b = 2;', { exact: false }));
     expect(server.searched).toEqual(['a.ts']);
     expect(go).toHaveBeenLastCalledWith({ tab: 'files', path: 'src/a.ts', line: 2 });
+  });
+});
+
+describe('going straight from one file to another', () => {
+  // As a path in the conversation does while a file is open beside it: the step changes, the view stays.
+  function open(path: string) {
+    const client = new QueryClient();
+    const at = (p: string) => (
+      <QueryClientProvider client={client}>
+        <WorkspaceFiles cwd={CWD} step={{ tab: 'files', path: p }} open go={() => {}} up={() => {}} onAddToMessage={() => {}} />
+      </QueryClientProvider>
+    );
+    const view = render(at(path));
+    return { client, go: (p: string) => view.rerender(at(p)) };
+  }
+  const line = (n: number) => document.querySelector(`[data-line="${n}"]`);
+
+  it('shows a source file numbered after a Markdown file was shown as it reads', async () => {
+    server.files = { 'README.md': '# Title\n\nSome *words*.\n', 'src/a.ts': TEXT };
+    const { go } = open('README.md');
+    await screen.findByRole('heading', { name: 'Title' });
+    go('src/a.ts');
+    await waitFor(() => expect(line(2)?.textContent).toBe('2const b = 2;'));
+    expect(screen.getByRole('button', { name: 'Wrap' })).toBeTruthy();
+  });
+
+  it('opens another page as its code, and nothing of it runs until its own Run', async () => {
+    server.files = { 'a.html': '<p>first page</p>\n<script>parent.ran = "a"</script>\n', 'b.html': '<p>second page</p>\n<script>parent.ran = "b"</script>\n' };
+    const { go } = open('a.html');
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    fireEvent.click(await screen.findByTitle('Run its scripts'));
+    expect(screen.queryByTitle('Run its scripts')).toBeNull();
+    go('b.html');
+    await waitFor(() => expect(line(1)?.textContent).toContain('second page'));
+    expect(screen.queryByRole('button', { name: 'Source' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(screen.getByTitle('Run its scripts')).toBeTruthy();
+    expect(document.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
+  });
+
+  it('leaves a comment being written on one file behind', async () => {
+    server.files = { 'src/a.ts': TEXT, 'src/b.ts': 'let x = 1;\nlet y = 2;\nlet z = 3;\n' };
+    const { go } = open('src/a.ts');
+    await waitFor(() => expect(line(2)).toBeTruthy());
+    fireEvent.click(line(2)!);
+    fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Rename b' } });
+    go('src/b.ts');
+    await waitFor(() => expect(line(2)?.textContent).toBe('2let y = 2;'));
+    expect(screen.queryByLabelText('Comment for Claude')).toBeNull();
+    expect(commentsOf(CWD)).toEqual([]);
+  });
+});
+
+describe('a page that was run', () => {
+  it('waits for Run again once it is rewritten', async () => {
+    server.files = { 'a.html': '<p>first</p>\n<script>parent.ran = 1</script>\n' };
+    const client = new QueryClient();
+    render(<QueryClientProvider client={client}><FileViewer cwd={CWD} path="a.html" onAddToMessage={() => {}} /></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    fireEvent.click(await screen.findByTitle('Run its scripts'));
+    expect(document.querySelector('iframe')?.getAttribute('sandbox')).toBe('allow-scripts');
+    // Claude rewrites it; the viewer reads it again.
+    server.files = { 'a.html': '<p>second</p>\n<script>parent.ran = 2</script>\n' };
+    await act(() => client.refetchQueries({ queryKey: ['file'] }));
+    await waitFor(() => expect(screen.getByTitle('Run its scripts')).toBeTruthy());
+    expect(document.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
   });
 });
