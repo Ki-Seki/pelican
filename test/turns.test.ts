@@ -75,3 +75,67 @@ describe('toChatMessage: refusals', () => {
     expect(row()?.blocks[0]).not.toHaveProperty('denied');
   });
 });
+
+describe('buildItems: workflows', () => {
+  const notice = (id: string, status: string, extra = '') => `<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>/tmp/w1.output</output-file>\n<status>${status}</status>\n<summary>Dynamic workflow "Review &amp; fix" ${status}</summary>${extra}\n</task-notification>`;
+  const workflow = (id: string, runId: string): ChatMessage[] => [
+    assistant(`a-${id}`, [{ type: 'tool_use', id, name: 'Workflow', input: { script: "export const meta = { name: 'demo-review', description: 'Review', phases: [] }" } }]),
+    { uuid: `r-${id}`, role: 'user', blocks: [{ type: 'tool_result', tool_use_id: id, content: 'Workflow launched in background.', workflow: { runId, taskId: 'w1' } }] },
+  ];
+
+  it('joins a workflow’s end to its call, and leaves a line that names it where Claude Code said it', () => {
+    const items = buildItems([
+      user('u1', 'Review it'),
+      ...workflow('toolu_w', 'wf_7c2e4a10-9b3'),
+      user('n1', notice('toolu_w', 'completed', '<result>[1]</result><usage><duration_ms>361250</duration_ms></usage>')),
+      assistant('a2', [{ type: 'text', text: 'It found one thing.' }]),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(['user', 'assistant', 'notice', 'assistant']);
+    const call = items[1]!.kind === 'assistant' && items[1]!.parts[0]!.kind === 'tool' ? items[1]!.parts[0]!.call : undefined;
+    expect(call?.ended).toMatchObject({ status: 'completed', result: '[1]', summary: 'Dynamic workflow "Review & fix" completed' });
+    // The line leads to the card; the result is in the card, not again here.
+    expect(items[2]).toMatchObject({ kind: 'notice', tone: 'task', workflow: { toolUseId: 'toolu_w', name: 'demo-review', status: 'completed', durationMs: 361_250 } });
+    expect((items[2] as { detail?: string }).detail).toBeUndefined();
+  });
+
+  it('keeps the end of a call not on the page, and of any other task, as a notice with what it returned', () => {
+    const items = buildItems([user('n1', notice('toolu_elsewhere', 'completed', '<result>done</result>'))]);
+    expect(items).toMatchObject([{ kind: 'notice', tone: 'task', text: 'Dynamic workflow "Review & fix" completed', detail: 'done' }]);
+    expect((items[0] as { workflow?: unknown }).workflow).toBeUndefined();
+  });
+
+  it('takes the word of the Claude Code that ran a workflow over one that found it without its end', () => {
+    const orphan = '<task-notification>\n<task-id>w1</task-id>\n<tool-use-id>toolu_w</tool-use-id>\n<status>stopped</status>\n<summary>Background workflow didn\'t finish</summary>\n<note>No completion record.</note>\n</task-notification>';
+    const items = buildItems([...workflow('toolu_w', 'wf_7c2e4a10-9b3'), user('n1', notice('toolu_w', 'completed')), user('n2', orphan)]);
+    const call = items[0]!.kind === 'assistant' && items[0]!.parts[0]!.kind === 'tool' ? items[0]!.parts[0]!.call : undefined;
+    expect(call?.ended?.status).toBe('completed');
+  });
+
+  it('marks a call whose run a later call resumed, with that call', () => {
+    const items = buildItems([...workflow('toolu_a', 'wf_7c2e4a10-9b3'), ...workflow('toolu_b', 'wf_7c2e4a10-9b3'), ...workflow('toolu_c', 'wf_0d0d0d0d-111')]);
+    const calls = items.flatMap((i) => (i.kind === 'assistant' ? i.parts : [])).flatMap((p) => (p.kind === 'tool' ? [p.call] : []));
+    expect(calls.map((c) => c.resumedBy)).toEqual(['toolu_b', undefined, undefined]);
+  });
+});
+
+describe('toChatMessage: a Workflow call’s launch', () => {
+  it('keeps the run Claude Code recorded next to the result, from a transcript or from the stream', async () => {
+    const { toChatMessage } = await import('../src/server/normalize');
+    const output = {
+      status: 'async_launched', taskId: 'w4k9qz2mx', taskType: 'local_workflow', workflowName: 'demo-review', runId: 'wf_7c2e4a10-9b3', summary: 'Review the demo app',
+      transcriptDir: '/h/.claude/projects/p/s/subagents/workflows/wf_7c2e4a10-9b3', scriptPath: '/h/.claude/projects/p/s/workflows/scripts/demo-review-wf_7c2e4a10-9b3.js',
+    };
+    const content = [{ type: 'tool_result', tool_use_id: 'toolu_w', content: 'Workflow launched in background.' }];
+    const expected = { runId: 'wf_7c2e4a10-9b3', taskId: 'w4k9qz2mx', name: 'demo-review', summary: 'Review the demo app', scriptFile: 'demo-review-wf_7c2e4a10-9b3.js' };
+    for (const key of ['toolUseResult', 'tool_use_result']) {
+      const message = toChatMessage({ type: 'user', uuid: 'r', [key]: output, message: { role: 'user', content } });
+      expect(message?.blocks[0]).toMatchObject({ type: 'tool_result', workflow: expected });
+    }
+    // Another tool's result keeps nothing of the kind, and a run id of another shape is no run id.
+    const agent = toChatMessage({ type: 'user', uuid: 'r', toolUseResult: { status: 'async_launched', agentId: 'a1' }, message: { role: 'user', content } });
+    expect(agent?.blocks[0]).not.toHaveProperty('workflow');
+    const odd = toChatMessage({ type: 'user', uuid: 'r', toolUseResult: { ...output, runId: '../../etc' }, message: { role: 'user', content } });
+    expect(odd?.blocks[0]).toMatchObject({ workflow: { taskId: 'w4k9qz2mx' } });
+    expect((odd?.blocks[0] as { workflow?: { runId?: string } }).workflow?.runId).toBeUndefined();
+  });
+});

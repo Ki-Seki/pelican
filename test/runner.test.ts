@@ -961,3 +961,82 @@ it('broadcasts its state to the session’s pages', async () => {
   const last: RunState = runs().at(-1)!;
   expect(last.queued?.[0]?.text).toBe('Queued');
 });
+
+describe('workflows', () => {
+  const SCRIPT = "export const meta = {\n  name: 'demo-review',\n  description: 'Review the demo app, then check each finding',\n  phases: [{ title: 'Review', detail: 'one agent per area' }, { title: 'Verify' }],\n}\nreturn 1\n";
+  const item = (index: number, extra: Record<string, unknown>) => ({ type: 'workflow_agent', index, label: `review:${index}`, phaseIndex: 1, phaseTitle: 'Review', ...extra });
+  const frame = (extra: Record<string, unknown> = {}) => system('task_progress', {
+    task_id: 'w1', tool_use_id: 'toolu_w', description: 'Review: review:1', summary: 'Review the demo app, then check each finding',
+    usage: { total_tokens: 9000, tool_uses: 4, duration_ms: 20_000 }, last_tool_name: 'review:1', ...extra,
+  });
+
+  it('follow Claude Code’s task events: the whole list from the frames that carry it, the status, the end', async () => {
+    const { claude, state, runs } = await start();
+    claude.say(system('background_tasks_changed', { tasks: [{ task_id: 'w1', task_type: 'local_workflow', description: 'Review the demo app, then check each finding' }] }));
+    claude.say(system('task_started', { task_id: 'w1', tool_use_id: 'toolu_w', description: 'Review the demo app, then check each finding', task_type: 'local_workflow', workflow_name: 'demo-review', prompt: SCRIPT }));
+    claude.say(toolResult('toolu_w', { status: 'async_launched', taskId: 'w1', taskType: 'local_workflow', workflowName: 'demo-review', runId: 'wf_7c2e4a10-9b3' }, 'Workflow launched in background. Task ID: w1'));
+    claude.say(frame({ workflow_progress: [{ type: 'workflow_phase', index: 1, title: 'Review' }, { type: 'workflow_phase', index: 2, title: 'Verify' }, { type: 'workflow_phase', index: 3, title: 'Report' }] }));
+    claude.say(frame({ workflow_progress: [item(1, { state: 'done', agentId: 'a1', tokens: 5000, toolCalls: 3, durationMs: 9000, resultPreview: 'x'.repeat(1000) }), item(2, { state: 'progress', agentId: 'a2', tokens: 4000, startedAt: 5 })] }));
+    await vi.waitFor(() => expect(state().workflows?.toolu_w?.agents).toHaveLength(2));
+    const shown = state().workflows!.toolu_w!;
+    expect(shown).toMatchObject({
+      runId: 'wf_7c2e4a10-9b3', taskId: 'w1', name: 'demo-review', status: 'running', totalTokens: 9000, totalToolCalls: 3, source: 'live',
+      phases: [{ title: 'Review', detail: 'one agent per area' }, { title: 'Verify' }, { title: 'Report' }],
+    });
+    // Long texts are cut for the page.
+    expect(shown.agents[0]!.resultPreview!.length).toBeLessThanOrEqual(300);
+    // Its task row says its name and how far its agents got, not its description twice.
+    expect(state().tasks).toEqual([{ id: 'w1', description: 'demo-review', type: 'local_workflow', summary: '1/2 agents' }]);
+    expect(state().progress).toBeUndefined();
+
+    // Frames without the list only tick usage: the list stays, and nothing is sent for them.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const sent = runs().length;
+    claude.say(frame({ usage: { total_tokens: 9500, tool_uses: 5, duration_ms: 21_000 } }));
+    claude.say(frame({ usage: { total_tokens: 9900, tool_uses: 6, duration_ms: 22_000 } }));
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(runs().length).toBe(sent);
+    expect(state().workflows!.toolu_w!.agents).toHaveLength(2);
+
+    claude.say(system('task_updated', { task_id: 'w1', patch: { status: 'paused' } }));
+    await vi.waitFor(() => expect(state().workflows!.toolu_w!.status).toBe('paused'));
+    claude.say(frame({ workflow_progress: [item(2, { state: 'error', agentId: 'a2', error: 'Stopped because the workflow was stopped' })] }));
+    claude.say(system('task_updated', { task_id: 'w1', patch: { status: 'killed', end_time: Date.now() } }));
+    claude.say(system('task_notification', { task_id: 'w1', tool_use_id: 'toolu_w', status: 'stopped', output_file: '', summary: 'Review the demo app, then check each finding' }));
+    claude.say(system('background_tasks_changed', { tasks: [] }));
+    await vi.waitFor(() => expect(state().workflows!.toolu_w!.status).toBe('killed'));
+    expect(state().workflows!.toolu_w!.agents.map((a) => a.state)).toEqual(['done', 'error']);
+    expect(state().workflows!.toolu_w!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('end with Claude Code’s totals, and are let go a while after, for the record to take over', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const { claude, state } = await start();
+      claude.say(system('task_started', { task_id: 'w1', tool_use_id: 'toolu_w', description: 'Review', task_type: 'local_workflow', workflow_name: 'demo-review', prompt: SCRIPT }));
+      claude.say(frame({ workflow_progress: [item(1, { state: 'done', tokens: 5000 })] }));
+      claude.say(system('task_notification', { task_id: 'w1', tool_use_id: 'toolu_w', status: 'completed', output_file: '', summary: 'Dynamic workflow "Review" completed', usage: { total_tokens: 412_300, tool_uses: 87, duration_ms: 361_250 } }));
+      await vi.waitFor(() => expect(state().workflows?.toolu_w?.status).toBe('completed'));
+      expect(state().workflows!.toolu_w).toMatchObject({ totalTokens: 412_300, totalToolCalls: 87, durationMs: 361_250 });
+      vi.advanceTimersByTime(2 * 60_000 + 1000);
+      expect(state().workflows).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('name the workflow agent that asks for an approval, and end with their Claude Code', async () => {
+    const { claude, state, run } = await start();
+    claude.say(system('task_started', { task_id: 'w1', tool_use_id: 'toolu_w', description: 'Review', task_type: 'local_workflow', workflow_name: 'demo-review' }));
+    claude.say(frame({ workflow_progress: [item(1, { state: 'progress', agentId: 'a1f0c3e5b7d9a2c41', label: 'review:server' })] }));
+    await vi.waitFor(() => expect(state().workflows?.toolu_w).toBeDefined());
+    const { answer } = ask(claude, 'Bash', { command: 'npm test' }, { agentID: 'a1f0c3e5b7d9a2c41' });
+    await vi.waitFor(() => expect(state().permissions[0]?.agent).toBe('review:server'));
+    run.decide(state().permissions[0]!.id, { behavior: 'deny' });
+    await answer;
+    claude.end();
+    await vi.waitFor(() => expect(run.closed).toBe(true));
+    expect(run.workflow('toolu_w')).toBeUndefined();
+  });
+});
