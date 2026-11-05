@@ -196,6 +196,15 @@ const restored = (a: Attachment): Upload => ({
 
 const MODE_HINT: Record<SendMode, string> = { steer: 'Claude reads it at its next step', queue: 'Sent when this turn ends' };
 
+/**
+ * Text to put in the box, a new `key` each time: a prompt to edit, a suggestion. `append` adds it
+ * after what is written; `block` too, on lines of its own (a request to Claude). `back`: a message
+ * that did not go, given back with its quotes and files: into an empty box as it was, else above
+ * what was typed since. A `!` command goes back only into an empty box: words typed under it would
+ * become part of the command.
+ */
+export type ComposerDraft = { text: string; key: number; append?: boolean; block?: boolean; back?: boolean; attachments?: Attachment[] };
+
 export function Composer({
   busy,
   settings,
@@ -231,13 +240,7 @@ export function Composer({
   autoFocus?: boolean;
   /** Folder of the session, for / commands and @ files. */
   cwd?: string;
-  /**
-   * Text to put in the box, e.g. a prompt being edited, or one that failed to send (with its
-   * files); a new `key` puts it in again. `append` adds it after what is there; `block` too, on
-   * lines of its own (a quote, line comments, a request).
-   */
-  /** `block`: text that goes on lines of its own after what is written (a request to Claude). */
-  draft?: { text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] };
+  draft?: ComposerDraft;
   /** Where what is typed is kept until it is sent (lib/drafts): the chat's view id. */
   draftKey?: string;
   /** Shown before Send and Stop: the context meter, on a phone. */
@@ -303,9 +306,13 @@ export function Composer({
   useEffect(() => {
     if (!draft) return;
     // A message given back (its send failed) brings its quotes back above the box, before any added since.
-    const back = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
-    if (back.quotes.length > 0) setQuotes((list) => [...back.quotes, ...list.filter((q) => !back.quotes.includes(q))]);
-    const next = draft.block ? withQuote(text, draft.text) : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}` : back.text;
+    const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
+    if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
+    const typed = text.trim().length > 0;
+    const next = draft.block ? withQuote(text, draft.text)
+      : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
+        : draft.back && typed ? (given.text.startsWith('!') ? text : `${given.text.trimEnd()}\n\n${text}`)
+          : given.text;
     setText(next);
     // Its files come back too, beside any added since.
     const files = draft.attachments;

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { Attachment, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
+import type { Attachment, ChatMessage, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CREATED = '44444444-2222-4333-8444-555555555555';
@@ -21,6 +21,8 @@ const server = vi.hoisted(() => ({
   sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
   session: {} as Partial<SessionSummary>,
   run: null as RunState | null,
+  /** What the conversation holds after its first prompt. */
+  after: [] as ChatMessage[],
   /** How often git status was asked for, and what it says. */
   gitReads: 0,
   git: { repo: false } as GitStatus,
@@ -60,7 +62,10 @@ vi.mock('../src/web/lib/api', async (original) => {
         tasks: [],
         settings: {},
       }),
-      messages: async () => ({ messages: [{ uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Clean up the build' }], timestamp: Date.now() - 60_000 }], total: 1, offset: 0 }),
+      messages: async () => {
+        const messages: ChatMessage[] = [{ uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Clean up the build' }], timestamp: Date.now() - 60_000 }, ...server.after];
+        return { messages, total: messages.length, offset: 0 };
+      },
       send: async (_id: string, body: { text: string; attachments: string[]; trust?: string }) => {
         await answer(body);
         return { sessionId: SESSION };
@@ -110,7 +115,7 @@ afterEach(() => {
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
-  Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, gitReads: 0, git: { repo: false } });
+  Object.assign(server, { answers: [], hold: undefined, sent: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address.
   history.replaceState(null, '', '/');
 });
@@ -203,6 +208,92 @@ describe('a message that did not go', () => {
     expect(screen.getByLabelText('Remove notes.txt')).toBeTruthy();
     await waitFor(() => expect(stored()?.attachments).toEqual([expect.objectContaining({ id: 'up-notes.txt' })]), { timeout: 2000 });
     expect(server.sent).toHaveLength(1);
+  });
+});
+
+describe('what is being typed, when a message the chat sends on its own does not go', () => {
+  const comment = { id: 'c1', path: 'src/a.ts', kind: 'add' as const, line: 3, code: 'const a = 1;', note: 'Name this better' };
+  const typing = () => fireEvent.change(box(), { target: { value: 'Half-written thought' } });
+  const apiError = (text: string): ChatMessage => ({ uuid: 'e1', role: 'assistant', blocks: [{ type: 'text', text }], apiError: true, timestamp: Date.now() - 50_000 });
+
+  it('stays in the box after Send now, and the comments wait again', async () => {
+    setComments(SESSION, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    typing();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByText('Send now'));
+    await screen.findByText('Can’t reach studio');
+    expect(server.sent.map((body) => body.text)).toEqual(['src/a.ts:3\n> + const a = 1;\nName this better']);
+    expect(box().value).toBe('Half-written thought');
+    expect(commentsOf(SESSION)).toEqual([comment]);
+    await waitFor(() => expect(loadDraft(SESSION)?.text).toBe('Half-written thought'), { timeout: 2000 });
+  });
+
+  it('stays in the box after Send now in a folder nobody trusted, the question put away', async () => {
+    setComments(SESSION, [comment]);
+    server.answers = [untrusted()];
+    session();
+    await loaded();
+    typing();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await screen.findByText('Send now'));
+    const sheet = await screen.findByRole('dialog', { name: 'Trust this folder?' });
+    act(() => {
+      sheet.dispatchEvent(new Event('cancel', { cancelable: true }));
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Trust this folder?' })).toBeNull());
+    expect(box().value).toBe('Half-written thought');
+    expect(commentsOf(SESSION)).toEqual([comment]);
+  });
+
+  it('stays in the box after Compact, Retry or Cancel on a check-in, which take no comments', async () => {
+    // Sessions of their own: the conversation must end on the error, with nothing sent after it.
+    const ended = ['77777777-2222-4333-8444-555555555551', '77777777-2222-4333-8444-555555555552', '77777777-2222-4333-8444-555555555553'] as const;
+    for (const [id, error, button] of [[ended[0], 'Prompt is too long', 'Compact'], [ended[1], 'API Error: 529 Overloaded', 'Retry']] as const) {
+      setComments(id, [comment]);
+      server.after = [apiError(error)];
+      server.answers = [new Error('Can’t reach studio')];
+      session(id);
+      const next = await screen.findByRole('button', { name: button });
+      typing();
+      fireEvent.click(next);
+      await screen.findByText('Can’t reach studio');
+      expect(box().value).toBe('Half-written thought');
+      expect(commentsOf(id)).toEqual([comment]);
+      cleanup();
+    }
+    server.after = [];
+    server.run = { sessionId: ended[2], cwd: CWD, busy: false, settings: {}, permissions: [], partial: [], scheduled: [{ id: 'wakeup', what: 'Check the deploy', repeats: true }] };
+    server.answers = [new Error('Can’t reach studio')];
+    try {
+      session(ended[2]);
+      const cancel = await screen.findByRole('button', { name: 'Cancel' });
+      typing();
+      fireEvent.click(cancel);
+      await screen.findByText('Can’t reach studio');
+      expect(box().value).toBe('Half-written thought');
+      expect(server.sent.map((body) => body.text)).toEqual(['/compact', 'Clean up the build', 'Stop the loop (Check the deploy).']);
+    } finally {
+      act(() => setRun(ended[2], undefined));
+      for (const id of ended) setComments(id, []);
+    }
+  });
+});
+
+describe('a message from the box that does not go', () => {
+  it('goes back above what was typed since it went', async () => {
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    const release = holdNextSend();
+    sendText('Why does the export fail?');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: 'Also: the logs' } });
+    release();
+    await screen.findByText('Can’t reach studio');
+    expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs');
   });
 });
 

@@ -36,7 +36,7 @@ import {
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
-import { Composer, type ComposerHandle } from './Composer';
+import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
 import { StartIn } from './NewSession';
@@ -385,7 +385,7 @@ export function Chat({
     const choice = sessionChoice(sessionId);
     return choice ? { ...base, ...choice.settings } : base;
   });
-  const [draft, setDraftText] = useState<{ text: string; key: number; append?: boolean; block?: boolean; attachments?: Attachment[] }>();
+  const [draft, setDraftText] = useState<ComposerDraft>();
   const [note, setNote] = useState<string>();
   // A send that failed. `note`: not an error to show in red, but the demo saying what it does not
   // do, or the computer out of reach (the line under the header says so too).
@@ -479,7 +479,12 @@ export function Chat({
     }
   };
 
-  const send = async (text: string, attachments: Attachment[], mode: SendMode, trust?: TrustChoice) => {
+  /**
+   * Sends a message. `from`: the message box, whose words go back to it if the message does not go,
+   * and which takes the line comments along; Send now, the comments alone; or the chat itself
+   * (Retry, Compact, Cancel on a check-in), which leaves the box and the comments as they are.
+   */
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat', trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
@@ -495,7 +500,7 @@ export function Chat({
     const uuid = newId();
     // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command
     // takes none. Taken now, they go with this message only; they come back if it does not go.
-    const notes = !text.trimStart().startsWith('/') ? takeComments(viewId) : [];
+    const notes = from !== 'chat' && !text.trimStart().startsWith('/') ? takeComments(viewId) : [];
     const said = withComments(text, notes);
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
@@ -509,19 +514,23 @@ export function Chat({
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
-        clearDraft(viewId, text);
+        if (from === 'box') clearDraft(viewId, text);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
-        clearDraft(viewId, text);
+        if (from === 'box') clearDraft(viewId, text);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back and give it back to edit, files, quotes and comments all.
+      // Nothing reached Claude: take the message back. Its comments wait again; words from the box
+      // go back to it, files and all, above anything typed since. What the chat sent leaves the box be.
       removeLocalMessage(viewId, uuid);
       putBackComments(viewId, notes);
+      const giveBack = () => {
+        if (from === 'box') setDraftText({ text, attachments, key: Date.now(), back: true });
+      };
       if (error instanceof ApiError && error.trust) {
         // The folder has programs of its own and nobody trusted it: ask, then send it again. Only
         // the first answer counts: a double tap on the sheet must not start two Claudes.
@@ -533,13 +542,13 @@ export function Chat({
         };
         setTrustAsk({
           brings: error.trust.brings,
-          answer: (choice) => once(() => void send(text, attachments, mode, choice)),
-          cancel: () => once(() => setDraftText({ text, attachments, key: Date.now() })),
+          answer: (choice) => once(() => void send(text, attachments, mode, from, choice)),
+          cancel: () => once(giveBack),
         });
         return;
       }
       failed(error);
-      setDraftText({ text, attachments, key: Date.now() });
+      giveBack();
     }
   };
 
@@ -583,21 +592,21 @@ export function Chat({
             settled = true;
           },
           cancel: () => {
-            if (!settled) setDraftText({ text: `!${command}`, key: Date.now() });
+            if (!settled) setDraftText({ text: `!${command}`, key: Date.now(), back: true });
             settled = true;
           },
         });
         return;
       }
       failed(error);
-      setDraftText({ text: `!${command}`, key: Date.now() });
+      setDraftText({ text: `!${command}`, key: Date.now(), back: true });
     }
   };
 
   // An API error the conversation ends on: its prompt goes again, with its pictures and files.
   const sendAgain = (prompt: Extract<Item, { kind: 'user' }>) => {
     setSendError(undefined);
-    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy), failed);
+    void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy, 'chat'), failed);
   };
 
   // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
@@ -850,7 +859,7 @@ export function Chat({
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
             {...(sessionId ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
-            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy) } : {})}
+            {...(sessionId ? { onRetry: sendAgain, onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') } : {})}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -872,7 +881,7 @@ export function Chat({
         )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
-          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy)} />
+          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')} />
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
@@ -932,7 +941,7 @@ export function Chat({
         settings={shown}
         onSettings={changeSettings}
         models={modelList?.models}
-        onSend={(text, attachments, mode) => void send(text, attachments, mode)}
+        onSend={(text, attachments, mode) => void send(text, attachments, mode, 'box')}
         {...(sessionId ? { onShell: (command: string) => void shell(command) } : {})}
         {...(sessionId && !session?.sideChatOf ? { onSideChat: side.show } : {})}
         onStop={() => sessionId && void api.interrupt(sessionId)}
@@ -973,7 +982,7 @@ export function Chat({
             // None waiting: there were none, or they are on their way (a second tap of Send now).
             if (commentsOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
-            void send('', [], prefs.sendWhileBusy);
+            void send('', [], prefs.sendWhileBusy, 'comments');
           }}
         />
       )}

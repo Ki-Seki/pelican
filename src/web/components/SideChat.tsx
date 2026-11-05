@@ -8,7 +8,7 @@ import { newId } from '../lib/ids';
 import { composing, hasKeyboard, isApple } from '../lib/keyboard';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
-import { Composer } from './Composer';
+import { Composer, type ComposerDraft } from './Composer';
 import { MessageList } from './MessageList';
 import { Sheet } from './Sheet';
 
@@ -174,7 +174,7 @@ export function SideChat({
   const busy = Boolean(side && view.run?.busy);
   const draftKey = `side:${sessionId}`;
   const [error, setError] = useState<{ text: string; note: boolean }>();
-  const [giveBack, setGiveBack] = useState<{ text: string; key: number }>();
+  const [giveBack, setGiveBack] = useState<ComposerDraft>();
   const asking = useRef(false);
 
   // Only the side chat's own conversation: the copy of the session's comes before its first
@@ -199,14 +199,14 @@ export function SideChat({
   const ask = async (text: string, mode: SendMode = 'steer') => {
     // The first question is still making the side chat: this one waits in the box.
     if (asking.current) {
-      setGiveBack({ text, key: Date.now() });
+      setGiveBack({ text, key: Date.now(), back: true });
       return;
     }
     setError(undefined);
     const uuid = newId();
     const giveItBack = (failure: unknown) => {
       setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
-      setGiveBack({ text, key: Date.now() });
+      setGiveBack({ text, key: Date.now(), back: true });
     };
     if (side) {
       // Its first question never reached the side chat (its Claude did not start): this one starts its conversation.
