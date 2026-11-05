@@ -49,6 +49,11 @@ from every app.
 
 ### The conversation
 
+- A workflow (Claude Code's Workflow tool) shows as a card, as Claude Code shows one, instead of its
+  script's first line: its name, Running or how it ended with its agents and tokens, its phases one
+  a line (Review · 3 of 5 done) opening into their agents and each agent's steps, the script and the
+  result; live with Stop in sessions Pelican runs, read from the run's folder for other apps', and
+  its end, also one that came while Claude worked (those were lost), leads back to the card.
 - A failed request at the end of the conversation offers Retry, which sends the prompt again with
   its files, or Compact when the conversation is too long.
 - Scheduled check-ins have Cancel, which asks Claude to cancel them.
