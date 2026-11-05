@@ -41,7 +41,7 @@ import type {
   WorkflowPhase,
   WorkflowStatus,
 } from '../shared/protocol.js';
-import { agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
+import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { config } from './config.js';
@@ -236,6 +236,8 @@ type LiveFlow = {
   status: WorkflowStatus;
   startedAt: number;
   endedAt?: number;
+  /** When it was paused, which stops it as a stop does. */
+  pausedAt?: number;
   /** The script's own phases, with their details. */
   phases: WorkflowPhase[];
   /** Progress items by `type:index`, as Claude Code merges them: a newer one replaces the old whole. */
@@ -268,14 +270,12 @@ function liveAgent(item: Record<string, unknown>): WorkflowAgent | undefined {
     const value = text(key, 120);
     if (value) out[key] = value;
   }
+  // Its prompt and what it returned are not sent with every frame: nothing shows them but the
+  // agent opened, which reads them from its transcript and the run's journal.
   const error = text('error', 600);
   const tool = text('lastToolSummary', 160);
-  const result = text('resultPreview', 300);
-  const prompt = text('promptPreview', 200);
   if (error) out.error = error;
   if (tool) out.lastToolSummary = tool;
-  if (result) out.resultPreview = result;
-  if (prompt) out.promptPreview = prompt;
   if (item.isolation === 'worktree' || item.isolation === 'remote') out.isolation = item.isolation;
   if (item.lastAttemptReason === 'stalled' || item.lastAttemptReason === 'throttled' || item.lastAttemptReason === 'user-retry') out.lastAttemptReason = item.lastAttemptReason;
   for (const key of ['skipped', 'blocked', 'cached'] as const) if (item[key] === true) out[key] = true;
@@ -290,7 +290,7 @@ function liveWorkflow(flow: LiveFlow): Workflow {
   for (const item of flow.items.values()) {
     if (item.type === 'workflow_phase') {
       const title = clipped(item.title, 120);
-      if (title && !phases.some((p) => p.title.toLowerCase() === title.toLowerCase())) phases.push({ title });
+      if (title) addPhase(phases, title);
     } else if (item.type === 'workflow_agent') {
       const agent = liveAgent(item);
       if (agent) agents.push(agent);
@@ -305,7 +305,9 @@ function liveWorkflow(flow: LiveFlow): Workflow {
     ...(flow.description ? { description: flow.description } : {}),
     status: flow.status,
     startedAt: flow.startedAt,
-    ...(flow.totals ? { durationMs: flow.totals.durationMs } : flow.endedAt ? { durationMs: flow.endedAt - flow.startedAt } : {}),
+    ...(flow.totals ? { durationMs: flow.totals.durationMs }
+      : flow.endedAt ? { durationMs: flow.endedAt - flow.startedAt }
+        : flow.status === 'paused' && flow.pausedAt ? { durationMs: flow.pausedAt - flow.startedAt } : {}),
     ...(tokens > 0 ? { totalTokens: tokens } : {}),
     ...(toolUses > 0 ? { totalToolCalls: toolUses } : {}),
     phases,
@@ -557,11 +559,11 @@ export class SessionRun {
     return undefined;
   }
 
-  /** A workflow agent asking for something, by the label its script gave it. */
+  /** A workflow agent asking for something, by the label its script gave it, cut as its card cuts it. */
   private workflowAgent(agentId: string): string | undefined {
     for (const flow of this.flows.values()) {
       for (const item of flow.items.values()) {
-        if (item.type === 'workflow_agent' && item.agentId === agentId && typeof item.label === 'string') return item.label;
+        if (item.type === 'workflow_agent' && item.agentId === agentId) return clipped(item.label, 200);
       }
     }
     return undefined;
@@ -616,6 +618,9 @@ export class SessionRun {
       else if (status === 'paused' || status === 'completed' || status === 'failed' || status === 'killed') flow.status = status;
       if (typeof patch.error === 'string' && patch.error) flow.error = patch.error;
       if (typeof patch.end_time === 'number') flow.endedAt = patch.end_time;
+      // A pause stops the run, as a stop does: its time stops there.
+      if (status === 'paused') flow.pausedAt ??= Date.now();
+      else if (status === 'running') flow.pausedAt = undefined;
       this.emit();
       return true;
     }

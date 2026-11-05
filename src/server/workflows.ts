@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ChatMessage, ToolResultBlock, ToolUseBlock, Workflow, WorkflowAgent, WorkflowAgentPage, WorkflowPhase, WorkflowStatus } from '../shared/protocol.js';
-import { agentTokens, launchOf, parseMeta, parseTaskNotice, RUN_ID, type TaskNotice, unframedPrompt, workflowOf } from '../shared/workflows.js';
+import type { Block, ChatMessage, ToolResultBlock, ToolUseBlock, Workflow, WorkflowAgent, WorkflowAgentPage, WorkflowPhase, WorkflowStatus } from '../shared/protocol.js';
+import { addPhase, agentTokens, launchOf, parseMeta, parseTaskNotice, RUN_ID, type TaskNotice, unframedPrompt, workflowOf } from '../shared/workflows.js';
 import { readHistory } from './history.js';
 import { liveProcesses } from './live.js';
 import { openRegular } from './open.js';
@@ -36,17 +36,67 @@ const PROMPT_MAX = 8 * 1024;
 const SCRIPT_SHOWN_MAX = 64 * 1024;
 /** An agent that wrote this recently is at work. */
 const ACTIVE_MS = 60_000;
+/**
+ * Longer than Claude Code lets a workflow's agents go silent: it gives up on one after ten minutes
+ * without progress (more with a tool at work) and starts it again, and the new one writes.
+ */
+const QUIET_MS = 20 * 60_000;
+/** Agents' transcripts read at once, at most, a little at a time: a run can have dozens of large ones. */
+const READERS = 3;
+const CHUNK = 1024 * 1024;
 
 const str = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…` : text);
+const cut = (value: unknown, max: number) => (typeof value === 'string' && value ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : undefined);
 
-/** What a run returned, as text: a string as it is, a value as JSON. */
+/**
+ * A long result cut where a line ends, saying how much was left out, as Claude Code cuts the one it
+ * hands Claude: JSON cut there stays readable as JSON, line by line.
+ */
+function clipLines(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const at = text.lastIndexOf('\n', max);
+  const end = at > max / 2 ? at : max;
+  return `${text.slice(0, end)}\n... (truncated ${text.length - end} chars)`;
+}
+
+/** What a run or an agent returned, as text: a string as it is, a value as JSON, laid out. */
 function resultText(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return text ? clip(text, RESULT_MAX) : undefined;
+  return text ? clipLines(text, RESULT_MAX) : undefined;
+}
+
+/**
+ * One read at a time per file, for the readers below that carry on from where the last one
+ * stopped: two pages asking at once (a phone and a computer, a run and one of its agents) would
+ * otherwise both read the same new bytes and both count them.
+ */
+const reading = new Map<string, Promise<unknown>>();
+function oneAtATime<T>(file: string, read: () => Promise<T>): Promise<T> {
+  const previous = reading.get(file) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(read);
+  reading.set(file, next);
+  void next.finally(() => {
+    if (reading.get(file) === next) reading.delete(file);
+  }).catch(() => undefined);
+  return next;
+}
+
+/** `fn` over `items`, `limit` at a time, the results in order. */
+async function inTurn<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await fn(items[i]!, i);
+    }
+  }));
+  return out;
 }
 
 // ---- Files inside the session's folder ---------------------------------------------------------
@@ -117,6 +167,14 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
   while (map.size > max) map.delete(map.keys().next().value as K);
 }
 
+/** Each line of `data` that a newline ends, as text, cut on bytes: a character split across reads comes out whole. */
+function lines(data: Buffer, each: (line: string) => void): Buffer {
+  const last = data.lastIndexOf(0x0a);
+  if (last < 0) return Buffer.from(data);
+  for (const line of data.toString('utf8', 0, last).split('\n')) each(line);
+  return Buffer.from(data.subarray(last + 1));
+}
+
 // ---- The run's record ------------------------------------------------------------------------
 
 type RunRecord = {
@@ -140,14 +198,15 @@ function recordOf(value: unknown): RunRecord | undefined {
   const status = value.status === 'completed' || value.status === 'failed' || value.status === 'killed' ? value.status : undefined;
   if (!status) return undefined;
   const phases = (Array.isArray(value.phases) ? value.phases : []).filter(isRecord).flatMap((p): WorkflowPhase[] => {
-    const title = str(p.title);
-    return title ? [{ title, ...(str(p.detail) ? { detail: str(p.detail)! } : {}) }] : [];
+    const title = cut(p.title, 120);
+    const detail = cut(p.detail, 400);
+    return title ? [{ title, ...(detail ? { detail } : {}) }] : [];
   });
   const error = typeof value.error === 'string' ? value.error : isRecord(value.error) ? str(value.error.message) : undefined;
   return {
     ...(str(value.taskId) ? { taskId: str(value.taskId)! } : {}),
-    ...(str(value.workflowName) ? { name: str(value.workflowName)! } : {}),
-    ...(str(value.summary) ? { summary: str(value.summary)! } : {}),
+    ...(cut(value.workflowName, 200) ? { name: cut(value.workflowName, 200)! } : {}),
+    ...(cut(value.summary, 2000) ? { summary: cut(value.summary, 2000)! } : {}),
     status,
     ...(num(value.startTime) !== undefined ? { startTime: num(value.startTime)! } : {}),
     ...(num(value.durationMs) !== undefined ? { durationMs: num(value.durationMs)! } : {}),
@@ -164,8 +223,6 @@ function recordOf(value: unknown): RunRecord | undefined {
 const recordFile = (dir: string, runId: string) => path.join(dir, 'workflows', `${runId}.json`);
 
 // ---- Progress items, as Claude Code reports them ---------------------------------------------
-
-const cut = (value: unknown, max: number) => (typeof value === 'string' && value ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : undefined);
 
 /** A `workflow_agent` item, its long texts cut. */
 export function agentItem(item: unknown): WorkflowAgent | undefined {
@@ -199,7 +256,7 @@ function withPhases(phases: WorkflowPhase[], items: unknown[]): WorkflowPhase[] 
   for (const item of items) {
     if (!isRecord(item) || item.type !== 'workflow_phase') continue;
     const title = cut(item.title, 120);
-    if (title && !out.some((p) => p.title.toLowerCase() === title.toLowerCase())) out.push({ title });
+    if (title) addPhase(out, title);
   }
   return out;
 }
@@ -209,12 +266,12 @@ function withPhases(phases: WorkflowPhase[], items: unknown[]): WorkflowPhase[] 
 /** An agent as the journal tells it: started, done with a result, or failed; the latest line wins. */
 type JournalAgent = { key: string; agentId?: string; label?: string; phase?: string; state: 'started' | 'done' | 'failed'; result?: string };
 
-type Journal = { ino: number; offset: number; carry: string; agents: Map<string, JournalAgent> };
+type Journal = { ino: number; offset: number; carry: Buffer; agents: Map<string, JournalAgent> };
 
 const journals = new Map<string, Journal>();
 
 /** One journal line. A line cut short (Claude Code was stopped mid-write) or of another kind is passed over, as Claude Code does. */
-function journalLine(journal: Journal, line: string): void {
+function journalLine(agents: Map<string, JournalAgent>, line: string): void {
   if (!line.trim()) return;
   let event: Record<string, unknown>;
   try {
@@ -225,16 +282,20 @@ function journalLine(journal: Journal, line: string): void {
     return;
   }
   const key = str(event.key);
-  if (!key) return;
-  const known = journal.agents.get(key);
-  const agentId = str(event.agentId) ?? known?.agentId;
+  if (!key || key.length > 200) return;
+  const known = agents.get(key);
+  const agentId = cut(event.agentId, 80) ?? known?.agentId;
+  // The script names them: as long as it likes, in the journal; as long as the record has them, here.
+  const label = (event.type === 'started' ? cut(event.label, 200) : undefined) ?? known?.label;
+  const phase = (event.type === 'started' ? cut(event.phase, 120) : undefined) ?? known?.phase;
+  const base = { key, ...(agentId ? { agentId } : {}), ...(label ? { label } : {}), ...(phase ? { phase } : {}) };
   if (event.type === 'started') {
-    journal.agents.set(key, { key, ...(agentId ? { agentId } : {}), ...(str(event.label) ?? known?.label ? { label: str(event.label) ?? known!.label! } : {}), ...(str(event.phase) ?? known?.phase ? { phase: str(event.phase) ?? known!.phase! } : {}), state: 'started' });
+    agents.set(key, { ...base, state: 'started' });
   } else if (event.type === 'result') {
     const result = resultText(event.result);
-    journal.agents.set(key, { ...(known ?? { key }), ...(agentId ? { agentId } : {}), state: 'done', ...(result ? { result } : {}) });
+    agents.set(key, { ...base, state: 'done', ...(result ? { result } : {}) });
   } else if (event.type === 'failed') {
-    journal.agents.set(key, { ...(known ?? { key }), ...(agentId ? { agentId } : {}), state: 'failed' });
+    agents.set(key, { ...base, state: 'failed' });
   }
 }
 
@@ -243,33 +304,35 @@ async function readJournal(dir: string, runId: string): Promise<JournalAgent[] |
   const file = path.join(dir, 'subagents', 'workflows', runId, 'journal.jsonl');
   const real = await inside(dir, file);
   if (!real) return undefined;
-  const handle = await openRegular(real).catch(() => undefined);
-  if (!handle) return undefined;
-  try {
-    const info = await handle.stat();
-    let journal = journals.get(real);
-    if (!journal || journal.ino !== info.ino || info.size < journal.offset) journal = { ino: info.ino, offset: 0, carry: '', agents: new Map() };
-    const end = Math.min(info.size, JOURNAL_MAX);
-    while (journal.offset < end) {
-      const buffer = Buffer.alloc(Math.min(4 * 1024 * 1024, end - journal.offset));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, journal.offset);
-      if (bytesRead <= 0) break;
-      journal.offset += bytesRead;
-      const text = journal.carry + buffer.toString('utf8', 0, bytesRead);
-      const lines = text.split('\n');
-      journal.carry = lines.pop() ?? '';
-      for (const line of lines) journalLine(journal, line);
+  return oneAtATime(real, async () => {
+    const handle = await openRegular(real).catch(() => undefined);
+    if (!handle) return undefined;
+    try {
+      const info = await handle.stat();
+      let journal = journals.get(real);
+      if (!journal || journal.ino !== info.ino || info.size < journal.offset) journal = { ino: info.ino, offset: 0, carry: Buffer.alloc(0), agents: new Map() };
+      const end = Math.min(info.size, JOURNAL_MAX);
+      while (journal.offset < end) {
+        const buffer = Buffer.allocUnsafe(Math.min(4 * CHUNK, end - journal.offset));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, journal.offset);
+        if (bytesRead <= 0) break;
+        const data = journal.carry.length > 0 ? Buffer.concat([journal.carry, buffer.subarray(0, bytesRead)]) : buffer.subarray(0, bytesRead);
+        // The offset moves with the line it may leave unfinished: a read that fails part way carries on from there.
+        const agents = journal.agents;
+        journal.carry = lines(data, (line) => journalLine(agents, line));
+        journal.offset += bytesRead;
+      }
+      remember(journals, real, journal, 64);
+      // A last line without its newline yet counts if it is whole; it is read again with the rest.
+      const agents = new Map(journal.agents);
+      if (journal.carry.length > 0) journalLine(agents, journal.carry.toString('utf8'));
+      return [...agents.values()];
+    } catch {
+      return undefined;
+    } finally {
+      await handle.close();
     }
-    remember(journals, real, journal, 64);
-    // A last line without its newline yet counts if it is whole; it is read again with the rest.
-    const agents = new Map(journal.agents);
-    if (journal.carry) journalLine({ ...journal, agents }, journal.carry);
-    return [...agents.values()];
-  } catch {
-    return undefined;
-  } finally {
-    await handle.close();
-  }
+  });
 }
 
 // ---- Agents' own files ------------------------------------------------------------------------
@@ -278,35 +341,53 @@ type AgentMeta = { agentType?: string; label?: string; phase?: string; model?: s
 
 function agentMetaOf(value: unknown): AgentMeta | undefined {
   if (!isRecord(value)) return undefined;
-  return {
-    ...(str(value.agentType) ? { agentType: str(value.agentType)! } : {}),
-    ...(str(value.description) ? { label: str(value.description)! } : {}),
-    ...(str(value.workflowPhase) ? { phase: str(value.workflowPhase)! } : {}),
-    ...(str(value.pickedEffortModel) ? { model: str(value.pickedEffortModel)! } : {}),
-  };
+  const agentType = cut(value.agentType, 120);
+  const label = cut(value.description, 200);
+  const phase = cut(value.workflowPhase, 120);
+  const model = cut(value.pickedEffortModel, 120);
+  return { ...(agentType ? { agentType } : {}), ...(label ? { label } : {}), ...(phase ? { phase } : {}), ...(model ? { model } : {}) };
 }
 
 /**
  * What an agent's transcript says of it, without keeping it: when it started and last wrote, its
  * model, its tool calls, its last tool, and its context at its latest response (Claude Code's
- * "tokens"). Read once, then only by what was added.
+ * "tokens"). Read once, then only by what was added, a little at a time.
  */
-type AgentStats = { ino: number; offset: number; carry: string; startedAt?: number; lastAt?: number; model?: string; tokens?: number; toolCalls: number; lastTool?: string };
+type AgentStats = {
+  ino: number;
+  offset: number;
+  /** The start of a line not finished yet; of one too long to keep, its first bytes and its last. */
+  carry: Buffer;
+  long?: { head: Buffer; tail: Buffer };
+  startedAt?: number;
+  lastAt?: number;
+  model?: string;
+  tokens?: number;
+  toolCalls: number;
+  lastTool?: string;
+};
 
 const stats = new Map<string, AgentStats>();
 const ASSISTANT = /"type":\s*"assistant"/;
 const TIMESTAMP = /"timestamp":\s*"([^"]{10,40})"/;
+/** A row longer than this (a copy of an API request, a huge tool output) is only looked at for its time. */
+const LINE_MAX = 2 * 1024 * 1024;
+const TAIL = 4096;
+const ROW = Buffer.from('{"parentUuid"');
+
+function noteTime(agent: AgentStats, text: string): void {
+  const time = TIMESTAMP.exec(text)?.[1];
+  const at = time ? Date.parse(time) : NaN;
+  if (Number.isNaN(at)) return;
+  agent.startedAt ??= at;
+  agent.lastAt = at;
+}
 
 function statLine(agent: AgentStats, line: string): void {
   // Rows of the conversation only: copies of API requests repeat it, and are no part of it.
   if (!line.startsWith('{"parentUuid"')) return;
-  const time = TIMESTAMP.exec(line.length > 4096 ? line.slice(-4096) : line)?.[1] ?? TIMESTAMP.exec(line)?.[1];
-  const at = time ? Date.parse(time) : NaN;
-  if (!Number.isNaN(at)) {
-    agent.startedAt ??= at;
-    agent.lastAt = at;
-  }
-  if (line.length > 2 * 1024 * 1024 || !ASSISTANT.test(line)) return;
+  noteTime(agent, line.length > TAIL ? line.slice(-TAIL) : line);
+  if (!ASSISTANT.test(line)) return;
   let row: { type?: unknown; message?: { model?: unknown; content?: unknown; usage?: Record<string, unknown> } };
   try {
     row = JSON.parse(line) as typeof row;
@@ -325,69 +406,140 @@ function statLine(agent: AgentStats, line: string): void {
     for (const block of row.message.content) {
       if (isRecord(block) && block.type === 'tool_use') {
         agent.toolCalls += 1;
-        if (str(block.name)) agent.lastTool = str(block.name);
+        if (str(block.name)) agent.lastTool = cut(block.name, 120);
       }
     }
   }
 }
 
-async function agentStats(real: string): Promise<AgentStats | undefined> {
-  const handle = await openRegular(real).catch(() => undefined);
-  if (!handle) return undefined;
-  try {
-    const info = await handle.stat();
-    let agent = stats.get(real);
-    if (!agent || agent.ino !== info.ino || info.size < agent.offset) agent = { ino: info.ino, offset: 0, carry: '', toolCalls: 0 };
-    while (agent.offset < info.size) {
-      const buffer = Buffer.alloc(Math.min(8 * 1024 * 1024, info.size - agent.offset));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, agent.offset);
-      if (bytesRead <= 0) break;
-      agent.offset += bytesRead;
-      // Lines are cut on bytes, so a character split across reads comes out whole.
-      const chunk = Buffer.concat([Buffer.from(agent.carry, 'latin1'), buffer.subarray(0, bytesRead)]);
-      const last = chunk.lastIndexOf(0x0a);
-      agent.carry = last < 0 ? chunk.toString('latin1') : chunk.subarray(last + 1).toString('latin1');
-      if (last >= 0) for (const line of chunk.subarray(0, last).toString('utf8').split('\n')) statLine(agent, line);
-      // A line too long to be a row worth reading is let go rather than carried.
-      if (agent.carry.length > 8 * 1024 * 1024) agent.carry = '';
+/** The end of a line: read it, or for one too long, only its time. */
+function endLine(agent: AgentStats, piece: Buffer): void {
+  if (agent.long) {
+    const { head } = agent.long;
+    const tail = Buffer.concat([agent.long.tail, piece]).subarray(-TAIL);
+    agent.long = undefined;
+    if (head.subarray(0, ROW.length).equals(ROW)) noteTime(agent, tail.toString('utf8'));
+    return;
+  }
+  const line = agent.carry.length > 0 ? Buffer.concat([agent.carry, piece]) : piece;
+  agent.carry = Buffer.alloc(0);
+  if (line.length > LINE_MAX) {
+    if (line.subarray(0, ROW.length).equals(ROW)) noteTime(agent, line.subarray(-TAIL).toString('utf8'));
+    return;
+  }
+  statLine(agent, line.toString('utf8'));
+}
+
+/** A line goes on past this read: kept, or of one too long, only its ends. */
+function carryOn(agent: AgentStats, piece: Buffer): void {
+  if (agent.long) {
+    agent.long.tail = Buffer.from(Buffer.concat([agent.long.tail, piece]).subarray(-TAIL));
+    return;
+  }
+  agent.carry = Buffer.concat([agent.carry, piece]);
+  if (agent.carry.length > LINE_MAX) {
+    agent.long = { head: Buffer.from(agent.carry.subarray(0, ROW.length)), tail: Buffer.from(agent.carry.subarray(-TAIL)) };
+    agent.carry = Buffer.alloc(0);
+  }
+}
+
+function agentStats(real: string): Promise<AgentStats | undefined> {
+  return oneAtATime(real, async () => {
+    const handle = await openRegular(real).catch(() => undefined);
+    if (!handle) return undefined;
+    try {
+      const info = await handle.stat();
+      let agent = stats.get(real);
+      if (!agent || agent.ino !== info.ino || info.size < agent.offset) agent = { ino: info.ino, offset: 0, carry: Buffer.alloc(0), toolCalls: 0 };
+      const buffer = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1, info.size - agent.offset)));
+      while (agent.offset < info.size) {
+        const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, info.size - agent.offset), agent.offset);
+        if (bytesRead <= 0) break;
+        agent.offset += bytesRead;
+        const chunk = buffer.subarray(0, bytesRead);
+        for (let from = 0; ;) {
+          const end = chunk.indexOf(0x0a, from);
+          if (end < 0) {
+            if (from < chunk.length) carryOn(agent, chunk.subarray(from));
+            break;
+          }
+          endLine(agent, chunk.subarray(from, end));
+          from = end + 1;
+        }
+      }
+      remember(stats, real, agent, 512);
+      return agent;
+    } catch {
+      return undefined;
+    } finally {
+      await handle.close();
     }
-    remember(stats, real, agent, 512);
-    return agent;
-  } catch {
-    return undefined;
-  } finally {
-    await handle.close();
-  }
+  });
 }
 
-/** An agent's transcript: in its run's folder, or (after an interrupt, Claude Code sometimes) beside the session's other subagents. */
-async function agentFile(dir: string, runId: string, agentId: string): Promise<string | undefined> {
-  if (!AGENT_ID.test(agentId)) return undefined;
-  for (const file of [path.join(dir, 'subagents', 'workflows', runId, `agent-${agentId}.jsonl`), path.join(dir, 'subagents', `agent-${agentId}.jsonl`)]) {
-    const real = await inside(dir, file);
-    if (real) return real;
-  }
-  return undefined;
+/** An agent's figures over its files: its tool calls in all of them, its latest response's in the newest. */
+type Seen = { startedAt?: number; lastAt?: number; model?: string; tokens?: number; toolCalls: number; lastTool?: string };
+
+function together(parts: AgentStats[]): Seen | undefined {
+  if (parts.length === 0) return undefined;
+  if (parts.length === 1) return parts[0];
+  const newest = parts.reduce((a, b) => ((b.lastAt ?? 0) > (a.lastAt ?? 0) ? b : a));
+  const times = (pick: (s: AgentStats) => number | undefined) => parts.map(pick).filter((t): t is number => t !== undefined);
+  const started = times((s) => s.startedAt);
+  const last = times((s) => s.lastAt);
+  const model = newest.model ?? parts.find((s) => s.model)?.model;
+  const tokens = newest.tokens ?? parts.find((s) => s.tokens)?.tokens;
+  const lastTool = newest.lastTool ?? parts.find((s) => s.lastTool)?.lastTool;
+  return {
+    ...(started.length > 0 ? { startedAt: Math.min(...started) } : {}),
+    ...(last.length > 0 ? { lastAt: Math.max(...last) } : {}),
+    ...(model ? { model } : {}),
+    ...(tokens ? { tokens } : {}),
+    toolCalls: parts.reduce((sum, s) => sum + s.toolCalls, 0),
+    ...(lastTool ? { lastTool } : {}),
+  };
 }
 
-/** The journal's agents, with what each one's own files say. */
-async function journalAgents(dir: string, runId: string): Promise<{ agents: WorkflowAgent[]; results: Map<string, string> }> {
+/**
+ * An agent's transcript: in its run's folder, and (after an interrupt, Claude Code sometimes goes
+ * on there) beside the session's other subagents, where the rest of it is: both, in that order.
+ */
+async function agentFiles(dir: string, runId: string, agentId: string): Promise<string[]> {
+  if (!AGENT_ID.test(agentId)) return [];
+  const found = await Promise.all([
+    inside(dir, path.join(dir, 'subagents', 'workflows', runId, `agent-${agentId}.jsonl`)),
+    inside(dir, path.join(dir, 'subagents', `agent-${agentId}.jsonl`)),
+  ]);
+  return [...new Set(found.filter((f): f is string => Boolean(f)))];
+}
+
+/**
+ * The journal's agents, with what each one's own files say. For a call that resumed the run
+ * (`since`: when it was made), only the agents at work since: the journal also holds those of the
+ * attempts before it, which it did not run again.
+ */
+async function journalAgents(dir: string, runId: string, since?: number): Promise<WorkflowAgent[]> {
   const entries = (await readJournal(dir, runId)) ?? [];
-  const results = new Map<string, string>();
-  const agents = await Promise.all(entries.map(async (entry, i): Promise<WorkflowAgent> => {
+  const agents = await inTurn(entries, READERS, async (entry): Promise<WorkflowAgent | undefined> => {
     const meta = entry.agentId
       ? await cachedJson(dir, path.join(dir, 'subagents', 'workflows', runId, `agent-${entry.agentId}.meta.json`), META_FILE_MAX, agentMetaOf)
       : undefined;
-    const file = entry.agentId ? await agentFile(dir, runId, entry.agentId) : undefined;
-    const seen = file ? await agentStats(file) : undefined;
-    if (entry.agentId && entry.result) results.set(entry.agentId, entry.result);
-    const label = entry.label ?? meta?.label ?? `Agent ${i + 1}`;
+    const files = entry.agentId ? await agentFiles(dir, runId, entry.agentId) : [];
+    const parts: AgentStats[] = [];
+    for (const file of files) {
+      const seen = await agentStats(file);
+      if (seen) parts.push(seen);
+    }
+    const seen = together(parts);
+    // An agent an earlier attempt ran, not run again by this call.
+    if (since !== undefined && seen?.lastAt !== undefined && seen.lastAt < since) return undefined;
+    const label = entry.label ?? meta?.label;
     const phase = entry.phase ?? meta?.phase;
-    const model = seen?.model ?? meta?.model;
+    const model = cut(seen?.model, 120) ?? meta?.model;
     const done = entry.state === 'done';
     return {
-      index: i + 1,
-      label,
+      index: 0,
+      label: label ?? '',
       state: done ? 'done' : entry.state === 'failed' ? 'error' : 'progress',
       ...(phase ? { phaseTitle: phase } : {}),
       ...(entry.agentId ? { agentId: entry.agentId } : {}),
@@ -401,18 +553,23 @@ async function journalAgents(dir: string, runId: string): Promise<{ agents: Work
       ...(done && seen?.startedAt !== undefined && seen.lastAt !== undefined ? { durationMs: Math.max(0, seen.lastAt - seen.startedAt) } : {}),
       ...(done && entry.result ? { resultPreview: cut(entry.result.replace(/\s+/g, ' ').trim(), 400)! } : {}),
     };
-  }));
-  return { agents, results };
+  });
+  return agents.filter((a): a is WorkflowAgent => Boolean(a)).map((agent, i) => ({ ...agent, index: i + 1, label: agent.label || `Agent ${i + 1}` }));
 }
 
 // ---- The Workflow call, in the conversation -----------------------------------------------------
 
+/** A notice of a run's end, with when Claude Code wrote it. */
+type Notice = TaskNotice & { at?: number };
+
 /** What the conversation says about its workflows: the calls, their results, how each ended. */
 type Index = {
   calls: Map<string, ToolUseBlock>;
+  /** When each call was made: an agent at work since is that call's. */
+  madeAt: Map<string, number>;
   results: Map<string, { block: ToolResultBlock; at?: number }>;
   /** The end Claude Code wrote for each call, by its id; one from the Claude Code that ran it beats an orphan's. */
-  notices: Map<string, TaskNotice>;
+  notices: Map<string, Notice>;
   /** Tasks Claude stopped (TaskStop calls that ran). */
   stopped: Set<string>;
   /** The calls of each run, in order: a run resumed later has more than one. */
@@ -424,13 +581,17 @@ const indexes = new WeakMap<ChatMessage[], Index>();
 function indexOf(messages: ChatMessage[]): Index {
   const known = indexes.get(messages);
   if (known) return known;
-  const index: Index = { calls: new Map(), results: new Map(), notices: new Map(), stopped: new Set(), runs: new Map() };
+  const index: Index = { calls: new Map(), madeAt: new Map(), results: new Map(), notices: new Map(), stopped: new Set(), runs: new Map() };
   const stops = new Map<string, string>();
   for (const message of messages) {
     for (const block of message.blocks) {
       if (block.type === 'tool_use') {
-        if (block.name === 'Workflow') index.calls.set(block.id, block);
-        else if (block.name === 'TaskStop' && str(block.input.task_id ?? block.input.shell_id)) stops.set(block.id, str(block.input.task_id ?? block.input.shell_id)!);
+        if (block.name === 'Workflow') {
+          index.calls.set(block.id, block);
+          if (message.timestamp) index.madeAt.set(block.id, message.timestamp);
+        } else if (block.name === 'TaskStop' && str(block.input.task_id ?? block.input.shell_id)) {
+          stops.set(block.id, str(block.input.task_id ?? block.input.shell_id)!);
+        }
       } else if (block.type === 'tool_result') {
         if (index.calls.has(block.tool_use_id)) {
           index.results.set(block.tool_use_id, { block, ...(message.timestamp ? { at: message.timestamp } : {}) });
@@ -443,7 +604,7 @@ function indexOf(messages: ChatMessage[]): Index {
         const notice = parseTaskNotice(block.text);
         if (!notice?.toolUseId) continue;
         const before = index.notices.get(notice.toolUseId);
-        if (!before || before.orphan || !notice.orphan) index.notices.set(notice.toolUseId, notice);
+        if (!before || before.orphan || !notice.orphan) index.notices.set(notice.toolUseId, { ...notice, ...(message.timestamp ? { at: message.timestamp } : {}) });
       }
     }
   }
@@ -491,6 +652,22 @@ async function scriptFile(dir: string, name: string | undefined): Promise<string
 /** One Workflow call's run as a page shows it, and a tag that changes when it does. */
 export type WorkflowAnswer = { workflow: Workflow; tag: string };
 
+const tagOf = (value: unknown) => `"${createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 27)}"`;
+
+/**
+ * Whether a run nothing has said the end of is still at work. Its agents writing now say so. A
+ * Claude Code that found it in the session without a record of its end wrote an orphan's notice:
+ * then only the run's own agents say it lives on (the Claude Code that started it, still at it,
+ * writes after that notice), not that some Claude Code has the session open, as the one that wrote
+ * the notice does. Without that notice, a Claude Code with the session open may be running it.
+ */
+async function stillRunning(sessionId: string, lastAt: number, orphan: Notice | undefined): Promise<boolean> {
+  const quiet = Date.now() - lastAt;
+  if (quiet < ACTIVE_MS) return true;
+  if (orphan) return orphan.at !== undefined && lastAt > orphan.at && quiet < QUIET_MS;
+  return (await liveProcesses()).has(sessionId);
+}
+
 /**
  * A Workflow call's run: what this Pelican's Claude reports of it (`live`), else Claude Code's
  * record of it once it ended, else its journal and its agents' files. How it ended comes from what
@@ -520,9 +697,12 @@ export async function workflowView(sessionId: string, callId: string, live?: Wor
   const phases = meta?.phases ?? [];
   const startedAt = index.results.get(callId)?.at;
   let workflow: Workflow;
-  // A later call resumed this run (the same run id): it is that call's to show.
+  // A later call resumed this run (the same run id): it is that call's to show. This one resumed
+  // an earlier call's run: the journal goes back to that one's attempt.
   const calls = runId ? index.runs.get(runId) ?? [] : [];
-  const resumedLater = calls.indexOf(callId) >= 0 && calls.indexOf(callId) < calls.length - 1;
+  const position = calls.indexOf(callId);
+  const resumedLater = position >= 0 && position < calls.length - 1;
+  const resumed = position > 0;
   if (live) {
     workflow = { ...base, ...live, ...(live.phases.length > 0 ? {} : { phases }), source: 'live' };
   } else if (ours) {
@@ -544,14 +724,13 @@ export async function workflowView(sessionId: string, callId: string, live?: Wor
     };
   } else {
     // Another call carries the run on: its card shows the run, this one how it ended here.
-    const { agents } = runId && !resumedLater ? await journalAgents(where.dir, runId) : { agents: [] as WorkflowAgent[] };
+    const since = resumed ? index.madeAt.get(callId) ?? startedAt : undefined;
+    const agents = runId && !resumedLater ? await journalAgents(where.dir, runId, since) : [];
     const lastAt = Math.max(0, ...agents.map((a) => a.lastProgressAt ?? 0));
-    // Without word of its end, it runs while a Claude Code has the session open, or while its
-    // agents still write: a look at the registry that missed a process must not end it.
     const ended = notice?.status && !notice.orphan ? ENDED[notice.status]
       : taskId && index.stopped.has(taskId) ? 'killed'
         : resumedLater ? 'killed'
-          : Date.now() - lastAt < ACTIVE_MS || (await liveProcesses()).has(sessionId) ? 'running' : 'stopped';
+          : await stillRunning(sessionId, lastAt, notice?.orphan ? notice : undefined) ? 'running' : 'stopped';
     const running = ended === 'running';
     const tokens = notice?.usage?.tokens ?? agentTokens(agents);
     const toolUses = notice?.usage?.toolUses ?? agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0);
@@ -566,56 +745,162 @@ export async function workflowView(sessionId: string, callId: string, live?: Wor
       phases,
       agents,
       ...(notice?.error ? { error: notice.error } : {}),
-      ...(notice?.result ? { result: clip(notice.result, RESULT_MAX) } : {}),
+      ...(notice?.result ? { result: clipLines(notice.result, RESULT_MAX) } : {}),
       source: 'journal',
     };
   }
-  const tag = `"${createHash('sha256').update(JSON.stringify(workflow)).digest('base64url').slice(0, 27)}"`;
-  return { workflow, tag };
+  return { workflow, tag: tagOf(workflow) };
 }
+
+// ---- A workflow agent's own transcript --------------------------------------------------------
 
 /** How many of an agent's messages a page holds at most, and about how much text. */
 const PAGE_MAX = 300;
 const PAGE_BYTES = 768 * 1024;
+/** One message, at most, on a page: a call with a large value (a StructuredOutput of findings) is cut to this. */
+const MESSAGE_MAX = 128 * 1024;
+const PART_MAX = 8 * 1024;
+
+/** A value as text no longer than `max`: a string cut, anything else as its JSON, cut. */
+function shortValue(value: unknown, max: number): unknown {
+  if (typeof value === 'string') return value.length > max ? `${value.slice(0, max)}\n…` : value;
+  if (value === null || typeof value !== 'object') return value;
+  const text = JSON.stringify(value) ?? '';
+  return text.length > max ? `${text.slice(0, max)}\n…` : value;
+}
+
+/** A block of a message too large for a page, each of its parts cut to a few kilobytes. */
+function shortBlock(block: Block): Block {
+  switch (block.type) {
+    case 'text':
+      return block.text.length > PART_MAX ? { ...block, text: `${block.text.slice(0, PART_MAX)}\n…`, truncated: true } : block;
+    case 'thinking':
+      return block.thinking.length > PART_MAX / 4 ? { ...block, thinking: `${block.thinking.slice(0, PART_MAX / 4)}\n…` } : block;
+    case 'tool_use':
+      return { ...block, input: Object.fromEntries(Object.entries(block.input).map(([key, value]) => [key, shortValue(value, PART_MAX)])) };
+    case 'tool_result': {
+      if (typeof block.content === 'string') return block.content.length > PART_MAX ? { ...block, content: `${block.content.slice(0, PART_MAX)}\n…`, truncated: true } : block;
+      const content = block.content.map((part) => (part.type === 'text' && part.text.length > PART_MAX ? { ...part, text: `${part.text.slice(0, PART_MAX)}\n…`, truncated: true } : part));
+      return { ...block, content, ...(content.some((p) => p.type === 'text' && p.truncated) ? { truncated: true } : {}) };
+    }
+    default:
+      return block;
+  }
+}
+
+/** A message as a page carries it, with its size: one too large has its parts cut, and then as many of them as fit. */
+const sized = new WeakMap<ChatMessage, { message: ChatMessage; size: number }>();
+function onPage(message: ChatMessage): { message: ChatMessage; size: number } {
+  const known = sized.get(message);
+  if (known) return known;
+  let shown = message;
+  let size = JSON.stringify(message).length;
+  if (size > MESSAGE_MAX) {
+    const blocks: Block[] = [];
+    let total = 0;
+    const parts = message.blocks.map(shortBlock);
+    for (const [i, block] of parts.entries()) {
+      const weight = JSON.stringify(block).length;
+      if (total + weight > MESSAGE_MAX - 1024 && blocks.length > 0) {
+        blocks.push({ type: 'text', text: `… (${parts.length - i} more parts)`, truncated: true });
+        break;
+      }
+      blocks.push(block);
+      total += weight;
+    }
+    shown = { ...message, blocks };
+    size = JSON.stringify(shown).length;
+  }
+  const out = { message: shown, size };
+  sized.set(message, out);
+  return out;
+}
+
+/** An agent's messages over its two files, the run folder's first: the second goes on where the first stopped. */
+const joined = new WeakMap<ChatMessage[], { rest: ChatMessage[]; all: ChatMessage[] }>();
+function joinParts(parts: ChatMessage[][]): ChatMessage[] {
+  const [first = [], rest = []] = parts;
+  if (rest.length === 0) return first;
+  if (first.length === 0) return rest;
+  const known = joined.get(first);
+  if (known?.rest === rest) return known.all;
+  // The earlier one first, should the files be the other way round.
+  const [a, b] = (rest[0]?.timestamp ?? Infinity) < (first[0]?.timestamp ?? Infinity) ? [rest, first] : [first, rest];
+  const seen = new Set(a.map((m) => m.uuid));
+  const all = [...a, ...b.filter((m) => !seen.has(m.uuid))];
+  joined.set(first, { rest, all });
+  return all;
+}
 
 /**
- * A page of one workflow agent's own transcript, ending before message `before` (default: the
- * end): its last `limit` messages, fewer when they come to more than a phone should load at once.
- * With its prompt, and what it returned, from the journal. Only agents of this call's run.
+ * What the agent was asked, as Claude Code shows it: the last of the user messages its transcript
+ * starts with (Claude Code relays the user's request in one, then the computed task), the one with
+ * the computed task if any, without the harness's frame.
+ */
+function promptOf(messages: ChatMessage[]): string | undefined {
+  const leading: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== 'user' || (message.meta && leading.length > 0)) break;
+    if (!message.blocks.some((b) => b.type === 'text')) break;
+    leading.push(message);
+  }
+  const text = (message: ChatMessage) => message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+  const task = [...leading].reverse().find((m) => text(m).includes('The computed task text follows:\n')) ?? leading.at(-1);
+  return task ? unframedPrompt(text(task)) : undefined;
+}
+
+/**
+ * A page of one workflow agent's own transcript: its last `limit` messages before message `before`
+ * (default: the end), or with `after`, those from that message on (what a page that has the rest
+ * asks for while the agent works); fewer when they come to more than a phone should load at once.
+ * With its prompt, and what it returned, from the journal. Only agents of this call's run. Read
+ * from that agent's own files only, whatever the run's size.
  */
 export async function workflowAgentPage(
-  sessionId: string, callId: string, agentId: string, before: number | undefined, limit: number, live?: Workflow,
-): Promise<WorkflowAgentPage | undefined> {
+  sessionId: string, callId: string, agentId: string, { before, after, limit = 60 }: { before?: number; after?: number; limit?: number }, live?: Workflow,
+): Promise<(WorkflowAgentPage & { tag: string }) | undefined> {
   if (!AGENT_ID.test(agentId)) return undefined;
   const found = await findCall(sessionId, callId);
   if (!found?.runId) return undefined;
   const { where, runId, taskId } = found;
   const record = await cachedJson(where.dir, recordFile(where.dir, runId), RECORD_MAX, recordOf);
-  const fromRecord = record && (!taskId || !record.taskId || record.taskId === taskId) ? record.items.map(agentItem).filter((a): a is WorkflowAgent => Boolean(a)) : [];
-  const { agents: fromJournal, results } = await journalAgents(where.dir, runId);
-  const agent = [...(live?.agents ?? []), ...fromRecord, ...fromJournal].find((a) => a.agentId === agentId);
-  if (!agent) return undefined;
-  const file = await agentFile(where.dir, runId, agentId);
-  const all = file ? await readHistory(file, { sidechain: true }) : [];
-  const end = Math.min(before ?? all.length, all.length);
-  let offset = end;
-  let bytes = 0;
+  const ours = record && (!taskId || !record.taskId || record.taskId === taskId) ? record : undefined;
+  const fromRecord = (ours?.items ?? []).map(agentItem).find((a) => a?.agentId === agentId);
+  const entry = ((await readJournal(where.dir, runId)) ?? []).find((e) => e.agentId === agentId);
+  const agent = live?.agents.find((a) => a.agentId === agentId) ?? fromRecord;
+  if (!agent && !entry) return undefined;
+  const files = await agentFiles(where.dir, runId, agentId);
+  const all = joinParts(await Promise.all(files.map((file) => readHistory(file, { sidechain: true }))));
   const wanted = Math.max(1, Math.min(limit, PAGE_MAX));
-  while (offset > 0 && end - offset < wanted) {
-    const size = JSON.stringify(all[offset - 1]).length;
-    if (end - offset > 0 && bytes + size > PAGE_BYTES) break;
-    bytes += size;
-    offset -= 1;
+  let offset: number;
+  let end: number;
+  if (after !== undefined) {
+    // From `after` on, as far as a page goes.
+    offset = Math.min(after, all.length);
+    end = offset;
+    for (let bytes = 0; end < all.length && end - offset < wanted; end += 1) {
+      const { size } = onPage(all[end]!);
+      if (end > offset && bytes + size > PAGE_BYTES) break;
+      bytes += size;
+    }
+  } else {
+    end = Math.min(before ?? all.length, all.length);
+    offset = end;
+    for (let bytes = 0; offset > 0 && end - offset < wanted; offset -= 1) {
+      const { size } = onPage(all[offset - 1]!);
+      if (end - offset > 0 && bytes + size > PAGE_BYTES) break;
+      bytes += size;
+    }
   }
-  const first = all.find((m) => m.role === 'user' && m.blocks.some((b) => b.type === 'text'));
-  const framed = first?.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-  const prompt = framed ? unframedPrompt(framed) : agent.promptPreview;
-  const result = results.get(agentId) ?? agent.resultPreview;
-  return {
-    messages: all.slice(offset, end),
+  const prompt = promptOf(all) ?? agent?.promptPreview ?? fromRecord?.promptPreview;
+  const result = entry?.state === 'done' ? entry.result : undefined;
+  const shown = result ?? agent?.resultPreview ?? fromRecord?.resultPreview;
+  const page: WorkflowAgentPage = {
+    messages: all.slice(offset, end).map((m) => onPage(m).message),
     total: all.length,
     offset,
     ...(prompt ? { prompt: clip(prompt, PROMPT_MAX) } : {}),
-    ...(result ? { result } : {}),
+    ...(shown ? { result: shown } : {}),
   };
+  return { ...page, tag: tagOf(page) };
 }

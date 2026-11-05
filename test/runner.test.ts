@@ -983,8 +983,9 @@ describe('workflows', () => {
       runId: 'wf_7c2e4a10-9b3', taskId: 'w1', name: 'demo-review', status: 'running', totalTokens: 9000, totalToolCalls: 3, source: 'live',
       phases: [{ title: 'Review', detail: 'one agent per area' }, { title: 'Verify' }, { title: 'Report' }],
     });
-    // Long texts are cut for the page.
-    expect(shown.agents[0]!.resultPreview!.length).toBeLessThanOrEqual(300);
+    // What an agent returned is not sent with each frame: the agent opened reads it from its files.
+    expect(shown.agents[0]).not.toHaveProperty('resultPreview');
+    expect(shown.agents[0]).not.toHaveProperty('promptPreview');
     // Its task row says its name and how far its agents got, not its description twice.
     expect(state().tasks).toEqual([{ id: 'w1', description: 'demo-review', type: 'local_workflow', summary: '1/2 agents' }]);
     expect(state().progress).toBeUndefined();
@@ -1001,6 +1002,8 @@ describe('workflows', () => {
 
     claude.say(system('task_updated', { task_id: 'w1', patch: { status: 'paused' } }));
     await vi.waitFor(() => expect(state().workflows!.toolu_w!.status).toBe('paused'));
+    // A pause stops the run: its time stops counting there.
+    expect(state().workflows!.toolu_w!.durationMs).toBeGreaterThanOrEqual(0);
     claude.say(frame({ workflow_progress: [item(2, { state: 'error', agentId: 'a2', error: 'Stopped because the workflow was stopped' })] }));
     claude.say(system('task_updated', { task_id: 'w1', patch: { status: 'killed', end_time: Date.now() } }));
     claude.say(system('task_notification', { task_id: 'w1', tool_use_id: 'toolu_w', status: 'stopped', output_file: '', summary: 'Review the demo app, then check each finding' }));
@@ -1035,6 +1038,13 @@ describe('workflows', () => {
     await vi.waitFor(() => expect(state().permissions[0]?.agent).toBe('review:server'));
     run.decide(state().permissions[0]!.id, { behavior: 'deny' });
     await answer;
+    // The script names its agents as it likes: the name is cut, as the run's card cuts it.
+    claude.say(frame({ workflow_progress: [item(2, { state: 'progress', agentId: 'a2f0c3e5b7d9a2c42', label: 'x'.repeat(5000) })] }));
+    await vi.waitFor(() => expect(state().workflows?.toolu_w?.agents).toHaveLength(2));
+    const long = ask(claude, 'Bash', { command: 'ls' }, { agentID: 'a2f0c3e5b7d9a2c42' });
+    await vi.waitFor(() => expect(state().permissions[0]?.agent).toBe(`${'x'.repeat(199)}…`));
+    run.decide(state().permissions[0]!.id, { behavior: 'deny' });
+    await long.answer;
     claude.end();
     await vi.waitFor(() => expect(run.closed).toBe(true));
     expect(run.workflow('toolu_w')).toBeUndefined();

@@ -194,13 +194,13 @@ describe('a workflow agent’s steps', () => {
     await transcript(id, [call('toolu_p1', { script: META }), launched('toolu_p1', 'wf_3f9c1a2b-7d4', 'w10')]);
     await put(id, 'subagents/workflows/wf_3f9c1a2b-7d4/journal.jsonl', '{"type":"started","key":"v2:a","agentId":"a1","label":"review:server"}\n{"type":"result","key":"v2:a","agentId":"a1","result":"All clear."}\n');
     await put(id, 'subagents/workflows/wf_3f9c1a2b-7d4/agent-a1.jsonl', agentRows('a1', 60_000, 75));
-    const last = await workflowAgentPage(id, 'toolu_p1', 'a1', undefined, 60);
+    const last = await workflowAgentPage(id, 'toolu_p1', 'a1', { limit: 60 });
     expect(last).toMatchObject({ total: 151, offset: 91, prompt: 'Review the server.', result: 'All clear.' });
     expect(last!.messages).toHaveLength(60);
-    const before = await workflowAgentPage(id, 'toolu_p1', 'a1', last!.offset, 60);
+    const before = await workflowAgentPage(id, 'toolu_p1', 'a1', { before: last!.offset, limit: 60 });
     expect(before).toMatchObject({ total: 151, offset: 31 });
     expect(before!.messages.at(-1)!.uuid).not.toBe(last!.messages[0]!.uuid);
-    expect((await workflowAgentPage(id, 'toolu_p1', 'a1', 31, 60))!.offset).toBe(0);
+    expect((await workflowAgentPage(id, 'toolu_p1', 'a1', { before: 31, limit: 60 }))!.offset).toBe(0);
   });
 
   it('never come to more than a phone should load at once', async () => {
@@ -213,7 +213,7 @@ describe('a workflow agent’s steps', () => {
         message: i % 2 ? { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${i - 1}`, content: 'x'.repeat(200_000) }] } : { id: `m${i}`, role: 'assistant', content: [{ type: 'tool_use', id: `t${i}`, name: 'Write', input: { file_path: '/work/shop/big.txt', content: 'y'.repeat(100_000) } }] } });
     }
     await put(id, 'subagents/workflows/wf_4a4a4a4a-111/agent-a1.jsonl', `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
-    const page = (await workflowAgentPage(id, 'toolu_p2', 'a1', undefined, 60))!;
+    const page = (await workflowAgentPage(id, 'toolu_p2', 'a1', { limit: 60 }))!;
     expect(page.messages.length).toBeLessThan(60);
     expect(JSON.stringify(page).length).toBeLessThan(900_000);
   });
@@ -225,11 +225,13 @@ describe('the workflow routes', () => {
     id = newSession();
     await transcript(id, [call('toolu_w1', { script: META }), launched('toolu_w1', 'wf_6b6b6b6b-222', 'w12')]);
     await put(id, 'subagents/workflows/wf_6b6b6b6b-222/journal.jsonl', '{"type":"started","key":"v2:a","agentId":"a1","label":"review:server"}\n{"type":"started","key":"v2:b","agentId":"a2","label":"linked"}\n');
-    await put(id, 'subagents/workflows/wf_6b6b6b6b-222/agent-a1.jsonl', agentRows('a1', 60_000));
+    // Its agent last wrote well before the minute that counts as at work: the run reads the same
+    // from one request to the next (at 60 s, it ended between two of them).
+    await put(id, 'subagents/workflows/wf_6b6b6b6b-222/agent-a1.jsonl', agentRows('a1', 10 * 60_000));
     // Another run's agent, in the same session.
-    await put(id, 'subagents/workflows/wf_7c7c7c7c-333/agent-a9.jsonl', agentRows('a9', 60_000));
+    await put(id, 'subagents/workflows/wf_7c7c7c7c-333/agent-a9.jsonl', agentRows('a9', 10 * 60_000));
     // An agent file that is a link out of the session's folder, and a record that is one.
-    await writeFile(path.join(outside, 'secret.jsonl'), agentRows('a2', 60_000).replace('Review the server.', 'SECRET'));
+    await writeFile(path.join(outside, 'secret.jsonl'), agentRows('a2', 10 * 60_000).replace('Review the server.', 'SECRET'));
     await writeFile(path.join(outside, 'record.json'), RECORD('w12').replace('demo-review', 'SECRET'));
     await symlink(path.join(outside, 'secret.jsonl'), path.join(folder(id), 'subagents/workflows/wf_6b6b6b6b-222/agent-a2.jsonl'));
     await mkdir(path.join(folder(id), 'workflows'), { recursive: true });
