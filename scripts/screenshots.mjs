@@ -1,6 +1,7 @@
-// The README's screenshots, from the demo (made-up sessions; nothing of yours is shown).
-//   npm run build && npm run screenshots      (CHROME=/path/to/chrome if it is not in the usual place)
-// Writes docs/shots/{phone,desktop,list}-{light,dark}.png and og.png, the picture shared links show.
+// The README's and the site's screenshots, from the demo (made-up sessions; nothing of yours is shown).
+//   npm run build && npm run screenshots      (CHROME=/path/to/chrome if it is not in the usual place;
+//                                              PELICAN_DEMO_PORT if 47860 is taken)
+// Writes docs/shots/{phone,desktop,list,live}-{light,dark}.png and og.png, the picture shared links show.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -8,11 +9,13 @@ import { chromium } from 'playwright-core';
 
 import { startDemo } from './demo-server.mjs';
 
-const PORT = 47860;
+const PORT = Number(process.env.PELICAN_DEMO_PORT ?? 47860);
 const BASE = `http://127.0.0.1:${PORT}/`;
 const OUT = 'docs/shots';
 const WAITING = 'a3f1c2d4-1111-4a1b-8c3d-000000000001';
 const CHART = 'f3a6e9b5-6666-4f60-9182-000000000006';
+/** A session Claude Desktop is working on: what the site shows under "Wherever you started it". */
+const ELSEWHERE = 'b7e2a9c1-2222-4b2c-9d4e-000000000002';
 
 const demo = await startDemo({ port: PORT });
 
@@ -54,8 +57,12 @@ async function phoneShots(scheme) {
   await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
   await page.waitForTimeout(500);
   await grab();
+  await page.goto(`${BASE}?s=${ELSEWHERE}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(700);
+  await page.evaluate(tidy);
+  const live = await page.screenshot();
   await context.close();
-  return shots;
+  return { shots, live };
 }
 
 /** Three phone screens side by side, each with rounded corners, on the page color. */
@@ -107,9 +114,10 @@ async function socialCard(shots) {
 }
 
 for (const scheme of ['light', 'dark']) {
-  const shots = await phoneShots(scheme);
+  const { shots, live } = await phoneShots(scheme);
   await strip(shots, scheme, `phone-${scheme}.png`);
   await writeFile(path.join(OUT, `list-${scheme}.png`), shots[0]);
+  await writeFile(path.join(OUT, `live-${scheme}.png`), live);
   if (scheme === 'light') await socialCard(shots);
   await desktopShot(scheme, `desktop-${scheme}.png`);
 }

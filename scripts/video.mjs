@@ -1,5 +1,6 @@
 // A short tour of the demo for the README and the site: phone-sized, with each tap shown.
-//   npm run build && node scripts/video.mjs      (needs ffmpeg; CHROME=/path/to/chrome if elsewhere)
+//   npm run build && node scripts/video.mjs      (needs ffmpeg; CHROME=/path/to/chrome if elsewhere;
+//                                                 PELICAN_DEMO_PORT if 47862 is taken)
 // Writes docs/shots/tour.mp4 and docs/shots/tour.gif.
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { chromium } from 'playwright-core';
 
 import { startDemo } from './demo-server.mjs';
 
-const PORT = 47862;
+const PORT = Number(process.env.PELICAN_DEMO_PORT ?? 47862);
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 const demo = await startDemo({ port: PORT });
