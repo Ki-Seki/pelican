@@ -644,12 +644,13 @@ app.get('/api/git', async (c) => {
   return c.json(await gitStatus(cwd, scopeOf(c)));
 });
 
+/** One file's diff; `from`, a renamed file's old path, so git pairs the two. */
 app.get('/api/git/diff', async (c) => {
   const cwd = await folderOf(c);
   const file = c.req.query('path');
   if (!cwd || !file) return c.json({ error: 'No such file' }, 404);
   if (!(await gitAllowed(cwd))) return c.json({ diff: '' });
-  return c.json({ diff: await gitDiff(cwd, file, scopeOf(c)) });
+  return c.json({ diff: await gitDiff(cwd, file, scopeOf(c), c.req.query('from') || undefined) });
 });
 
 app.get('/api/tree', async (c) => {

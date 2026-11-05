@@ -130,9 +130,10 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   });
   const turn = scope.kind === 'turn' ? turns.data?.turns.find((t) => t.uuid === scope.uuid) : undefined;
   const shown = step.path && !step.path.endsWith('/') ? step.path : undefined;
+  const renamedFrom = scope.kind === 'turn' ? undefined : [scope.kind === 'base' ? base.data : status.data].flatMap((s) => (s?.repo ? s.files : [])).find((f) => f.path === shown)?.from;
   const diff = useQuery({
-    queryKey: ['diff', cwd, sessionId, step.scope ?? '', shown ?? ''],
-    queryFn: () => (scope.kind === 'turn' ? api.turnDiff(sessionId!, scope.uuid, shown!) : api.gitDiff(cwd, shown!, scope.kind === 'base' ? 'base' : undefined)),
+    queryKey: ['diff', cwd, sessionId, step.scope ?? '', shown ?? '', renamedFrom ?? ''],
+    queryFn: () => (scope.kind === 'turn' ? api.turnDiff(sessionId!, scope.uuid, shown!) : api.gitDiff(cwd, shown!, scope.kind === 'base' ? 'base' : undefined, renamedFrom)),
     enabled: Boolean(shown) && (scope.kind !== 'turn' || Boolean(sessionId)),
   });
 

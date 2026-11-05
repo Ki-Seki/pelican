@@ -218,21 +218,30 @@ async function countUntracked(cwd: string, files: GitFile[]): Promise<void> {
 }
 
 /**
- * The diff of one file against the last commit, or (`base`) against where the branch split from
- * the default branch; an untracked file shows as all added.
+ * A path a diff is asked for: inside the session's folder, as is the folder it is in. The file
+ * itself may be gone (a deleted file, a renamed one's old path, has a diff), but its folder may
+ * not lead out through a link.
  */
-export async function gitDiff(cwd: string, file: string, scope: 'uncommitted' | 'base' = 'uncommitted'): Promise<string> {
-  if (!(await repositoryOf(cwd))) return '';
-  // The file itself may be gone (a deleted file has a diff), but the folder it is in may not lead
-  // out of the session's folder through a link.
+async function diffPath(cwd: string, file: string): Promise<void> {
   const full = inside(cwd, file);
   const [root, parent] = await Promise.all([realpath(cwd), realpath(path.dirname(full)).catch(() => undefined)]);
   if (parent && !within(root, parent)) throw new Error(OUTSIDE);
+}
+
+/**
+ * The diff of one file against the last commit, or (`base`) against where the branch split from
+ * the default branch; an untracked file shows as all added. A renamed file is diffed with its old
+ * path (`from`), as git pairs them, so it shows what changed in it rather than a whole new file.
+ */
+export async function gitDiff(cwd: string, file: string, scope: 'uncommitted' | 'base' = 'uncommitted', from?: string): Promise<string> {
+  if (!(await repositoryOf(cwd))) return '';
+  await diffPath(cwd, file);
+  if (from) await diffPath(cwd, from);
   let diff = '';
   try {
     const branch = scope === 'base' ? (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 5000)).trim() : undefined;
     const against = scope === 'base' ? await splitPoint(cwd, branch) : 'HEAD';
-    if (against) diff = await git(cwd, ['diff', '-M', against, '--', file]);
+    if (against) diff = await git(cwd, ['diff', '-M', against, '--', ...(from && from !== file ? [from] : []), file]);
   } catch {
     diff = '';
   }
