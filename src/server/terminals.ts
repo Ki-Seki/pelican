@@ -81,13 +81,18 @@ const OUTER = new Set([
   'SHLVL', 'OLDPWD', '_', 'CLAUDE_CODE_SSE_PORT',
 ]);
 const OUTER_PREFIX = /^(ITERM_|KITTY_|WEZTERM_|ALACRITTY_|GHOSTTY_|VSCODE_|KONSOLE_|GNOME_TERMINAL_)/;
-/** Pelican's own settings, npm's when npm started Pelican, and the mark Claude Code leaves on what it runs. */
-const PELICANS = /^(PELICAN_|npm_)|^CLAUDECODE$/;
+/**
+ * Pelican's own settings, npm's when npm started Pelican, the mark Claude Code leaves on what it
+ * runs, and what the Agent SDK sets in Pelican's own process: its version, with each query (which
+ * `claude` would take to say it is an Agent SDK client), and a setting for Windows' cmd.
+ */
+const PELICANS = /^(PELICAN_|npm_|CLAUDE_AGENT_SDK_)|^(CLAUDECODE|NoDefaultCurrentDirectoryInExePath)$/;
 
 /**
  * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*),
- * Claude Code's mark (CLAUDECODE, which would stop `claude` from starting there) and what
- * describes the terminal or service Pelican runs in; with `launch`, what launchFor gives Claude
+ * Claude Code's mark (CLAUDECODE, which would stop `claude` from starting there), the Agent SDK's
+ * (CLAUDE_AGENT_SDK_*) and what describes the terminal or service Pelican runs in; with
+ * `launch`, what launchFor gives Claude
  * Code and `!` commands in the folder (in one kept to the user's settings only, git settings that
  * turn the repository's own programs off), so the shell runs as Claude does there.
  */

@@ -100,8 +100,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   in a folder as Claude Code does, so a folder nobody trusted that brings programs is asked about
   first, and in one kept to your settings only, git runs none of the repository's filters,
   file-system monitor or hooks folder (the settings Claude Code and `!` commands get there). The
-  shell's environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`) or Claude
-  Code's mark (`CLAUDECODE`), nor what describes the terminal or service Pelican runs in. At most
+  shell's environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude
+  Code's mark (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the
+  terminal or service Pelican runs in. At most
   10 terminals run at once, each shown on at most 8 pages, and a page sends at most 64 KB at a
   time; a page that stops reading is let go rather than kept in memory, and the shell waits for a
   slow one instead. What the server keeps of a terminal's screen is bounded too: 2,000 lines, and

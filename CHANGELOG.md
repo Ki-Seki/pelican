@@ -41,7 +41,8 @@ A terminal beside the conversation, as Claude Desktop has one.
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git
   runs none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`),
-  npm's (`npm_*`) or Claude Code's mark (`CLAUDECODE`). At most 10 terminals run at once, each on
+  npm's (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there
+  as in any terminal. At most 10 terminals run at once, each on
   up to 8 pages; nothing of them is written to disk. The demo has none, and `pelican --no-terminal`
   (also for `pelican service install`) starts Pelican without them.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
