@@ -353,7 +353,8 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
       </div>
     );
   }
-  // Text, and a picture, a video, a sound or a page while it is closed (or cannot be shown): a card that opens it.
+  // Text, and a picture, a video, a sound or a page while it is closed (or cannot be shown): a card
+  // that opens it.
   const unshowable = broken || noData || (kind === 'page' && data?.truncated);
   const toggle = { type: 'button' as const, 'aria-label': name, 'aria-expanded': open && !unshowable, disabled: Boolean(unshowable), onClick: () => setOpen((v) => !v) };
   // A tile while it is closed and has nothing to say; open, it takes the width what it shows needs.

@@ -930,8 +930,9 @@ app.get('/api/sessions/:id/sent/state', async (c) => {
 /**
  * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;
  * a video or a sound to play, a part at a time; a PDF for the browser's own viewer, in a tab of its
- * own; anything else, and anything asked for with `download`, as an attachment. Read only, as it is on disk when asked for (a file that grows
- * meanwhile sends no more), up to 200 MB, never sniffed. One no longer there is Gone (410).
+ * own; anything else, and anything asked for with `download`, as an attachment. Read only, as it is
+ * on disk when asked for (a file that grows meanwhile sends no more), up to 200 MB, never sniffed.
+ * One no longer there is Gone (410).
  */
 app.get('/api/sessions/:id/sent/raw', async (c) => {
   const file = c.req.query('path') ?? '';
