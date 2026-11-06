@@ -349,6 +349,12 @@ describe('a reply in the export', () => {
     expect(reply('Plan | Status\n===\n:-')).toBe('### Plan | Status\n\\:-');
   });
 
+  it('lets no footnote call followed by `(…)` be a link’s words, as it is in readers without footnotes', () => {
+    // markdown-it and commonmark.js take `[^1-1](`)` for a link to a backquote, and the HTML after it for HTML.
+    expect(reply('As measured[^1](`) <img src="https://evil.example/p.png"> `\n\n[^1]: On CI.')).toBe('As measured[^1-1]\\(`) <img src="https://evil.example/p.png"> `\n\n[^1-1]: On CI.');
+    expect(trouble(reply('As measured[^1](`) <img src="https://evil.example/p.png"> `\n\n[^1]: On CI.'))).toEqual([]);
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

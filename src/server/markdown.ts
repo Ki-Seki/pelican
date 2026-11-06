@@ -1712,8 +1712,11 @@ function inline(text: string, { sure, breaks = [], context }: { sure: boolean; b
       const call = reading.calls.get(i);
       const link = reading.links.get(i);
       if (call) {
-        // A footnote call, by the label the reply's footnote has in the export.
-        i = put(i, `[^${context.notes.get(normalize(call.label))}]`, call.end);
+        // A footnote call, by the label the reply's footnote has in the export; a `(` right after
+        // it escaped, as readers without footnotes take `[^…](…)` for a link, which takes in a
+        // backquote that opens code here.
+        const label = `[^${context.notes.get(normalize(call.label))}]`;
+        i = text[call.end] === '(' ? put(i, `${label}\\(`, call.end + 1) : put(i, label, call.end);
       } else {
         if (link?.definition && !text.slice(link.close, link.end).includes('\n')) ends.set(link.close, link);
         else if (!link && sure && text[i + 1] === '^' && !reading.carets.has(i + 1)) looked(i, bracketEnd(text, i));
