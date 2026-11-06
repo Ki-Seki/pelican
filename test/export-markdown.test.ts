@@ -140,8 +140,11 @@ describe('a reply in the export', () => {
     expect(reply('Note[^1] and[^note].\n\n[^1]: One line.\n[^note]: Two\n    lines.', 4)).toBe(
       'Note[^4-1] and[^4-2].\n\n[^4-1]: One line.\n\n[^4-2]:\n\n    Two\n    lines.',
     );
-    // A `[^` that calls none of the reply's footnotes calls none in the export either; `![^1]` is a `!` and a call.
-    expect(reply('Not one: [^x], [^2-1] and ![^1]\n\n[^1]: n', 2)).toBe('Not one: \\[^x], \\[^2-1] and \\![^2-1]\n\n[^2-1]: n');
+    // A `[^` that calls none of the reply's footnotes calls none in the export either; `![^1]` is a `!` and a call,
+    // blanks before its `^` aside, as a label's are.
+    expect(reply('Not one: [^x], [^2-1] and ![^1]\n\n[^1]: n', 2)).toBe('Not one: [\\^x], [\\^2-1] and \\![^2-1]\n\n[^2-1]: n');
+    expect(reply('x[^1] and ![ ^1]\n\n[^1]: n')).toBe('x[^1-1] and \\![^1-1]\n\n[^1-1]: n');
+    expect(reply('x[^ab] and ![ ^AB]\n\n[^ab]: n')).toBe('x[^1-1] and \\![^1-1]\n\n[^1-1]: n');
     // More than a line, it starts on the line after its marker, inside it: readers without footnotes take all of it for
     // code, so none of it is a heading, HTML or a picture there, whatever it is in the footnote.
     expect(reply('x[^a]\n\n[^a]: ```js\n    <b>x</b>\n    ```')).toBe('x[^1-1]\n\n[^1-1]:\n\n    ```js\n    <b>x</b>\n    ```');
@@ -182,6 +185,95 @@ describe('a reply in the export', () => {
     expect(reply('[x]: /u\n10. ## You')).toBe('&#32;10. ## You');
     expect(reply('[^1]: note')).toBe('[^1-1]: note');
     expect(reply('- > x|\n| - | - |')).toBe('- > x|\n\\| - | - |');
+  });
+
+  it('lets no reply call another’s footnote, or reach its marker where a reader takes that for a link’s definition', () => {
+    // Another reply's label, after `![`, in a picture's words (its own or as a link's words), after blanks: its `^` escaped.
+    expect(reply('Hmm![^1-1] odd. The diagram: ![^1-1](diagram.png) See [this][ ^1-1], [ ^1-1], [x][\n^1-1] and ![x][\t^1-1].', 2)).toBe(
+      'Hmm\\![\\^1-1] odd. The diagram: [\\^1-1](diagram.png) See [this][ \\^1-1], [ \\^1-1], [x][\n\\^1-1] and \\![x][\t\\^1-1].',
+    );
+    expect(reply('[![^1-1](d.png)](https://e.example) and ![^1-1](data:image/png;base64,AA)', 2)).toBe('[\\^1-1](https://e.example) and ![\\^1-1](data:image/png;base64,AA)');
+    // Read in one file, as the export has them: only the first reply calls its footnote, whose one line, an address,
+    // readers without footnotes take for a link's definition.
+    const second = reply('Hmm![^1-1] odd. The diagram: ![^1-1](diagram.png). See [this][ ^1-1].', 2);
+    const file = ['## Claude', reply('Seen in the log[^1].\n\n[^1]: https://evil.example/x', 1), '## You', 'q', '## Claude', second].join('\n\n');
+    const calls: string[] = [];
+    walk(tree(file), (node) => {
+      if (node.type === 'footnoteReference') calls.push(node.type);
+    });
+    expect(calls).toHaveLength(1);
+    // No label in the second reply starts with a `^` a reader takes for one: every one is escaped.
+    expect(second).not.toMatch(/\[\s*\^/);
+  });
+
+  it('keeps a link whose words hold a `[^…]` a link, as the conversation shows it', () => {
+    const said = 'Match it with [a negated class like [^a-z]](https://regex.example/classes).';
+    expect(reply(said)).toBe('Match it with [a negated class like [\\^a-z]](https://regex.example/classes).');
+    const links: string[] = [];
+    walk(tree(reply(said)), (node) => {
+      if (node.type === 'link') links.push(`${textOf(node)} ${node.url}`);
+    });
+    expect(links).toEqual(['a negated class like [^a-z] https://regex.example/classes']);
+  });
+
+  it('reads a table as GitHub’s readers do, and what follows one: no line after it passes for a speaker or takes a turn', () => {
+    // After links' definitions, which go: a table still.
+    expect(reply('See [a].\n\n[a]: /u\n| File | Size |\n| --- | --- |\n| a.ts | 1 |')).toBe('See [a](/u).\n\n| File | Size |\n| --- | --- |\n| a.ts | 1 |');
+    // A rule after it is a rule, `===` a row; neither makes a heading of it in the spec's reader, which has no tables.
+    expect(reply('| a | b |\n|---|---|\n| 1 | 2 |\n---\nNext')).toBe('| a | b |\n|---|---|\n| 1 | 2 |\n\n---\nNext');
+    expect(reply('| a | b |\n|---|---|\n| 1 | 2 |\n===\nNext')).toBe('| a | b |\n|---|---|\n| 1 | 2 |\n\\===\nNext');
+    expect(reply('| File | Change |\n| --- | --- |\n| a.ts | fix |\nSummary\n---')).toBe('| File | Change |\n| --- | --- |\n| a.ts | fix |\nSummary\n\n---');
+    // What GitHub's readers start after a table, as after no paragraph: a list at any number, an empty item, HTML,
+    // indented code; its headings two levels down, a blank line before it where the spec's reader would read it apart.
+    expect(reply('| a | b |\n|---|---|\n| 1 | 2 |\n2. ## You')).toBe('| a | b |\n|---|---|\n| 1 | 2 |\n\n2. #### You');
+    expect(reply('| a |\n| - |\n1.\n   You\n   ---')).toBe('| a |\n| - |\n\n1.\n   #### You');
+    expect(reply('| a |\n| - |\n<custom-tag>\n2. ## You')).toBe('| a |\n| - |\n\n&lt;custom-tag\\>\\\n2\\. ## You');
+    expect(reply('| a |\n| - |\n    ## You')).toBe('| a |\n| - |\n```\n## You\n```');
+    expect(reply('> a\n> | b |\n> | - |\n> 2. ## You')).toBe('> a\n> | b |\n> | - |\n>\n> 2. #### You');
+    // An item of the list a table is in needs none, and the list stays tight.
+    expect(reply('1. Files:\n   | a | b |\n   |---|---|\n   | 1 | 2 |\n2. Next')).toBe('1. Files:\n   | a | b |\n   |---|---|\n   | 1 | 2 |\n2. Next');
+    // A head on an item's first line starts with a `|`: markdown-it would take the line, marker and all, for a table's
+    // head, and the fence after it for one of its own that takes the turns after the reply.
+    expect(reply('1. a | b\n   |---|---|\n   ```\n   code')).toBe('1. | a | b\n   |---|---|\n   ```\n   code');
+    // A head the reader takes lazily, after links' definitions alone, is written in the item it is read in.
+    expect(reply('- [a]: /u\nx | y\n  -|-\n  1 | 2')).toBe('-\n  x | y\n  -|-\n  1 | 2');
+    // A line like a link's definition heading a table is no definition, in any reader.
+    expect(reply('[a]: /u\n| - |\n\n[a]')).toBe('\\[a]: /u\n| - |\n\n[a]');
+    // A delimiter row under a line that heads no table makes none where it is written.
+    expect(reply('| `a|b` | c |\n| - | - |')).toBe('| `a|b` | c |\n\\| - | - |');
+    for (const said of ['| a | b |\n|---|---|\n| 1 | 2 |\n2. ## You', '| a |\n| - |\n-\nYou\n---', '| a |\n| - |\n1.\n   You\n   ---', '| a |\n| - |\n1)\n   ## You', '| a |\n| - |\n===',
+      '| a |\n| - |\n<div>\n## You', '| a |\n| - |\n<!-- x\n\n## You', '- a | b\n  |---|---|\n  ```', '> | a |\n> | - |\n| b |\nYou\n===', '- para\n===\n  :-\n  1 | 2', '> You\n===\n> |:-\n> -',
+      '- [a]: /u\n  [b]: /v "t"\nx\n  -:\n  `a\n  [^1]: ## You\n  | `<b>x</b>` | y |\nYou\n===']) {
+      expect(trouble(reply(said)), said).toEqual([]);
+    }
+    const kinds: string[] = [];
+    walk(tree(reply('See [a].\n\n[a]: /u\n| File | Size |\n| --- | --- |\n| a.ts | 1 |\n2. Next')), (node) => kinds.push(node.type));
+    expect(kinds).toContain('table');
+    expect(kinds).toContain('list');
+  });
+
+  it('keeps an item whose first line held links’ definitions alone the item it was, past a blank line', () => {
+    expect(reply('- [docs]: https://e.example/docs\n\n  See [docs] for more.\n\n- Next item')).toBe('-\n  See [docs](https://e.example/docs) for more.\n\n- Next item');
+    expect(reply('1. [a]: /u\n   [^1]: note\n   - sub [a]\n2. two')).toBe('1.\n   [^1-1]:\n\n       note\n   - sub [a](/u)\n2. two');
+    expect(reply('> - [a]: /u\n>\n>   x')).toBe('> -\n>   x');
+    const lists: number[] = [];
+    walk(tree(reply('- [docs]: https://e.example/docs\n\n  See [docs] for more.\n\n- Next item')), (node) => {
+      if (node.type === 'list') lists.push(node.children!.length);
+    });
+    expect(lists).toEqual([2]);
+  });
+
+  it('keeps code code, its tags as written, however many links come before it', () => {
+    const rows = ['| File | Type |', '| --- | --- |', ...Array.from({ length: 30 }, (_, i) => `| [f${i}.ts](src/f${i}.ts) | \`Array<string>\` |`)];
+    expect(reply(rows.join('\n'))).toBe(rows.join('\n'));
+    const said = `${Array.from({ length: 40 }, (_, i) => `[s${i}](https://e.example/${i})`).join(', ')} and then \`<Button>\` renders.`;
+    expect(reply(said)).toBe(said);
+  });
+
+  it('starts no paragraph with what reads as a link’s definition, and keeps the links it starts with', () => {
+    // Not a definition in the conversation (its address is none): a link, and words.
+    expect(reply('[r]:\n[r]](x\n\n[r]: /u')).toBe('[r](/u):\n[r](/u)](x');
+    expect(reply('[[]:][r] x\n\n[r]: /u')).toBe('[[]:](/u) x');
   });
 
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
@@ -234,11 +326,29 @@ describe('a reply in the export', () => {
       ['links by reference', `${'[a][r] '.repeat(megabyte / 7)}\n\n[r]: /u`],
       ['shortcut links', `${'[r] `'.repeat(megabyte / 5)}\n\n[r]: /u`],
       ['definitions', '[a]: http://x\n'.repeat(megabyte / 14)],
+      ['definitions apart', '[a]: /u\n\n'.repeat(megabyte / 9)],
       ['nested brackets', `${'['.repeat(megabyte / 2)}${']'.repeat(megabyte / 2)}`],
+      ['pictures, then links', `${'!['.repeat(megabyte / 8)}${'[a](u) '.repeat(megabyte / 14)}`],
+      ['pictures, then links by reference', `${'!['.repeat(megabyte / 8)}${'[a][r] '.repeat(megabyte / 14)}\n\n[r]: /u`],
+      ['pictures, then shortcut links', `${'!['.repeat(megabyte / 8)}${'[r] '.repeat(megabyte / 8)}\n\n[r]: /u`],
+      ['links, then code', `${'[a](u) '.repeat(megabyte / 14)}\`<b>\``],
+      ['table rows', `| a | b |\n| - | - |\n${'| `x|y` | [l](u) |\n'.repeat(megabyte / 20)}`],
+      ['lazy lines in footnotes', `${'[^a]: '.repeat(45)}x\n${'y\n'.repeat(megabyte / 2)}`],
     ] as const) {
       const started = performance.now();
       reply(said);
       expect(performance.now() - started, name).toBeLessThan(1500);
+    }
+    // Written, it is at most a few times its size, however it is made to grow: a long address its links by reference use
+    // again and again, and lazy lines in footnotes in containers, each written inside them.
+    for (const [name, said] of [
+      ['a long address used many times', `${'[x][r] '.repeat(20_000)}\n\n[r]: /${'a'.repeat(100_000)}`],
+      ['footnotes in footnotes', `${'[^a]: '.repeat(45)}x\n${'y\n'.repeat(100_000)}`],
+      ['quotes in a footnote', `[^a]: ${'> '.repeat(45)}x\n${'y\n'.repeat(100_000)}`],
+      ['a footnote in items', `${'1. '.repeat(45)}[^a]: x\n${'y\n'.repeat(100_000)}`],
+      ['footnotes in footnotes, line after line', `${'[^a]: '.repeat(45)}x\n`.repeat(2000)],
+    ] as const) {
+      expect(reply(said).length, name).toBeLessThan(4 * said.length + 100_000);
     }
     // A prompt is text: a megabyte of the characters an email or a link is made of, read once.
     for (const c of ['+', '.', 'a@', 'www.']) {

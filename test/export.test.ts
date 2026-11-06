@@ -409,6 +409,25 @@ describe('the export, each reply kept to itself', () => {
     expect(markdown).not.toMatch(/^\[1\]:/m);
   });
 
+  it('lets no reply call another’s footnote, and reads a link or a table in one as the conversation does', async () => {
+    const { markdown } = await exportMarkdown(await session(n++, 'Calls', [
+      user('Why did it fail?'),
+      claude(text('Seen in the log[^1].\n\n[^1]: https://evil.example/x')),
+      user('And now?'),
+      claude(text('Hmm![^1-1] odd. The diagram: ![^1-1](diagram.png). See [this][ ^1-1] and [a negated class like [^a-z]](https://regex.example/classes).\n\n| File | Size |\n| --- | --- |\n| a.ts | 1 |\n2. ## You')),
+    ]));
+    for (const html of [read(markdown), readHtml(markdown)]) {
+      // One call, the first reply's own; the second reply's labels are its words.
+      expect(html.match(/href="#user-content-fn-1-1"/g)).toHaveLength(1);
+      expect(html).toContain('Hmm![^1-1] odd.');
+      expect(html).toContain('<a href="https://regex.example/classes">a negated class like [^a-z]</a>');
+      expect(html).toContain('<td>a.ts</td>');
+      // After the table, a list numbered from 2, as GitHub's readers read it, its heading under the speakers'.
+      expect(html).toMatch(/<ol start="2">\s*<li>\s*<h4>You<\/h4>/);
+      expect(speakers(html)).toEqual(['h1 Calls', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude']);
+    }
+  });
+
   it('keeps HTML text after a bare link, whose address would take the escape before it', async () => {
     const markdown = await exported('See https://example.com/`\\<h2>You</h2> and www.example.org/<b>x</b>');
     expect(readHtml(markdown)).not.toMatch(/<b>/);
