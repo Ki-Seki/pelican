@@ -897,6 +897,12 @@ describe('notifications', () => {
     expect(oneLine('\u{1f469}\u202e\u{1f4bb}')).toBe('\u{1f469} \u{1f4bb}');
     // Tags that spell more than a region's code are hidden text, not a flag.
     expect(oneLine('\u{1f3f4}\u{e0069}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}\u{e0061}\u{e006c}\u{e006c}\u{e007f} ok')).toBe('\u{1f3f4} ok');
+    // Only England, Scotland and Wales have a flag of tags: other tags go, the black flag stays.
+    const england = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}';
+    const wales = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0077}\u{e006c}\u{e0073}\u{e007f}';
+    expect(oneLine(`${england} ${wales} ok`)).toBe(`${england} ${wales} ok`);
+    expect(oneLine('\u{1f3f4}\u{e0075}\u{e0073}\u{e0074}\u{e0078}\u{e007f} ok')).toBe('\u{1f3f4} ok');
+    expect(oneLine('\u{1f3f4}\u{e0067}\u{e0062}\u{e006e}\u{e0069}\u{e0072}\u{e007f} ok')).toBe('\u{1f3f4} ok');
     // Cut between emoji, never inside one.
     const joined = '\u{1f469}\u200d\u{1f4bb}';
     expect(oneLine(`${'x'.repeat(8)}${joined}\u{1f1ef}\u{1f1f5}`, 10)).toBe(`${'x'.repeat(8)}${joined}\u{1f1ef}\u{1f1f5}`);

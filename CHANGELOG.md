@@ -5,6 +5,9 @@
 - A `!` command that is a command in backquotes, such as `` `grep x f` ``, takes exit code 1 as
   an answer, as Claude Code does, not as a failure: where a command would start, Pelican reads a
   backquote as Claude Code's parser does, after `;`, `|`, `if` or an assignment too.
+- A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
+  recommends; other tags after a black flag, which can spell anything unseen, are left out. The
+  repository's check for hidden characters holds the docs to the same three.
 
 ## 0.4.0
 
