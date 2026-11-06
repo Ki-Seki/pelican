@@ -355,6 +355,18 @@ describe('a reply in the export', () => {
     expect(trouble(reply('As measured[^1](`) <img src="https://evil.example/p.png"> `\n\n[^1]: On CI.'))).toEqual([]);
   });
 
+  it('keeps a done task done where the reply defines a link labelled x: a task’s mark is read before a link there', () => {
+    expect(reply('- [x] Ship it\n- [ ] Tell support\n\nPosted on [X].\n\n[X]: https://x.com/acme')).toBe('- [x] Ship it\n- [ ] Tell support\n\nPosted on [X](https://x.com/acme).');
+    expect(reply('- [x]\n  Ship it\n\n[x]: /u')).toBe('- [x]\n  Ship it');
+    // Anywhere else, `[x]` is a link by reference.
+    expect(reply('- a [x] b\n- [x]a\n\n> [x] quoted\n\n[x]: /u')).toBe('- a [x](/u) b\n- [x](/u)a\n\n> [x](/u) quoted');
+    const checked: Array<boolean | null | undefined> = [];
+    walk(tree(reply('- [x] Ship it\n- [ ] Tell support\n\n[X]: https://x.com/acme')), (node) => {
+      if (node.type === 'listItem') checked.push((node as Node & { checked?: boolean | null }).checked);
+    });
+    expect(checked).toEqual([true, false]);
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

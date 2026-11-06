@@ -133,11 +133,12 @@ interface Table {
   lines: Line[];
 }
 
-/** An item: its marker, whether it holds nothing yet, and where it ended in the reply written out. */
+/** An item: its marker, whether it holds nothing yet, the block it starts with, and where it ended in the reply written out. */
 interface Item {
   kind: 'item';
   data: ListData;
   empty: boolean;
+  first?: Block;
   end?: number;
 }
 
@@ -505,7 +506,8 @@ export function reply(said: string, id = 1): string {
         for (const line of lines.slice(1, taken + 1)) out[line.at] = undefined;
         rest[0] = { at: first.at, prefix: first.prefix, text: rest[0]!.text, moved: true };
       }
-      const words = inlineParagraph(rest, context);
+      // The words an item starts with, a task's mark first, as GitHub's readers have it.
+      const words = inlineParagraph(rest, context, taken === 0 && parent?.kind === 'item' && parent.first === block);
       rest.forEach((line, i) => {
         out[line.at] = line.prefix + words[i]!;
       });
@@ -647,7 +649,10 @@ export function reply(said: string, id = 1): string {
       closeUnmatched();
       while (open.length > 0 && !holds(open.at(-1)!, block)) finalize(open.pop()!, open);
       const parent = open.at(-1);
-      if (parent?.kind === 'item') parent.empty = false;
+      if (parent?.kind === 'item') {
+        if (parent.empty) parent.first = block;
+        parent.empty = false;
+      }
       open.push(block);
       container = open.length - 1;
     };
@@ -1130,6 +1135,11 @@ const HTML_START = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s>]|\/>|$)|\/[A-Za-z]|[!?])/y;
 const BARE_START = /(?:https?|ftp):\/\/|www\./iy;
 /** A picture's words that are written as the words of a link to it: no brackets, backslashes, backquotes or line breaks. */
 const SIMPLE_WORDS = /^[^[\]\\`\n]{0,1000}$/;
+/**
+ * A task's mark, where an item's words start: `[ ]` or `[x]`, then more words, as micromark reads
+ * one before it reads a link there.
+ */
+const TASK = /\[[ \t\nxX]\](?:\n|[ \t]+[^])/y;
 /** A line that starts a link's reference definition, which the reader takes whole: no `[` or `]` in its label but escaped. */
 const DEFINITION = /^\[(?:[^[\]\\]|\\.){0,999}\]:/;
 /** A line some reader may take for a table's delimiter row, if a `-` is in it: `|`, `:`, `-` and blanks alone. */
@@ -1140,7 +1150,7 @@ const DELIMITER_LIKE = /^[ \t]*[|:-][ \t|:-]*$/;
  * footnote, as GitHub's extensions have it, starts with its `[` escaped: readers without them take
  * it for a paragraph, and read what it holds otherwise, so it is written as one for all of them.
  */
-function inlineParagraph(lines: readonly Line[], context: Context): string[] {
+function inlineParagraph(lines: readonly Line[], context: Context, task = false): string[] {
   // A `>` that starts a line here is text (the line goes on a paragraph); markdown-it (VS Code's
   // preview) still takes one with any indentation for a quote that goes on: escaped, it is text
   // there too. And a line that looks like a table's delimiter row: past the first, the line above
@@ -1159,7 +1169,7 @@ function inlineParagraph(lines: readonly Line[], context: Context): string[] {
     if (line.lazy && written[i]!.startsWith('<')) breaks.push(at);
     at += written[i]!.length + 1;
   });
-  const words = inline(written.join('\n'), { sure: true, breaks, context }).split('\n').map(unfenced);
+  const words = inline(written.join('\n'), { sure: true, breaks, context, task }).split('\n').map(unfenced);
   // A paragraph that starts, as written, as a link's reference definition does is text: no
   // reader defines a link where the reply's reader did not, as readers part ways on where one
   // ends. Its `[` opens no link there (one would be written with its address).
@@ -1310,10 +1320,10 @@ interface Reading {
 }
 
 /** A paragraph's words read: its links, pictures and footnote calls. */
-function readInline(text: string, context: Context): Reading {
+function readInline(text: string, context: Context, task: boolean): Reading {
   const reading: Reading = { links: new Map(), calls: new Map(), carets: new Set(), addresses: new Map() };
-  // No `[`: no link, picture or call.
-  if (text.includes('[')) readSpan(text, 0, text.length, context, reading);
+  // No `[`: no link, picture or call. A task's mark, which micromark reads before any, is neither.
+  if (text.includes('[')) readSpan(text, task && matchAt(TASK, text, 0) ? 3 : 0, text.length, context, reading);
   return reading;
 }
 
@@ -1543,11 +1553,11 @@ const resolved = ({ destination, title: written }: Definition) => `${address(des
  * what the reader surely takes as code; links by reference with their addresses and footnotes with
  * the reply's labels. `sure`: whether code can be told there at all.
  */
-function inline(text: string, { sure, breaks = [], context }: { sure: boolean; breaks?: readonly number[]; context: Context }): string {
+function inline(text: string, { sure, breaks = [], context, task = false }: { sure: boolean; breaks?: readonly number[]; context: Context; task?: boolean }): string {
   // Nothing in words without these is written otherwise.
   if (!/[`<[\\]/.test(text)) return text;
   const n = text.length;
-  const reading = readInline(text, context);
+  const reading = readInline(text, context, task);
   // The runs of backquotes of each length, for finding the run that ends code: the next of the
   // same length, as the reader looks for it (asked for in order, from places further on each time).
   const byLength = new Map<number, number[]>();
