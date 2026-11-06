@@ -516,7 +516,9 @@ function casePatterns(line: string, at: number): { end: number; odd: boolean } {
  * backquote that closed the command opens another, and a line of only `` `grep x f` `` is read by
  * `grep`. In a group or a subshell inside another compound, it takes the rest of the line into
  * the outermost compound instead, and in a case's patterns it reads a pattern there, or takes the
- * rest of the line too when that pattern leaves a backquote open.
+ * rest of the line too when that pattern leaves a backquote open. Right after the keyword that
+ * closes a compound, a backquote is a statement of its own as well, and the parser starts over
+ * after it. A `[ … ]` that starts a statement ends at its `]`.
  */
 function statements(line: string): string[] {
   if (line.length > PARSED_MAX) return [line];
@@ -532,6 +534,8 @@ function statements(line: string): string[] {
   let ended = false;
   /** The statement under way has a redirection after its words, which the rest of it then belongs to, a `#` too. */
   let redirected = false;
+  /** The statement under way is a `[ … ]`, which ends at its `]`. */
+  let test = false;
   /** The compounds the statements so far left open. */
   let compounds: Compound[] = [];
   /**
@@ -549,6 +553,7 @@ function statements(line: string): string[] {
     start = next;
     leads = undefined;
     redirected = false;
+    test = false;
   };
   const alone = (at: number, text: string) => {
     end(at, at + text.length);
@@ -599,6 +604,15 @@ function statements(line: string): string[] {
       continue;
     }
     if (c === '`') {
+      // Right after the keyword that closes a compound (`done`, `fi`, `esac`, `}`), that parser
+      // reads a backquote as a statement of its own, and starts over after it, as where a command
+      // would start: what was open before is left behind.
+      if (open.length === 0 && compounds.length > 0 && CLOSERS.has(line.slice(start, i).trim())) {
+        end(i, i);
+        alone(i, '`');
+        compounds = [];
+        continue;
+      }
       const there = top === '`' ? undefined : open.length === 0 ? commandAt(start, i, compounds) : level && commandAt(level.start, i, level.compounds);
       if (there === undefined) {
         if (top === '`') open.pop();
@@ -710,6 +724,18 @@ function statements(line: string): string[] {
       }
     }
     if (open.length > 0) continue;
+    // A `[ … ]` that starts a statement ends at its `]`: a word after it, not a redirection,
+    // starts another statement. A `]` a backquote follows ends none, and starts the next instead.
+    if (c === '[' && blank(i) && endsWord(line, i + 1)) test = true;
+    else if (c === ']' && test && startsWord(line, i)) {
+      const gap = line.slice(i + 1).search(/[^ \t]/);
+      const next = gap < 0 ? line.length : i + 1 + gap;
+      if (line[i + 1] === '`') end(i, i);
+      else if (endsWord(line, i + 1) && next < line.length && !/[;&|\n)#]/.test(line[next]!) && !REDIRECTION.test(line.slice(next))) {
+        end(i + 1, i + 1);
+        ended = true;
+      }
+    }
     if (c === '[' && line[i + 1] === '[' && startsWord(line, i) && endsWord(line, i + 2)) {
       if (blank(i)) leads = i;
       open.push(']]');
