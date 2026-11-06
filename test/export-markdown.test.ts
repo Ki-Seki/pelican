@@ -375,8 +375,9 @@ describe('a reply in the export', () => {
     expect(reply('Docs: www.example.com/start</a>')).toBe('Docs: <http://www.example.com/start>&lt;/a>');
     // Less what GitHub's rules leave out at its end, a `)` it opened kept.
     expect(reply('See https://a.example/x.<br> and https://en.wikipedia.org/wiki/Foo_(bar)<br>')).toBe('See <https://a.example/x>.&lt;br> and <https://en.wikipedia.org/wiki/Foo_(bar)>&lt;br>');
-    // One that is no link, in a link's words or after a letter, stays as it was.
+    // One that is no link, in a link's words or after a letter, stays as it was; so does a link's address.
     expect(reply('[see https://a.example<br>](u) xhttps://a.example<br>')).toBe('[see https://a.example&lt;br>](u) xhttps://a.example&lt;br>');
+    expect(reply('[a](https://e.example/p)x<b> ![b](https://e.example/q.png "t")y<b>')).toBe('[a](https://e.example/p)x&lt;b> [b · e.example](https://e.example/q.png "t")y&lt;b>');
     const links: string[] = [];
     walk(tree(reply('| API | Links |\n| --- | --- |\n| v2 | https://api.example.com/v2<br>https://status.example.com |')), (node) => {
       if (node.type === 'link') links.push(node.url!);

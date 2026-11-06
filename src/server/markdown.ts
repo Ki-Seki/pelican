@@ -1635,11 +1635,12 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
    * Where a bare link that starts at `at` ends, as micromark (the conversation's reader) reads
    * one, when HTML comes right after it: a `<` that is written `&lt;`, which the link would run on
    * through, as it runs on through a `&`. Undefined for any other: one that ends elsewhere, or that
-   * could not be written in `<…>` as it is (with a backquote, a `&`, a backslash or a `>` in it),
-   * or in a link's words, where micromark makes none.
+   * could not be written in `<…>` as it is (with a backquote, a `&`, a backslash, a `>` or a
+   * bracket in it), or in a link's words or its address and title, where micromark makes none.
    */
   let edge: Int32Array | undefined;
   let opens: Int32Array | undefined;
+  let resources: Uint8Array | undefined;
   let trimming = 2 * n + 100;
   const tags = text.includes('<');
   const bareBeforeTag = (at: number): number | undefined => {
@@ -1660,7 +1661,11 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
         opens[3 * (k + 1) + 1] = opens[3 * k + 1]! + (text[k] === ')' ? 1 : 0);
         opens[3 * (k + 1) + 2] = opens[3 * k + 2]! + (text[k] === '[' ? 1 : text[k] === ']' ? -1 : 0);
       }
+      // What follows a link's words and a footnote call, its address and title among it.
+      resources = new Uint8Array(n);
+      for (const [start, end] of whole) resources.fill(1, start, end);
     }
+    if (resources![at]) return undefined;
     const tag = edge[at]!;
     if (text[tag] !== '<' || reading.addresses.has(tag) || matchAt(AUTOLINK, text, tag) || !(matchAt(HTML_START, text, tag) || matchAt(AUTOLINK_SOME, text, tag))) return undefined;
     if (opens![3 * at + 2]! > 0) return undefined;
@@ -1674,7 +1679,7 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
       else break;
     }
     if (trimming <= 0 || end <= at + start[0].length) return undefined;
-    return /[`&\\>\x00-\x20\x7f]/.test(text.slice(at, end)) ? undefined : end;
+    return /[`&\\>[\]\x00-\x20\x7f]/.test(text.slice(at, end)) ? undefined : end;
   };
   /**
    * What a look ahead found, where the reader may take some words whole from `from` to `end`:
