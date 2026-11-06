@@ -500,10 +500,10 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const enter = () => {
     const f = field.current;
     setCtrl(false);
+    if (!send(`${cleanPaste(f?.value ?? '')}\r`)) return;
     // What the line prints is read out to a screen reader once the shell is quiet: nobody types
     // into the screen here, which is what xterm reads out after.
     screen.current?.readNext();
-    if (!send(`${cleanPaste(f?.value ?? '')}\r`)) return;
     if (f) f.value = '';
     setTyped(false);
   };
