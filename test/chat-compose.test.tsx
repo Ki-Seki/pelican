@@ -671,9 +671,30 @@ describe('a file open in Changes and files', () => {
 });
 
 describe('quotes with a note, as Claude Desktop sends them', () => {
+  const REPLY = 'The colors are already variables, so a dark theme is one more set of values.';
+  const answer = (text = REPLY): ChatMessage => ({ uuid: 'a1', role: 'assistant', blocks: [{ type: 'text', text }], timestamp: Date.now() - 50_000 });
   const quote = (id: string, text: string, note?: string): WaitingItem => ({ id, kind: 'quote', text, from: { what: 'reply', key: 'a1' }, ...(note ? { note } : {}) });
   const comment = { id: 'c1', path: 'src/a.ts', kind: 'add' as const, line: 3, code: 'const a = 1;', note: 'Name this better' };
+  /** Selects words of the reply with a mouse, and waits the 250 ms the pill takes. */
+  async function selectInReply(words: string) {
+    const node = [...document.querySelectorAll('[data-quote-from="a1"] p')].find((p) => p.textContent?.includes(words))!.firstChild!;
+    const at = node.textContent!.indexOf(words);
+    fireEvent.pointerDown(node.parentElement!, { pointerType: 'mouse' });
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + words.length);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(node.parentElement!, { pointerType: 'mouse' });
+    return screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+  }
+  beforeAll(() => {
+    const rect = { x: 10, y: 40, top: 40, left: 10, bottom: 60, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+  });
   afterEach(() => {
+    getSelection()?.removeAllRanges();
     for (const chat of [SESSION, `new:${CWD}`, `side:${SESSION}`]) setWaiting(chat, []);
   });
 
@@ -697,6 +718,71 @@ describe('quotes with a note, as Claude Desktop sends them', () => {
     expect(waitingOf(SESSION).map((item) => item.id)).toEqual(['q1', 'q2', 'f-src/prefs.ts', 'c1'].map((id) => (id.startsWith('f-') ? items[2]!.id : id)));
     expect(waitingOf(SESSION)[1]!.note).toBe('Use the names we have');
     expect(box().value).toBe('Then run the tests.');
+  });
+
+  it('selected in a reply: ↵ opens the note box, ↵ adds the quote with its note, and the message carries Desktop’s reply block', async () => {
+    media['(hover: hover) and (pointer: fine)'] = true;
+    server.after = [answer()];
+    session();
+    await loaded();
+    await screen.findByText(REPLY);
+    await selectInReply('one more set of values');
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    const note = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note');
+    fireEvent.change(note, { target: { value: 'Use the --bg and --fg names we have' } });
+    fireEvent.keyDown(note, { key: 'Enter' });
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+    expect(screen.getByRole('button', { name: 'Your note on “one more set of values”: Use the --bg and --fg names we have' })).toBeTruthy();
+    sendText('Then run the tests.');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe('<!-- reply 1 -->\n> one more set of values\n\nUse the --bg and --fg names we have\n\n\nThen run the tests.');
+    // The prompt reads back as a quote, quietly, its note and words after it.
+    await waitFor(() => expect(screen.getByText('Use the --bg and --fg names we have')).toBeTruthy());
+    expect(document.body.textContent).not.toContain('<!-- reply');
+  });
+
+  it('Send now in the note box sends that one at once, a steer while Claude works, leaving the box as it is; if it does not go, it waits', async () => {
+    media['(hover: hover) and (pointer: fine)'] = true;
+    server.after = [answer()];
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [] };
+    server.answers = [undefined, new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    await screen.findByText(REPLY);
+    fireEvent.change(box(), { target: { value: 'Half-written thought' } });
+    for (const note of ['Keep the names', 'And the toggle']) {
+      await selectInReply('one more set of values');
+      fireEvent.click(within(screen.getByRole('toolbar', { name: 'Selected text' })).getByRole('button', { name: /^Quote/ }));
+      const field = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note');
+      fireEvent.change(field, { target: { value: note } });
+      fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(server.sent.map((body) => body.text)).toContain(`<!-- reply -->\n> one more set of values\n\n${note}`));
+    }
+    expect((server.sent[0] as { mode?: string }).mode).toBe('steer');
+    await screen.findByText('Can’t reach studio');
+    expect(box().value).toBe('Half-written thought');
+    expect(waitingOf(SESSION)).toMatchObject([{ kind: 'quote', text: 'one more set of values', note: 'And the toggle' }]);
+  });
+
+  it('Send now in a folder nobody trusted goes once the folder is trusted, and waits no more', async () => {
+    media['(hover: hover) and (pointer: fine)'] = true;
+    server.after = [answer()];
+    server.answers = [untrusted()];
+    session();
+    await loaded();
+    await screen.findByText(REPLY);
+    await selectInReply('one more set of values');
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    const field = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note');
+    fireEvent.change(field, { target: { value: 'Keep the names' } });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true, ctrlKey: true });
+    fireEvent.click(await screen.findByText('Trust and start'));
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    expect(server.sent.map((body) => [body.text, body.trust])).toEqual([
+      ['<!-- reply -->\n> one more set of values\n\nKeep the names', undefined],
+      ['<!-- reply -->\n> one more set of values\n\nKeep the names', 'trusted'],
+    ]);
+    expect(waitingOf(SESSION)).toEqual([]);
   });
 
   it('a queued message taken back to edit brings back what waited with it, and its words', async () => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useRef } from 'react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 beforeAll(() => {
   window.matchMedia = ((query: string) => ({
@@ -13,68 +13,272 @@ beforeAll(() => {
   Range.prototype.getBoundingClientRect = () => rect;
 });
 
-const { PromptBody, QuoteAction } = await import('../src/web/components/Quotes');
-const { setWaiting, waitingOf } = await import('../src/web/lib/drafts');
+const { PromptBody, QuoteTargetContext, SelectionActions, SETTLE_MS } = await import('../src/web/components/Quotes');
+const { keyText } = await import('../src/web/lib/keyboard');
+/** Quote, with the key that quotes beside it, as this keyboard prints it. */
+const QUOTE = `Quote${keyText('quote')}`;
+const { addWaiting, setWaiting, waitingOf } = await import('../src/web/lib/drafts');
 const { messageWith, quoteItem, sendNowMessage } = await import('../src/web/lib/quote');
+type QuoteTarget = import('../src/web/components/Quotes').QuoteTarget;
 type WaitingItem = import('../src/web/lib/quote').WaitingItem;
 
-afterEach(() => {
-  cleanup();
-  getSelection()?.removeAllRanges();
-  setWaiting('chat', []);
-});
+const SAID_AT = Date.UTC(2026, 10, 6, 10, 42);
 
-function Conversation() {
-  const ref = useRef<HTMLDivElement>(null);
+function Conversation({ target }: { target: QuoteTarget }) {
+  const content = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   return (
-    <div ref={ref}>
-      <p data-testid="prompt">My own prompt</p>
-      <div data-quotable><p data-testid="reply">The settings page already reads them, so a context adds nothing.</p></div>
-      <QuoteAction within={ref} quoteKey="chat" />
-    </div>
+    <QuoteTargetContext.Provider value={target}>
+      <div ref={frame} data-testid="frame">
+        <div data-conversation>
+          <div ref={content}>
+            <div data-quotable data-quote-from="u1" data-quote-what="prompt"><p data-testid="prompt">Add a dark theme to the settings page.</p></div>
+            <div data-quotable data-quote-from="a1" data-quote-what="reply" data-quote-at={SAID_AT}>
+              <p data-testid="reply">The colors are already variables, so a dark theme is one more set of values.</p>
+            </div>
+            <div data-quotable data-quote-from="a2" data-quote-what="reply"><p data-testid="next">All 14 theme tests pass.</p></div>
+            <SelectionActions within={content} dockTo={frame} />
+          </div>
+        </div>
+      </div>
+    </QuoteTargetContext.Provider>
   );
 }
 
-function select(element: HTMLElement, from: number, to: number) {
+/** Selects text from `from` to `to` in one element, or from one into another. */
+function select(element: HTMLElement, from: number, to: number, end: HTMLElement = element) {
   const range = document.createRange();
   range.setStart(element.firstChild!, from);
-  range.setEnd(element.firstChild!, to);
+  range.setEnd(end.firstChild!, to);
   const selection = getSelection()!;
   selection.removeAllRanges();
   selection.addRange(range);
-  document.dispatchEvent(new Event('selectionchange'));
+  act(() => {
+    document.dispatchEvent(new Event('selectionchange'));
+  });
 }
 
-describe('Quote, on text selected in a reply', () => {
-  it('appears once the selection settles, and puts the text above the message box, waiting with the rest', () => {
-    vi.useFakeTimers();
-    try {
-      render(<Conversation />);
-      select(screen.getByTestId('reply'), 4, 31);
-      act(() => {
-        vi.advanceTimersByTime(300);
-      });
-      fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
-      expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'settings page already reads' }]);
-      expect(getSelection()?.isCollapsed).toBe(true);
-      expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+/** A mouse's selection: pressed, dragged over the text, let go. */
+function drag(element: HTMLElement, from: number, to: number, end?: HTMLElement) {
+  fireEvent.pointerDown(element, { pointerType: 'mouse' });
+  select(element, from, to, end);
+  fireEvent.pointerUp(element, { pointerType: 'mouse' });
+}
+
+/** A finger's: the system's long press, then the handles, each move a selectionchange. */
+function hold(element: HTMLElement, from: number, to: number) {
+  fireEvent.pointerDown(element, { pointerType: 'touch' });
+  select(element, from, to);
+}
+
+const wait = (ms: number) => act(() => {
+  vi.advanceTimersByTime(ms);
+});
+const pill = () => screen.queryByRole('toolbar', { name: 'Selected text' });
+const actions = () => [...(pill()?.querySelectorAll('button') ?? [])].map((b) => b.textContent);
+const noteBox = () => screen.queryByRole('dialog', { name: 'Quote with a note' });
+
+let target: QuoteTarget;
+beforeEach(() => {
+  vi.useFakeTimers();
+  target = { chat: 'chat', sendNow: vi.fn(), focusBox: vi.fn(), sideChat: { open: false, start: vi.fn() } };
+});
+afterEach(() => {
+  // A note left open is kept for its chat, as switching sessions keeps it: Esc lets it go.
+  const open = noteBox();
+  if (open) fireEvent.keyDown(within(open).getByLabelText('Your note'), { key: 'Escape' });
+  cleanup();
+  getSelection()?.removeAllRanges();
+  setWaiting('chat', []);
+  vi.useRealTimers();
+});
+
+describe('text selected with a mouse', () => {
+  it('shows Desktop’s two, side chat then Quote, 250 ms after the button is let go', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS - 10);
+    expect(pill()).toBeNull();
+    wait(20);
+    expect(actions()).toEqual(['Start a side chat', QUOTE]);
   });
 
-  it('is not offered for your own prompt', () => {
-    vi.useFakeTimers();
-    try {
-      render(<Conversation />);
-      select(screen.getByTestId('prompt'), 0, 6);
-      act(() => {
-        vi.advanceTimersByTime(300);
-      });
-      expect(screen.queryByRole('button', { name: 'Quote' })).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+  it('says Send to side chat once one is open, and offers no side chat in a side chat', () => {
+    const { rerender } = render(<Conversation target={{ ...target, sideChat: { open: true, start: vi.fn() } }} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    expect(actions()).toEqual(['Send to side chat', QUOTE]);
+    rerender(<Conversation target={{ chat: 'side', side: true }} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    expect(actions()).toEqual([QUOTE]);
+  });
+
+  it('offers nothing for fewer than two characters, and only the side chat across two messages', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 4, 5);
+    wait(SETTLE_MS);
+    expect(pill()).toBeNull();
+    drag(screen.getByTestId('reply'), 53, 10, screen.getByTestId('next'));
+    wait(SETTLE_MS);
+    expect(actions()).toEqual(['Start a side chat']);
+  });
+
+  it('↵ quotes while the pill shows: Desktop’s note box at the selection, with the keys', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    const box = noteBox()!;
+    expect(within(box).getByText('one more set of values')).toBeTruthy();
+    expect(document.activeElement).toBe(within(box).getByLabelText('Your note'));
+    // The selection is the box's now, and the pill has gone.
+    expect(getSelection()?.isCollapsed).toBe(true);
+    expect(pill()).toBeNull();
+  });
+
+  it('the note box: ↵ adds the quote with its note, where it is from kept to show it again', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.click(within(pill()!).getByRole('button', { name: /^Quote/ }));
+    const note = within(noteBox()!).getByLabelText('Your note');
+    fireEvent.change(note, { target: { value: 'Use the --bg and --fg names we have' } });
+    fireEvent.keyDown(note, { key: 'Enter' });
+    expect(noteBox()).toBeNull();
+    expect(waitingOf('chat')).toMatchObject([{
+      kind: 'quote', text: 'one more set of values', note: 'Use the --bg and --fg names we have',
+      from: { what: 'reply', key: 'a1', at: SAID_AT, span: [43, 61] },
+    }]);
+    expect(target.focusBox).toHaveBeenCalled();
+  });
+
+  it('adds it as a plain quote without a note, and Shift+Enter starts a new line of the note', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('prompt'), 2, 16);
+    wait(SETTLE_MS);
+    fireEvent.click(within(pill()!).getByRole('button', { name: /^Quote/ }));
+    const note = within(noteBox()!).getByLabelText('Your note');
+    fireEvent.keyDown(note, { key: 'Enter', shiftKey: true });
+    expect(noteBox()).not.toBeNull();
+    fireEvent.click(within(noteBox()!).getByRole('button', { name: /^Add/ }));
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'd a dark theme', from: { what: 'prompt', key: 'u1' } }]);
+    expect(waitingOf('chat')[0]!.note).toBeUndefined();
+  });
+
+  it('⌘↵ sends it now with its note, which it needs; Esc lets it go', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    const note = within(noteBox()!).getByLabelText('Your note');
+    expect((within(noteBox()!).getByRole('button', { name: /^Send now/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(note, { key: 'Enter', metaKey: true });
+    expect(target.sendNow).not.toHaveBeenCalled();
+    fireEvent.change(note, { target: { value: 'Keep the names' } });
+    fireEvent.keyDown(note, { key: 'Enter', ctrlKey: true });
+    expect(target.sendNow).toHaveBeenCalledWith(expect.objectContaining({ text: 'one more set of values', note: 'Keep the names' }));
+    expect(noteBox()).toBeNull();
+    expect(waitingOf('chat')).toEqual([]);
+
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.change(within(noteBox()!).getByLabelText('Your note'), { target: { value: 'never mind' } });
+    fireEvent.keyDown(within(noteBox()!).getByLabelText('Your note'), { key: 'Escape' });
+    expect(noteBox()).toBeNull();
+    expect(waitingOf('chat')).toEqual([]);
+  });
+
+  it('a click outside closes the note box only while its note is empty', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.change(within(noteBox()!).getByLabelText('Your note'), { target: { value: 'half a thought' } });
+    fireEvent.pointerDown(screen.getByTestId('next'), { button: 0 });
+    expect(noteBox()).not.toBeNull();
+    fireEvent.change(within(noteBox()!).getByLabelText('Your note'), { target: { value: '  ' } });
+    fireEvent.pointerDown(screen.getByTestId('next'), { button: 0 });
+    expect(noteBox()).toBeNull();
+    expect(waitingOf('chat')).toEqual([]);
+  });
+
+  it('keeps an unfinished note when another session is opened and this one again', () => {
+    const first = render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.change(within(noteBox()!).getByLabelText('Your note'), { target: { value: 'half a thought' } });
+    first.rerender(<Conversation target={{ ...target, chat: 'other' }} />);
+    expect(noteBox()).toBeNull();
+    first.unmount();
+    render(<Conversation target={target} />);
+    expect((within(noteBox()!).getByLabelText('Your note') as HTMLTextAreaElement).value).toBe('half a thought');
+    expect(within(noteBox()!).getByText('one more set of values')).toBeTruthy();
+    // Esc lets it go for good.
+    fireEvent.keyDown(within(noteBox()!).getByLabelText('Your note'), { key: 'Escape' });
+    cleanup();
+    render(<Conversation target={target} />);
+    expect(noteBox()).toBeNull();
+  });
+
+  it('says so when the message holds 99 quotes with a note already, and keeps the note box', () => {
+    for (let i = 0; i < 99; i += 1) addWaiting('chat', quoteItem(`quote ${i}`, { what: 'reply' }, { note: 'n' })!);
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.change(within(noteBox()!).getByLabelText('Your note'), { target: { value: 'one more' } });
+    fireEvent.click(within(noteBox()!).getByRole('button', { name: /^Add/ }));
+    expect(within(noteBox()!).getByRole('alert').textContent).toBe('Your message can hold up to 99 quotes with a note. Send it, then add more.');
+    expect(waitingOf('chat')).toHaveLength(99);
+  });
+
+  it('Start a side chat takes the passage to the side chat', () => {
+    render(<Conversation target={target} />);
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.click(within(pill()!).getByRole('button', { name: 'Start a side chat' }));
+    expect(target.sideChat!.start).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: 'one more set of values' }));
+    expect(pill()).toBeNull();
+  });
+
+  it('⇧⌘L quotes what is selected, without a note', () => {
+    render(<Conversation target={target} />);
+    select(screen.getByTestId('reply'), 53, 75);
+    fireEvent.keyDown(document.body, { key: 'L', code: 'KeyL', shiftKey: true, ctrlKey: true });
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'one more set of values' }]);
+    expect(waitingOf('chat')[0]!.note).toBeUndefined();
+    expect(noteBox()).toBeNull();
+  });
+});
+
+describe('text selected under a finger', () => {
+  it('docks the pair above the message box once the handles rest, and takes it away while one is dragged', () => {
+    render(<Conversation target={target} />);
+    hold(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    const dock = pill()!;
+    expect(screen.getByTestId('frame').contains(dock)).toBe(true);
+    expect(dock.className).toContain('h-11');
+    expect(actions()).toEqual(['Start a side chat', 'Quote']);
+    // A handle moves: the bar goes, and comes back once it rests.
+    select(screen.getByTestId('reply'), 49, 75);
+    expect(pill()).toBeNull();
+    wait(SETTLE_MS);
+    expect(pill()).not.toBeNull();
+  });
+
+  it('Quote puts the passage in the box as it is, with no note box and no keyboard', () => {
+    render(<Conversation target={target} />);
+    hold(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    fireEvent.click(within(pill()!).getByRole('button', { name: 'Quote' }));
+    expect(noteBox()).toBeNull();
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'one more set of values', from: { key: 'a1' } }]);
+    expect(target.focusBox).not.toHaveBeenCalled();
+    expect(getSelection()?.isCollapsed).toBe(true);
   });
 });
 

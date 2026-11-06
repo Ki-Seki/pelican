@@ -7,11 +7,12 @@ import { clearDraft, putBackWaiting, takeWaiting } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
-import { messageWith } from '../lib/quote';
+import { messageWith, sendNowMessage } from '../lib/quote';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
 import { Composer, type ComposerDraft } from './Composer';
 import { MessageList } from './MessageList';
+import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { Sheet } from './Sheet';
 
 /**
@@ -224,21 +225,24 @@ export function SideChat({
     };
   }, [state.open, side, demo]);
 
-  /** Asks a question, with what waits above the side chat's box: quotes /btw took along. */
-  const ask = async (text: string, mode: SendMode = 'steer') => {
+  /**
+   * Asks a question, with what waits above the side chat's box (a passage it was started with), or
+   * sends `now`, a quote with its note from the note box, as it is.
+   */
+  const ask = async (text: string, mode: SendMode = 'steer', now?: string) => {
     // The first question is still making the side chat: this one waits in the box.
     if (asking.current) {
-      setGiveBack({ text, key: Date.now(), back: true });
+      if (!now) setGiveBack({ text, key: Date.now(), back: true });
       return;
     }
     setError(undefined);
     const uuid = newId();
-    const taken = takeWaiting(draftKey);
-    const said = messageWith(taken, text);
+    const taken = now ? [] : takeWaiting(draftKey);
+    const said = now ?? messageWith(taken, text);
     const giveItBack = (failure: unknown) => {
       setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
       putBackWaiting(draftKey, taken);
-      setGiveBack({ text, key: Date.now(), back: true });
+      if (!now) setGiveBack({ text, key: Date.now(), back: true });
     };
     if (side) {
       // Its first question never reached the side chat (its Claude did not start): this one starts its conversation.
@@ -250,7 +254,7 @@ export function SideChat({
       addLocalMessage(side.id, pendingMessage(uuid, said));
       try {
         await api.send(side.id, { text: said, attachments: [], settings, uuid, ...(busy ? { mode } : {}) });
-        clearDraft(draftKey, text);
+        if (!now) clearDraft(draftKey, text);
       } catch (failure) {
         removeLocalMessage(side.id, uuid);
         giveItBack(failure);
@@ -265,7 +269,7 @@ export function SideChat({
       remember(sessionId, made);
       adoptView(waitingView, id);
       setSide(made);
-      clearDraft(draftKey, text);
+      if (!now) clearDraft(draftKey, text);
     } catch (failure) {
       removeLocalMessage(waitingView, uuid);
       giveItBack(failure);
@@ -273,6 +277,15 @@ export function SideChat({
       asking.current = false;
     }
   };
+
+  // Quotes taken from its answers wait in its own box; Send now in the note box asks at once.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const quoteTarget = useMemo<QuoteTarget>(() => ({
+    chat: draftKey,
+    side: true,
+    sendNow: (item) => void askRef.current('', 'steer', sendNowMessage(item.text, item.note ?? '')),
+  }), [draftKey]);
 
   // A question it was opened with (/btw and a question) is asked at once.
   const asked = useRef<number | undefined>(undefined);
@@ -304,7 +317,9 @@ export function SideChat({
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         {own.messages.length > 0 || busy || own.offset > 0 ? (
-          <MessageList sessionId={viewId} view={own} cwd={cwd} {...(machine ? { machine } : {})} mode="normal" quoteKey={draftKey} />
+          <QuoteTargetContext.Provider value={quoteTarget}>
+            <MessageList sessionId={viewId} view={own} cwd={cwd} {...(machine ? { machine } : {})} mode="normal" />
+          </QuoteTargetContext.Provider>
         ) : (
           <div className="flex-1" />
         )}

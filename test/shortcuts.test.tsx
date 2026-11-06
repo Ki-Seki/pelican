@@ -60,7 +60,13 @@ describe('the keyboard shortcuts sheet', () => {
         'Files and agents: @',
         'Shell command: !',
       ],
-      'Quotes and comments': ['Changes and files: send all comments: Ctrl Enter'],
+      'Quotes and comments': [
+        'Quote, with the pill showing: Enter',
+        'Quote without a note: Ctrl Shift L',
+        'Note box: add: Enter',
+        'Note box: send now: Ctrl Enter',
+        'Changes and files: send all comments: Ctrl Enter',
+      ],
     });
   });
 

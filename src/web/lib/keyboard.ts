@@ -144,10 +144,10 @@ export const KEYS = {
   mention: { label: 'Files and agents', group: 'Message box', scope: 'box', keys: ['@'] },
   shell: { label: 'Shell command', group: 'Message box', scope: 'box', keys: ['!'] },
 
-  quote: { label: 'Quote, with the pill showing', group: 'Quotes and comments', scope: 'pill', keys: ['enter'], soon: true },
-  quoteSelection: { label: 'Quote without a note', group: 'Quotes and comments', scope: 'page', keys: ['mod+shift+l'], soon: true },
-  noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ['enter'], soon: true },
-  noteSend: { label: 'Note box: send now', group: 'Quotes and comments', scope: 'note', keys: ['mod+enter'], soon: true },
+  quote: { label: 'Quote, with the pill showing', group: 'Quotes and comments', scope: 'pill', keys: ['enter'] },
+  quoteSelection: { label: 'Quote without a note', group: 'Quotes and comments', scope: 'page', keys: ['mod+shift+l'] },
+  noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ['enter'] },
+  noteSend: { label: 'Note box: send now', group: 'Quotes and comments', scope: 'note', keys: ['mod+enter'] },
   commentsSend: { label: 'Changes and files: send all comments', group: 'Quotes and comments', scope: 'comments', keys: ['mod+enter'] },
 
   pickAnswer: { label: 'Pick an answer', group: 'Questions', scope: 'question', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], soon: true },

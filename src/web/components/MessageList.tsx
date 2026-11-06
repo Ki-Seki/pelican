@@ -16,7 +16,7 @@ import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
-import { PromptBody, QuoteAction } from './Quotes';
+import { PromptBody, SelectionActions } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
@@ -148,7 +148,7 @@ const AssistantTurn = memo(function AssistantTurn({
   const lastText = texts.at(-1);
 
   return (
-    <div className="group/turn" data-quotable>
+    <div className="group/turn" data-quotable data-quote-from={item.key} data-quote-what="reply" {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})}>
       <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
@@ -183,7 +183,7 @@ function FileChip({ file }: { file: SentFile }) {
  * A prompt's words, selectable like any text. Past about twelve lines (a pasted log, a file) it
  * folds, with a way to read it all. On a touch screen a tap shows the prompt's actions.
  */
-function PromptText({ text, command, onTap }: { text: string; command: boolean; onTap: () => void }) {
+function PromptText({ text, command, onTap, source }: { text: string; command: boolean; onTap: () => void; source: { key: string; at?: number } }) {
   const body = useRef<HTMLDivElement>(null);
   const [all, setAll] = useState(false);
   const [long, setLong] = useState(false);
@@ -205,6 +205,10 @@ function PromptText({ text, command, onTap }: { text: string; command: boolean; 
         // A tap, not the end of selecting some of it.
         if (matches('(hover: none)') && !getSelection()?.toString()) onTap();
       }}
+      data-quotable
+      data-quote-from={source.key}
+      data-quote-what="prompt"
+      {...(source.at ? { 'data-quote-at': source.at } : {})}
       className={`max-w-[85%] rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
     >
       <div
@@ -285,7 +289,7 @@ const UserBubble = memo(function UserBubble({
           {item.files.map((file, i) => <FileChip key={`file-${i}`} file={file} />)}
         </div>
       )}
-      {text && <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} />}
+      {text && <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} source={{ key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }} />}
       {item.pending ? (
         <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
       ) : text && (
@@ -514,7 +518,7 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
   const clipped = long && !all;
   const foot = 'border-t border-line py-1.5 text-[12px] text-faint hover:text-fg';
   return (
-    <div data-quotable className="overflow-hidden rounded-xl border border-line bg-panel">
+    <div data-quotable data-quote-from={item.key} data-quote-what="step" {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})} className="overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 break-words">{item.command}</span>
@@ -716,12 +720,10 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact, quoteKey,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact,
 }: {
   sessionId: string;
   view: SessionView;
-  /** Whose message box a quote of a reply goes to (lib/quote); the conversation's own by default. */
-  quoteKey?: string;
   cwd?: string;
   /** The computer Claude Code runs on, for error lines that say what to do there. */
   machine?: string;
@@ -741,6 +743,9 @@ export function MessageList({
   const lastSending = useRef<string | undefined>(undefined);
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  // A phone's selection: its actions dock at the foot of the conversation, which makes room for them.
+  const [docked, setDocked] = useState(false);
   /** Following the newest output. Stops the moment the reader scrolls up or opens something; any other tap leaves it be. */
   const atBottom = useRef(true);
   /** A finger is on the list: never move it under them. */
@@ -855,12 +860,13 @@ export function MessageList({
 
   return (
     <SessionContext.Provider value={sessionId}>
-    <div className="relative min-h-0 flex-1">
+    <div ref={frame} className="relative min-h-0 flex-1">
       {/* Opening or closing something (a step, a long output) is reading, not following: what
           arrives next must not pull it away. A tap that opens nothing (selecting text, a link,
           Copy) leaves following as it was. Scrolling back down to the end follows again. */}
       <div
         ref={scroller}
+        data-conversation
         onScroll={onScroll}
         onClickCapture={(e) => {
           if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary')) atBottom.current = false;
@@ -877,8 +883,8 @@ export function MessageList({
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
-        <div ref={content} className="relative mx-auto max-w-3xl px-4 pt-3 pb-6">
-          <QuoteAction within={content} quoteKey={quoteKey ?? sessionId} />
+        <div ref={content} className={`relative mx-auto max-w-3xl px-4 pt-3 ${docked ? 'pb-[4.75rem]' : 'pb-6'}`}>
+          <SelectionActions within={content} dockTo={frame} onDock={setDocked} />
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
               {view.loadingOlder ? (
@@ -951,7 +957,7 @@ export function MessageList({
         <button
           type="button"
           aria-label="Jump to latest"
-          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
+          className={`animate-fade absolute left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1 ${docked ? 'bottom-16' : 'bottom-3'}`}
           onClick={() => {
             const el = scroller.current;
             if (!el) return;

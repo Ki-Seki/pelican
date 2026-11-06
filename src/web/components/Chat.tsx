@@ -15,7 +15,7 @@ import { composing, hasKeyboard } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
-import { messageWith, olderQuote, promptGist, readMessage, type WaitingItem } from '../lib/quote';
+import { messageWith, olderQuote, promptGist, readMessage, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { CommentsChat } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
@@ -43,6 +43,7 @@ import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
+import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { StatusBadge } from './SessionList';
 import { SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
@@ -487,10 +488,11 @@ export function Chat({
   /**
    * Sends a message. `from`: the message box, whose words go back to it if the message does not go,
    * and which takes along what waits above it (quotes, line comments, files); Send now in Changes
-   * and files, what waits alone; or the chat itself (Retry, Compact, Cancel on a check-in), which
-   * leaves the box and what waits as they are.
+   * and files, what waits alone; a quote with its note sent at once from the note box (`reply`,
+   * the whole message already), which waits again if it does not go; or the chat itself (Retry,
+   * Compact, Cancel on a check-in), which leaves the box and what waits as they are.
    */
-  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat', trust?: TrustChoice) => {
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat' | { reply: WaitingItem }, trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
@@ -508,7 +510,10 @@ export function Chat({
     // comments do in Claude Desktop; a command takes none. Taken now, it goes with this message
     // only; it comes back if the message does not go.
     const box = from === 'box' || from === 'comments';
-    const taken = box && !text.trimStart().startsWith('/') ? takeWaiting(viewId) : [];
+    // A reply sent from the note box is the message; one that waited again after a try that did
+    // not go (the folder's trust asked first) leaves the list as it goes again.
+    if (typeof from === 'object') takeWaiting(viewId, (item) => item.id === from.reply.id);
+    const taken = box && !text.trimStart().startsWith('/') ? takeWaiting(viewId) : typeof from === 'object' ? [from.reply] : [];
     const said = box ? messageWith(taken, text) : text;
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
@@ -575,8 +580,27 @@ export function Chat({
   // one on screen at a time.
   const composer = useRef<ComposerHandle>(null);
   const side = useSideChat(Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
-  /** The side chat's message box, where the quotes a side question takes along wait for it. */
+  /** The side chat's message box, where a passage taken for it waits for the question. */
   const sideBox = sessionId ? `side:${sessionId}` : undefined;
+  // Quotes taken in the conversation go to this chat's message box; Send now in the note box sends
+  // one at once, a steer while Claude works; Start a side chat takes one to the side chat.
+  const sendReply = useRef<(item: WaitingItem) => void>(() => {});
+  sendReply.current = (item) => void send(sendNowMessage(item.text, item.note ?? ''), [], 'steer', { reply: item });
+  const { open: sideOpen, show: showSide } = side;
+  const quoteTarget = useMemo<QuoteTarget>(() => ({
+    chat: viewId,
+    sendNow: (item) => sendReply.current(item),
+    focusBox: () => composer.current?.focus(),
+    ...(sideBox && !sideChat ? {
+      sideChat: {
+        open: sideOpen,
+        start: (item: WaitingItem) => {
+          addWaiting(sideBox, item);
+          showSide();
+        },
+      },
+    } : {}),
+  }), [viewId, sideBox, sideChat, sideOpen, showSide]);
   const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
@@ -877,6 +901,7 @@ export function Chat({
 
       <div className="flex min-h-0 flex-1 flex-col [@media(max-height:380px)]:min-h-[80%]">
         {sessionId || view.messages.length > 0 ? (
+          <QuoteTargetContext.Provider value={quoteTarget}>
           <MessageList
             sessionId={viewId}
             // Can't reach the computer: the line under the header says so, and offers to retry.
@@ -887,6 +912,7 @@ export function Chat({
             {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
             {...(sessionId ? { onRetry: sendAgain, ...(sideChat ? {} : { onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') }) } : {})}
           />
+          </QuoteTargetContext.Provider>
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
             <div className="min-w-0 max-w-full">

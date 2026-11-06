@@ -175,7 +175,9 @@ async function walkWorkspace(page, base, session, where, step) {
   const quote = page.getByRole('button', { name: 'Quote', exact: true });
   if (!(await quote.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing(`selecting lines of ${file} offers no Quote`);
   await quote.click();
-  if (!(await page.locator('button[aria-label^="Remove the quote"]').first().waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`Quote on ${file} puts no quote above the message box`);
+  // It waits above the message box: a chip, or on a phone the card of the quote just taken.
+  const waits = page.locator('ul[aria-label="With your next message"] li').or(page.getByRole('button', { name: 'Add a note' })).first();
+  if (!(await waits.waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`Quote on ${file} puts no quote above the message box`);
 
   step('a text search');
   view = await openWorkspace(page, `${url}&w=files`);
@@ -200,6 +202,58 @@ async function walkWorkspace(page, base, session, where, step) {
   await changed.click();
   if (!(await page.locator('[role="group"][aria-label^="Changes to "]').waitFor({ timeout: 5000 }).then(() => true, () => false))) missing('a file the turn changed shows no diff');
   await page.waitForLoadState('networkidle');
+}
+
+/**
+ * A quote with a note, as someone takes one: words of a reply selected, Quote, a note, and the
+ * message sent; the prompt then reads back with the quote set apart. On a phone the pair docks
+ * above the message box and Quote leaves a card there with Add a note; with a mouse, ↵ quotes and
+ * the note box opens at the selection.
+ */
+async function walkQuote(page, base, session, where, phone) {
+  const missing = (what) => problems.push(`${where}, session ${session.id}: ${what}`);
+  await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  const words = await page.evaluate((touch) => {
+    const paragraph = [...document.querySelectorAll('[data-quote-what="reply"] p')].find((p) => (p.firstChild?.textContent ?? '').trim().split(/\s+/).length >= 4);
+    const node = paragraph?.firstChild;
+    if (!node) return '';
+    const text = node.textContent;
+    const end = text.split(/\s+/).slice(0, 3).join(' ').length;
+    paragraph.scrollIntoView({ block: 'center' });
+    // A finger's selection begins with a touch, a mouse's with its button; then the words are selected.
+    paragraph.dispatchEvent(new PointerEvent('pointerdown', { pointerType: touch ? 'touch' : 'mouse', bubbles: true }));
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, end);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    paragraph.dispatchEvent(new PointerEvent('pointerup', { pointerType: touch ? 'touch' : 'mouse', bubbles: true }));
+    return range.toString();
+  }, phone);
+  if (!words) return missing('no paragraph of a reply to quote');
+  const actions = page.getByRole('toolbar', { name: 'Selected text' });
+  if (!(await actions.waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('selecting words of a reply offers no Quote');
+  const note = 'Keep this as it is';
+  if (phone) {
+    await actions.getByRole('button', { name: 'Quote' }).click();
+    const add = page.getByRole('button', { name: 'Add a note' });
+    if (!(await add.waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('Quote on a phone leaves no card with Add a note');
+    await add.click();
+    await page.getByLabel('Your note').fill(note);
+  } else {
+    await page.keyboard.press('Enter');
+    const box = page.getByRole('dialog', { name: 'Quote with a note' });
+    if (!(await box.waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('↵ on a selection opens no note box');
+    await page.keyboard.type(note);
+    await page.keyboard.press('Enter');
+    if (!(await page.locator('ul[aria-label="With your next message"] li').first().waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('the note box adds no chip above the message box');
+  }
+  await page.getByLabel('Message Claude').fill('And go on');
+  await page.getByRole('button', { name: 'Send' }).click();
+  const quoted = page.locator('blockquote', { hasText: words.trim() }).first();
+  if (!(await quoted.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing('the prompt sent shows no quote');
+  if (await page.getByText('<!-- reply', { exact: false }).count()) missing('the prompt sent shows its reply marker');
 }
 
 /** The name the site build gives a saved answer (scripts/site.mjs, src/web/lib/static-demo.ts). */
@@ -263,6 +317,8 @@ async function driveApp(browser, base, sessions, walked) {
       }
       at = 'Changes and files';
       if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; });
+      at = 'a quote with a note';
+      if (walked) await walkQuote(page, base, walked, `app, ${size}, ${scheme}`, size === 'phone');
       all = false;
       await context.close();
     }

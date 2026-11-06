@@ -140,6 +140,40 @@ describe('the side chat', () => {
     expect(within(pane()!).queryByText('Clean up the build')).toBeNull();
   });
 
+  it('starts from a selection with the passage waiting in its box, and asks with it attached, as Desktop does', async () => {
+    computer(1440);
+    const rect = { x: 10, y: 40, top: 40, left: 10, bottom: 60, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+    server.after = [{ uuid: 'a1', role: 'assistant', blocks: [{ type: 'text', text: 'The cache key is per user, so one user never reads another’s build.' }], timestamp: Date.now() - 50_000 }];
+    session();
+    await loaded();
+    const words = (await screen.findByText(/The cache key is per user/)).firstChild!;
+    fireEvent.pointerDown(words.parentElement!, { pointerType: 'mouse' });
+    const range = document.createRange();
+    range.setStart(words, 17);
+    range.setEnd(words, 25);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(words.parentElement!, { pointerType: 'mouse' });
+    const pill = await screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+    fireEvent.click(within(pill).getByRole('button', { name: 'Start a side chat' }));
+    expect(pane()).not.toBeNull();
+    expect(within(pane()!).getByRole('button', { name: 'Quote “per user”' })).toBeTruthy();
+    type('Side question', 'Why not per project?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    expect(server.side[0]!.question).toBe('<!-- attach -->\n> per user\n\nWhy not per project?');
+    expect(server.sent).toEqual([]);
+    // Open now: a selection goes to it, under Desktop's other words for it.
+    fireEvent.pointerDown(words.parentElement!, { pointerType: 'mouse' });
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(words.parentElement!, { pointerType: 'mouse' });
+    const again = await screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+    expect(within(again).getByRole('button', { name: 'Send to side chat' })).toBeTruthy();
+    getSelection()!.removeAllRanges();
+  });
+
   it('/btw takes the quotes waiting in the box along, and leaves comments for the session', async () => {
     computer(1280);
     const { addWaiting, waitingOf } = await import('../src/web/lib/drafts');
