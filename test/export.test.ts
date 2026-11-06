@@ -209,3 +209,19 @@ describe('Export as Markdown', () => {
     expect(markdown).toContain('## You\n\n```` !echo `date` ``` ````\n\n````\n```\nnot the end\n```\n````\n');
   });
 });
+
+describe('the export, in step with the conversation', () => {
+  it('names the computer in a failed request’s line, and says a command failed where the conversation does', async () => {
+    const sessionId = await session(9, 'Failures', [
+      user('<bash-input>npm test</bash-input>'),
+      user('<bash-stdout></bash-stdout><bash-stderr>FAIL theme.test.ts</bash-stderr>', { version: '2.1.318' }),
+      // A failed request, as Claude Code writes it: a reply of its own, marked as an API error.
+      { type: 'assistant', isApiErrorMessage: true, error: 'unknown', message: { id: 'msg_err', type: 'message', role: 'assistant', model: '<synthetic>', content: [text('API Error: Connection error.')] } },
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).toContain('```\nFAIL theme.test.ts\n```');
+    expect(markdown).toContain('*Failed*');
+    expect(markdown).toContain(config.machine);
+    expect(markdown).not.toContain('your computer');
+  });
+});

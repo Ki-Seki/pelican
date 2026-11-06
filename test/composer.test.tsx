@@ -77,6 +77,17 @@ describe('the message box', () => {
     }
   });
 
+  it('sends a / command with its words alone: the files wait for the next message', () => {
+    saveDraft('s3', '/compact', [{ id: 'up3', name: 'export.log', mime: 'text/plain', size: 2048, path: '/tmp/up3' }]);
+    const { box, onSend } = renderComposer('s3');
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenLastCalledWith('/compact', [], 'steer');
+    expect(screen.getByText('export.log')).toBeTruthy();
+    fireEvent.change(box, { target: { value: 'Now read this' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenLastCalledWith('Now read this', [expect.objectContaining({ id: 'up3' })], 'steer');
+  });
+
   it('brings back the files of a draft', () => {
     saveDraft('s2', 'look', [{ id: 'up1', name: 'shot.png', mime: 'image/png', size: 2048, path: '/tmp/up1' }]);
     const { box, onSend } = renderComposer('s2');

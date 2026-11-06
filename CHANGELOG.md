@@ -115,7 +115,8 @@ from every app.
   4 KB a push service carries.
 - Export as Markdown has the conversation as it shows here: `!` and `/` commands as typed, as
   code, with their output; the files and pictures sent with a prompt; Claude Code's own lines,
-  such as a background task's note, Interrupted, a failed request or a hook's word; and none of
+  such as a background task's note, Interrupted, a failed request (naming the computer, as the
+  conversation does) or a hook's word, and a command that failed marked so; and none of
   the tags, notes and summaries Claude Code and Pelican add for Claude, such as a side chat's note
   with each question.
 - The session menu shows the session's tokens, the share from the cache, its models and
@@ -124,13 +125,15 @@ from every app.
   start, and for one too long for the conversation what Claude Code saved of it (up to 64MB), from
   that file, a page at a time, also in a branch that copied it. One that printed nothing shows the
   command alone, and one that failed says Failed, or Stopped, where its live card said how it
-  ended. A running one's Stop is named for it.
+  ended; a record from before (Claude Code before 2.1.80, Pelican before 0.4) says so only where
+  it noted it. A running one's Stop is named for it.
 - Claude's answer to a background task's note shows after the note, not in the reply before it.
 - A message that does not go comes back to the message box, files and all, above anything typed
   since. A `!` or `/` command comes back only into an empty box; with words or files there, it
   waits above the box, Not sent, with Put back, as does a message, files and all, that comes back
-  while a command is typed. What waits stays across reloads, and in a new session goes on with the
-  session once it starts. Put back brings words and files back together, or, where they cannot
+  while a command is typed. A `/` command goes with its words alone: files in the box wait for the
+  next message, as quotes do. What waits stays across reloads, and in a new session goes on with
+  the session once it starts, line comments too. Put back brings words and files back together, or, where they cannot
   share the box, swaps them with what is there, which waits in its place, Set aside. One sent for
   you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and

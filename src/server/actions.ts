@@ -96,13 +96,15 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
     for (const block of blocks) out.push(block, '');
   };
   // What the conversation view shows, read the same way.
-  for (const item of buildItems(messages)) {
+  for (const item of buildItems(messages, config.machine)) {
     if (item.kind === 'user') {
       const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())] : item.text ? [item.text] : [];
       say('You', [...words, ...attached(item.images.length, item.files)]);
     } else if (item.kind === 'shell') {
       const output = [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd();
-      say('You', [asCode(`!${item.command}`), ...(output ? [codeBlock(output)] : [])]);
+      // How it ended when not well, as the conversation marks it.
+      const ended = item.ended ? note(item.ended === 'stopped' ? 'Stopped' : 'Failed') : '';
+      say('You', [asCode(`!${item.command}`), ...(output ? [codeBlock(output)] : []), ...(ended ? [ended] : [])]);
     } else if (item.kind === 'notice' && item.tone === 'output') {
       // A `/` command's output, under the command.
       out.push(codeBlock(item.text), '');

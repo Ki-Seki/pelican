@@ -170,6 +170,11 @@ export type ChatMessage = {
   meta?: boolean;
   /** The summary a compaction left in place of the earlier conversation. */
   compactSummary?: boolean;
+  /**
+   * The Claude Code that wrote a `!` command's output row. The row's shape changed in 2.1.80: since
+   * then a command that went well always has something under stdout, so an empty one means it failed.
+   */
+  version?: string;
   /** Local-only message shown before the transcript confirms it. */
   pending?: boolean;
   /** A local message that waits for the running turn to end. */

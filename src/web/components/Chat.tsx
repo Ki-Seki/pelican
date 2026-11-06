@@ -528,6 +528,8 @@ export function Chat({
         // the session it was for, not with the next new session in this folder.
         composer.current?.saveDraft();
         moveDraft(viewId, created);
+        // So do line comments a first message took none of (a / command takes none).
+        putBackComments(created, takeComments(viewId));
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);

@@ -163,7 +163,8 @@ describe('a running command', () => {
   });
 
   it('that failed says so once recorded, quietly, where its live card said its exit code, as the record tells it', () => {
-    const recorded = (output: string) => buildItems([user('c', '<bash-input>npm test</bash-input>'), user('o', output)])[0];
+    // Rows as Claude Code 2.1.318 writes them (the version is on every row it writes).
+    const recorded = (output: string, version = '2.1.318') => buildItems([user('c', '<bash-input>npm test</bash-input>'), { ...user('o', output), version }])[0];
     // Claude Code's bash mode puts a failed command's output under stderr, with stdout empty, also when it printed nothing.
     expect(recorded('<bash-stdout></bash-stdout><bash-stderr>FAIL theme.test.ts\n</bash-stderr>')).toMatchObject({ stderr: 'FAIL theme.test.ts', ended: 'failed' });
     expect(recorded('<bash-stdout></bash-stdout><bash-stderr></bash-stderr>')).toMatchObject({ stdout: '', stderr: '', ended: 'failed' });
@@ -171,11 +172,16 @@ describe('a running command', () => {
     // One that went well: its output, or Claude Code's word that it printed none.
     expect(recorded('<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')).not.toHaveProperty('ended');
     expect(recorded('<bash-stdout>2 passed</bash-stdout><bash-stderr></bash-stderr>')).not.toHaveProperty('ended');
-    // In one message with its command, as Claude Desktop writes it.
-    expect(buildItems([user('d', '<bash-input>false</bash-input><bash-stdout></bash-stdout><bash-stderr></bash-stderr>')])[0]).toMatchObject({ ended: 'failed' });
+    // Records from before: a Claude Code before 2.1.80 left stdout empty for one that went well too,
+    // and Pelican before 0.4 wrote one message, with "(exit code N)" at the end of a failed one.
+    expect(recorded("<bash-stdout></bash-stdout><bash-stderr>Switched to a new branch 'fix-b'\n</bash-stderr>", '2.1.50')).not.toHaveProperty('ended');
+    expect(recorded('<bash-stdout></bash-stdout><bash-stderr></bash-stderr>', '1.0.100')).not.toHaveProperty('ended');
+    expect(buildItems([user('d', '<bash-input>touch a.txt</bash-input><bash-stdout></bash-stdout><bash-stderr></bash-stderr>')])[0]).not.toHaveProperty('ended');
+    expect(buildItems([user('e', "<bash-input>git switch -c fix-b</bash-input><bash-stdout></bash-stdout><bash-stderr>Switched to a new branch 'fix-b'</bash-stderr>")])[0]).not.toHaveProperty('ended');
+    expect(buildItems([user('f', '<bash-input>npm test</bash-input><bash-stdout>FAIL</bash-stdout><bash-stderr>\n(exit code 1)</bash-stderr>')])[0]).toMatchObject({ ended: 'failed' });
 
     act(() => handleShellEvent({ type: 'shells', sessionId: 's13', shells: [live({ id: 'r13', output: 'FAIL\n', done: { code: 1 } })] }));
-    const record = [user('r13', '<bash-input>npm test</bash-input>'), user('o13', '<bash-stdout></bash-stdout><bash-stderr>FAIL\n</bash-stderr>')];
+    const record = [user('r13', '<bash-input>npm test</bash-input>'), { ...user('o13', '<bash-stdout></bash-stdout><bash-stderr>FAIL\n</bash-stderr>'), version: '2.1.318' }];
     const { rerender } = render(<MessageList sessionId="s13" view={view(record)} mode="normal" />);
     expect(screen.getByText('Exit code 1')).toBeTruthy();
     act(() => handleShellEvent({ type: 'shells', sessionId: 's13', shells: [] }));

@@ -192,3 +192,14 @@ describe('toChatMessage: a Workflow call’s launch', () => {
     expect((odd?.blocks[0] as { workflow?: { runId?: string } }).workflow?.runId).toBeUndefined();
   });
 });
+
+describe('toChatMessage: a ! command’s output row', () => {
+  it('keeps the Claude Code that wrote it, which says how to read it, and on no other row', async () => {
+    const { toChatMessage } = await import('../src/server/normalize');
+    const row = (text: string) => ({ type: 'user', uuid: 'r', version: '2.1.318', message: { role: 'user', content: text } });
+    expect(toChatMessage(row('<bash-stdout></bash-stdout><bash-stderr>FAIL</bash-stderr>'))).toMatchObject({ version: '2.1.318' });
+    expect(toChatMessage(row('<bash-input>npm test</bash-input>'))).not.toHaveProperty('version');
+    expect(toChatMessage(row('Fix the tests'))).not.toHaveProperty('version');
+    expect(toChatMessage({ ...row('<bash-stdout></bash-stdout>'), version: 'x'.repeat(33) })).not.toHaveProperty('version');
+  });
+});

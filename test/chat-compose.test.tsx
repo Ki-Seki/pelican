@@ -584,6 +584,17 @@ describe('line comments, as in Claude Desktop', () => {
     expect(server.sent[0]!.text).toBe(said);
   });
 
+  it('written before a new session whose first message is a / command, go on with that session, not the folder’s next one', async () => {
+    setComments(`new:${CWD}`, [comment]);
+    fresh();
+    sendText('/init');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe('/init');
+    await waitFor(() => expect(commentsOf(CREATED)).toEqual([comment]));
+    expect(commentsOf(`new:${CWD}`)).toEqual([]);
+    setComments(CREATED, []);
+  });
+
   it('written before a new session starts, go with its first message', async () => {
     setComments(`new:${CWD}`, [comment]);
     fresh();

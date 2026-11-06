@@ -149,27 +149,40 @@ function shellOutput(raw: string): { text: string; saved?: string } {
  * printed nothing is for Claude, and the card shows nothing in its place. How it ended, as the
  * record tells it: Claude Code's bash mode puts the output of one that went well under stdout, or
  * its word that it printed none, and that of one that failed under stderr, with stdout empty; one
- * Pelican stopped says so at its end.
+ * Pelican stopped says so at its end. Before Claude Code 2.1.80, and in Pelican's records before
+ * 0.4 (one message, with "(exit code N)" at the end of a failed one's stderr), a command that went
+ * well could leave stdout empty too: those say how they ended only by such a note.
  */
-function shellRecord(text: string): Recorded {
+function shellRecord(text: string, version?: string): Recorded {
   const out = tag(text, 'bash-stdout');
   const err = tag(text, 'bash-stderr');
   const stdout = shellOutput(out ?? '');
   const stderr = shellOutput(err ?? '');
   const saved = stdout.saved ?? stderr.saved;
-  const ended: ShellEnd | undefined = err === undefined || out ? undefined : /(?:^|\n)\(stopped(?: after [^)\n]+)?\)$/.test(stderr.text) ? 'stopped' : 'failed';
+  const note = /(?:^|\n)\((stopped(?: after [^)\n]+)?|exit code -?\d+)\)$/.exec(stderr.text)?.[1];
+  const shaped = err !== undefined && !out && sharesStdoutOnSuccess(version);
+  const ended: ShellEnd | undefined = note?.startsWith('stopped') ? 'stopped' : note || shaped ? 'failed' : undefined;
   return { stdout: stdout.text === '(Bash completed with no output)' ? '' : stdout.text, stderr: stderr.text, ...(saved ? { saved } : {}), ...(ended ? { ended } : {}) };
 }
 
+/** Whether a Claude Code's `!` output row says under stdout that a command went well: 2.1.80 on. */
+function sharesStdoutOnSuccess(version: string | undefined): boolean {
+  const [major, minor, patch] = (version ?? '').split('.').map((n) => Number.parseInt(n, 10));
+  if (major === undefined || minor === undefined || patch === undefined || [major, minor, patch].some(Number.isNaN)) return false;
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 80)));
+}
+
 /** Splits what Claude Code wraps in tags out of a user message's text. */
-function classifyUserText(raw: string): Classified | undefined {
+function classifyUserText(raw: string, version?: string): Classified | undefined {
   const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   if (!text) return undefined;
   if (text.includes('<local-command-caveat>')) return undefined;
   // A `!` command and its output (Claude Code's bash mode), from any client.
   const bash = tag(text, 'bash-input');
+  // One message holding the command and its output is a record of Pelican's before 0.4 (or another
+  // client's): only a note at its end says it did not go well.
   if (bash !== undefined) return { kind: 'shell', command: unescape(bash), ...shellRecord(text) };
-  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) return { kind: 'shell-output', ...shellRecord(text) };
+  if (text.startsWith('<bash-stdout>') || text.startsWith('<bash-stderr>')) return { kind: 'shell-output', ...shellRecord(text, version) };
   const commandName = tag(text, 'command-name');
   if (commandName) {
     return { kind: 'user', text: '', images: [], command: { name: commandName, args: tag(text, 'command-args') ?? '' } };
@@ -249,7 +262,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
       const texts = message.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : ''));
       const images = message.blocks.filter((b): b is ImageBlock => b.type === 'image');
       if (texts.length === 0 && images.length === 0) continue;
-      const classified: Classified | undefined = texts.length > 0 ? classifyUserText(texts.join('\n\n')) : { kind: 'user', text: '', images: [] };
+      const classified: Classified | undefined = texts.length > 0 ? classifyUserText(texts.join('\n\n'), message.version) : { kind: 'user', text: '', images: [] };
       if (!classified) continue;
       if (classified.kind === 'user') {
         push({

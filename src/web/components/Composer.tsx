@@ -578,15 +578,17 @@ export function Composer({
     // Typed out of habit in a side chat, /btw only says what the rest is.
     const words = side ? text.trim().replace(ASKS_BTW, '').trim() : text.trim();
     if (!words && quotes.length === 0 && !uploads.some((u) => u.attachment)) return;
-    // A / command has to start its message: the quotes wait for the next one, as with a ! command.
+    // A / command has to start its message, and takes nothing but its words: the quotes and files
+    // wait for the next message, as with a ! command (files would go to it as its arguments).
     const command = words.startsWith('/');
-    const attachments = uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
+    const attachments = command ? [] : uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
     draftSaver.now(words, attachments, quotes, held);
     onSend(command ? words : messageWithQuotes(quotes, words), attachments, mode);
     justSent.current = true;
     setText('');
     setCaret(0);
-    if (!command) setQuotes([]);
+    if (command) return;
+    setQuotes([]);
     for (const u of uploads) forget(u);
     setUploads([]);
   };
@@ -743,14 +745,17 @@ export function Composer({
         {problems.length > 0 && <div className="px-4 pt-2 text-[12.5px] leading-snug text-danger">{problems.join(' · ')}</div>}
         {notes.length > 0 && <div className="flex items-start gap-1.5 px-4 pt-2 text-[12.5px] leading-snug text-muted"><Info className="mt-px size-3.5 shrink-0" />{notes.join(' · ')}</div>}
         {held.map((h, i) => {
-          const { words, files, name } = heldWords(h);
+          const { words, files, name: said } = heldWords(h);
+          // Two that begin alike are told apart by where they are in the list.
+          const name = held.filter((other) => heldWords(other).name === said).length > 1 ? `${said} (${i + 1} of ${held.length})` : said;
           return (
             <div key={`${i}:${h.text}:${files}`} role="status" className="flex items-center gap-1 pt-2 pr-2 pl-4 text-[12.5px] leading-snug text-muted">
               {/* Long words are cut before the files that wait with them. */}
               <span title={[h.text.trim(), ...(h.attachments ?? []).map((a) => a.name)].filter(Boolean).join('\n')} className="flex min-w-0 flex-1 items-baseline gap-1 whitespace-nowrap">
                 {h.aside ? 'Set aside: ' : 'Not sent: '}
                 <span className={`min-w-0 truncate text-fg ${words && isCommand(h.text) ? 'font-mono text-[12px]' : ''}`}>{words || files}</span>
-                {words && files && <span className="max-w-[45%] shrink-0 truncate text-faint">{' · '}{files}</span>}
+                {/* The files give way first: a long name never cuts the words to a few letters. */}
+                {words && files && <span className="max-w-[35%] min-w-0 shrink-[4] truncate text-faint">{' · '}{files}</span>}
               </span>
               <button type="button" aria-label={`Put back ${name}`} disabled={uploading} onClick={() => putBack(i)} className="relative h-7 shrink-0 rounded-full px-2 font-medium text-fg after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover disabled:opacity-40">
                 Put back
