@@ -289,6 +289,16 @@ describe('a reply in the export', () => {
     }
   });
 
+  it('takes no line with a no-break space on it for a blank line, as no reader does: indented code of one is closed', () => {
+    // JavaScript's trim takes U+00A0, U+FEFF, U+3000 and U+2028 for blanks; readers, only spaces and tabs.
+    for (const space of [' ', '﻿', '　', ' ']) {
+      expect(reply(`Its last line:\n\n    ${space}\n\nThat is all.`), JSON.stringify(space)).toBe(`Its last line:\n\n\`\`\`\n${space}\n\`\`\`\n\nThat is all.`);
+      expect(trouble(reply(`Its last line:\n\n    ${space}\n\nThat is all.`)), JSON.stringify(space)).toEqual([]);
+    }
+    // A table in a quote that such a line ends keeps the blank line after it, which the spec's reader needs.
+    expect(reply('> | a |\n> | - |\n \n> ---')).toBe('> | a |\n> | - |\n>\n \n> ---');
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

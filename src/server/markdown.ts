@@ -176,6 +176,11 @@ interface Context {
 }
 
 const space = (c: string | undefined) => c === ' ' || c === '\t';
+/**
+ * Whether a line is blank as readers take one: nothing on it but spaces and tabs. A no-break space,
+ * which JavaScript's trim takes for a blank, is a character on the line to them.
+ */
+const blank = (line: string | undefined) => line !== undefined && /^[ \t]*$/.test(line);
 
 /** A label as readers match it: case and runs of blanks aside (micromark's normalizeIdentifier). */
 const normalize = (label: string) => label.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '').toLowerCase().toUpperCase();
@@ -525,18 +530,18 @@ export function reply(text: string, id = 1): string {
       // Indented code, fenced: readers differ on what indentation makes code, never on a fence. The
       // first line keeps the markers it started its containers with, and the fence takes them; the
       // lines after it go on in those containers.
-      const last = block.lines.findLastIndex((line) => line.text.trim());
+      const last = block.lines.findLastIndex((line) => !blank(line.text));
       const marks = fence(block.lines.slice(0, last + 1).map((line) => line.text).join('\n'), 3);
       const within = inside(chain);
       block.lines.forEach((line, i) => {
-        const shown = !line.text.trim() ? line.prefix.trimEnd() : `${i === 0 ? within : line.prefix}${line.text}`;
+        const shown = blank(line.text) ? line.prefix.trimEnd() : `${i === 0 ? within : line.prefix}${line.text}`;
         out[line.at] = `${i === 0 ? `${line.prefix}${marks}\n` : ''}${shown}${i === last ? `\n${within}${marks}` : ''}`;
       });
     } else if (block.kind === 'html') {
       block.lines.forEach((line, i) => {
         const next = block.lines[i + 1];
-        const words = line.text.trim() ? textLine(line.text.trimEnd()) : '';
-        out[line.at] = line.prefix + words + (words && next?.text.trim() ? '\\' : '');
+        const words = blank(line.text) ? '' : textLine(line.text.replace(/[ \t]+$/, ''));
+        out[line.at] = line.prefix + words + (words && next && !blank(next.text) ? '\\' : '');
       });
       owed = blankIn(chain);
     } else if (block.kind === 'footnote') {
@@ -583,8 +588,8 @@ export function reply(text: string, id = 1): string {
       if (!first || footnote.first!.heading || footnote.first!.lines.length > 1) continue;
       const words = out[first.at]?.slice(first.prefix.length);
       const after = out.slice(first.at + 1, footnote.end);
-      const blank = footnote.end! >= out.length || after.some((line) => line !== undefined) || out[footnote.end!]?.trim() === '';
-      if (!words?.trim() || after.some((line) => line?.trim()) || !blank) continue;
+      const ends = footnote.end! >= out.length || after.some((line) => line !== undefined) || blank(out[footnote.end!]);
+      if (words === undefined || blank(words) || after.some((line) => line !== undefined && !blank(line)) || !ends) continue;
       out[footnote.marker] = `${out[footnote.marker]} ${words}`;
       out[footnote.blank] = undefined;
       out[first.at] = undefined;
@@ -601,7 +606,7 @@ export function reply(text: string, id = 1): string {
   for (let index = 0, read = 0; index < lines.length || carried !== undefined; read += 1) {
     const raw = carried ?? lines[index++]!;
     carried = undefined;
-    empty = raw.trim() === '';
+    empty = blank(raw);
     owedTable = false;
     const cur = new Cursor(raw);
     let matched = 0;
