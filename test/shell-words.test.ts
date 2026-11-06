@@ -6,7 +6,7 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { revealHidden } from '../src/shared/hidden';
 import { inWords } from '../src/shared/shell-words';
@@ -113,6 +113,16 @@ describe('where a shell reads a look-alike space as part of a word', () => {
       const started = Date.now();
       expect(inWords(command, isSpace)).toBeUndefined();
       expect(Date.now() - started).toBeLessThan(2000);
+    }
+  });
+
+  it('gives up, and says so in the console, when reading a command goes wrong, so the approval still shows', () => {
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(inWords('echo a\u00a0b', () => { throw new TypeError('a mistake in the reader'); })).toBeUndefined();
+      expect(said).toHaveBeenCalledTimes(1);
+    } finally {
+      said.mockRestore();
     }
   });
 });

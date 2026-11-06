@@ -1483,9 +1483,10 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
       }
     }
   } catch (error) {
-    // Lost, or a command nested deeper than the stack goes.
-    if (error instanceof Lost || error instanceof RangeError) return undefined;
-    throw error;
+    // Lost, or a command nested deeper than the stack goes. Anything else is a mistake here: the
+    // approval still shows, every such space written out, rather than not at all.
+    if (!(error instanceof Lost || error instanceof RangeError)) console.error('Pelican could not read a command for its spaces', error);
+    return undefined;
   }
   // A shell reads its input, and something may hand it text of the command line this does not follow.
   if (across.readsInput && (across.risky || [...across.fed].some((name) => across.functions.has(name)))) return undefined;
