@@ -1,13 +1,14 @@
 import { FileText, MessageSquare, MessagesSquare, TextQuote } from 'lucide-react';
-import { createContext, type KeyboardEvent as ReactKeyboardEvent, type RefObject, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { announce } from '../lib/announce';
 import { addWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
 import { composing, isKey, keyText } from '../lib/keyboard';
-import { fromRange, paint, rangeOf, sourceOf } from '../lib/passages';
+import { fromElement, fromRange, paint, rangeOf, sourceOf } from '../lib/passages';
 import { enterSends } from '../lib/prefs';
+import { useSwipeLeft } from '../lib/press';
 import { type PromptPart, type QuoteFrom, quoteItem, readPrompt, shortLines, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 
 /**
@@ -542,6 +543,69 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
       </div>
     </div>,
     document.body,
+  );
+}
+
+/* ---------- a left swipe ---------- */
+
+/** What a swipe on a reply quotes: the paragraph, item or heading under the finger. */
+const PARAGRAPH = 'p, li, h1, h2, h3, h4, h5, h6, blockquote';
+
+/**
+ * A left swipe under a finger quotes, as Telegram's swipe to reply: the paragraph of a reply it is
+ * on, or the whole of a prompt or a step's output (`whole`). The thing follows the finger, with
+ * Quote showing beside it; let go past the mark, it is quoted into the message box, where a note
+ * can be added. Code, tables and diffs scroll sideways instead, and so does a selection's text.
+ */
+export function SwipeQuote({ children, whole, className = '' }: {
+  children: ReactNode;
+  /** A swipe quotes all of it, from here, whatever part of it the finger is on: this text, or what it reads. */
+  whole?: { text?: () => string; from: () => QuoteFrom | undefined };
+  className?: string;
+}) {
+  const target = useContext(QuoteTargetContext);
+  const box = useRef<HTMLDivElement>(null);
+  const moving = useRef<HTMLElement | null>(null);
+  const { dx, armed, bind } = useSwipeLeft(() => {
+    const el = moving.current;
+    if (!target || !el) return;
+    const text = whole?.text ? whole.text() : (el.innerText || el.textContent || '');
+    const from = (whole ? whole.from() : fromElement(el)) ?? { what: target.side ? 'side' as const : 'reply' as const };
+    if (from.what === 'reply' && target.side) from.what = 'side';
+    const item = quoteItem(text, from);
+    if (!item) return;
+    if (addWaiting(target.chat, item)) announce('Quoted in your message');
+    else announce(TOO_MANY_REPLIES);
+  }, { enabled: Boolean(target) });
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const root = box.current;
+    const under = e.target instanceof Element ? e.target : null;
+    moving.current = !root ? null : whole ? root.firstElementChild as HTMLElement | null : (under?.closest<HTMLElement>(PARAGRAPH) ?? null);
+    if (moving.current && !root?.contains(moving.current)) moving.current = null;
+    if (moving.current) bind.onPointerDown(e);
+  };
+  useLayoutEffect(() => {
+    const el = moving.current;
+    if (!el) return;
+    el.style.transform = dx ? `translateX(${dx}px)` : '';
+    el.style.transition = dx ? 'none' : 'transform 200ms cubic-bezier(0.32,0.72,0,1)';
+  }, [dx]);
+
+  const el = moving.current;
+  const centre = el && box.current ? el.offsetTop + el.offsetHeight / 2 : 0;
+  return (
+    <div ref={box} {...bind} onPointerDown={onPointerDown} className={`relative ${className}`}>
+      {children}
+      {dx < 0 && el && (
+        <div aria-hidden style={{ top: centre, opacity: Math.min(1, -dx / 40) }} className="pointer-events-none absolute right-0 flex -translate-y-1/2 flex-col items-center gap-1 text-[11px] text-muted">
+          <span className={`grid size-10 place-items-center rounded-full transition-colors ${armed ? 'bg-fg text-bg' : 'bg-chip text-fg'}`}>
+            <TextQuote className="size-4" />
+          </span>
+          Quote
+        </div>
+      )}
+    </div>
   );
 }
 

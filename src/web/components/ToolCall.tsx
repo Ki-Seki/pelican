@@ -14,6 +14,7 @@ import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
 import { loadsInPlace, Markdown } from './Markdown';
 import { STEP_LINK } from './PathLink';
+import { SwipeQuote } from './Quotes';
 import { WorkflowCard } from './WorkflowCard';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -401,8 +402,10 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
       </span>
     </>
   );
-  return (
-    <div>
+  // A command's output can be quoted: swiped to the left on a phone, or selected once it is open.
+  const command = (call.name === 'Bash' || call.name === 'PowerShell') && outcome.kind !== 'pending';
+  const step = (
+    <div data-quote-from={call.id} data-quote-what="step">
       {fileLink ? (
         // The file's name opens it, as a path does in Claude Desktop; the rest of the row still
         // opens the step (its toggle lies under the whole row, the name's link above it). On a
@@ -435,4 +438,8 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
       )}
     </div>
   );
+  if (!command) return step;
+  const output = cleanOutput(resultText(call.result)).trim();
+  if (!output) return step;
+  return <SwipeQuote whole={{ text: () => output, from: () => ({ what: 'step', key: call.id }) }}>{step}</SwipeQuote>;
 });

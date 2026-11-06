@@ -16,7 +16,7 @@ import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
-import { PromptBody, SelectionActions } from './Quotes';
+import { PromptBody, SelectionActions, SwipeQuote } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ToolCallView, ToolTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
@@ -156,7 +156,8 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.kind === 'workflow' ? (
           <ToolCallView key={seg.key} call={seg.part.call} cwd={cwd} running={running} defaultOpen={view === 'verbose'} />
         ) : seg.kind === 'text' ? (
-          <Markdown key={seg.key} text={seg.text} className="my-2" />
+          // A paragraph swiped to the left is quoted (a phone's swipe to reply).
+          <SwipeQuote key={seg.key}><Markdown text={seg.text} className="my-2" /></SwipeQuote>
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
@@ -209,7 +210,7 @@ function PromptText({ text, command, onTap, source }: { text: string; command: b
       data-quote-from={source.key}
       data-quote-what="prompt"
       {...(source.at ? { 'data-quote-at': source.at } : {})}
-      className={`max-w-[85%] rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
+      className={`max-w-full rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
     >
       <div
         ref={body}
@@ -289,7 +290,12 @@ const UserBubble = memo(function UserBubble({
           {item.files.map((file, i) => <FileChip key={`file-${i}`} file={file} />)}
         </div>
       )}
-      {text && <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} source={{ key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }} />}
+      {text && (
+        // Swiped to the left, it is quoted.
+        <SwipeQuote whole={{ from: () => ({ what: 'prompt', key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }) }} className="flex max-w-[85%] flex-col items-end">
+          <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} source={{ key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }} />
+        </SwipeQuote>
+      )}
       {item.pending ? (
         <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
       ) : text && (

@@ -13,7 +13,7 @@ beforeAll(() => {
   Range.prototype.getBoundingClientRect = () => rect;
 });
 
-const { PromptBody, QuoteTargetContext, SelectionActions, SETTLE_MS } = await import('../src/web/components/Quotes');
+const { PromptBody, QuoteTargetContext, SelectionActions, SETTLE_MS, SwipeQuote } = await import('../src/web/components/Quotes');
 const { keyText } = await import('../src/web/lib/keyboard');
 /** Quote, with the key that quotes beside it, as this keyboard prints it. */
 const QUOTE = `Quote${keyText('quote')}`;
@@ -279,6 +279,57 @@ describe('text selected under a finger', () => {
     expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'one more set of values', from: { key: 'a1' } }]);
     expect(target.focusBox).not.toHaveBeenCalled();
     expect(getSelection()?.isCollapsed).toBe(true);
+  });
+});
+
+describe('a swipe to the left under a finger', () => {
+  function Swiped({ whole }: { whole?: boolean }) {
+    return (
+      <QuoteTargetContext.Provider value={target}>
+        <div data-quotable data-quote-from="a1" data-quote-what="reply" data-quote-at={SAID_AT}>
+          {whole ? (
+            <SwipeQuote whole={{ text: () => 'Test Files  2 passed (2)', from: () => ({ what: 'step', key: 'bash-1' }) }}>
+              <div data-testid="step">Run npm test -- theme</div>
+            </SwipeQuote>
+          ) : (
+            <SwipeQuote>
+              <div>
+                <p data-testid="first">Done. The toggle sits under Display in Settings.</p>
+                <p data-testid="second">All 14 theme tests pass.</p>
+                <pre data-testid="code">npm test -- theme</pre>
+              </div>
+            </SwipeQuote>
+          )}
+        </div>
+      </QuoteTargetContext.Provider>
+    );
+  }
+  /** A finger from x = 300 to `to`, sideways. */
+  function swipe(element: HTMLElement, to: number, from = 300) {
+    fireEvent.pointerDown(element, { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: from, clientY: 100 });
+    for (let x = from; x !== to; x += to < from ? -10 : 10) fireEvent.pointerMove(element, { pointerType: 'touch', pointerId: 1, clientX: x, clientY: 101 });
+    fireEvent.pointerMove(element, { pointerType: 'touch', pointerId: 1, clientX: to, clientY: 101 });
+    fireEvent.pointerUp(element, { pointerType: 'touch', pointerId: 1, clientX: to, clientY: 101 });
+  }
+
+  it('quotes the paragraph it is on, from where it is in the reply', () => {
+    render(<Swiped />);
+    swipe(screen.getByTestId('second'), 200);
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'All 14 theme tests pass.', from: { what: 'reply', key: 'a1', at: SAID_AT } }]);
+  });
+
+  it('does nothing to the right (Back’s), short of the mark, or on code, which scrolls sideways', () => {
+    render(<Swiped />);
+    swipe(screen.getByTestId('second'), 380);
+    swipe(screen.getByTestId('second'), 260);
+    swipe(screen.getByTestId('code'), 200);
+    expect(waitingOf('chat')).toEqual([]);
+  });
+
+  it('quotes all of a step’s output, wherever on it the finger is', () => {
+    render(<Swiped whole />);
+    swipe(screen.getByTestId('step'), 200);
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'Test Files  2 passed (2)', from: { what: 'step', key: 'bash-1' } }]);
   });
 });
 
