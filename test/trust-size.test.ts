@@ -121,6 +121,20 @@ describe('a large hostile file', () => {
   }, 60_000);
 });
 
+describe('a hook nested deeper than the stack goes', () => {
+  // String() of a list of lists recursed once per level: the request failed, and nothing started.
+  for (const [name, settings] of [
+    ['in its arguments', `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"x","args":${'['.repeat(20_000)}${']'.repeat(20_000)}}]}]}}`],
+    ['as its type', `{"hooks":{"PreToolUse":[{"hooks":[{"type":${'['.repeat(20_000)}${']'.repeat(20_000)}}]}]}}`],
+  ] as const) {
+    it(`${name}: is one Pelican cannot read, and the folder is asked about`, async () => {
+      const answer = await ask(await folderWith(`deep-${name.replace(/\W+/g, '-')}`, { '.claude/settings.json': settings }));
+      expect(answer.status).toBe(409);
+      expect(answer.brings).toEqual([name === 'as its type' ? 'PreToolUse hook: one Pelican cannot read' : 'PreToolUse hook Pelican cannot read in full: x']);
+    });
+  }
+});
+
 describe('a folder’s other files with more than any project’s', () => {
   it('list as many items as fit from each, and say there is more', async () => {
     const dir = await folderWith('many-items', {

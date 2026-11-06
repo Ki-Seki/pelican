@@ -385,6 +385,9 @@ export async function folderTrusted(folder: string): Promise<boolean> {
 
 const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
+/** A value of a folder's JSON as text where it is plain: a string, or a number or true or false as written; anything else (a list or a map, of any depth) undefined. */
+const plain = (value: unknown) => (typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined);
+
 /** Settings that run a command of the folder's choosing, as Claude Code's trust dialog lists them. */
 const HELPERS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh', 'otelHeadersHelper', 'proxyAuthHelper'];
 
@@ -396,10 +399,17 @@ function* fromSettings(settings: unknown): Generator<Item> {
         for (const hook of isObject(group) && Array.isArray(group.hooks) ? group.hooks : []) {
           if (!isObject(hook)) continue;
           if (typeof hook.command !== 'string') {
-            yield said(`${event} hook: ${typeof hook.url === 'string' ? hook.url : String(hook.type ?? 'hook')}`);
+            // What a hook with no command is, by its address or its type; one of another kind (a
+            // list, a map, nested any depth), as one Pelican cannot read.
+            const what = typeof hook.url === 'string' ? hook.url : hook.type === undefined ? 'hook' : plain(hook.type);
+            yield what === undefined ? note(`${event} hook: one Pelican cannot read`) : said(`${event} hook: ${what}`);
           } else if (Array.isArray(hook.args)) {
-            // Its exec form: the program, run with these arguments and no shell.
-            yield runs(`${event} hook: `, [hook.command, ...hook.args.map(String)].join(' '), 'argv');
+            // Its exec form: the program, run with these arguments and no shell; with arguments
+            // that are not text, as one Pelican cannot read in full.
+            const args = hook.args.map(plain);
+            yield args.every((arg) => arg !== undefined)
+              ? runs(`${event} hook: `, [hook.command, ...args].join(' '), 'argv')
+              : { ...runs(`${event} hook Pelican cannot read in full: `, hook.command, 'argv'), note: true };
           } else {
             // Run by a shell, or by PowerShell, which takes every space for one (but in what it hands a POSIX shell).
             yield runs(`${event} hook: `, hook.command, hook.shell === 'powershell' ? 'powershell' : 'shell');
