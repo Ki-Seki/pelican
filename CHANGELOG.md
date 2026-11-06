@@ -14,9 +14,8 @@ A terminal beside the conversation, as Claude Desktop has one.
   there, and End hangs the shown one up, as closing a window does, asking first while a program runs
   in it, also one left in the background. On a computer you type straight into it, with input
   methods, the emoji picker and dictation too, select to Quote or Copy, and Ctrl and the wheel sets
-  the text size. Its colors and
-  font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim does
-  to pick a theme, gets them. A screen reader reads it.
+  the text size. Its colors and font are Pelican's, light or dark, and a program that asks for its
+  colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, and
   Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-`
@@ -29,13 +28,13 @@ A terminal beside the conversation, as Claude Desktop has one.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
-  the size the shell has on another page. A shell that ends keeps its last screen, with Start again; so does one Pelican
-  ended when it stopped, as all terminals end with Pelican. One unused for 12 hours with nothing
-  running in it closes on its own, and one nobody typed into that no page shows makes room when 10
-  run; with 10 in use, the Terminal tab lists those in other folders, to end one, asking first
-  while a program runs in it. Its output comes over a connection of its own, so it never holds up
-  an approval, and while a phone on a slow link catches up the shell waits for it, so Ctrl+C gets
-  through at once.
+  the size the shell has on another page. A shell that ends keeps its last screen, with Start again;
+  so does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
+  hours with nothing running in it closes on its own, and one nobody typed into that no page shows
+  makes room when 10 run; with 10 in use, the Terminal tab lists those in other folders, to end one,
+  asking first while a program runs in it. Its output comes over a connection of its own, so it
+  never holds up an approval, and while a phone on a slow link catches up the shell waits for it, so
+  Ctrl+C gets through at once.
 - **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or `fish`
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
   session's folder, pasted there, so its lines go in together. Only Claude's replies offer it, not a
