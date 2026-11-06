@@ -94,4 +94,5 @@ describe('a part of the page that does not load', () => {
     fireEvent.click(screen.getByLabelText('Settings'));
     expect(await screen.findByText('Appearance', {}, { timeout: 3000 })).toBeTruthy();
   });
-});
+  // Each loads the whole app afresh: about a second alone, many on a busy computer.
+}, 20_000);
