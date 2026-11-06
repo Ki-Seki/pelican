@@ -20,9 +20,10 @@ import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState,
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, shellEnvironment, terminalState,
   terminalTiming, testShell,
 } from '../src/server/terminals';
+import { modesBeyondSnapshot } from '../src/server/terminal-snapshot';
 import { Page, pause, until } from './terminal-page';
 
 let dir: string;
@@ -311,8 +312,9 @@ describe('a page that comes back', () => {
     const screen = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true });
     // Rows 3 to 20 scroll, and with origin mode the cursor's row counts from the first of them.
     await new Promise<void>((done) => screen.write('\u001b[?1016h\u001b[?25l\u001b[3;20r\u001b[?6h\u001b[2;5H\u001b[4 q', done));
-    expect(modesBeyondSnapshot(screen)).toBe('\u001b[?1016h\u001b[3;20r\u001b[2;5H\u001b[4 q\u001b[?25l');
-    expect(modesBeyondSnapshot(new xtermHeadless.Terminal({ cols: 80, rows: 24 }))).toBe('');
+    // The rows said with origin mode off, then the cursor back last, and a NUL, so nothing joins what came before.
+    expect(modesBeyondSnapshot(screen)).toBe('\u001b[?1016h\u001b[?6l\u001b[3;20r\u001b[?6h\u001b[4 q\u001b[?25l\u001b[0m\u001b[2;5H\u0000');
+    expect(modesBeyondSnapshot(new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true }))).toBe('\u0000');
   });
 
   it('comes once its time is up, every time, while a program left a sequence open and prints nothing more', async () => {
@@ -525,8 +527,9 @@ describe('marks on a character', () => {
       expect(heaviest(shown)).toBe(17);
       expect(heaviest(late)).toBe(17);
       expect(late.lines()).toEqual(shown.lines());
-      // The lines the copy keeps, each of 20 such cells, and no more however many came.
-      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * 17 + 10_000);
+      // The lines the copy keeps, each of 20 such cells (and a NUL before each that begins with a
+      // mark, so it joins nothing before it), and no more however many came.
+      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * 18 + 10_000);
     }, 90_000);
   }
 

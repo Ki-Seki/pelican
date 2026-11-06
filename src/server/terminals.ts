@@ -4,7 +4,6 @@ import { access, constants } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import serializeAddon from '@xterm/addon-serialize';
 import unicode11Addon from '@xterm/addon-unicode11';
 import xtermHeadless, { type Terminal as Screen } from '@xterm/headless';
 import type { RawData, WebSocket } from 'ws';
@@ -19,6 +18,7 @@ import { refreshAuth } from './auth.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
 import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
+import { screenSnapshot } from './terminal-snapshot.js';
 
 /**
  * Terminals: a shell on this computer per terminal, shown on any number of pages (up to
@@ -39,9 +39,7 @@ import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
  */
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
-const { SerializeAddon } = serializeAddon;
 const { Unicode11Addon } = unicode11Addon;
-type Serializer = InstanceType<typeof SerializeAddon>;
 
 /** Times and amounts the terminals keep to; tests shorten them. */
 export const terminalTiming = {
@@ -149,43 +147,6 @@ function betweenSequences(screen: Screen): boolean {
   return state === undefined || state === 0;
 }
 
-type ScreenCore = {
-  coreMouseService?: { activeEncoding?: string };
-  coreService?: { isCursorHidden?: boolean; decPrivateModes?: { origin?: boolean; cursorStyle?: 'block' | 'underline' | 'bar'; cursorBlink?: boolean } };
-  buffer?: { scrollTop?: number; scrollBottom?: number };
-};
-
-/**
- * What a program set that xterm's serializer leaves out of a screen, as sequences to follow it:
- * how mouse reports are written (SGR, which lazygit, htop and less --mouse ask for), a hidden
- * cursor, the cursor's shape (neovim's bar while it inserts), and the rows that scroll (apt keeps
- * its progress bar under them). Setting the rows, and the serializer's own origin mode, put the
- * cursor home, so it goes back where it was. xterm keeps these to itself; the version is pinned,
- * and test/terminals.test.ts fails should they move.
- */
-export function modesBeyondSnapshot(screen: Screen): string {
-  const core = (screen as unknown as { _core?: ScreenCore })._core;
-  const modes = core?.coreService?.decPrivateModes;
-  let more = '';
-  const encoding = core?.coreMouseService?.activeEncoding;
-  if (encoding === 'SGR') more += '\x1b[?1006h';
-  else if (encoding === 'SGR_PIXELS') more += '\x1b[?1016h';
-  const top = core?.buffer?.scrollTop ?? 0;
-  const bottom = core?.buffer?.scrollBottom ?? screen.rows - 1;
-  const region = top !== 0 || bottom !== screen.rows - 1;
-  if (region) more += `\x1b[${top + 1};${bottom + 1}r`;
-  if (region || modes?.origin) {
-    const { cursorX, cursorY } = screen.buffer.active;
-    more += `\x1b[${(modes?.origin ? cursorY - top : cursorY) + 1};${Math.min(cursorX, screen.cols - 1) + 1}H`;
-  }
-  if (modes?.cursorStyle) {
-    const shape = { block: 1, underline: 3, bar: 5 }[modes.cursorStyle];
-    more += `\x1b[${modes.cursorBlink ? shape : shape + 1} q`;
-  }
-  if (core?.coreService?.isCursorHidden) more += '\x1b[?25l';
-  return more;
-}
-
 /**
  * What a program asks of the terminal's colors or sets them to (OSC 4, 10, 11 and 12, and 104, 110,
  * 111 and 112 to put them back), as xterm reads it for its own colors: a report (0), a color set
@@ -264,7 +225,6 @@ class Term {
   closed = false;
   /** The server's copy of the screen. */
   private readonly screen: Screen;
-  private readonly serializer: Serializer;
   /** The shell's size; the copy takes a new one where it comes in the output. */
   private cols: number;
   private rows: number;
@@ -308,8 +268,6 @@ class Term {
       if (!this.thrown) console.warn('[pelican] a terminal\'s screen lost some output xterm could not take:', error instanceof Error ? error.message : error);
       this.thrown = true;
     });
-    this.serializer = new SerializeAddon();
-    this.screen.loadAddon(this.serializer);
     // The copy answers what programs ask of the terminal (device attributes, the cursor's
     // position, a mode's state, a color), once, however many pages show it, or none: answers from
     // each page would come twice, or not at all, and after the copy's, where a program that asked
@@ -495,7 +453,7 @@ class Term {
     if (due.length === 0) return;
     // What is still gathering joins what the pages hold, so all that follows the cut is there.
     this.flush();
-    const snapshot = this.serializer.serialize({ scrollback: TERMINAL_LIMITS.scrollback }) + modesBeyondSnapshot(this.screen);
+    const snapshot = screenSnapshot(this.screen, TERMINAL_LIMITS.scrollback);
     // The end goes with the screen only once the copy has all the output before it.
     const final = this.exit && this.parsed === this.received ? this.exit : undefined;
     for (const viewer of due) {
