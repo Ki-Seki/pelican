@@ -32,7 +32,9 @@
  * variable). So in a shell command (`runs: 'shell'`) every one is written out but where
  * src/shared/shell-words.ts finds it, for sure, quoted, in a heredoc's body or in a comment, as
  * bash, zsh, dash and macOS's bash 3.2 read the command and the scripts it hands to a shell in the
- * ways that file lists; where it cannot tell, every one is. A quoted screenshot's name, or a commit
+ * ways that file lists; where it cannot tell, every one is, as in a command that uses what runs text
+ * later in its own shell (eval, source, an alias, read, arithmetic on a variable it sets and the
+ * like, which that file lists). A quoted screenshot's name, or a commit
  * message with a full-width space in Claude Code's `"$(cat <<'EOF' … EOF)"`, shows as it is. What
  * that file does not follow shows as it is too: a quoted string that a program other than those
  * runs in a shell of its own (python's os.system, make), a script in a file the command does not

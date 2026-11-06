@@ -31,9 +31,9 @@ const IN_WORDS = [
   'case x in\n  a) w esac ;;\n  *) w a•#b\n  ;;\nesac', 'wi <<\\\nE\nbody\nE\nw a•#b', 'wi <<E\\\nF\nbody\nEF\nw a•#b',
   'case x in (x) w a•b;; esac', 'w $(case x in (x) w a•b;; esac)', "w \"${•x}\"", "w $'\\c•'",
   // Handed to a shell.
-  "bash -c 'w a•#b'", 'sh -c "w a•#b"', "eval 'w a•#b'", 'eval "w a•#b"', "bash <<'E'\nw a•#b\nE", "cat <<'E' | sh\nw a•#b\nE",
+  "bash -c 'w a•#b'", 'sh -c "w a•#b"', "bash <<'E'\nw a•#b\nE", "cat <<'E' | sh\nw a•#b\nE",
   "echo 'w a•#b' | sh", "bash <<< 'w a•#b'", "env X=1 bash -c 'w a•#b'", "bash -o pipefail -c 'w a•#b'", "echo \"w a'\" \"'•#b\" | sh",
-  "x=eval; $x 'w a•#b'", "trap 'w a•#b' EXIT", "alias t='w a•#b'\nt", 'D=/tmp; bash -c "cd $D && w a•#b"', "echo -n 'w a•#b' | cat | sh",
+  'D=/tmp; bash -c "cd $D && w a•#b"', "echo -n 'w a•#b' | cat | sh",
   // A script the command writes, then runs.
   "cat > f1.sh <<'E'\nw a•#b\nE\nsh f1.sh", "echo 'w a•#b' > f2.sh; sh ./f2.sh", "cat > f5.sh <<'E'\nw a•#b\nE\nsh < f5.sh",
   "tee f7.sh >/dev/null <<'E'\nw a•#b\nE\nsh f7.sh", "bash 3<<'E' /dev/fd/3\nw a•#b\nE", "env -S 'sh -c \"w a•#b\"'",
@@ -44,7 +44,7 @@ const AS_TEXT = [
   // A commit message the way Claude writes one, also where bash 3.2 cannot find the end of its $( ).
   'w "$(wi <<\'E\'\nFix it°now\nE\n)"', 'w "$(wi <<\'E\'\nFix the case°now\n1) first\nE\n)"', 'w "$(wi <<\'E\'\nDon\'t°stop\nE\n)"',
   'w "$(wi <<\'E\'\nFix the login°test\n\n1) first\n2) then°more\nE\n)"',
-  "bash -c 'w \"a°b\"'", "eval 'w \"a°b\"'", "bash <<'E'\nw 'a°b'\nE", 'wi <<E\nE°\nE', "case x in x) w 'a°b';; esac", 'wi <<E\n$(w a;#x) w°b\nw c)\nE',
+  "bash -c 'w \"a°b\"'", "bash <<'E'\nw 'a°b'\nE", 'wi <<E\nE°\nE', "case x in x) w 'a°b';; esac", 'wi <<E\n$(w a;#x) w°b\nw c)\nE',
   '(case x in *) w "doc°!";; esac)', "cat <<'E' | bash\nw \"a°b\"\nE", 'PY=/usr/bin/printf\n$PY \'%s\' \'a°b\'', "for f in a b; do w \"« $f°»\"; done",
   "w $'\\n°x'", 'w "${x:-y}°z"', "cat > f3.sh <<'E'\nw 'a°b'\nE\nsh f3.sh", "cat > f6.txt <<'E'\na°b\nE\nw < f6.txt",
 ];
@@ -62,6 +62,17 @@ const LOST = [
   "cat > f8.sh <<'E'\nw a•#b\nE\ncp f8.sh f9.sh; sh f9.sh", "printf 'w a•#b' > f10.sh; sh f10.sh",
   // bash 3.2 ends this $( ) at the `)` in its heredoc, runs the next line, then stops at the last `)`.
   'w $(wi <<E\n)\nw a•#b\nE\n)', 'w $(w a;#x) w•b\nw c)',
+  // What runs text later, or sets a variable whose name the text gives: not followed, wherever it is.
+  "eval 'w a•#b'", 'eval "w a•#b"', "eval 'w \"a•b\"'", "x=eval; $x 'w a•#b'", "trap 'w a•#b' EXIT", "alias t='w a•#b'\nt",
+  "command alias t=eval\nt 'w a•#b'", "builtin eval 'w a•#b'", "\\eval 'w a•#b'", "'eval' 'w a•#b'", "time -p eval 'w a•#b'",
+  "a=alias; $a t=eval\nt 'w a•#b'", "set -- eval 'w a•#b'; \"$@\"", ": eval; $_ 'w a•#b'", "x='a[$'\"(w a•#b)]\"; read -r \"$x\"",
+  "n='a[$'\"(w a•#b)]\"; w $(( n + 1 ))", "n='a[$'\"(w a•#b)]\"; (( n )); w c", "x='a[$'\"(w a•#b)]\"; [[ $x -eq 1 ]]; w c",
+  "x='a[$'\"(w a•#b)]\"; a=(1); w ${a[x]}", "x='a[$'\"(w a•#b)]\"; y=abc; w ${y:x}", "x='a[$'\"(w a•#b)]\"; a=(1); w ${!x}",
+  "x='a[$'\"(w a•#b)]\"; a[x]=1; w c", "x='a[$'\"(w a•#b)]\"; a=(1 [x]=2); w c", "x='a[$'\"(w a•#b)]\"; let x; w c",
+  "x='a[$'\"(w a•#b)]\"; a=(1); unset \"$x\"; w c", "x='a[$'\"(w a•#b)]\"; f() { local \"$x=1\"; }; f; w c",
+  "x='a[$'\"(w a•#b)]\"; declare -i y=\"$x\"; w c", "x='a[$'\"(w a•#b)]\"; printf -v \"$x\" %s 1; w c",
+  "printf 'w a•#b\\n' > s.sh; . ./s.sh", "echo 'w a•#b' > s2.sh; source ./s2.sh", "compgen -C 'w a•#b' x",
+  "echo 'w a•#b' > lz; chmod +x lz; PATH=.:$PATH lz", "env PS4='$'\"(w a•#b)\" bash -xc :",
 ];
 /** Handed to a shell elsewhere, so not run here: every space in a word counts there. */
 const ELSEWHERE: Array<[string, string]> = [

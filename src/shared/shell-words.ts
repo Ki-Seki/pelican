@@ -9,29 +9,43 @@
  * and `/bin/sh`, which run hooks there) does too, which finds where a `$( )` ends by its own rules
  * (bash32End) and so may run what the others take for a heredoc's body or a comment; a character
  * in a word for either counts. Inside `$( )`, `<( )`, `>( )`, backquotes, `$(( ))`, `${ }`, a
- * subshell, a case, a function and an array too. It follows a script the command hands to a shell:
- * the one after `-c` of sh, bash, zsh, dash, ksh and the like (also where sudo, env, find -exec or
- * another program runs them), of su, flock or script, what `eval`, `trap` or an alias runs, the
- * command ssh or watch runs, and what a heredoc, a here-string, `echo` or `cat` feeds a shell that
- * reads its commands from its input (`bash <<EOF`, `echo … | sh`, `ssh host 'bash -s' <<EOF`), and
- * a file the command writes with them and then runs or reads as a script (`cat > fix.sh <<'EOF' …
- * EOF`, then `bash fix.sh`, `./fix.sh` or `sh < fix.sh`; found by the last part of its name). In
- * such a script a variable the command sets to plain text stands for that text, and one it does not
- * set, the user's own, for a word of its own. Quoted text with a substitution's start in it (`$(`,
- * `${`, a backquote) counts as in a word too: arithmetic, a subscript, a prompt or zsh's (e) may
- * yet run it as one.
+ * subshell, a case, a function and an array too. It follows a script the command hands to a new
+ * shell: the one after `-c` of sh, bash, zsh, dash, ksh and the like (also where sudo, env, find
+ * -exec or another program runs them), of su, flock or script, the command ssh or watch runs, and
+ * what a heredoc, a here-string, `echo` or `cat` feeds a shell that reads its commands from its
+ * input (`bash <<EOF`, `echo … | sh`, `ssh host 'bash -s' <<EOF`), and a file the command writes
+ * with them and then runs or reads as a script (`cat > fix.sh <<'EOF' … EOF`, then `bash fix.sh`,
+ * `./fix.sh`, `sh < fix.sh`, or by its name alone where the command sets PATH and makes it a
+ * program; found by the last part of its name). In such a script a variable the command sets to
+ * plain text stands for that text, and one it does not set, the user's own, for a word of its own.
+ * Quoted text with a substitution's start in it (`$(`, `${`, a backquote) counts as in a word too.
  *
- * Where it cannot tell, every such character counts as in a word (inWords gives undefined): a
- * syntax error (a quote never closed, a heredoc whose line never comes, a `)` that closes nothing),
- * which may be one only here; what the shells read otherwise (`<<(`, a `(` where an argument would
- * be, a `{` inside `${ }`, `${ cmd; }`, `$'…\'…'`, quotes inside `$(( ))`, `$[ ]`); a script handed to
- * a shell with text in it this does not know (a substitution, an argument such as `$1`, a variable
- * set to what this does not know, braces or a pattern; what printf, xargs or a filter make); what
- * runs a variable's value (zsh's functions and aliases arrays, a prompt such as PS4, zsh's (e), (P)
- * and (%) flags, bash's @P, print -P); text
- * of the command that may reach a shell's input any other way (through a loop, a function, `exec`,
- * a subshell, a coprocess or a command whose name this does not know); a file the command writes
- * and runs as a script with what this does not know in it (from printf, an unquoted heredoc that
+ * What runs text later, in the shell that reads the command, is not followed, however the text is
+ * made (split across quotes, by an expansion, by an escape): a command that uses it counts as one
+ * this cannot tell. That is a builtin that runs text or sets a variable whose name the text gives,
+ * where a subscript runs (RUNS_LATER: eval, source and `.`, trap, alias, read, mapfile, getopts,
+ * let, unset, declare and typeset, zsh's autoload, emulate, zpty and the like), also after
+ * `command`, `builtin`, zsh's `exec` and `noglob`, or run by env, sudo or xargs as macOS's
+ * /usr/bin/read runs `builtin read`; export, local and readonly with an option or a name that is
+ * not plain; printf -v, print -P and -v, set -A, wait -p, hash -p, `[[ ]]`'s -v and -R; a command
+ * whose name this does not know, which may be any of them; a variable whose value a shell runs or
+ * reads as arithmetic (zsh's functions, aliases, commands and options arrays, bash's BASH_ALIASES and
+ * BASH_CMDS, a prompt such as PS4, OPTIND and RANDOM set to what is not a number); zsh's parameter
+ * flags such as (e), (P) and (%), bash's @P and `${!x}`; and arithmetic (`$(( ))`, a subscript, an
+ * offset, the sides of `[[ ]]`'s -eq, and in a script ksh runs those of `test`, printf, shift and
+ * ulimit) that reads a variable the command sets to what is not a number, an argument, `$_` or what
+ * a substitution writes: arithmetic reads a variable's value as an expression, and a subscript in it
+ * (`a[$(…)]`) runs.
+ *
+ * Where it cannot tell, every such character counts as in a word (inWords gives undefined): what
+ * runs text later, above; a syntax error (a quote never closed, a heredoc whose line never comes, a
+ * `)` that closes nothing), which may be one only here; what the shells read otherwise (`<<(`, a `(`
+ * where an argument would be, a `{` inside `${ }`, `${ cmd; }`, `$'…\'…'`, quotes inside `$(( ))`,
+ * `$[ ]`); a script handed to a shell with text in it this does not know (a substitution, an
+ * argument such as `$1`, a variable set to what this does not know, braces or a pattern; what
+ * printf, xargs or a filter make); text of the command that may reach a shell's input any other way
+ * (through a loop, a function, `exec`, a subshell or a coprocess); a file the command writes and
+ * runs as a script with what this does not know in it (from printf, an unquoted heredoc that
  * expands, or added to); and what is nested deeper than it reads.
  * Past what bash 3.2 takes for a `$( )` never closed it runs nothing more of that command, so only
  * the others are read there: a commit message in `"$(cat <<'EOF' … EOF)"` with an odd apostrophe is
@@ -62,6 +76,8 @@ type Word = {
   open: boolean;
   /** Its unquoted `{`, `}`, `[`, `]`, `*`, `?`, `,` and `.`, in order. */
   specials: string;
+  /** Names a function the command defines, whose body's first command follows it among the words (`f() { …`). */
+  defines?: boolean;
 };
 
 /** What a command reads at its input from the command line: a heredoc's body, a here-string. Not `exact`: what the shell makes of it is not known here. */
@@ -115,10 +131,69 @@ const OPENS = new Set(['if', 'while', 'until', 'for', 'select', 'case', '{']);
 const CLOSES = new Set(['}', 'fi', 'done', 'esac']);
 
 /**
- * Variables whose value a shell runs: zsh's arrays of functions and aliases (`functions[lint]=…`
- * defines one), and the prompts bash and zsh expand, PS4 among them.
+ * Variables whose value a shell runs, or that change what a name runs or how text reads: zsh's
+ * arrays of functions, aliases, commands and options (`functions[lint]=…` defines one), bash's of
+ * aliases and commands (`BASH_ALIASES[run]=eval`), and the prompts bash and zsh expand, PS4 among
+ * them.
  */
-const CODE_VARIABLES = /^(?:(?:dis_)?(?:functions|aliases|galiases|saliases)(?:_source)?|PS[0-4]|PROMPT[0-4]?|RPROMPT2?|RPS[12]|SPROMPT|PROMPT_COMMAND)$/;
+const CODE_VARIABLES = /^(?:(?:dis_)?(?:functions|aliases|galiases|saliases)(?:_source)?|commands|options|BASH_ALIASES|BASH_CMDS|PS[0-4]|PROMPT[0-4]?|RPROMPT2?|RPS[12]|SPROMPT|PROMPT_COMMAND)$/;
+
+/**
+ * Builtins that run text, now or later, or set a variable whose name the text gives (a subscript in
+ * that name runs, as zsh's functions[…] defines one): bash's, zsh's, ksh's and dash's. A command
+ * that uses one is not followed: every look-alike space in it counts as in a word. So too for the
+ * forms of others that do (runsLater).
+ */
+const RUNS_LATER = new Set([
+  'eval', 'source', '.', 'trap', 'alias', 'autoload', 'emulate', 'functions', 'zpty', 'sched', 'zle', 'bindkey', 'zstyle',
+  'zmodload', 'compgen', 'complete', 'compctl', 'bind', 'fc', 'enable', 'read', 'mapfile', 'readarray', 'getopts', 'let',
+  'unset', 'declare', 'typeset', 'integer', 'float', 'private', 'nameref', 'vared', 'zparseopts', 'zformat', 'strftime',
+  'zstat', 'sysread', 'zsocket', 'ztcp', 'zselect', 'pcre_match', 'zregexparse', 'getln',
+]);
+
+/**
+ * Builtins that set variables by name, which run text only where that name is not a plain one (zsh's
+ * `export 'a[$(…)]=1'`, bash's `local`) or an option gives them a kind that reads it: otherwise what
+ * they do is an assignment, and is read as one (assigns).
+ */
+const DECLARING = new Set(['export', 'local', 'readonly']);
+
+/**
+ * Builtins macOS also has as programs (/usr/bin/read runs `builtin read` in sh), so a program that
+ * runs its arguments as a command (env, sudo, nohup, xargs, find -exec) runs them too: `env read
+ * 'a[$(…)]'` runs the substitution, `env command eval '…'` the text.
+ */
+const WRAPPED = new Set(['read', 'command', 'getopts', 'jobs', 'wait', 'fc', 'hash', 'alias', 'eval']);
+
+/** Programs that run their arguments as a command. */
+const EXEC_RUNNERS = new Set(['env', 'sudo', 'doas', 'nohup', 'timeout', 'gtimeout', 'nice', 'renice', 'setsid', 'stdbuf', 'xargs', 'parallel', 'flock', 'chronic', 'caffeinate', 'unbuffer', 'time', 'ionice', 'chrt', 'taskset', 'numactl', 'strace', 'ltrace', 'valgrind', 'arch', 'xcrun', 'script', 'watch', 'find', 'busybox', 'command', 'builtin', 'exec']);
+
+/**
+ * Variables a shell reads a value of as arithmetic, which runs a subscript's substitution: bash's
+ * OPTIND, HISTCMD and RANDOM, ksh's SECONDS, LINENO and the like. Set to anything but a number,
+ * the command is not followed.
+ */
+const NUMERIC_VARIABLES = /^(?:OPTIND|OPTERR|HISTCMD|RANDOM|SRANDOM|SECONDS|EPOCHSECONDS|EPOCHREALTIME|LINENO|SHLVL|TMOUT|MAILCHECK|PPID|UID|EUID|GID|EGID|BASHPID|HISTSIZE|HISTFILESIZE|SAVEHIST|COLUMNS|LINES|KEYTIMEOUT|PERIOD|LISTMAX|DIRSTACKSIZE|FUNCNEST|BASH_XTRACEFD|LOGCHECK|REPORTTIME|REPORTMEMORY|TRY_BLOCK_ERROR|TRY_BLOCK_INTERRUPT|ZLE_RPROMPT_INDENT|ERRNO)$/;
+
+/** What a shell runs the command after as it is, a builtin too (zsh's `exec eval` and `noglob eval` among them): their names. */
+const MODIFIERS = new Set(['command', 'builtin', 'exec', 'noglob', 'nocorrect', '-', 'time', 'coproc', 'jobs']);
+
+/** The operators by which `[[ ]]`, and ksh's `test`, read their sides as arithmetic. */
+const NUMERIC_TEST = /^-(?:eq|ne|lt|le|gt|ge)$/;
+
+
+/**
+ * Text arithmetic reads (a subscript, an offset): whether it holds only numbers, operators and
+ * variables, by name or as `$name` or `${name}`, which `count` takes (their values are judged once
+ * the whole command is read); a substitution, an argument (`$1`) or quotes in it are not followed.
+ */
+function arithmeticOf(text: string, count: (name: string) => void): boolean {
+  const rest = text.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}|\$[?#$!]/g, '0').replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?|(?<![0-9A-Za-z_#])([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced: string | undefined, bare: string | undefined) => {
+    count((braced ?? bare)!);
+    return '0';
+  });
+  return /^[\s0-9A-Za-z_#()+\-*\/%<>=!&|^~?:,.[\]]*$/.test(rest) && !rest.includes('$');
+}
 
 /** What bash, zsh, ksh, sh and csh read as they start, by name. */
 const STARTUP_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.kshrc', '.mkshrc', '.shrc', '.cshrc', '.tcshrc', '.login'];
@@ -167,7 +242,7 @@ const PARAMETER = /^[=~^+]$/;
 const PLAIN = /^[A-Za-z0-9_.\/:@%+=,~ \t-]*$/;
 
 /** Programs that run what they are given, or what follows them, so a variable that names one is not known. */
-const RUNNERS = new Set(['eval', 'source', '.', 'exec', 'trap', 'alias', 'su', 'sudo', 'doas', 'ssh', 'watch', 'xargs', 'parallel', 'flock', 'script', 'env', 'nohup', 'timeout', 'nice', 'command', 'builtin', 'time', 'setsid', 'stdbuf']);
+const RUNNERS = new Set([...RUNS_LATER, ...MODIFIERS, ...DECLARING, ...WRAPPED, 'su', 'sudo', 'doas', 'ssh', 'watch', 'xargs', 'parallel', 'flock', 'script', 'env', 'nohup', 'timeout', 'nice', 'setsid', 'stdbuf']);
 
 /** A stand-in for what an expansion gives, unknown here: part of a word, and nothing to show. */
 const expansion = (made: Made): Piece => ({ char: '\u0000', at: -1, made });
@@ -205,11 +280,15 @@ type Across = {
   readsInput: boolean;
   /** Something that may run a shell is fed from the command line otherwise than this follows: lost if a shell reads its input. */
   risky: boolean;
-  /** Names given to a function or an alias, and the names of commands that are fed. */
+  /** Names given to a function, and the names of commands that are fed. */
   functions: Set<string>;
   fed: Set<string>;
-  /** Names given to an alias: where one is a command's name, what it stands for is not known here, and may run its arguments. */
-  aliases: Set<string>;
+  /** The command sets where a shell finds a program by its name (PATH): a file it writes and makes a program may run. */
+  path: boolean;
+  /** The files the command makes programs (chmod +x, install, cp and the like), by the last part of their names. */
+  executables: Set<string>;
+  /** Variables arithmetic reads: their values, as the command sets them, must be numbers. */
+  counted: Set<string>;
   /** A ksh runs a script: its `<<#` heredoc, which strips the blanks before its lines, this does not read. */
   ksh: boolean;
   /** What the command sets a variable to: its text, or null where it is not known here. */
@@ -343,6 +422,9 @@ class Reader {
         return;
       }
       const frame = top();
+      // An array's element with a subscript, which arithmetic reads (`a=([n]=1)`).
+      const subscript = frame?.kind === 'array' ? /^\[([^\]]*)\]\+?=/.exec(w.text)?.[1] : undefined;
+      if (subscript !== undefined && !arithmeticOf(subscript, (variable) => this.shared.across.counted.add(variable))) throw new Lost();
       if (frame?.kind === 'case' && frame.stage !== 'arm') {
         if (frame.stage === 'subject') frame.stage = 'in';
         else if (frame.stage === 'in') {
@@ -381,6 +463,7 @@ class Reader {
       if (naming) {
         naming = false;
         this.shared.across.functions.add(w.text);
+        w.defines = true;
         atCommand = true;
         defined = true;
         return;
@@ -576,6 +659,7 @@ class Reader {
             // A function's name: its body comes where a command would.
             this.shared.across.functions.add(text);
             endWord();
+            command.words.at(-1)!.defines = true;
             naming = false;
             this.i += 2;
             atCommand = true;
@@ -592,6 +676,7 @@ class Reader {
         } else if (next === ')' && command.words.length === 1 && command.words[0]!.plain && !BEFORE_COMMAND.has(command.words[0]!.text) && !assigned) {
           // `name ()`.
           this.shared.across.functions.add(command.words[0]!.text);
+          command.words[0]!.defines = true;
           this.i += 2;
           atCommand = true;
           defined = true;
@@ -717,10 +802,10 @@ class Reader {
       const from = this.i;
       this.braces(unquoted);
       const inside = textOf(this.p.slice(from, this.i - 1));
-      // zsh's (e), (P) and (%) flags, and bash's @P, run what the value holds as a substitution:
-      // what the value is, and where it came from, this does not follow.
-      if (/^\([^)]*[eP%]/.test(inside) || /@P$/.test(inside)) throw new Lost();
+      this.expansion(inside);
       if (/^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!_-])$/.test(inside)) add({ char: `\${${inside}}`, at: -1, made: 'parameter', name: inside }, false);
+      // A length is a number (numeric).
+      else if (/^#(?:[A-Za-z_][A-Za-z0-9_]*(?:\[[@*]\])?|[0-9@*#?$!_-])$/.test(inside)) add({ char: `\${${inside}}`, at: -1, made: 'parameter', name: '#' }, false);
       else expanded('parameter');
     } else if (next === '[') {
       // $[ … ], arithmetic of old: past what this follows.
@@ -798,6 +883,27 @@ class Reader {
     });
   }
 
+  /**
+   * What a `${…}` holds, read for what runs what a value holds, which is not followed: zsh's flags
+   * (`(e)`, `(P)` and `(%)` run it as a substitution or a prompt, `(A)` and `::=` set an array of
+   * its own), bash's `@P` and `${!x}`, which takes x's value for a name; a subscript or an offset,
+   * which arithmetic reads (`${a[n]}`, `${x:n}`), as arithmetic is read; and setting what runs
+   * (`${functions[f]:=…}`). Setting any other variable, its value is not known.
+   */
+  private expansion(inside: string): void {
+    if (/^[(!]/.test(inside) || /@P$/.test(inside)) throw new Lost();
+    const parts = /^#?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!_-])(?:\[([^\]]*)\])?([\s\S]*)$/.exec(inside);
+    if (!parts) return;
+    const [, name, subscript, rest] = parts as unknown as [string, string, string | undefined, string];
+    const count = (variable: string) => this.shared.across.counted.add(variable);
+    if (subscript !== undefined && subscript !== '@' && subscript !== '*' && !arithmeticOf(subscript, count)) throw new Lost();
+    if (/^:(?![-=?+])/.test(rest) && !/^::=/.test(rest) && !arithmeticOf(rest.slice(1), count)) throw new Lost();
+    if (/^(?::?:?=)/.test(rest)) {
+      if (CODE_VARIABLES.test(name) || name === 'PATH' || name === 'path') throw new Lost();
+      if (/^[A-Za-z_]/.test(name)) this.sets(name, null);
+    }
+  }
+
   /** `$(( ))` or `(( ))`: arithmetic, where `<<` shifts and `#` starts no comment. */
   private arithmetic(): void {
     this.nest(() => {
@@ -823,10 +929,20 @@ class Reader {
         } else if (c === '\\') {
           this.flag(this.p[this.i + 1]);
           this.i += 2;
-        } else if (c === '`') {
-          this.backquote(false);
-        } else if (c === '$') {
+        } else if (c === '$' && /^\$(?:[?#$!]|\(\(|\{#)/.test(textOf(this.p.slice(this.i, this.i + 3)))) {
+          // `$?`, `$#` and the like, a length, arithmetic inside: numbers.
           this.dollar(() => {}, () => {}, true);
+        } else if (c === '$' || (/[A-Za-z_]/.test(c) && !/[0-9A-Za-z_#]/.test(this.p[this.i - 1]?.char ?? ''))) {
+          // A variable, by name (not a digit of `0x1f` or `16#ff`) or as `$name` or `${name}`: its value
+          // is read as an expression, whose subscript runs (`n='a[$(…)]'; $(( n ))`), so it counts
+          // (Across). What a substitution writes, an argument, or another expansion: not followed.
+          const variable = /^\$?(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/.exec(textOf(this.p.slice(this.i, this.i + 256)));
+          if (!variable || (c !== '$' && variable[0].startsWith('{'))) throw new Lost();
+          this.shared.across.counted.add((variable[1] ?? variable[2])!);
+          for (let n = 0; n < variable[0].length; n += 1) this.flag(this.p[this.i + n]);
+          this.i += variable[0].length;
+        } else if (c === '`') {
+          throw new Lost();
         } else {
           this.flag(this.p[this.i]);
           this.i += 1;
@@ -1066,8 +1182,13 @@ class Reader {
   private hands(command: Command): void {
     const words = command.words;
     let k = 0;
-    while (k < words.length && words[k]!.plain && BEFORE_COMMAND.has(words[k]!.text)) k += 1;
+    // Past a function's definition (`function f`, `f()`), its body's first command; past `time`, its options.
+    while (k < words.length && (words[k]!.defines || (words[k]!.plain && (BEFORE_COMMAND.has(words[k]!.text) || (words[k]!.text === 'function' && words[k + 1]?.defines))))) {
+      k += 1;
+      if (words[k - 1]!.text === 'time') while (k < words.length && /^-[A-Za-z]+$/.test(words[k]!.text)) k += 1;
+    }
     while (k < words.length && ASSIGNMENT.test(words[k]!.text)) this.assigns(words[k++]!);
+    k = this.pastModifiers(words, k);
     const first = words[k];
     if (first === undefined) return;
     if (first.open && /[{]/.test(first.text) && first.text !== '{') {
@@ -1075,37 +1196,49 @@ class Reader {
       throw new Lost();
     }
     const name = this.nameOf(first);
-    if (first.plain && this.shared.across.aliases.has(first.text)) {
-      // An alias the command made, which may stand for eval or trap (`alias run=eval`, then `run '…'`):
-      // its arguments read as eval would read them.
-      command.kind = 'runs';
-      this.handOff(words.slice(k + 1));
-      return;
-    }
-    if (name === undefined) {
-      // A command whose name is not known here, which may be eval or a shell: its arguments read as eval would read them.
-      command.kind = 'runs';
-      this.handOff(words.slice(k + 1));
-      return;
-    }
+    // A command whose name is not known here may be one that runs text later (eval, alias, read):
+    // not followed, as such a one is not.
+    if (name === undefined) throw new Lost();
     const rest = words.slice(k + 1);
-    // What env, or a program, hands a shell it starts in its environment.
-    for (const word of rest) this.startsWith(word);
+    if (name === null) {
+      // A program that runs its arguments, named by a variable: they read as eval would read them.
+      command.kind = 'runs';
+      this.handOff(rest);
+      return;
+    }
+    if (runsLater(name, first, rest, this.shared.across.ksh, (variable) => this.shared.across.counted.add(variable))) throw new Lost();
+    if (DECLARING.has(name)) {
+      // An option, or a name that is not plain (`'a[$(…)]=1'`, `"$x"`), may make it run what it
+      // sets: not followed. Else it sets variables, as an assignment does.
+      for (const word of rest) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\+?=|$)/.test(word.text)) throw new Lost();
+        if (word.text.includes('=')) this.assigns(word);
+      }
+    }
+    // A builtin macOS also has as a program (/usr/bin/read), run by a program that runs its arguments (WRAPPED).
+    const runsArguments = EXEC_RUNNERS.has(name) && (name !== 'find' || rest.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word.text)));
+    if (runsArguments && rest.some((word) => !word.made && WRAPPED.has(word.text.replace(/^\/usr\/bin\//, '')))) throw new Lost();
+    // What env, or a program, hands a shell it starts in its environment. What env, sudo or doas
+    // sets there for the program it runs is not known here.
+    const passes = (word: Word) => ['env', 'sudo', 'doas'].includes(program(word));
+    let environment = passes(first);
+    for (const word of rest) {
+      this.startsWith(word, environment);
+      const named = environment ? /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word.text)?.[1] : undefined;
+      if (named !== undefined) this.sets(named, null);
+      environment ||= passes(word);
+    }
     // A script the command may have written, run by its path (`./fix.sh`).
     if (first.text.includes('/')) this.runsFile(first);
-    // What sets a variable to what this does not follow: read, for, mapfile, printf -v and the like.
-    if (DECLARES.has(name)) for (const word of rest) if (ASSIGNMENT.test(word.text)) this.assigns(word);
     if (name === 'for' && rest[1]?.text === 'in' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(rest[0]?.text ?? '')) {
-      // for NAME in WORDS: one of them, each plain text.
+      // for NAME in WORDS: one of them, each plain text; a number only where every one is.
       const each = rest.slice(2);
-      this.sets(rest[0]!.text, each.length > 0 && each.every((word) => !word.made && !word.open && PLAIN.test(word.text) && !RUNNERS.has(program(word)) && !SHELLS.has(program(word))) ? each[0]!.text : null);
-    } else if (['read', 'for', 'select', 'mapfile', 'readarray', 'printf', 'getopts', 'declare', 'typeset', 'local', 'export', 'readonly', 'unset', 'let'].includes(name)) {
+      const plain = each.length > 0 && each.every((word) => !word.made && !word.open && PLAIN.test(word.text) && !RUNNERS.has(program(word)) && !SHELLS.has(program(word)));
+      this.sets(rest[0]!.text, plain ? (each.find((word) => !/^[-+]?[0-9]+$/.test(word.text)) ?? each[0]!).text : null);
+    } else if (['for', 'select'].includes(name)) {
+      // What sets a variable to what this does not follow.
       for (const word of rest) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(word.text)) this.sets(word.text, null);
     }
-    // A coprocess reads what the command writes to it, from anywhere.
-    if (name === 'coproc') this.shared.across.risky = true;
-    // zsh's print -P expands a prompt, which runs a substitution with prompt_subst set.
-    if (name === 'print' && rest.some((word) => /^-[A-Za-z]*P/.test(word.text))) throw new Lost();
     switch (name) {
       case 'echo': {
         command.kind = 'echo';
@@ -1125,39 +1258,6 @@ class Reader {
       case 'cat':
         if (rest.every((word) => word.text === '-' || word.text === '-u')) command.kind = 'cat';
         return;
-      case 'eval':
-        command.kind = 'runs';
-        this.handOff(rest);
-        return;
-      case 'trap': {
-        command.kind = 'runs';
-        const operands = rest[0]?.text === '--' ? rest.slice(1) : rest;
-        if (operands.length >= 2 && operands[0]!.text !== '-') this.handOff([operands[0]!]);
-        return;
-      }
-      case 'alias':
-        // In zsh, and in bash where it expands them, an alias's value is read as part of the command
-        // it stands in. zsh's global and suffix aliases stand in anywhere on a line (`alias -g Y='| sh'`).
-        if (rest.some((word) => /^-[A-Za-z]*[gs]/.test(word.text))) throw new Lost();
-        for (const word of rest) {
-          const equals = word.pieces.findIndex((piece) => piece.char === '=');
-          if (equals <= 0) continue;
-          const value = word.pieces.slice(equals + 1);
-          const named = textOf(word.pieces.slice(0, equals));
-          this.shared.across.functions.add(named);
-          this.shared.across.aliases.add(named);
-          this.handOff([{ ...word, pieces: value, text: textOf(value) }]);
-        }
-        return;
-      case 'source':
-      case '.': {
-        command.kind = 'runs';
-        const file = rest[0];
-        if (file?.pieces.some((piece) => piece.made === 'command' || piece.made === 'process')) throw new Lost();
-        if (file && ['/dev/stdin', '/dev/fd/0'].includes(file.text)) command.kind = 'shell';
-        this.runsFile(file);
-        return;
-      }
       case 'exec':
         // Redirections alone: they stay for all that follows.
         if (rest.length === 0) {
@@ -1255,6 +1355,26 @@ class Reader {
   }
 
   /**
+   * Where the command's name is, past what a shell runs the command after as it is (`command`,
+   * `builtin`, zsh's `exec`, `noglob`, `nocorrect` and `-`, `time -p`, `jobs -x`, `coproc`) and
+   * their options: a builtin after them runs as a builtin, `command eval '…'` as eval.
+   */
+  private pastModifiers(words: Word[], k: number): number {
+    for (;;) {
+      const word = words[k];
+      const name = word && !word.made && !word.open ? program(word) : undefined;
+      if (name === undefined || !MODIFIERS.has(name) || (name === 'jobs' && words[k + 1]?.text !== '-x')) return k;
+      let m = k + 1;
+      while (words[m] !== undefined && /^-[A-Za-z]+$/.test(words[m]!.text)) m += /^-[A-Za-z]*a$/.test(words[m]!.text) && name === 'exec' ? 2 : 1;
+      // `exec` with redirections alone keeps them for what follows (hands).
+      if (words[m] === undefined) return name === 'exec' ? k : m;
+      // A coprocess reads what the command writes to it, from anywhere.
+      if (name === 'coproc') this.shared.across.risky = true;
+      k = m;
+    }
+  }
+
+  /**
    * What a command writes to files: what `cat` reads or `echo` writes, else not known here. Two
    * things written to one file, or added to it: not known which a script finds there.
    */
@@ -1279,7 +1399,17 @@ class Reader {
       : [];
     for (const word of changes) {
       const file = named(word);
-      if (file !== undefined) files.set(file, null);
+      if (file === undefined) continue;
+      files.set(file, null);
+      // A copy, a link or an install may be a program.
+      if (['cp', 'mv', 'ln', 'install', 'rsync', 'ditto'].includes(name ?? '')) this.shared.across.executables.add(file);
+    }
+    // What it makes a program: chmod with a mode that sets x.
+    if (name === 'chmod' && operands.length > 1 && /x|[1357]/.test(operands[0]!.text)) {
+      for (const word of operands.slice(1)) {
+        const file = named(word);
+        if (file !== undefined) this.shared.across.executables.add(file);
+      }
     }
     for (const { file, append } of command.writes) {
       if (file === undefined) continue;
@@ -1303,12 +1433,18 @@ class Reader {
     const equals = word.text.indexOf('=');
     const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(word.text)![0];
     // A function or an alias of zsh's, made by setting its arrays, or a prompt, which bash and zsh
-    // expand (PS4 at each command set -x traces): what the value runs, this does not follow.
+    // expand (PS4 at each command set -x traces): what the value runs, this does not follow. A
+    // subscript of an array is arithmetic, which runs what a variable it names holds (`a[n]=1`).
     if (CODE_VARIABLES.test(name)) throw new Lost();
+    const subscript = /^\[([^\]]*)\]/.exec(word.text.slice(name.length))?.[1];
+    if (subscript !== undefined && !arithmeticOf(subscript, (variable) => this.shared.across.counted.add(variable))) throw new Lost();
     this.startsWith(word);
-    const value = textOf(word.pieces.slice(equals + 1));
-    // An element of an array, or what adds to the value: not known.
-    this.sets(name, !word.made && !word.open && PLAIN.test(value) && equals === name.length ? value : null);
+    const pieces = word.pieces.slice(equals + 1);
+    const value = textOf(pieces);
+    // What arithmetic gives is a number (`n=$((n + 1))`); an element of an array, or what adds to
+    // the value, is not known.
+    const number = pieces.length > 0 && pieces.every((piece) => piece.made === 'arithmetic' || (!piece.made && /^[0-9]$/.test(piece.char)));
+    this.sets(name, equals !== name.length ? null : number ? '0' : !word.made && !word.open && PLAIN.test(value) ? value : null);
   }
 
   /**
@@ -1317,8 +1453,20 @@ class Reader {
    * writes in it is known; ZDOTDIR's .zshenv is among the files every shell started reads (shell).
    * A function bash takes from the environment (`BASH_FUNC_f%%=() { … }`) runs what it holds.
    */
-  private startsWith(word: Word): void {
+  private startsWith(word: Word, environment = true): void {
     if (/^BASH_FUNC_[^=]*(?:%%|\(\))=/.test(word.text)) throw new Lost();
+    // In an assignment, or set by env for what it runs: a prompt or the like a shell expands
+    // (`env PS4='…' bash -xc :`), a number, where programs are found.
+    const named = environment ? /^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=/.exec(word.text)?.[1] : undefined;
+    if (named !== undefined && CODE_VARIABLES.test(named)) throw new Lost();
+    // A value a shell reads as arithmetic (NUMERIC_VARIABLES): a number, or a variable it counts.
+    if (named !== undefined && NUMERIC_VARIABLES.test(named)) {
+      const value = word.pieces.slice(word.pieces.findIndex((piece) => piece.char === '=') + 1);
+      const text = textOf(value);
+      if (!(text === '' || sideOf({ ...word, text, pieces: value, made: value.some((piece) => piece.made), plain: !value.some((piece) => piece.made) }, (variable) => this.shared.across.counted.add(variable)))) throw new Lost();
+    }
+    // Where a shell finds a program by its name: a file the command writes may run by its name alone.
+    if (named === 'PATH' || named === 'path') this.shared.across.path = true;
     const setting = /^(?:BASH_ENV|ENV)=/.exec(word.text);
     if (!setting) return;
     const value = word.pieces.slice(setting[0].length);
@@ -1329,26 +1477,33 @@ class Reader {
   /** What the command sets a variable to; set to two things, it is not known which a script sees. */
   private sets(name: string, value: string | null): void {
     const values = this.shared.across.values;
-    values.set(name, values.has(name) && values.get(name) !== value ? null : value);
+    const known = values.get(name);
+    const number = (text: string | null | undefined) => typeof text === 'string' && /^[-+]?[0-9]+$/.test(text);
+    // Set to two numbers, it is a number still (Across.counted).
+    values.set(name, !values.has(name) || known === value ? value : number(known) && number(value) ? '0' : null);
   }
 
   /**
    * The name of the program a word runs, where this can tell: the last part of its path, or what
    * the command set the variable it expands to (`$PY` after `PY=/usr/bin/python3`). A variable the
-   * command does not set is the user's own: a program, but for `$SHELL` and `$BASH`, which are shells.
+   * command does not set is the user's own: a program, but for `$SHELL`, `$BASH`, `$0` and zsh's
+   * name for itself, which are shells. What an argument, `$_` (the last word of the command before)
+   * or the command bash runs stands for is not known (undefined): `set -- eval …` makes `"$@"` eval.
+   * A variable set to a program that runs its arguments (`K='timeout 9 kubectl'`) gives null.
    */
-  private nameOf(word: Word): string | undefined {
+  private nameOf(word: Word): string | null | undefined {
     if (!word.made && !word.open) return program(word);
     const slash = word.pieces.map((piece) => piece.char).lastIndexOf('/');
     const tail = word.pieces.slice(slash + 1);
     if (slash >= 0 && !tail.some((piece) => piece.made) && !/[*?[]/.test(textOf(tail))) return textOf(tail);
     const variable = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(word.text)?.[1] ?? (word.pieces.length === 1 ? word.pieces[0]!.name : undefined);
-    if (variable === undefined) return undefined;
-    if (variable === 'SHELL' || variable === 'BASH') return 'sh';
+    if (variable === undefined || /^(?:[1-9@*_]|BASH_COMMAND|BASH_ARGV|BASH_REMATCH|FUNCNAME|REPLY|OPTARG|MAPFILE|MATCH|match)$/.test(variable)) return undefined;
+    if (['SHELL', 'BASH', '0', 'ZSH_NAME', 'ZSH_ARGZERO'].includes(variable)) return 'sh';
     const value = this.shared.across.values.get(variable);
     if (value === undefined) return '';
     const parts = value?.trim().split(/[ \t]+/).map((part) => part.split('/').pop()!);
-    return parts === undefined || parts.some((part) => RUNNERS.has(part) || SHELLS.has(part)) ? undefined : parts[0];
+    if (parts === undefined || parts.some((part) => RUNS_LATER.has(part) || MODIFIERS.has(part) || DECLARING.has(part) || WRAPPED.has(part))) return undefined;
+    return parts.some((part) => RUNNERS.has(part) || SHELLS.has(part)) ? null : parts[0];
   }
 
   /** A shell's options and what it runs: the script after `-c`, its input, or a file. */
@@ -1434,6 +1589,67 @@ class Reader {
   }
 }
 
+/** A word that is a number as it is: digits, or `$?`, `$#`, `$$`, `$!` or a length (`${#x}`), which are numbers. */
+const numeric = (word: Word) => (!word.made && /^[-+]?[0-9]+$/.test(word.text)) || (word.pieces.length === 1 && /^[?#$!]$/.test(word.pieces[0]!.name ?? ''));
+
+/**
+ * Whether arithmetic may read a word, as a number or a variable (`count` takes its name: its value
+ * is judged once the command is read). Anything else it would read as an expression: not followed.
+ */
+const sideOf = (word: Word, count: (name: string) => void): boolean => {
+  if (numeric(word)) return true;
+  const name = word.pieces.length === 1 && word.pieces[0]!.made === 'parameter' ? word.pieces[0]!.name : !word.made && word.plain ? word.text : undefined;
+  if (name === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return false;
+  count(name);
+  return true;
+};
+
+/**
+ * Whether a command that `name` runs, with these words after it, may run text later, or set a
+ * variable whose name the text gives (RUNS_LATER): so may a builtin in some of its forms, read
+ * here as they were tried in bash, zsh, ksh and dash. printf with `-v` sets one; in a command that
+ * hands ksh a script (`ksh`), ksh reads a number printf writes, shift's and ulimit's, and the sides
+ * of `-eq` and the like in `test` (as bash does in `[[ ]]`) as arithmetic, which runs a subscript's
+ * substitution; zsh's print -P and -v and set -A, bash's `-v` and `-R` tests, `wait -p` and
+ * `hash -p` do too. Such a command is not followed.
+ */
+function runsLater(name: string, first: Word, rest: Word[], ksh: boolean, count: (name: string) => void): boolean {
+  if (RUNS_LATER.has(name)) return true;
+  const side = (word: Word | undefined) => word !== undefined && sideOf(word, count);
+  const options = rest.filter((word) => /^[-+][A-Za-z]+$/.test(word.text)).map((word) => word.text);
+  switch (name) {
+    case 'printf': {
+      if (options.some((option) => /^-[A-Za-z]*v/.test(option))) return true;
+      const args = rest[0]?.text === '--' ? rest.slice(1) : rest;
+      const format = args[0];
+      // A number it writes (or a width or a precision it takes), from what is not a number.
+      const specs = format?.text.replace(/%%/g, '').match(/%[^A-Za-z%]*[A-Za-z(]?/g) ?? [];
+      const numbers = format?.made || specs.some((spec) => !/^%[-+ #0']*[0-9]*(?:\.[0-9]*)?[sbq]$/.test(spec));
+      return ksh && Boolean(numbers) && args.slice(1).some((word) => !side(word));
+    }
+    case 'print':
+      return options.some((option) => /^-[A-Za-z]*[Pvz]/.test(option));
+    case 'set':
+      return options.some((option) => /^[-+][A-Za-z]*A/.test(option));
+    case 'wait':
+      return options.some((option) => /^-[A-Za-z]*p/.test(option));
+    case 'hash':
+      return options.some((option) => /^-[A-Za-z]*p/.test(option)) || rest.some((word) => word.text.includes('='));
+    case 'shift':
+    case 'ulimit':
+      return ksh && rest.some((word) => !word.text.startsWith('-') && !side(word) && !['unlimited', 'hard', 'soft'].includes(word.text));
+    default:
+  }
+  // `[[ ]]`, and ksh's `test` and `[`: the words of a `[[ ]]` after its `&&` or `||` are a command of their own here.
+  const brackets = name === '[[' || rest.at(-1)?.text === ']]';
+  if (brackets || name === '[' || name === 'test') {
+    const all = [first, ...rest];
+    if (all.some((word) => word.text === '-v' || word.text === '-R')) return true;
+    return (brackets || ksh) && all.some((word, i) => NUMERIC_TEST.test(word.text) && !(side(all[i - 1]) && side(all[i + 1])));
+  }
+  return false;
+}
+
 /**
  * What a pipeline feeds a shell that reads its commands from its input, once its heredocs are read:
  * the scripts to read. Only through what passes text on as it is (echo, cat) does this know what
@@ -1488,6 +1704,8 @@ function feeding(pipeline: Command[], s: number): Piece[] | undefined {
  */
 function ranFiles(shared: Shared): void {
   const { files, runs } = shared.across;
+  // Where the command sets PATH, a file it writes and makes a program may run by its name alone.
+  if (shared.across.path) for (const file of shared.across.executables) runs.add(file);
   for (const file of runs) {
     if (!files.has(file)) continue;
     runs.delete(file);
@@ -1588,7 +1806,7 @@ function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: n
 export function inWords(command: string, asked: (char: string) => boolean): Set<number> | undefined {
   const found = new Set<number>();
   const pieces = [...command.matchAll(/[\s\S]/gu)].map((match) => ({ char: match[0], at: match.index }));
-  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), aliases: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set() };
+  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), path: false, executables: new Set(), counted: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set() };
   // What all the readings may read, scripts handed on again and again (`eval eval eval …`) among them.
   let budget = 4 * pieces.length + 200_000;
   try {
@@ -1606,6 +1824,14 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
     // approval still shows, every such space written out, rather than not at all.
     if (!(error instanceof Lost || error instanceof RangeError)) console.error('Pelican could not read a command for its spaces', error);
     return undefined;
+  }
+  // Arithmetic reads a variable the command sets to what is not a number (or not known): what that
+  // holds may be a subscript, which runs (`n='a[$(…)]'; $(( n ))`), wherever in the command it is set.
+  for (const name of across.counted) {
+    const value = across.values.get(name);
+    // The shell sets these to text of the command: `$_` to the last word of the command before.
+    if (/^(?:_|BASH_COMMAND|BASH_ARGV|BASH_REMATCH|FUNCNAME|REPLY|OPTARG|MAPFILE|MATCH|match)$/.test(name)) return undefined;
+    if (value !== undefined && !/^[-+]?[0-9]+$/.test(value ?? '')) return undefined;
   }
   // A shell reads its input, and something may hand it text of the command line this does not follow.
   if (across.readsInput && (across.risky || [...across.fed].some((name) => across.functions.has(name)))) return undefined;

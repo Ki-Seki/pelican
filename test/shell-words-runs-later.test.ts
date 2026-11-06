@@ -25,6 +25,11 @@ const SHELLS: Record<string, { file: string; args: (command: string) => string[]
   bash: { file: '/bin/bash', args: (command) => ['-c', `shopt -s expand_aliases && eval ${quoted(command)} < /dev/null`] },
   sh: { file: '/bin/sh', args: (command) => ['-c', command] },
   ksh: { file: '/bin/ksh', args: (command) => ['-c', command] },
+  // A bash of 5.1 or later, as Linux has (macOS's /bin/bash is 3.2): Homebrew's, where it is.
+  bash5: {
+    file: ['/opt/homebrew/bin/bash', '/usr/local/bin/bash', '/bin/bash'].find((file) => existsSync(file) && /^(?:5\.[1-9]|[6-9])/.test(spawnSync(file, ['-c', 'echo $BASH_VERSION'], { encoding: 'utf8' }).stdout)) ?? '/nonexistent/bash',
+    args: (command) => ['-c', `shopt -s expand_aliases && eval ${quoted(command)} < /dev/null`],
+  },
 };
 /** What `p` logged of the command, run in the shell. */
 function logged(shell: string, command: string): string {
@@ -60,6 +65,52 @@ const CASES: Array<[string, string, string]> = [
   ['a function bash imports from the environment', `env 'BASH_FUNC_f%%=() { w done${N}# ; p PWNED; }' bash -c f`, 'sh'],
   // ksh93's `<<#` ends its heredoc at a line with blanks before its end: the line after it runs.
   ["ksh's <<# heredoc", `ksh -c 'cat <<#E\n  x\n  E\nw a${N}# ; p PWNED\n#E'`, 'ksh'],
+  // What runs text later, or sets a variable whose name the text gives, however the text is made:
+  // the substitution's start split across quotes, made by an expansion or an escape, or none at all.
+  ['a split substitution a read evaluates', `x='a[$'"(w done${N}# ; p PWNED)]"; read -r "$x" </dev/null`, 'zsh'],
+  ["a split substitution with $'' a read evaluates", `x='a[$'$''"(w done${N}# ; p PWNED)]"; read -r "$x" </dev/null`, 'sh'],
+  ['a substitution made by an expansion', `d='$'; x="a[\${d}(w done${N}# ; p PWNED)]"; read -r "$x" </dev/null`, 'zsh'],
+  ["a substitution made across $'…' strings", `x=$'a[$''(w done${N}# ; p PWNED)]'; read -r "$x" </dev/null`, 'sh'],
+  ['arithmetic on a split substitution', `n='a[$'"(w done${N}# ; p PWNED)]"; w $(( n + 1 ))`, 'sh'],
+  ['an arithmetic command', `n='a[$'"(w done${N}# ; p PWNED)]"; (( n ))`, 'bash'],
+  ["[[ ]]'s -eq", `n='a[$'"(w done${N}# ; p PWNED)]"; [[ $n -eq 1 ]]`, 'bash'],
+  ["[[ ]]'s -v", `x='a[$'"(w done${N}# ; p PWNED)]"; [[ -v $x ]]`, 'bash5'],
+  ['a nameref', `declare -n r='a[$'"(w done${N}# ; p PWNED)]"; w $r`, 'bash5'],
+  ['an indirect expansion', `x='a[$'"(w done${N}# ; p PWNED)]"; a=(1); w \${!x}`, 'bash'],
+  ['a subscript', `x='a[$'"(w done${N}# ; p PWNED)]"; a=(1); w \${a[x]}`, 'bash'],
+  ['an offset', `x='a[$'"(w done${N}# ; p PWNED)]"; y=abc; w \${y:x}`, 'bash'],
+  ["an array's element by its subscript", `x='a[$'"(w done${N}# ; p PWNED)]"; a=(1 [x]=2)`, 'bash'],
+  ['let', `let 'a[$'"(w done${N}# ; p PWNED)]"`, 'bash'],
+  ['unset', `a=(1); unset 'a[$'"(w done${N}# ; p PWNED)]"`, 'zsh'],
+  ["zsh's export", `export 'a[$'"(w done${N}# ; p PWNED)]=1"`, 'zsh'],
+  ["ksh's printf", `ksh <<'E'\nprintf '%d' 'a[$'"(w done${N}# ; p PWNED)]"\nE`, 'sh'],
+  ["ksh's test", `ksh <<'E'\ntest 'a[$'"(w done${N}# ; p PWNED)]" -eq 1\nE`, 'sh'],
+  ["zsh's set -A of functions", `set -A functions lint 'w lint${N}# fix later ; p PWNED'; lint`, 'zsh'],
+  ["zsh's read of functions", `read -r 'functions[lint]' <<< 'w lint${N}# fix later ; p PWNED'; lint`, 'zsh'],
+  ["zsh's typeset of functions", `typeset 'functions[lint]=w lint${N}# fix later ; p PWNED'; lint`, 'zsh'],
+  ["zsh's := of functions", `: \${functions[lint]:='w lint${N}# fix later ; p PWNED'}; lint`, 'zsh'],
+  ["zsh's autoload of a file the command writes", `echo 'w a${N}# ; p PWNED' > f; fpath=(.); autoload f; f`, 'zsh'],
+  ['an alias made after command', `command alias run=eval\nrun 'w lint${N}# ; p PWNED'`, 'bash'],
+  ['an alias made after builtin', `builtin alias run=eval\nrun 'w lint${N}# ; p PWNED'`, 'sh'],
+  ['an alias made by a variable', `a=alias; $a run=eval\nrun 'w lint${N}# ; p PWNED'`, 'sh'],
+  ["bash's array of aliases", `BASH_ALIASES[run]=eval\nrun 'w done${N}# ; p PWNED'`, 'bash5'],
+  ['eval after builtin', `builtin eval 'w done${N}# ; p PWNED'`, 'zsh'],
+  ["eval after zsh's exec", `exec eval 'w done${N}# ; p PWNED'`, 'zsh'],
+  ['eval after time -p', `time -p eval 'w done${N}# ; p PWNED' 2>/dev/null`, 'bash'],
+  ['eval as the arguments a command sets', `set -- eval 'w done${N}# ; p PWNED'; "$@"`, 'sh'],
+  ['eval as the last word of the command before', `: eval; $_ 'w done${N}# ; p PWNED'`, 'zsh'],
+  ["compgen's -C", `compgen -C 'w done${N}# ; p PWNED' x`, 'bash'],
+  ["mapfile's callback", `mapfile -C 'w done${N}# ; p PWNED' -c 1 < <(echo x)`, 'bash5'],
+  ['a prompt in the environment of a shell it starts', `env PS4='$'"(w done${N}# ; p PWNED)" bash -xc : 2>/dev/null`, 'sh'],
+  ['a file it writes, found on the PATH it sets', `echo 'w a${N}# ; p PWNED' > lz; chmod +x lz; PATH=.:$PATH lz`, 'sh'],
+  ['a function whose body sets a variable the text names', `x='a[$'"(w done${N}# ; p PWNED)]"; f() { local "$x=1"; }; f`, 'bash'],
+  // Arithmetic reads a variable the command sets to what is not a number, however it sets it.
+  ['a loop variable that is not always a number', `abc='a[$'"(w done${N}# ; p PWNED)]"; for i in 1 abc; do w $((i)); done`, 'bash'],
+  ["the last word of the command before, `$_`", `: 'a[$'"(w done${N}# ; p PWNED)]"; w $(( _ ))`, 'bash'],
+  ['a variable set in the environment of a shell it starts', `x='a[$'"(w done${N}# ; p PWNED)]"; env n="$x" bash -c 'w $((n))'`, 'zsh'],
+  ["a variable bash reads as arithmetic, OPTIND", `x='a[$'"(w done${N}# ; p PWNED)]"; OPTIND=x`, 'bash'],
+  ["a variable set by ${n:=…}", `: \${n:='a[$'"(w done${N}# ; p PWNED)]"}; w $((n))`, 'bash'],
+  ['a file it makes a program, found on the PATH it sets', `printf 'w a${N}# ; p PWNED\\n' > t; chmod +x t; PATH=.:$PATH t`, 'zsh'],
 ];
 
 describe('quoted text a shell runs later', () => {
@@ -67,7 +118,7 @@ describe('quoted text a shell runs later', () => {
     it(`${what}: the card writes each such space out, and warns`, () => {
       expect(revealHidden(command, { runs: 'shell' })).toEqual({ text: command.replaceAll(N, '\u27e8U+00A0\u27e9'), hidden: true });
     });
-    // bash has @P from 4.4: macOS's /bin/bash is 3.2.
+    // bash has @P from 4.4: macOS's /bin/bash is 3.2. ksh may not be there.
     const missing = !existsSync(SHELLS[shell]!.file) || (command.includes('@P') && !/^(?:4\.[4-9]|[5-9])/.test(spawnSync(SHELLS[shell]!.file, ['-c', 'echo $BASH_VERSION'], { encoding: 'utf8' }).stdout));
     it.skipIf(missing)(`${what}: the space changes what runs, in ${shell}`, () => {
       expect(logged(shell, command)).toContain('PWNED');
@@ -77,6 +128,19 @@ describe('quoted text a shell runs later', () => {
 
   it('leaves such a space as it is in quoted text that holds no substitution’s start, or in a commit message', () => {
     for (const command of [`w 'a${N}b'`, `w "a${N}b \$(w c)"`, `git commit -m "$(cat <<'EOF'\nFix it${N}now, \$(and) \`this\`\nEOF\n)"`]) {
+      expect(revealHidden(command, { runs: 'shell' }), command).toEqual({ text: command, hidden: false });
+    }
+  });
+
+  it('leaves it as it is beside what runs no text: numbers in arithmetic, a string printf writes, a test of strings', () => {
+    for (const command of [
+      `w $(( 1 + 2 )) 'a${N}b'`, `w $(( 16#ff + 0x1f )) 'a${N}b'`, `w "\${#x}" 'a${N}b'`, `w "\${x:0:2}" 'a${N}b'`, `w "\${a[@]}" 'a${N}b'`,
+      `printf '%s\n' 'a${N}b'`, `[ "$x" = 'a${N}b' ] && w y`, `[[ $x == 'a${N}b' ]] && w y`, `[ $# -eq 0 ] && w 'a${N}b'`,
+      `command -v git && git commit -m 'a${N}b'`, `X=1 w 'a${N}b'`, `cd /tmp && w 'a${N}b'`, `hash -r; w 'a${N}b'`,
+      `n=0; for d in */; do n=$((n+1)); done; w "$n" 'a${N}b'`, `for i in 1 2 3; do w $((i*2)) 'a${N}b'; done`,
+      `[[ $n -gt 2 ]] && w 'a${N}b'`, `export PATH="$HOME/bin:$PATH" LANG=C; w 'a${N}b'`, `f() { local x=1; w "$x" 'a${N}b'; }; f`,
+      `K='timeout 9 kubectl'; $K get pods; w 'a${N}b'`, `echo hi > out.txt; PATH=/opt/bin:$PATH w 'a${N}b'`, `grep -r read src; w 'a${N}b'`,
+    ]) {
       expect(revealHidden(command, { runs: 'shell' }), command).toEqual({ text: command, hidden: false });
     }
   });

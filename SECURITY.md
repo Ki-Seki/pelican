@@ -93,13 +93,18 @@ can read your sessions and have Claude run commands as you, so treat access to i
   written out as ⟨U+…⟩ and warned of, as an approval shows it, and offers **Trust and start** or
   **Use my settings only**. In a command a space other than a plain one is written out too, unless
   Pelican finds it in quotes, a heredoc's body or a comment, as bash, zsh, dash and macOS's bash 3.2
-  read the command and a script it hands a shell in the ways Pelican follows (`bash -c`, `eval`, `ssh`, an
-  alias, a heredoc or a pipe into `sh`, a file a shell reads as it starts, and the like); quoted
-  text with a substitution's start in it, which arithmetic, a prompt or zsh's `(e)` may yet run,
-  counts as in a word. Where Pelican cannot tell, every such space is written out. A string that a
-  program runs in a shell of its own (python's `os.system`, `make`) is not followed. With your settings only, Claude Code loads just your user settings,
-  and git runs none of the repository's filters, its file-system monitor or its hooks folder; a
-  folder whose git config git cannot read in full does not start that way.
+  read the command and a script it hands a new shell in the ways Pelican follows (`bash -c`, `ssh`,
+  a heredoc or a pipe into `sh`, a file it writes and runs or that a shell reads as it starts, and
+  the like); quoted text with a substitution's start in it counts as in a word. A command that uses
+  what can run text later in its own shell is one Pelican cannot tell, however the text is made
+  (split across quotes, by a variable or an escape): `eval`, `source`, `trap`, an alias in any form,
+  `read`, `declare`, `let`, `unset`, zsh's `set -A` and its `functions` array, bash's `BASH_ALIASES`,
+  a parameter flag such as zsh's `(e)` or bash's `@P`, a command whose name Pelican does not know,
+  arithmetic on a variable the command sets to anything but a number, and the like. Where Pelican
+  cannot tell, every such space is written out. A string that a program runs in a shell of its own
+  (python's `os.system`, `make`) is not followed. With your settings only, Claude Code loads just
+  your user settings, and git runs none of the repository's filters, its file-system monitor or its
+  hooks folder; a folder whose git config git cannot read in full does not start that way.
   A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
   written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
   Claude Code has worked there before, unless you chose your settings only for it. Listing a
