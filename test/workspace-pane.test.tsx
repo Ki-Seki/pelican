@@ -7,6 +7,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CWD = '/code/app';
 
+// The terminal's screen (xterm.js) is stood in for: the tab around it is what is tried here.
+vi.mock('../src/web/components/TerminalScreen', async () => {
+  const { forwardRef, useImperativeHandle } = await import('react');
+  return {
+    TerminalScreen: forwardRef(function Stand(props: { id?: string }, ref) {
+      useImperativeHandle(ref, () => ({ size: () => ({ cols: 80, rows: 24 }), focus: () => undefined, input: () => undefined, paste: () => undefined, text: () => ({ before: '', screen: '', after: '' }) }));
+      return <div data-terminal tabIndex={-1} data-shows={props.id ?? ''} />;
+    }),
+  };
+});
+
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
   return {
@@ -20,6 +31,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       git: async () => ({ repo: true, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 0 }] }),
       changes: async () => ({ turns: [], lines: {} }),
       tree: async () => [],
+      terminals: async () => ({ available: true, terminals: [{ id: 't1', cwd: CWD, program: 'zsh', viewers: 0, createdAt: 1 }] }),
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle' },
         run: null,
@@ -110,6 +122,24 @@ describe('Changes and files beside the conversation', () => {
     key(message, { key: '\\', ctrlKey: true });
     expect(pane()).not.toBeNull();
     expect(document.activeElement).toBe(message);
+  });
+
+  it('shows the terminal with Ctrl+`, as in Claude Desktop, and hides it pressed there, the message box having the keys again', async () => {
+    computer();
+    await session();
+    key(window, { key: '`', code: 'Backquote', ctrlKey: true });
+    await waitFor(() => expect(pane()).not.toBeNull());
+    expect(within(pane()!).getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => expect(document.querySelector('[data-terminal]')?.getAttribute('data-shows')).toBe('t1'), LAZY);
+    // On another tab, it comes back to the terminal.
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Files' }));
+    key(window, { key: '`', code: 'Backquote', ctrlKey: true });
+    expect(within(pane()!).getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true');
+    const terminal = document.querySelector<HTMLElement>('[data-terminal]')!;
+    terminal.focus();
+    key(terminal, { key: '`', code: 'Backquote', ctrlKey: true });
+    expect(pane()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText('Message Claude'));
   });
 
   it('closed with its X, gives the keys to the button that shows it', async () => {

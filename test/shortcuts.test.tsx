@@ -41,6 +41,7 @@ describe('the keyboard shortcuts sheet', () => {
     expect(listed).toEqual(expect.arrayContaining([
       'Transcript view: Ctrl O',
       'Changes and files: Ctrl Shift D',
+      'Terminal: Ctrl `',
       'Side chat: Ctrl ;',
       'Close pane: Ctrl \\',
       'Send comments: Ctrl Enter',

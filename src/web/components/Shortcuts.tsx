@@ -54,6 +54,7 @@ export function ShortcutsSheet() {
       <Row label="Search sessions" keys={[MOD, 'K']} />
       <Row label="Transcript view" keys={['Ctrl', 'O']} />
       <Row label="Changes and files" keys={[MOD, 'Shift', 'D']} />
+      <Row label="Terminal" keys={['Ctrl', '`']} />
       <Row label="Side chat" keys={[MOD, ';']} />
       <Row label="Close pane" keys={[MOD, '\\']} />
       <Row label="Close a sheet" keys={['Esc']} />

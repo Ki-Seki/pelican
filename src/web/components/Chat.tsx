@@ -11,7 +11,7 @@ import { useDemoNote } from '../lib/demo';
 import { clearDraft, moveDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { composing, hasKeyboard } from '../lib/keyboard';
+import { composing, hasKeyboard, togglesTerminal } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
@@ -33,9 +33,11 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
+import { wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
+import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
@@ -49,7 +51,7 @@ import { Sheet } from './Sheet';
 import { SideChat, useSideChat } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
-import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
+import { PANE_KEYS, shownTab, useWorkspacePane, Workspace } from './Workspace';
 import { prefetchWorkspace } from './WorkspaceTabs';
 
 /**
@@ -691,6 +693,27 @@ export function Chat({
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
   } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
 
+  // Ctrl+` shows the terminal and gives it the keys, as in Claude Desktop; pressed in the terminal,
+  // it hides it and the message box has them again. The side chat makes way first.
+  const step = useWorkspaceStep();
+  const { setOpen: setPaneOpen } = workspace;
+  useEffect(() => {
+    if (!cwd) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!togglesTerminal(e) || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      const inTerminal = e.target instanceof Element && Boolean(e.target.closest('[data-terminal]'));
+      if (paneShown && shownTab(step) === 'terminal' && inTerminal) {
+        setPaneOpen(false);
+        composer.current?.focus();
+        return;
+      }
+      wantTerminalFocus();
+      makeWay(() => showWorkspace({ tab: 'terminal' }));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cwd, paneShown, step, setPaneOpen, makeWay, showWorkspace]);
   // The trust sheet, for a terminal in a folder nobody trusted that brings programs.
   const askTrust = useCallback((brings: string[]) => new Promise<TrustChoice | undefined>((resolve) => {
     let settled = false;

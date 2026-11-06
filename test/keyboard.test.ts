@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { composing, sendsMessage } from '../src/web/lib/keyboard';
+import { composing, sendsMessage, togglesTerminal } from '../src/web/lib/keyboard';
 
 describe('the Enter that confirms an input method candidate', () => {
   it('is composing in Safari too, where isComposing is already false but the key says 229', () => {
@@ -29,5 +29,16 @@ describe('sending with the keyboard', () => {
   it('Shift+Enter is a new line', () => {
     expect(sendsMessage({ key: 'Enter', shiftKey: true }, true)).toBe(false);
     expect(sendsMessage({ key: 'a' }, true)).toBe(false);
+  });
+});
+
+describe('the terminal’s key', () => {
+  it('is Ctrl+`, as in Claude Desktop, on a Mac too, by the key left of 1 whatever it prints', () => {
+    expect(togglesTerminal({ key: '`', code: 'Backquote', ctrlKey: true })).toBe(true);
+    // A layout where that key prints something else.
+    expect(togglesTerminal({ key: '^', code: 'Backquote', ctrlKey: true })).toBe(true);
+    expect(togglesTerminal({ key: '`', code: 'Backquote' })).toBe(false);
+    expect(togglesTerminal({ key: '`', code: 'Backquote', metaKey: true })).toBe(false);
+    expect(togglesTerminal({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true })).toBe(false);
   });
 });
