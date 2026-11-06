@@ -48,9 +48,12 @@ command hides; and what the reviews of 0.4.0 left.
   script named to read as a picture no longer does. A screenshot keeps the name macOS gave it.
 - Files Claude sent in Claude Desktop show from Claude Code's record of what it delivered, so one
   Claude named by a relative path shows too; a file Claude Code did not deliver never shows.
-- A download, of a file Claude sent or from Changes and files, sends the file as it was when you
-  asked for it: one that grew meanwhile, such as a log still being written, went on past the size it
-  had announced, and past the 200 MB limit. One cut short meanwhile breaks the download off.
+- An SVG file Claude writes shows in its own colors and fonts, as a browser shows it: the visuals'
+  styles repainted its text and boxes (a yellow box near-white, a white label near-black). A sent
+  picture too small for the download button in its corner has the button beside it.
+- A download, of a file Claude sent or from Changes and files, stops at the size the file had when
+  you asked for it: one that grew meanwhile, such as a log still being written, went on past the
+  size it had announced, and past the 200 MB limit. One cut short meanwhile breaks the download off.
 - A file whose extension names what every JavaScript object has, such as `.constructor`, opens as a
   file: sent by Claude it failed with a server error, in Changes and files it showed as a broken
   picture, and as an upload it would not open.
@@ -58,6 +61,10 @@ command hides; and what the reviews of 0.4.0 left.
   compact row the project and time make room for them. From the keyboard, Pin, Unpin and Archive
   leave focus on the session's row where it went, or on the next row when it leaves the list, and
   Undo brings focus back to it; Archive used to drop it to the page.
+- A compact row keeps a date on one line ("Oct 25", not "Oct" over "25"), and grouped by time the
+  list's headings say what they hold, Previous 7 days and Previous 30 days: "This month" held
+  October's sessions on 6 November.
+- A session archived in 0.4.0 while pinned in 0.4.1 comes back unpinned when you unarchive it.
 - A step Claude is still writing keeps its icon and its verb at their size beside a long command.
 - A conversation shows its day above its first message too, and above the first prompt of each new
   day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
@@ -73,17 +80,24 @@ command hides; and what the reviews of 0.4.0 left.
   that cannot be read says why, and Show earlier asks again. A step too large to show says what was
   left out of it, and the transcript is read only from the session's own folder.
 - Behind a tunnel or a proxy that cannot reach Pelican, a 502, 503 or 504 shows the quiet "Can't
-  reach" line, which keeps trying, instead of the error.
-- Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of its
-  Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its quotes
-  are quotes, a quote from a file its lines as code. A reply keeps to itself in any reader (GitHub,
-  VS Code's preview): a heading in it sits under the speakers' (`##` becomes `####`), so none passes
-  for "You" or "Claude"; its HTML is text, as the conversation shows it, so none hides the turns
-  after it; a picture is a link that names its site, never loaded when the file is read; its links
-  by reference are written with their addresses and its footnotes under labels of its own, so two
-  replies' `[^1]` are two footnotes and no reply changes where another's links lead or what its
-  footnotes say; and a code block it leaves open ends with it. Addresses and emails in prompts and
-  Claude Code's notes stay text, as code, where a reader would link them.
+  reach" line, which keeps trying, instead of the error; a conversation that could not load then
+  loads once the computer is in reach again, also while the live connection stayed up.
+- Export as Markdown reads as the conversation does, but for a reply's single line breaks, which a
+  Markdown file joins, as GitHub does. A prompt is text, as you typed it: none of its Markdown takes
+  effect, so a ``` it opens no longer swallows the rest of the file, nor makes a line of `:--` a
+  table, and its quotes are quotes, a quote from a file its lines as code. A reply keeps to itself in
+  any reader (GitHub, VS Code's preview, the spec's own): a heading in it sits under the speakers'
+  (`##` becomes `####`), so none passes for "You" or "Claude"; its HTML is text, as the conversation
+  shows it, so none hides the turns after it; a picture is a link that names its site, never loaded
+  when the file is read; its links by reference are written with their addresses and its footnotes
+  under labels of its own, so two replies' `[^1]` are two footnotes and no reply changes where
+  another's links lead or what its footnotes say; and a code block it leaves open ends with it.
+  Where readers part ways on a reply (an autolink with a character one of them takes, an address
+  with a control character, `ftp://`, a table VS Code's preview finds under a fence or a heading),
+  it is written so that they read it alike. The files Claude sent are named under their step, with
+  the words Claude sent with them. An address that starts with http://, https://, ftp:// or www.,
+  and an email, in prompts and Claude Code's notes stay text, as code, where a reader would link
+  them. A text past 60,000 characters ends with "…", as the conversation shows it.
 
 ### Security
 
@@ -97,12 +111,17 @@ command hides; and what the reviews of 0.4.0 left.
   finds it in quotes, a heredoc's body or a comment: a shell takes it as part of a word, so `echo
   done⟨U+00A0⟩# ; curl … | sh` read as a comment and ran curl, and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh`
   ran ./setup.sh. Pelican reads the command as bash, zsh, dash and macOS's bash 3.2 do, and the
-  scripts it hands a shell: after `bash -c`, `eval`, `ssh`, `trap` or an alias, in a heredoc or pipe
-  into `sh`, a script it writes and then runs. Where it cannot tell, every such space shows. The
-  same goes for a Monitor's command and, in the trust sheet, for a hook, a helper, a skill's command
-  and a git filter; between the arguments of an MCP server, or of a hook run without a shell, every
-  such space shows. A string another program runs in a shell of its own, such as python's
-  `os.system`, is not followed.
+  scripts it hands a shell: after `bash -c`, `eval`, `ssh`, `trap` or an alias (also one the command
+  makes and then uses, `alias run=eval`), in a heredoc or pipe into `sh`, a script it writes and
+  then runs, and a file it writes that a shell reads as it starts (what BASH_ENV, ENV or `--rcfile`
+  names, a .zshenv). Quoted text with a substitution's start in it counts as in a word, as
+  arithmetic, a prompt such as PS4, bash's `@P` and zsh's `(e)` may run it; what runs a variable's
+  value (zsh's functions and aliases arrays, a function bash takes from its environment) and a ksh
+  script with a `<<#` heredoc have every such space show. Where it cannot tell, every such space
+  shows. The same goes for a Monitor's command and, in the trust sheet, for a hook, a helper, a
+  skill's command and a git filter; between the arguments of an MCP server, or of a hook run without
+  a shell, every such space shows. A string another program runs in a shell of its own, such as
+  python's `os.system`, is not followed. A long command shows at once, read once.
 - In a PowerShell command such a space shows as it is, as PowerShell takes it for a space, unless
   the command hands a script to bash, sh, wsl or ssh, which read it otherwise: then every one shows,
   with the warning; in the trust sheet too, for a hook PowerShell runs.
@@ -116,6 +135,15 @@ command hides; and what the reviews of 0.4.0 left.
   asks to send (a web search in Sinhala or Persian warned).
 - The trust sheet lists a hook's arguments: a hook run without a shell (with `args`) showed only its
   program.
+- The trust sheet reads a folder's files as Claude Code reads them. A `.claude/settings.json` or
+  `.mcp.json` saved with a byte-order mark, as Windows' Notepad saves it, or as UTF-16, listed
+  nothing, so the folder was not asked about and Claude Code started with its hooks and servers; one
+  Pelican cannot read as JSON is listed by its name. A skill's, command's or agent's frontmatter
+  whose lines end with a carriage return alone, which Claude Code's YAML breaks at, hid its
+  allowed-tools and hooks. A hook's or a server's YAML shows with its lines as written, so a second
+  line that runs curl no longer reads as part of a `#` comment on the first, and the sheet says
+  where an escape such as `\n` reads otherwise than it is written. Frontmatter of 480 KB held the
+  server for 47 seconds; each line is read once.
 - A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
   recommends; other tags after a black flag, which can spell anything unseen, are left out. The
   repository's check for hidden characters holds the docs to the same three.
@@ -123,10 +151,13 @@ command hides; and what the reviews of 0.4.0 left.
 ### Site, docs and project
 
 - The demo, and the live demo on the website, have a pinned session and a file Claude sent: in "Try
-  the dark theme on my phone", a screenshot of the settings page in dark.
-- The tests pass in any order and hold on a busy computer: each starts from a state of its own, a
-  page's tests wait up to 3 seconds for what they look for, and those that start a shell or Pelican
-  give it time to start and leave nothing running when they fail.
+  the dark theme on my phone", a screenshot of the settings page in dark. Export as Markdown
+  downloads the session in the live demo too, where it fetched nothing.
+- The docs say what the install takes: about 150 MB to download, under 400 MB on disk.
+- The tests pass in any order, at any time of day, and hold on a busy computer: each starts from a
+  state of its own, a page's tests wait up to 3 seconds for what they look for, and those that
+  start a shell or Pelican give it time to start and leave nothing running when they fail. CI checks
+  that an install brings one Claude Code, and the smoke test that Export as Markdown downloads.
 
 ## 0.4.0
 
