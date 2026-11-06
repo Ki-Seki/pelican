@@ -268,6 +268,27 @@ describe('the Terminal tab', () => {
     expect(screen.queryByText(/At most 10 terminals/)).toBeNull();
   });
 
+  it('asks first before ending a terminal elsewhere while a program runs in it, as the tab’s own End does', async () => {
+    list.terminals = Array.from({ length: 10 }, (_, n) => terminal(`t${n + 1}`, { cwd: `/code/other-${n + 1}` }));
+    refuse = () => (list.terminals.length >= 10 ? new ApiError('At most 10 terminals run at once. Close one to open another.', 429) : undefined);
+    tab();
+    expect(await screen.findByText(/At most 10 terminals/)).toBeTruthy();
+    // The list says zsh, from before; sleep runs there now.
+    list.terminals[2] = { ...list.terminals[2]!, program: 'sleep' };
+    fireEvent.click(screen.getByRole('button', { name: 'End zsh in other-3' }));
+    expect(await screen.findByText(/It is still running/)).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Terminals in other folders' }).textContent).toContain('End sleep · other-3? It is still running.');
+    expect(closed).toEqual([]);
+    // Cancel keeps it; End, asked again, ends it.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(/It is still running/)).toBeNull();
+    expect(closed).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'End zsh in other-3' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'End' }));
+    await waitFor(() => expect(closed).toEqual(['t3']));
+    await waitFor(() => expect(tabs()).toEqual(['zsh']));
+  });
+
   it('opens a terminal asked for elsewhere: in a folder (Open in terminal), running a command (Run in terminal)', async () => {
     list.terminals = [terminal('t1')];
     askForTerminal(`${CWD}/web`);

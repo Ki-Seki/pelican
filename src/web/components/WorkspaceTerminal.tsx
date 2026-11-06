@@ -147,6 +147,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   /** The problem is that as many terminals run as may: those elsewhere are listed, to end one. */
   const [full, setFull] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  /** One of those elsewhere, running a program, to end once asked. */
+  const [confirmElsewhere, setConfirmElsewhere] = useState<TerminalInfo>();
   // A new terminal starts by itself only the first time: not after the last was ended here, or the
   // folder's trust was not given.
   const [byHand, setByHand] = useState(false);
@@ -275,8 +277,19 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     else setByHand(true);
     void forget(terminal);
   };
-  /** A terminal of another folder, ended from the list shown when as many run as may; then one can start here. */
+  /**
+   * End on a terminal of another folder, in the list shown when as many run as may: asked first
+   * while a program runs there, as the tab's own End does, by what runs there now (the list may be
+   * seconds old).
+   */
+  const askEndElsewhere = async (terminal: TerminalInfo) => {
+    const now = await api.terminals().then((fresh) => fresh.terminals.find((t) => t.id === terminal.id), () => terminal);
+    if (!now || isShell(now.program) || now.exit) void endElsewhere(terminal);
+    else setConfirmElsewhere(now);
+  };
+  /** A terminal of another folder, ended from that list; then one can start here. */
   const endElsewhere = async (terminal: TerminalInfo) => {
+    setConfirmElsewhere(undefined);
     try {
       await api.closeTerminal(terminal.id);
     } catch (error) {
@@ -383,19 +396,25 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
       )}
       {problem && full && elsewhere.length > 0 && (
         <ul aria-label="Terminals in other folders" className="mx-4 mb-2 shrink-0 border-y border-line">
-          {elsewhere.map((t) => (
+          {elsewhere.map((t) => (confirmElsewhere?.id === t.id ? (
+            <li key={t.id} className="flex h-10 items-center gap-2 text-[12.5px]">
+              <span title={t.cwd} className="min-w-0 flex-1 truncate">End <span className="font-mono">{confirmElsewhere.program} · {baseName(t.cwd)}</span>? It is still running.</span>
+              <button type="button" onClick={() => void endElsewhere(t)} className="relative h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">End</button>
+              <button type="button" onClick={() => setConfirmElsewhere(undefined)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
+            </li>
+          ) : (
             <li key={t.id} className="flex h-10 items-center gap-2 text-[12.5px]">
               <span title={t.cwd} className="min-w-0 flex-1 truncate font-mono text-muted">{t.program} · {baseName(t.cwd)}</span>
               <button
                 type="button"
                 aria-label={`End ${t.program} in ${baseName(t.cwd)}`}
-                onClick={() => void endElsewhere(t)}
+                onClick={() => void askEndElsewhere(t)}
                 className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-10"
               >
                 End
               </button>
             </li>
-          ))}
+          )))}
         </ul>
       )}
 
