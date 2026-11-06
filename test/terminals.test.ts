@@ -248,6 +248,29 @@ describe('a page that comes back', () => {
     expect(drawn.every((line) => line.indexOf('end') === 39)).toBe(true);
   }, 90_000);
 
+  it('comes once its time is up, every time, while a program left a sequence open and prints nothing more', async () => {
+    terminalTiming.cutMs = 30;
+    const terminal = await open();
+    const first = await atPrompt(terminal.id);
+    // A title begun and never ended, as `cat` of a binary file can leave one, then quiet.
+    first.type(`printf 'A\\033]0;never ended'; sleep 60\r`);
+    await first.sees(/never ended/);
+    const realNow = Date.now;
+    try {
+      for (let join = 0; join < 12; join += 1) {
+        const late = page(terminal.id);
+        await until(() => terminalState(terminal.id)!.viewers.some((v) => v.joining), 5000, 'the page to come in');
+        // Timers keep a clock of their own: here the wall clock runs behind it, as it may by a millisecond.
+        if (join % 2 === 0) Date.now = () => realNow() - 50;
+        await late.readied();
+        Date.now = realNow;
+        await late.close();
+      }
+    } finally {
+      Date.now = realNow;
+    }
+  }, 30_000);
+
   it('is never cut inside an escape sequence, so what follows reads as it was printed', async () => {
     terminalTiming.cutMs = 8000;
     const terminal = await open();

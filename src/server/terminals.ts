@@ -459,12 +459,14 @@ class Term {
     }
     // The pages showing it already have all output so far: the new one comes in here.
     this.flush();
-    const viewer: Viewer = {
-      ws,
-      unacked: 0,
-      joining: { at: this.received, held: [], bytes: 0, until: Date.now() + terminalTiming.cutMs, timer: setTimeout(() => this.cut(), terminalTiming.cutMs) },
-      stopBeating: () => undefined,
-    };
+    const joining: NonNullable<Viewer['joining']> = { at: this.received, held: [], bytes: 0, until: Date.now() + terminalTiming.cutMs, timer: undefined as unknown as NodeJS.Timeout };
+    const viewer: Viewer = { ws, unacked: 0, joining, stopBeating: () => undefined };
+    // Once its time is up, the screen goes, cut wherever the copy is. Timers keep a clock of their
+    // own, which may run a millisecond ahead of Date.now(): this one says the time is up.
+    joining.timer = setTimeout(() => {
+      joining.until = 0;
+      this.cut();
+    }, terminalTiming.cutMs);
     const alone = this.viewers.size === 0;
     this.viewers.add(viewer);
     this.lastActive = Date.now();
