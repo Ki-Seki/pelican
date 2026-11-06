@@ -518,7 +518,8 @@ describe('marks on a character', () => {
       await shown.sees(/DONE\r\n/, 60_000);
       const late = page(terminal.id, size);
       const ready = await late.readied();
-      await until(() => late.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
+      // xterm takes in what it is given a moment later, the screen a page is sent too.
+      for (const seen of [shown, late]) await until(() => seen.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
       // A mark that started a cell of its own, and 16 more on it, where the page saw it all and
       // where the copy's screen came.
       expect(heaviest(shown)).toBe(17);
@@ -538,7 +539,7 @@ describe('marks on a character', () => {
     await shown.sees(/DONE\r\n/);
     const late = page(terminal.id);
     await late.readied();
-    await until(() => late.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
+    for (const seen of [shown, late]) await until(() => seen.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
     for (const seen of [shown, late]) {
       const y = seen.lines().findIndex((line) => line.startsWith('a\u0301'));
       const line = seen.screen.buffer.active.getLine(y)!;
