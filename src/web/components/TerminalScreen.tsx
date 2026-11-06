@@ -190,6 +190,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       screenReaderMode: true,
       minimumContrastRatio: 4.5,
       theme: pageTheme(),
+      // xterm would log an error for every character it does not take where it comes (a DEL), and
+      // a browser with its console open keeps each one: output of millions would fill the page.
+      logLevel: 'off',
       // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key.
       linkHandler: { activate: (event, uri) => openLink(event, uri, touch), allowNonHttpProtocols: false },
     });
