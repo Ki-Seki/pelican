@@ -397,25 +397,34 @@ describe('what a program asks of the terminal', () => {
     await open(work(), { colors, command: asking('\\033]11;?\\033\\\\\\033]4;2;?\\007', before) });
     expect(await answers(before)).toBe(`${report('11', 'fafa/fafa/fafa')}${report('4;2', '1111/6363/2929')}${DA1}|`);
 
-    // One page, then two, each saying its colors: one answer still, before the next.
+    // One page, then two, each saying its colors: one answer still, before the next, in the
+    // colors of the page last typed in (a phone in dark mode, a computer in light).
     const terminal = await open();
-    const one = await atPrompt(terminal.id, { colors });
+    const light = await atPrompt(terminal.id, { colors });
     const once = path.join(dir, 'colors-once');
-    one.type(`${asking('\\033]10;?;?\\033\\\\\\033]4;196;?\\033\\\\', once)}\r`);
+    light.type(`${asking('\\033]10;?;?\\033\\\\\\033]4;196;?\\033\\\\', once)}\r`);
     expect(await answers(once)).toBe(`${report('10', '1717/1717/1717')}${report('11', 'fafa/fafa/fafa')}${report('4;196', 'ffff/0000/0000')}${DA1}|`);
-    const dark = { ...colors, background: '#0a0a0a' };
-    await atPrompt(terminal.id, { colors: dark });
-    const twice = path.join(dir, 'colors-twice');
-    one.type(`${asking('\\033]11;?\\033\\\\', twice)}\r`);
-    expect(await answers(twice)).toBe(`${report('11', '0a0a/0a0a/0a0a')}${DA1}|`);
+    const dark = await atPrompt(terminal.id, { colors: { ...colors, background: '#0a0a0a' } });
+    const typedHere = path.join(dir, 'colors-light');
+    light.type(`${asking('\\033]11;?\\033\\\\', typedHere)}\r`);
+    expect(await answers(typedHere)).toBe(`${report('11', 'fafa/fafa/fafa')}${DA1}|`);
+    const typedThere = path.join(dir, 'colors-dark');
+    dark.type(`${asking('\\033]11;?\\033\\\\', typedThere)}\r`);
+    expect(await answers(typedThere)).toBe(`${report('11', '0a0a/0a0a/0a0a')}${DA1}|`);
 
     // A color a program set is the one it gets, until it puts it back.
     const set = path.join(dir, 'colors-set');
-    one.type(`printf '\\033]11;#102030\\033\\\\'; ${asking('\\033]11;?\\033\\\\', set)}\r`);
+    dark.type(`printf '\\033]11;#102030\\033\\\\'; ${asking('\\033]11;?\\033\\\\', set)}\r`);
     expect(await answers(set)).toBe(`${report('11', '1010/2020/3030')}${DA1}|`);
     const back = path.join(dir, 'colors-back');
-    one.type(`printf '\\033]111\\033\\\\'; ${asking('\\033]11;?\\033\\\\', back)}\r`);
+    dark.type(`printf '\\033]111\\033\\\\'; ${asking('\\033]11;?\\033\\\\', back)}\r`);
     expect(await answers(back)).toBe(`${report('11', '0a0a/0a0a/0a0a')}${DA1}|`);
+    // The dark page gone, the light one's are answered.
+    await dark.close();
+    await until(() => terminalState(terminal.id)!.viewers.length === 1, 5000, 'the dark page to go');
+    const left = path.join(dir, 'colors-left');
+    light.type(`${asking('\\033]11;?\\033\\\\', left)}\r`);
+    expect(await answers(left)).toBe(`${report('11', 'fafa/fafa/fafa')}${DA1}|`);
   }, 30_000);
 
   it('leaves a color unanswered while no page has said its colors, and answers what comes next', async () => {

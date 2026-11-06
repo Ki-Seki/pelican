@@ -277,6 +277,8 @@ type Viewer = {
   stuck?: { owed: number; buffered: number; since: number };
   /** Whether the sign-in its socket opened with still signs anyone in. */
   signedIn: () => boolean;
+  /** The colors it draws in, as it said them, and in which turn among the pages. */
+  colors?: { said: TerminalColors; turn: number };
   stopBeating: () => void;
 };
 
@@ -312,8 +314,13 @@ class Term {
   private paused = false;
   private watching?: NodeJS.Timeout;
   private programLook?: NodeJS.Timeout;
-  /** The colors the pages draw in, as the last to say them did, and those a program set since, by xterm's index. */
+  /**
+   * The colors last said (with the terminal, or by a page since), how many times pages said
+   * theirs, the page last typed in, and the colors a program set since, by xterm's index.
+   */
   private colors?: TerminalColors;
+  private saidColors = 0;
+  private typist?: Viewer;
   private readonly setColors = new Map<number, [number, number, number]>();
 
   constructor(readonly cwd: string, private readonly pty: Pty, shell: string, cols: number, rows: number, colors?: TerminalColors) {
@@ -348,6 +355,17 @@ class Term {
     if (!this.exit && !this.closed) this.pty.write(text);
   }
 
+  /**
+   * The colors a program is answered with: those of the page last typed in, as the size is; else
+   * of the page that said them last; else the last said, with no page showing it.
+   */
+  private drawnIn(): TerminalColors | undefined {
+    if (this.typist?.colors && this.viewers.has(this.typist)) return this.typist.colors.said;
+    let latest: Viewer['colors'];
+    for (const viewer of this.viewers) if (viewer.colors && (!latest || viewer.colors.turn > latest.turn)) latest = viewer.colors;
+    return latest?.said ?? this.colors;
+  }
+
   /** Colors asked for are answered as the pages draw them; one a program set is that one until put back. */
   private colorRequests(requests: ColorRequest[]): void {
     for (const { type, index, color } of requests) {
@@ -357,7 +375,7 @@ class Term {
         if (index !== undefined) this.setColors.delete(index);
         else for (const set of [...this.setColors.keys()]) if (set < 256) this.setColors.delete(set);
       } else if (type === 0 && index !== undefined) {
-        const rgb = this.setColors.get(index) ?? drawnColor(this.colors, index);
+        const rgb = this.setColors.get(index) ?? drawnColor(this.drawnIn(), index);
         if (rgb) this.answer(colorReport(index, rgb));
       }
     }
@@ -574,6 +592,7 @@ class Term {
   /** A page no longer shows it (no flow control here: the callers see to it). */
   private leave(viewer: Viewer): void {
     if (!this.viewers.delete(viewer)) return;
+    if (this.typist === viewer) this.typist = undefined;
     if (viewer.joining) clearTimeout(viewer.joining.timer);
     viewer.stopBeating();
     this.lastActive = Date.now();
@@ -604,6 +623,7 @@ class Term {
       this.pty.write(bytes);
       this.keyed = true;
       this.used = true;
+      this.typist = viewer;
       this.lastActive = Date.now();
       // Enter may start a program that prints nothing for a while.
       if (bytes.includes(13)) this.lookAtProgramSoon();
@@ -616,6 +636,8 @@ class Term {
     } else if (message?.type === 'resize' && !this.exit) {
       this.resize(message.cols, message.rows, viewer);
     } else if (message?.type === 'colors') {
+      this.saidColors += 1;
+      viewer.colors = { said: message.colors, turn: this.saidColors };
       this.colors = message.colors;
     }
   }

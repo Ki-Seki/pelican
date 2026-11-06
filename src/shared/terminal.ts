@@ -95,7 +95,10 @@ export type TerminalClientMessage =
    * closed (TERMINAL_CLOSE.behind).
    */
   | { type: 'ack'; bytes: number }
-  /** The colors this page draws in, said on each connection and when they change: the last said are answered. */
+  /**
+   * The colors this page draws in, said on each connection and when they change: a program is
+   * answered in those of the page last typed in, as the shell takes its size, else the last said.
+   */
   | { type: 'colors'; colors: TerminalColors };
 
 export const TERMINAL_LIMITS = {
