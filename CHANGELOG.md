@@ -13,6 +13,8 @@
   quotes are quotes. A heading in a reply sits under the speakers' (`##` becomes `####`), so none
   passes for "You" or "Claude", and a code block a reply leaves open ends with it. Addresses and
   emails in prompts and Claude Code's notes stay text, as code, where a reader would link them.
+- Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
+  the message boxes; it sat 2px lower.
 
 ## 0.4.0
 
