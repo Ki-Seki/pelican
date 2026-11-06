@@ -1,0 +1,652 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { access, constants } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import serializeAddon from '@xterm/addon-serialize';
+import xtermHeadless, { type Terminal as Screen } from '@xterm/headless';
+import type { RawData, WebSocket } from 'ws';
+
+import {
+  sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
+  type TerminalAvailability, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
+} from '../shared/terminal.js';
+import { config } from './config.js';
+import { heartbeat } from './heartbeat.js';
+import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
+
+/**
+ * Terminals: a shell on this computer per terminal, shown on any number of pages (up to
+ * TERMINAL_LIMITS.viewers), each over a WebSocket of its own (server.ts), so output never holds up
+ * a permission prompt on the session's socket.
+ *
+ * The shell belongs to the server, not to a page: it runs on when the page closes or the phone
+ * sleeps, in memory, until it is closed, ends, sits unused for 12 hours with nothing running, or
+ * Pelican stops. A copy of its screen (xterm's headless terminal) takes in everything it prints,
+ * so a page that comes back gets the screen as it is, scrollback, a full-screen program such as
+ * vim and the modes it set included, and goes on from there.
+ *
+ * Output goes out as binary frames: the first chunk at once (a keystroke's echo), what follows
+ * gathered for a few milliseconds. Pages acknowledge what they have drawn; while one is far behind,
+ * the PTY is paused, so the program waits as it would for a slow screen, Ctrl+C gets through at
+ * once, and memory stays flat however fast the program prints and however slowly a phone reads.
+ */
+
+const { Terminal: HeadlessTerminal } = xtermHeadless;
+const { SerializeAddon } = serializeAddon;
+type Serializer = InstanceType<typeof SerializeAddon>;
+
+/** Times and amounts the terminals keep to; tests shorten them. */
+export const terminalTiming = {
+  /** After the first chunk, output is gathered this long into one frame (or up to a frame's size). */
+  batchMs: 8,
+  /** The shell waits while a page has this many bytes of output not yet acknowledged, or waiting in its socket… */
+  high: 128 * 1024,
+  /** …until every page is below this. */
+  low: 16 * 1024,
+  /** The copy of the screen may fall this far behind the shell before the shell waits for it too, and goes on below the second. */
+  copyHigh: 1024 * 1024,
+  copyLow: 256 * 1024,
+  /** A page that makes no progress this long while the shell waits for it is let go (TERMINAL_CLOSE.behind). */
+  stallMs: 10_000,
+  /** How long a page's first screen may wait for a place between two escape sequences to be cut at. */
+  cutMs: 500,
+  /** How soon after output, or Enter, the program in front is looked at. */
+  programMs: 300,
+  /** Run in terminal: the shell is ready once its first output has been quiet this long, or after the second. */
+  promptQuietMs: 150,
+  promptWaitMs: 5000,
+  /** A terminal nobody has shown or used this long, where nothing runs, is closed… */
+  idleMs: 12 * 3600_000,
+  /** …as found by a look this often. */
+  idleCheckMs: 10 * 60_000,
+};
+
+/** How long a closed terminal's shell has to hang up its jobs before Pelican lets go of its PTY. */
+const HANGUP_MS = 1000;
+
+/** Too many terminals run already (TERMINAL_LIMITS.terminals), and none of them has ended. */
+export class TooManyTerminals extends Error {}
+
+/** Variables of the terminal, or the service, that Pelican itself runs in: they say nothing true of this one. */
+const OUTER = new Set([
+  'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'TERM_SESSION_ID', 'LC_TERMINAL', 'LC_TERMINAL_VERSION', 'COLORFGBG',
+  'COLUMNS', 'LINES', 'TERMCAP', 'WINDOWID', 'TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'VTE_VERSION', 'WT_SESSION',
+  'WT_PROFILE_ID', 'TERMINAL_EMULATOR', '__CFBundleIdentifier', 'XPC_SERVICE_NAME', 'XPC_FLAGS', 'INVOCATION_ID',
+  'JOURNAL_STREAM', 'NOTIFY_SOCKET', 'LISTEN_PID', 'LISTEN_FDS', 'LISTEN_FDNAMES', 'MANAGERPID', 'SYSTEMD_EXEC_PID',
+  'SHLVL', 'OLDPWD', '_',
+]);
+const OUTER_PREFIX = /^(ITERM_|KITTY_|WEZTERM_|ALACRITTY_|GHOSTTY_|VSCODE_|KONSOLE_|GNOME_TERMINAL_)/;
+/** Pelican's own settings, npm's when npm started Pelican, and the mark Claude Code leaves on what it runs. */
+const PELICANS = /^(PELICAN_|npm_)|^CLAUDECODE$/;
+
+/**
+ * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*),
+ * Claude Code's mark (CLAUDECODE, which would stop `claude` from starting there) and what
+ * describes the terminal or service Pelican runs in; with `launch`, what launchFor gives Claude
+ * Code and `!` commands in the folder (in one kept to the user's settings only, git settings that
+ * turn the repository's own programs off), so the shell runs as Claude does there.
+ */
+export function shellEnvironment(base: NodeJS.ProcessEnv, launch: Record<string, string> | undefined, shell: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(base)) {
+    if (value === undefined || PELICANS.test(name) || OUTER.has(name) || OUTER_PREFIX.test(name)) continue;
+    env[name] = value;
+  }
+  Object.assign(env, launch);
+  env.TERM = 'xterm-256color';
+  env.COLORTERM = 'truecolor';
+  env.SHELL = shell;
+  // A service starts with no locale (launchd sets none): the shell would read UTF-8 as bytes.
+  if (!env.LC_ALL && !env.LC_CTYPE && !env.LANG) env.LANG = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
+  return env;
+}
+
+const runnable = (file: string | null | undefined): Promise<boolean> =>
+  file && path.isAbsolute(file) ? access(file, constants.X_OK).then(() => true, () => false) : Promise.resolve(false);
+
+/** The user's shell: $SHELL, else the one the account names, else sh. */
+export async function loginShell(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  let account: string | null | undefined;
+  try {
+    account = os.userInfo().shell;
+  } catch {
+    account = undefined;
+  }
+  for (const candidate of [env.SHELL, account]) if (await runnable(candidate)) return candidate!;
+  return '/bin/sh';
+}
+
+/** For tests: a shell to start, with these arguments, instead of the user's login shell. */
+export const testShell: { file?: string; args?: string[] } = {};
+
+/** A program's name as a tab shows it: `/usr/bin/vim` and a login shell's `-zsh` as vim and zsh. */
+const programName = (raw: string) => path.basename(raw.trim()).replace(/^-/, '').slice(0, 64);
+
+const signalName = (signal: number) => Object.entries(os.constants.signals).find(([, n]) => n === signal)?.[0] ?? String(signal);
+
+/**
+ * Whether the copy's parser is between escape sequences, so a screen cut there, and the output
+ * after it, read as the whole did. xterm keeps its parser's state to itself; the version is pinned,
+ * and test/terminals.test.ts fails should this stop telling.
+ */
+function betweenSequences(screen: Screen): boolean {
+  const state = (screen as unknown as { _core?: { _inputHandler?: { _parser?: { currentState?: unknown } } } })._core?._inputHandler?._parser?.currentState;
+  return state === undefined || state === 0;
+}
+
+type Viewer = {
+  ws: WebSocket;
+  /** Output sent that the page has not acknowledged, in bytes. */
+  unacked: number;
+  /**
+   * Until it has its first screen: where in the output it came in, the output since, and until when
+   * its screen may wait for a clean place to be cut at.
+   */
+  joining?: { at: number; held: Buffer[]; bytes: number; until: number; timer: NodeJS.Timeout };
+  /** While the shell waits for it: what it owed and had waiting at the last look, and since when neither went down. */
+  stuck?: { owed: number; buffered: number; since: number };
+  stopBeating: () => void;
+};
+
+class Term {
+  readonly id = randomUUID();
+  readonly createdAt = Date.now();
+  readonly viewers = new Set<Viewer>();
+  program: string;
+  exit?: TerminalExit;
+  /** When it was last shown, typed into or printed something. */
+  lastActive = Date.now();
+  closed = false;
+  /** The server's copy of the screen. */
+  private readonly screen: Screen;
+  private readonly serializer: Serializer;
+  /** The shell's size; the copy takes a new one where it comes in the output. */
+  private cols: number;
+  private rows: number;
+  /** Output not sent yet, and the timer while more is gathered. */
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
+  private gathering?: NodeJS.Timeout;
+  /** Bytes the shell printed, and how many of them the copy has taken in. */
+  private received = 0;
+  private parsed = 0;
+  /** The PTY is paused (flow control), and looked at again while it is. */
+  private paused = false;
+  private watching?: NodeJS.Timeout;
+  private programLook?: NodeJS.Timeout;
+
+  constructor(readonly cwd: string, private readonly pty: Pty, shell: string, cols: number, rows: number) {
+    this.cols = cols;
+    this.rows = rows;
+    this.program = programName(shell);
+    this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
+    this.serializer = new SerializeAddon();
+    this.screen.loadAddon(this.serializer);
+    pty.onData((text) => this.output(text));
+    pty.onExit(({ exitCode, signal }) => this.ended(exitCode, signal));
+  }
+
+  get pid(): number {
+    return this.pty.pid;
+  }
+
+  info(): TerminalInfo {
+    return { id: this.id, cwd: this.cwd, program: this.program, viewers: this.viewers.size, createdAt: this.createdAt, ...(this.exit ? { exit: this.exit } : {}) };
+  }
+
+  /** How its flow control stands, for tests. */
+  state() {
+    return {
+      paused: this.paused,
+      received: this.received,
+      parsed: this.parsed,
+      viewers: [...this.viewers].map((v) => ({ unacked: v.unacked, buffered: v.ws.bufferedAmount, joining: Boolean(v.joining) })),
+    };
+  }
+
+  private output(text: string): void {
+    if (this.closed) return;
+    const bytes = Buffer.from(text, 'utf8');
+    this.received += bytes.length;
+    this.lastActive = Date.now();
+    this.screen.write(text, () => {
+      this.parsed += bytes.length;
+      this.cut();
+    });
+    this.pending.push(bytes);
+    this.pendingBytes += bytes.length;
+    if (this.pendingBytes >= TERMINAL_LIMITS.frame) {
+      this.flush();
+    } else if (!this.gathering) {
+      this.flush();
+      this.gathering = setTimeout(() => this.gathered(), terminalTiming.batchMs);
+    }
+    if (this.received - this.parsed > terminalTiming.copyHigh) this.pressure();
+    this.lookAtProgramSoon();
+  }
+
+  /** The end of a gathering: what came goes out, and the next is gathered while output goes on. */
+  private gathered(): void {
+    this.gathering = undefined;
+    if (this.pendingBytes === 0) return;
+    this.flush();
+    this.gathering = setTimeout(() => this.gathered(), terminalTiming.batchMs);
+  }
+
+  /** Sends what is pending to the pages that have their screen, and keeps it for those still waiting for one. */
+  private flush(): void {
+    if (this.pendingBytes === 0) return;
+    const data = this.pending.length === 1 ? this.pending[0]! : Buffer.concat(this.pending, this.pendingBytes);
+    this.pending = [];
+    this.pendingBytes = 0;
+    for (const viewer of this.viewers) {
+      if (viewer.joining) {
+        viewer.joining.held.push(data);
+        viewer.joining.bytes += data.length;
+      } else {
+        this.sendOutput(viewer, data);
+      }
+    }
+    this.pressure();
+  }
+
+  private sendOutput(viewer: Viewer, data: Buffer): void {
+    if (viewer.ws.readyState !== viewer.ws.OPEN) return;
+    for (let at = 0; at < data.length; at += TERMINAL_LIMITS.frame) viewer.ws.send(data.subarray(at, at + TERMINAL_LIMITS.frame), { binary: true });
+    viewer.unacked += data.length;
+  }
+
+  private send(viewer: Viewer, message: TerminalServerMessage): void {
+    if (viewer.ws.readyState === viewer.ws.OPEN) viewer.ws.send(JSON.stringify(message));
+  }
+
+  /** To every page that has its screen, after the output before it. */
+  private tell(message: TerminalServerMessage, except?: Viewer): void {
+    this.flush();
+    for (const viewer of this.viewers) if (viewer !== except && !viewer.joining) this.send(viewer, message);
+  }
+
+  /**
+   * Flow control. The shell waits (its PTY is paused, so what it prints blocks) while a page owes
+   * acknowledgements for, or has waiting in its socket, more than `high` bytes, or while the copy of
+   * the screen lags; it goes on once all are below `low`. A page that makes no progress at all for
+   * `stallMs` meanwhile (a phone asleep with its socket open) is let go, and repaints from the copy
+   * when it comes back, rather than holding up the shell and every other page.
+   */
+  private pressure(): void {
+    if (this.closed) return;
+    const now = Date.now();
+    const lag = this.received - this.parsed;
+    let behind = lag > terminalTiming.copyHigh;
+    let caughtUp = lag < terminalTiming.copyLow;
+    for (const viewer of this.viewers) {
+      const owed = viewer.unacked + (viewer.joining?.bytes ?? 0);
+      const buffered = viewer.ws.bufferedAmount;
+      if (owed > terminalTiming.high || buffered > terminalTiming.high) {
+        const moved = !viewer.stuck || owed < viewer.stuck.owed || buffered < viewer.stuck.buffered;
+        viewer.stuck = { owed, buffered, since: moved ? now : viewer.stuck!.since };
+        if (now - viewer.stuck.since > terminalTiming.stallMs) {
+          this.leave(viewer);
+          viewer.ws.close(TERMINAL_CLOSE.behind, 'Behind');
+          continue;
+        }
+        behind = true;
+      } else {
+        viewer.stuck = undefined;
+      }
+      if (owed >= terminalTiming.low || buffered >= terminalTiming.low) caughtUp = false;
+    }
+    if (behind && !this.paused && !this.exit) {
+      this.paused = true;
+      this.pty.pause();
+      // ws says nothing when a socket drains: look again while the shell waits.
+      this.watching = setInterval(() => this.pressure(), 50);
+    } else if (this.paused && (caughtUp || this.exit)) {
+      this.paused = false;
+      clearInterval(this.watching);
+      this.watching = undefined;
+      this.pty.resume();
+    }
+  }
+
+  /**
+   * A page that came in gets its first screen once the copy has taken in the output up to where it
+   * came in: cut where no escape sequence is half read, or wherever it is once `cutMs` is up. The
+   * output after the cut follows.
+   */
+  private cut(): void {
+    if (this.closed) return;
+    const now = Date.now();
+    let clean: boolean | undefined;
+    const due: Viewer[] = [];
+    for (const viewer of this.viewers) {
+      if (!viewer.joining || this.parsed < viewer.joining.at) continue;
+      clean ??= betweenSequences(this.screen);
+      if (clean || now >= viewer.joining.until) due.push(viewer);
+    }
+    if (due.length === 0) return;
+    // What is still gathering joins what the pages hold, so all that follows the cut is there.
+    this.flush();
+    const snapshot = this.serializer.serialize({ scrollback: TERMINAL_LIMITS.scrollback });
+    // The end goes with the screen only once the copy has all the output before it.
+    const final = this.exit && this.parsed === this.received ? this.exit : undefined;
+    for (const viewer of due) {
+      if (!viewer.joining || !this.viewers.has(viewer)) continue;
+      const { at, held, timer } = viewer.joining;
+      clearTimeout(timer);
+      viewer.joining = undefined;
+      this.send(viewer, { type: 'ready', id: this.id, cols: this.screen.cols, rows: this.screen.rows, snapshot, program: this.program, ...(final ? { exit: final } : {}) });
+      // A size the copy has yet to come to in the output.
+      if (this.screen.cols !== this.cols || this.screen.rows !== this.rows) this.send(viewer, { type: 'size', cols: this.cols, rows: this.rows });
+      let skip = this.parsed - at;
+      for (const chunk of held) {
+        if (skip >= chunk.length) {
+          skip -= chunk.length;
+          continue;
+        }
+        this.sendOutput(viewer, skip > 0 ? chunk.subarray(skip) : chunk);
+        skip = 0;
+      }
+      if (this.exit && !final) this.send(viewer, { type: 'exit', ...this.exit });
+    }
+    this.pressure();
+  }
+
+  /** A page's socket: it gets the screen as it is, then the output, and its size becomes the shell's. */
+  attach(ws: WebSocket, cols: number, rows: number): void {
+    if (this.viewers.size >= TERMINAL_LIMITS.viewers) {
+      ws.close(TERMINAL_CLOSE.tooManyViewers, 'Open on too many pages');
+      return;
+    }
+    // The pages showing it already have all output so far: the new one comes in here.
+    this.flush();
+    const viewer: Viewer = {
+      ws,
+      unacked: 0,
+      joining: { at: this.received, held: [], bytes: 0, until: Date.now() + terminalTiming.cutMs, timer: setTimeout(() => this.cut(), terminalTiming.cutMs) },
+      stopBeating: () => undefined,
+    };
+    this.viewers.add(viewer);
+    this.lastActive = Date.now();
+    if (!this.exit) this.resize(cols, rows, viewer);
+    // Called once the copy has taken in all output so far, the new size included.
+    this.screen.write('', () => this.cut());
+    // A tick goes once its screen has: `ready` is always first.
+    viewer.stopBeating = heartbeat(ws, () => {
+      if (!viewer.joining) this.send(viewer, { type: 'tick' });
+    });
+    ws.on('message', (data, binary) => this.heard(viewer, data, binary));
+    ws.on('close', () => {
+      if (!this.viewers.has(viewer)) return;
+      this.leave(viewer);
+      this.pressure();
+    });
+  }
+
+  /** A page no longer shows it (no flow control here: the callers see to it). */
+  private leave(viewer: Viewer): void {
+    if (!this.viewers.delete(viewer)) return;
+    if (viewer.joining) clearTimeout(viewer.joining.timer);
+    viewer.stopBeating();
+    this.lastActive = Date.now();
+  }
+
+  private heard(viewer: Viewer, data: RawData, binary: boolean): void {
+    if (binary) {
+      if (this.exit || this.closed) return;
+      const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+      this.pty.write(bytes);
+      this.lastActive = Date.now();
+      // Enter may start a program that prints nothing for a while.
+      if (bytes.includes(13)) this.lookAtProgramSoon();
+      return;
+    }
+    const message = terminalClientMessage(String(data));
+    if (message?.type === 'ack') {
+      viewer.unacked = Math.max(0, viewer.unacked - message.bytes);
+      this.pressure();
+    } else if (message?.type === 'resize' && !this.exit) {
+      this.resize(message.cols, message.rows, viewer);
+    }
+  }
+
+  /** The shell takes the size of the page that last said one; the others are told. */
+  private resize(cols: number, rows: number, from: Viewer): void {
+    if (cols === this.cols && rows === this.rows) return;
+    this.cols = cols;
+    this.rows = rows;
+    try {
+      this.pty.resize(cols, rows);
+    } catch {
+      // It has just ended.
+    }
+    // The copy takes the size where it comes in the output, as the pages do.
+    this.screen.write('', () => this.screen.resize(cols, rows));
+    this.tell({ type: 'size', cols, rows }, from);
+  }
+
+  private ended(code: number, signal: number | undefined): void {
+    if (this.closed || this.exit) return;
+    this.exit = signal ? { code: null, signal: signalName(signal) } : { code, signal: null };
+    clearTimeout(this.programLook);
+    this.tell({ type: 'exit', ...this.exit });
+    this.pressure();
+  }
+
+  private lookAtProgramSoon(): void {
+    if (this.programLook || this.exit || this.closed) return;
+    this.programLook = setTimeout(() => {
+      this.programLook = undefined;
+      this.lookAtProgram();
+    }, terminalTiming.programMs);
+  }
+
+  /** The program in front, as the PTY says; the pages are told when it changed. */
+  lookAtProgram(): void {
+    if (this.exit || this.closed) return;
+    let name: string;
+    try {
+      name = programName(this.pty.process);
+    } catch {
+      return;
+    }
+    if (!name || name === this.program) return;
+    this.program = name;
+    this.tell({ type: 'program', program: name });
+  }
+
+  /** Run in terminal: types `text` once the shell is ready for it, its first output (the prompt) gone quiet. */
+  typeWhenReady(text: string): void {
+    let done = false;
+    let quiet: NodeJS.Timeout | undefined;
+    const type = () => {
+      if (done) return;
+      done = true;
+      listening.dispose();
+      clearTimeout(quiet);
+      clearTimeout(latest);
+      if (this.exit || this.closed) return;
+      this.pty.write(text);
+      this.lookAtProgramSoon();
+    };
+    const listening = this.pty.onData(() => {
+      clearTimeout(quiet);
+      quiet = setTimeout(type, terminalTiming.promptQuietMs);
+    });
+    const latest = setTimeout(type, terminalTiming.promptWaitMs);
+  }
+
+  /**
+   * Closes it: the pages showing it are told, and the shell is hung up, as closing a window does.
+   * The shell gets SIGHUP while its terminal is still there, so it hangs up its jobs too (a shell
+   * that finds its terminal gone first just exits, and leaves them running); a moment later
+   * Pelican lets go of the PTY, and what ignored the hangup has no terminal any more.
+   */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    terminals.delete(this.id);
+    for (const viewer of [...this.viewers]) {
+      this.leave(viewer);
+      viewer.ws.close(TERMINAL_CLOSE.closed, 'Closed');
+    }
+    clearTimeout(this.gathering);
+    clearInterval(this.watching);
+    clearTimeout(this.programLook);
+    if (this.paused) this.pty.resume();
+    if (this.exit) return;
+    try {
+      this.pty.kill('SIGHUP');
+    } catch {
+      // Gone already.
+    }
+    setTimeout(() => {
+      try {
+        this.pty.destroy?.();
+      } catch {
+        // Gone already.
+      }
+    }, HANGUP_MS).unref();
+  }
+}
+
+const terminals = new Map<string, Term>();
+let sweeping: NodeJS.Timeout | undefined;
+
+/** Why this Pelican runs no terminals at all: the demo, or --no-terminal. */
+function refusal(): string | undefined {
+  if (config.demo) return 'This is the demo: it has no terminal. Start Pelican without --demo for one.';
+  if (!config.terminal) return 'The terminal is off: Pelican was started with --no-terminal.';
+  return undefined;
+}
+
+/** Whether the refusal is this Pelican's own (403), rather than the computer's (503). */
+export const terminalsRefused = (): boolean => refusal() !== undefined;
+
+/** Whether terminals run here, and why not, found without loading anything (for /api/info). */
+export function terminalAvailability(): TerminalAvailability {
+  const reason = refusal() ?? ptyFailure() ?? ptyMissing();
+  return reason ? { available: false, reason } : { available: true };
+}
+
+/** The same, for sure: the PTY is loaded, the first time a page asks for terminals. */
+export async function terminalsReady(): Promise<TerminalAvailability> {
+  const refused = refusal();
+  if (refused) return { available: false, reason: refused };
+  try {
+    await loadPty();
+    return { available: true };
+  } catch (error) {
+    return { available: false, reason: (error as Error).message };
+  }
+}
+
+/** The terminals of a folder (all of them, without one), oldest first, with the program in front now. */
+export function listTerminals(cwd?: string): TerminalInfo[] {
+  const shown = [...terminals.values()].filter((t) => cwd === undefined || t.cwd === cwd);
+  for (const term of shown) term.lookAtProgram();
+  return shown.map((t) => t.info());
+}
+
+/**
+ * Starts the user's shell, as a login shell, in `cwd` (checked by the caller, with launchFor's
+ * `env`), and types `command` into it once it is ready. An ended terminal makes room when as many
+ * run as may; otherwise TooManyTerminals.
+ */
+export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string } = {}): Promise<TerminalInfo> {
+  const refused = refusal();
+  if (refused) throw new Error(refused);
+  const spawn = await loadPty();
+  const file = testShell.file ?? (await loginShell());
+  const args = testShell.file ? (testShell.args ?? []) : ['-l'];
+  if (terminals.size >= TERMINAL_LIMITS.terminals) {
+    const ended = [...terminals.values()].find((t) => t.exit);
+    if (!ended) throw new TooManyTerminals(`At most ${TERMINAL_LIMITS.terminals} terminals run at once. Close one to open another.`);
+    ended.close();
+  }
+  const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
+  const term = new Term(cwd, pty, file, size.cols, size.rows);
+  terminals.set(term.id, term);
+  if (options.command) term.typeWhenReady(`${options.command}\r`);
+  if (!sweeping) {
+    sweeping = setInterval(() => void closeIdleTerminals(), terminalTiming.idleCheckMs);
+    sweeping.unref();
+  }
+  return term.info();
+}
+
+/** Closes a terminal, hanging its shell up; false when there is no such terminal. */
+export function closeTerminal(id: string): boolean {
+  const term = terminals.get(id);
+  term?.close();
+  return Boolean(term);
+}
+
+/** Every terminal ends with Pelican. */
+export function closeAllTerminals(): void {
+  for (const term of [...terminals.values()]) term.close();
+  clearInterval(sweeping);
+  sweeping = undefined;
+}
+
+/**
+ * A page's socket for a terminal (`api/terminal?id&cols&rows`), once server.ts has checked its
+ * host, origin and sign-in as for every socket.
+ */
+export function attachTerminal(ws: WebSocket, query: URLSearchParams): void {
+  // A frame too large or malformed closes this socket; unheard, the error would stop the server.
+  ws.on('error', () => ws.terminate());
+  if (refusal()) {
+    ws.close(TERMINAL_CLOSE.refused, 'No terminal here');
+    return;
+  }
+  const id = query.get('id') ?? '';
+  const cols = Number(query.get('cols'));
+  const rows = Number(query.get('rows'));
+  if (!id || !sizeAllowed(cols, rows)) {
+    ws.close(TERMINAL_CLOSE.badRequest, 'Which terminal, at what size?');
+    return;
+  }
+  const term = terminals.get(id);
+  if (!term) {
+    ws.close(TERMINAL_CLOSE.gone, 'No such terminal');
+    return;
+  }
+  term.attach(ws, cols, rows);
+}
+
+/** For tests: how a terminal's flow control stands. */
+export const terminalState = (id: string) => terminals.get(id)?.state();
+
+/** Each process's parent, from ps; undefined when ps cannot say. */
+function processParents(): Promise<Map<number, number> | undefined> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-A', '-o', 'pid=,ppid='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve(undefined);
+      const parents = new Map<number, number>();
+      for (const line of String(stdout).split('\n')) {
+        const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+        if (Number.isInteger(pid) && Number.isInteger(ppid)) parents.set(pid!, ppid!);
+      }
+      resolve(parents);
+    });
+  });
+}
+
+/**
+ * Closes the terminals nobody has shown or used for `idleMs` where nothing runs: ended, or a shell
+ * with no process of its own (a job left in the background counts). When that cannot be told, the
+ * terminal stays.
+ */
+export async function closeIdleTerminals(now = Date.now()): Promise<void> {
+  const idle = [...terminals.values()].filter((t) => t.viewers.size === 0 && now - t.lastActive >= terminalTiming.idleMs);
+  if (idle.length === 0) return;
+  const parents = idle.some((t) => !t.exit) ? await processParents() : undefined;
+  const busy = new Set(parents?.values());
+  for (const term of idle) {
+    if (term.closed || term.viewers.size > 0 || now - term.lastActive < terminalTiming.idleMs) continue;
+    if (term.exit || (parents && !busy.has(term.pid))) term.close();
+  }
+}

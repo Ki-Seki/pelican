@@ -15,6 +15,7 @@ import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import { sizeAllowed, TERMINAL_LIMITS } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -37,6 +38,7 @@ import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, readProjectFile } from './workspace.js';
 import { searchText } from './search.js';
+import { closeTerminal, listTerminals, openTerminal, terminalAvailability, terminalsReady, terminalsRefused, TooManyTerminals } from './terminals.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
@@ -204,7 +206,7 @@ app.get('/api/access/phone', async (c) => {
 });
 
 app.get('/api/info', async (c) => {
-  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo };
+  const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo, terminal: terminalAvailability() };
   const key = pushKey();
   if (key) info.pushKey = key;
   // Which Claude Code this Pelican runs, for About (and bug reports), and the user's own when newer.
@@ -760,6 +762,51 @@ app.post('/api/sessions/:id/shell', async (c) => {
   const launch = await launchFor(cwd);
   return c.json({ shell: startShell(id, cwd, command, launch.env) }, 202);
 });
+
+/**
+ * Terminals (terminals.ts): those of a folder, the session's (all of them without `cwd`), and
+ * whether this Pelican runs any. The first ask loads the PTY.
+ */
+app.get('/api/terminals', async (c) => {
+  const ready = await terminalsReady();
+  return c.json({ ...ready, terminals: ready.available ? listTerminals(c.req.query('cwd')) : [] });
+});
+
+/**
+ * A new terminal: the user's shell in the folder, at the page's size. It runs as Claude Code would
+ * there, as a `!` command does: a folder nobody trusted is asked about first (409, needsTrust),
+ * and in one kept to the user's settings only, git runs none of the repository's own programs.
+ * Not in the demo, nor with --no-terminal (403); 429 when as many run as may.
+ */
+app.post('/api/terminals', async (c) => {
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  if (typeof body.cwd !== 'string' || !sizeAllowed(body.cols, body.rows)) return c.json({ error: 'Say where, and the size' }, 400);
+  if (body.trust !== undefined && body.trust !== 'trusted' && body.trust !== 'user-only') return c.json({ error: 'trust must be trusted or user-only' }, 400);
+  if (body.command !== undefined && (typeof body.command !== 'string' || !body.command.trim() || body.command.length > TERMINAL_LIMITS.command)) {
+    return c.json({ error: `The command must be some text, up to ${TERMINAL_LIMITS.command} characters` }, 400);
+  }
+  const ready = await terminalsReady();
+  if (!ready.available) return c.json({ error: ready.reason }, terminalsRefused() ? 403 : 503);
+  const cwd = await checkedFolder(body.cwd);
+  if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  if (body.trust) await rememberChoice(cwd, body.trust);
+  const launch = await launchFor(cwd);
+  try {
+    const terminal = await openTerminal(cwd, { cols: body.cols as number, rows: body.rows as number }, {
+      ...(launch.env ? { env: launch.env } : {}),
+      ...(typeof body.command === 'string' ? { command: body.command } : {}),
+    });
+    return c.json({ terminal }, 201);
+  } catch (error) {
+    if (error instanceof TooManyTerminals) return c.json({ error: error.message }, 429);
+    throw error;
+  }
+});
+
+/** Closes a terminal: its shell is hung up (SIGHUP), as closing a window does, and its pages are told. */
+app.delete('/api/terminals/:id', (c) => (closeTerminal(c.req.param('id'))
+  ? c.json({ ok: true })
+  : c.json({ error: 'No such terminal' }, 404)));
 
 /**
  * An output Claude Code saved in a session's tool-results folder in place of one too long for the

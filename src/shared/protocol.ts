@@ -1,6 +1,7 @@
 // Types shared by the server and the web app: REST payloads and WebSocket events.
 
 import type { PermissionMode } from './modes';
+import type { TerminalAvailability } from './terminal';
 
 export type { PermissionMode } from './modes';
 
@@ -452,4 +453,6 @@ export type ServerInfo = {
    * brings; `newer`, the version of the user's own `claude` when that one is newer.
    */
   claudeCode?: { version?: string; path?: string; newer?: string };
+  /** Whether this server runs terminals, and why not; GET /api/terminals says for sure. */
+  terminal?: TerminalAvailability;
 };
