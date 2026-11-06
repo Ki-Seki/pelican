@@ -500,8 +500,9 @@ export function Composer({
 
   // On a phone too: a new session opens ready to type, with the keyboard up where the browser
   // lets a page raise it. A side chat opened from the session menu has the keys once the menu has gone.
+  // A note being written at a quote (Quotes' note box, back with its chat) keeps them.
   useEffect(() => {
-    if (autoFocus) takeKeys(area.current, () => area.current?.focus());
+    if (autoFocus && !document.querySelector('[data-note-box]')) takeKeys(area.current, () => area.current?.focus());
   }, [autoFocus]);
 
   const addFiles = (files: FileList | File[]) => {

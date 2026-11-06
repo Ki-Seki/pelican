@@ -741,6 +741,26 @@ describe('quotes with a note, as Claude Desktop sends them', () => {
     expect(document.body.textContent).not.toContain('<!-- reply');
   });
 
+  it('a note half written, back from another session, has the keys again: what is typed goes on with it', async () => {
+    media['(hover: hover) and (pointer: fine)'] = true;
+    server.after = [answer()];
+    session();
+    await loaded();
+    await screen.findByText(REPLY);
+    await selectInReply('one more set of values');
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    fireEvent.change(within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note'), { target: { value: 'Name the wait helper' } });
+    // Another session, then this one again.
+    cleanup();
+    session();
+    await loaded();
+    const note = within(await screen.findByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note') as HTMLTextAreaElement;
+    expect(note.value).toBe('Name the wait helper');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(document.activeElement).toBe(note);
+    fireEvent.keyDown(note, { key: 'Escape' });
+  });
+
   it('Send now in the note box sends that one at once, a steer while Claude works, leaving the box as it is; if it does not go, it waits', async () => {
     media['(hover: hover) and (pointer: fine)'] = true;
     server.after = [answer()];
