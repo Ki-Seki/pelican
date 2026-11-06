@@ -167,7 +167,10 @@ function TileLabel({ name, size, why }: { name: string; size?: number; why?: str
 }
 
 /** Over a picture or a tile, in its corner: shown on a touch screen, else when pointed at or focused. */
-const CORNER = 'absolute top-1.5 right-1.5 rounded-lg bg-bg/85 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100';
+const SHOWN_AT_HAND = 'rounded-lg bg-bg/85 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100';
+const CORNER = `absolute top-1.5 right-1.5 ${SHOWN_AT_HAND}`;
+/** A picture shown at its own size this small would be hidden by the button in its corner: the button goes beside it. */
+const SMALL_PICTURE = { width: 120, height: 96 };
 
 /** Why a file Claude sent cannot be had, as the server says it too (app.ts). */
 const GONE = 'No longer on this computer';
@@ -253,6 +256,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
   const name = fileName(file.path);
   const [open, setOpen] = useState(startOpen);
   const [broken, setBroken] = useState(false);
+  const [small, setSmall] = useState(false);
   // The site's demo has no computer behind it: its picture comes as data, as text does.
   const needsData = open && (kind === 'page' || kind === 'text' || (kind === 'picture' && STATIC_DEMO));
   const { data, error, isLoading } = useQuery({
@@ -271,16 +275,19 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
   if (kind === 'picture' && open && !broken && !noData && !error) {
     const src = STATIC_DEMO ? data?.image : api.sentUrl(sessionId, file.path);
     if (!src) return <div className={`${CARD} ${LINE} w-fit max-w-full`}><Badge name={name} /><Label name={name} size={file.size} /><Loader2 className="mr-2 size-3.5 animate-spin text-faint" /></div>;
-    // Alone, a picture at its own size, up to 360 by 480; beside other files, a square of 120.
+    // Alone, a picture at its own size, up to 360 by 480; beside other files, a square of 120. One
+    // at its own size that is small has its button beside it, which would cover it in its corner.
+    const beside = layout.natural && small;
     return (
-      <div className={`group relative ${layout.natural ? 'w-fit max-w-[min(100%,480px)]' : TILE}`}>
+      <div className={`group relative ${layout.natural ? 'w-fit max-w-[min(100%,480px)]' : TILE} ${beside ? 'flex items-start gap-1.5' : ''}`}>
         <button type="button" aria-label={`Open ${name}`} onClick={() => openImage(src)} className={layout.natural ? 'block max-w-full' : 'block size-full'}>
           <img
             src={src} alt={name} title={name} loading="lazy" decoding="async" onError={() => setBroken(true)}
+            onLoad={(event) => setSmall(event.currentTarget.clientWidth < SMALL_PICTURE.width || event.currentTarget.clientHeight < SMALL_PICTURE.height)}
             className={`rounded-xl border border-line bg-panel ${layout.natural ? 'block max-h-[360px] max-w-full' : 'size-full object-contain'}`}
           />
         </button>
-        <div className={CORNER}>
+        <div className={beside ? `shrink-0 ${SHOWN_AT_HAND}` : CORNER}>
           <Save sessionId={sessionId} file={file.path} {...(STATIC_DEMO ? { href: src } : {})} />
         </div>
       </div>

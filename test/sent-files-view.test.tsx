@@ -142,6 +142,23 @@ describe('a file Claude sent', () => {
     expect(within(group).getAllByRole('link', { name: /^Download phone-/ })).toHaveLength(4);
   });
 
+  it('puts a small picture’s download button beside it, where in its corner it would cover it', async () => {
+    const shots = [`${WORK}/shots/tiny.png`, `${WORK}/shots/wide.png`];
+    show([prompt, ...sent('s19', shots)]);
+    const group = screen.getByRole('group', { name: 'Sent 2 files' });
+    const [tiny, wide] = await Promise.all(['tiny.png', 'wide.png'].map((name) => within(group).findByRole('img', { name })));
+    // As drawn: 48 by 48, and 400 by 200.
+    for (const [picture, width, height] of [[tiny!, 48, 48], [wide!, 400, 200]] as const) {
+      Object.defineProperty(picture, 'clientWidth', { value: width });
+      Object.defineProperty(picture, 'clientHeight', { value: height });
+      fireEvent.load(picture);
+    }
+    const button = (name: string) => within(group).getByRole('link', { name: `Download ${name}` }).closest('div')!;
+    await waitFor(() => expect(button('tiny.png').className).not.toContain('absolute'));
+    expect(tiny!.closest('.group')!.className).toContain('flex');
+    expect(button('wide.png').className).toContain('absolute top-1.5 right-1.5');
+  });
+
   it('shows pictures beside other files as small squares, and the other files as tiles of their size', async () => {
     show([prompt, ...sent('s18', [`${WORK}/shots/dark.png`, `${WORK}/week-45.pdf`, `${WORK}/build.zip`])]);
     const group = screen.getByRole('group', { name: 'Sent 3 files' });
