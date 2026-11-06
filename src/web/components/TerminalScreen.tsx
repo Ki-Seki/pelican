@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { type ITheme, Terminal } from '@xterm/xterm';
-import { Check, Copy, Loader2, TextQuote } from 'lucide-react';
+import { ArrowDown, Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
@@ -111,6 +111,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [selection, setSelection] = useState('');
   const [copied, setCopied] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output. */
+  const [scrolledBack, setScrolledBack] = useState(false);
   /** Where the connection stands, and the timer that says Reconnecting once it has been down a moment. */
   const stateNow = useRef<Connection>(undefined);
   const slow = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -223,6 +225,13 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     };
     t.onWriteParsed(lookSoon);
     t.buffer.onBufferChange(lookSoon);
+    // Scrolled back, or output piling up under a screen scrolled back.
+    const back = () => {
+      const buffer = t.buffer.active;
+      setScrolledBack(touch && buffer.viewportY < buffer.baseY);
+    };
+    t.onScroll(back);
+    t.onWriteParsed(back);
 
     // Its colors follow the page's, light or dark, and the server answers a program from them.
     const recolor = () => {
@@ -417,6 +426,16 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
         <div className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-muted shadow-sm">
           <Loader2 className="size-3 animate-spin" /> Reconnecting
         </div>
+      )}
+      {scrolledBack && (
+        <button
+          type="button"
+          aria-label="Jump to latest"
+          onClick={() => term.current?.scrollToBottom()}
+          className="animate-fade absolute right-3 bottom-2 z-10 grid size-9 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
+        >
+          <ArrowDown className="size-4" />
+        </button>
       )}
       {selection.trim() && (
         <div className="absolute right-3 bottom-2 z-10 flex items-center rounded-full border border-line bg-panel p-0.5 text-[13px] shadow-lg">
