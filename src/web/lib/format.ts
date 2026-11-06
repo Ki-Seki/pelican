@@ -45,10 +45,16 @@ export function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * A day as Claude Desktop names it above a conversation's messages: Today, Yesterday, or the
+ * weekday and date ("Tuesday, Nov 4"), with the year when it is not this one. In the app's words,
+ * so in English, as "Today" is.
+ */
 export function dayLabel(ms: number, now = Date.now()): string {
   const group = dayGroup(ms, now);
   if (group === 'Today' || group === 'Yesterday') return group;
-  return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const sameYear = new Date(ms).getFullYear() === new Date(now).getFullYear();
+  return new Date(ms).toLocaleDateString('en', { weekday: 'long', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
 }
 
 /** `~/repos/x` for paths under home. */

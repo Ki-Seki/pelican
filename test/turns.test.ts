@@ -203,3 +203,15 @@ describe('toChatMessage: a ! command’s output row', () => {
     expect(toChatMessage({ ...row('<bash-stdout></bash-stdout>'), version: 'x'.repeat(33) })).not.toHaveProperty('version');
   });
 });
+
+describe('the day above the conversation', () => {
+  it('stands above the first message and above the first prompt of each new day, as in Claude Desktop', () => {
+    const at = (d: number, h: number) => new Date(2026, 10, d, h).getTime();
+    const days = buildItems([
+      user('p1', 'Start the review', { timestamp: at(4, 9) }),
+      user('p2', 'And the tests', { timestamp: at(4, 18) }),
+      user('p3', 'Next morning', { timestamp: at(5, 8) }),
+    ]).filter((item) => item.kind === 'day');
+    expect(days.map((d) => new Date(d.kind === 'day' ? d.timestamp : 0).getDate())).toEqual([4, 5]);
+  });
+});
