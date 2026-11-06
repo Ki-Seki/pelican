@@ -103,6 +103,14 @@ async function reach(url: string, init: RequestInit): Promise<Response> {
     setReachable(false);
     throw new ApiError(`Can’t reach ${machineName || 'your computer'}`, 0);
   }
+  // A proxy in front (an SSH tunnel, a reverse proxy) that cannot reach Pelican answers 502, 503 or
+  // 504 with a page of its own; Pelican never answers so with JSON-less words. It is the computer out
+  // of reach, said by the offline line as a dropped connection is, not "502 Bad Gateway".
+  if ([502, 503, 504].includes(response.status) && !response.headers.get('content-type')?.includes('application/json')) {
+    void response.body?.cancel().catch(() => undefined);
+    setReachable(false);
+    throw new ApiError(`Can’t reach ${machineName || 'your computer'}`, 0);
+  }
   setReachable(true);
   return response;
 }
