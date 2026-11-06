@@ -33,7 +33,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
-import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
+import { DemoRefusal, requestKey, STATIC_DEMO, staticRequest } from './static-demo';
 
 /**
  * The app does not know the path it is served under (`/` on its own, or a
@@ -252,7 +252,10 @@ export const api = {
   archive: (id: string, archived: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/archive`, { archived }),
   /** Keep the session at the top of the list (true) or let it go back (false); a pin brings an archived session back. */
   pin: (id: string, pinned: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/pin`, { pinned }),
-  exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
+  /** The session as Markdown, to save; on the site, the file its build saved from the demo. */
+  exportUrl: (id: string) => (STATIC_DEMO
+    ? new URL(`data/${requestKey(`sessions/${encodeURIComponent(id)}/export`)}.md`, appBase).toString()
+    : apiUrl(`sessions/${encodeURIComponent(id)}/export`)),
   models: () => request<{ models: ModelOption[]; signedIn: boolean | null; account?: Account }>('models'),
   completions: (cwd: string) => request<{ commands: Command[]; agents: Agent[] }>(`commands?cwd=${encodeURIComponent(cwd)}`),
   /** Starts a `!` command; its output comes over the socket (lib/shells). `trust`: the answer for a folder nobody trusted. */

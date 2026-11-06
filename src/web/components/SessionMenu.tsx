@@ -9,7 +9,7 @@ import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
 import { changeWords, type ListChange, makeChange, showChange } from '../lib/list-changes';
 import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
-import { DEMO_NOTE } from '../lib/static-demo';
+import { DEMO_NOTE, STATIC_DEMO } from '../lib/static-demo';
 import { compactNumber, percent, span, times } from '../lib/usage';
 import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
 
@@ -216,7 +216,8 @@ export function SessionMenu({
   const exportMarkdown = () => {
     const link = document.createElement('a');
     link.href = api.exportUrl(sessionId);
-    link.download = '';
+    // The server names the file by the session's title; the site's saved one is named here, as it would.
+    link.download = STATIC_DEMO ? `${(session?.title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'session'}.md` : '';
     document.body.append(link);
     link.click();
     link.remove();

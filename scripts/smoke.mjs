@@ -638,6 +638,36 @@ async function checkSentFiles(browser, base, sessions, answer) {
 }
 
 /**
+ * Export as Markdown, from the session menu of a few sessions: a file of Markdown downloads, with
+ * the conversation in it, on the site too, which saved each from the demo.
+ */
+async function checkExport(browser, base, sessions, where) {
+  const context = await browser.newContext({ ...SIZES.wide, acceptDownloads: true });
+  const page = await context.newPage();
+  let at = '';
+  watch(page, () => `${where}, export, ${at}`);
+  for (const session of sessions.slice(0, 3)) {
+    at = `session ${session.id}`;
+    await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Session menu', exact: true }).first().click();
+    const downloaded = page.waitForEvent('download', { timeout: 10_000 }).catch(() => undefined);
+    await page.getByRole('dialog').getByRole('button', { name: /Export as Markdown/ }).click();
+    const download = await downloaded;
+    if (!download) {
+      problems.push(`${where}, export, ${at}: nothing downloads`);
+      continue;
+    }
+    const chunks = [];
+    for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+    const markdown = Buffer.concat(chunks).toString('utf8');
+    if (!/^# .+\n/.test(markdown) || !/^## (?:You|Claude)$/m.test(markdown)) problems.push(`${where}, export, ${at}: ${download.suggestedFilename()} is no conversation: ${JSON.stringify(markdown.slice(0, 80))}`);
+    if (!download.suggestedFilename().endsWith('.md')) problems.push(`${where}, export, ${at}: saved as ${download.suggestedFilename()}`);
+    await page.keyboard.press('Escape');
+  }
+  await context.close();
+}
+
+/**
  * Settings > Usage and activity, on a phone and wide, light and dark, in each range: it fills in
  * from the demo's transcripts, and nothing on it ends past the window.
  */
@@ -733,7 +763,7 @@ async function checkSite(browser, base) {
 /** What the saved demo answers say the sessions are. */
 async function savedSessions(site) {
   const data = path.join(site, 'demo', 'data');
-  for (const file of await readdir(data)) {
+  for (const file of (await readdir(data)).filter((name) => name.endsWith('.json'))) {
     const body = JSON.parse(await readFile(path.join(data, file), 'utf8'));
     if (Array.isArray(body?.sessions)) return body.sessions;
   }
@@ -754,6 +784,7 @@ try {
     const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
     await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
+    await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
@@ -766,6 +797,7 @@ try {
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
+    await checkExport(browser, demo.base, sessions ?? [], 'app');
     await checkUsage(browser, demo.base);
   }
 } finally {

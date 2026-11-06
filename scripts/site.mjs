@@ -94,6 +94,10 @@ for (const session of sessions) {
     for (const file of turn.files) await save(`sessions/${q(session.id)}/changes?turn=${q(turn.uuid)}&path=${q(file.path)}`);
   }
   await save(`sessions/${q(session.id)}/usage`);
+  // Export as Markdown: the file the demo sends, saved as the site's own (the app links to it).
+  const exported = await fetch(`${BASE}sessions/${q(session.id)}/export`, { headers: MARK });
+  if (!exported.ok) throw new Error(`The demo exported nothing for ${session.id} (${exported.status})`);
+  await writeFile(path.join(data, `${requestKey(`sessions/${q(session.id)}/export`)}.md`), await exported.text());
   // Each workflow's run, and the newest steps of each of its agents.
   const { workflows = [] } = (await save(`sessions/${q(session.id)}/workflows`)) ?? {};
   for (const { toolUseId } of workflows) {
