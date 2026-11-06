@@ -4,6 +4,9 @@
  */
 const HIDDEN = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 
+/** Whether text holds such a character. */
+export const holdsHidden = (text: string): boolean => text.search(HIDDEN) >= 0;
+
 /** The text with each such character shown as a token (⟨U+202E⟩), and whether there were any. */
 export function revealHidden(text: string): { text: string; hidden: boolean } {
   let hidden = false;

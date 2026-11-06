@@ -17,6 +17,8 @@
 // swallows each of them (`terminal.parser.registerCsiHandler({ final: 'c' }, () => true)` and so
 // on, for a color only the asking) keeps its own quiet.
 
+import { holdsHidden } from './hidden';
+
 /** How a terminal's shell ended: its exit code, or the signal that ended it (`SIGHUP`). */
 export type TerminalExit = { code: number | null; signal: string | null };
 
@@ -135,6 +137,15 @@ export const TERMINAL_CLOSE = {
   /** The terminal shows on as many pages as it can. */
   tooManyViewers: 4429,
 } as const;
+
+/**
+ * Whether Run in terminal may type `command` into a shell. Not one with a control character other
+ * than tab and newline (C0, DEL or C1), which a shell's line editor takes as a key: Ctrl+U clears
+ * the line, Esc starts a sequence, a carriage return runs what is there, so an `echo` could run
+ * something else. Nor one with a character that changes how it reads without being seen
+ * (hidden.ts): what the code block shows is what runs.
+ */
+export const commandRunnable = (command: string): boolean => !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(command) && !holdsHidden(command);
 
 /** Whether a size is one a terminal takes. */
 export const sizeAllowed = (cols: unknown, rows: unknown): boolean => Number.isInteger(cols) && Number.isInteger(rows)

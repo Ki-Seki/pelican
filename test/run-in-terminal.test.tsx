@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
-// Run in terminal, on a shell's commands in a reply: offered where a terminal can run them, asked
-// about in place first, and sent to a new terminal only once Run is pressed.
+// Run in terminal, on a shell's commands in Claude's reply: offered where a terminal can run them
+// and only in the reply, for a command that shows all it holds, asked about in place first, and
+// sent to a new terminal only once Run is pressed.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TERMINAL_LIMITS } from '../src/shared/terminal';
+import { commandRunnable, TERMINAL_LIMITS } from '../src/shared/terminal';
 import { Markdown } from '../src/web/components/Markdown';
-import { RunInTerminal } from '../src/web/lib/terminals';
+import { InReply, RunInTerminal } from '../src/web/lib/terminals';
 
 afterEach(cleanup);
 
-const reply = (text: string, run?: (command: string) => void) => render(
-  <RunInTerminal.Provider value={run}><Markdown text={text} /></RunInTerminal.Provider>,
+const reply = (text: string, run?: (command: string) => void, inReply = true) => render(
+  <RunInTerminal.Provider value={run}><InReply.Provider value={inReply}><Markdown text={text} /></InReply.Provider></RunInTerminal.Provider>,
 );
 
 describe('Run in terminal', () => {
@@ -42,5 +43,30 @@ describe('Run in terminal', () => {
     cleanup();
     reply(`\`\`\`bash\n${'x'.repeat(TERMINAL_LIMITS.command + 1)}\n\`\`\``, vi.fn());
     expect(screen.queryByRole('button', { name: 'Run in terminal' })).toBeNull();
+  });
+
+  it('is offered in Claude’s reply only: not on a file’s Markdown, a tool’s or a subagent’s output, a plan or a result', () => {
+    reply('```bash\nls\n```', vi.fn(), false);
+    expect(screen.queryByRole('button', { name: 'Run in terminal' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  });
+
+  it('is offered only for a command that shows all it holds', () => {
+    // What reads as an echo, while the shell's line editor would take the control characters as
+    // keys (Ctrl+A, Ctrl+K, Esc, a carriage return), or a direction override turns it around.
+    for (const hidden of ["echo 'safe'\u0001\u000btouch pwned", 'echo safe\u001b[201~', 'echo safe\rtouch pwned', 'echo \u202eexe.dab\u202c', 'ls\u0085', 'ls\u007f']) {
+      expect(commandRunnable(hidden)).toBe(false);
+      reply(`\`\`\`bash\n${hidden}\n\`\`\``, vi.fn());
+      expect(screen.queryByRole('button', { name: 'Run in terminal' })).toBeNull();
+      cleanup();
+    }
+    // Tabs, lines and any language's letters are what they look like.
+    expect(commandRunnable('printf "a\tb"\ncd 文档 && ls')).toBe(true);
+    // A reply written with Windows' line ends runs as it shows.
+    const run = vi.fn();
+    reply('```bash\r\nnpm test\r\nnpm run lint\r\n```', run);
+    fireEvent.click(screen.getByRole('button', { name: 'Run in terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(run).toHaveBeenCalledWith('npm test\nnpm run lint');
   });
 });

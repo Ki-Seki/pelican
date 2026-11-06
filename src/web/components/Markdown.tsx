@@ -5,9 +5,9 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import { TERMINAL_LIMITS } from '../../shared/terminal';
+import { commandRunnable, TERMINAL_LIMITS } from '../../shared/terminal';
 import { rehypePathRefs } from '../lib/path-refs';
-import { RunInTerminal, runsInShell } from '../lib/terminals';
+import { InReply, RunInTerminal, runsInShell } from '../lib/terminals';
 import { openImage } from './Lightbox';
 import { PathRef } from './PathLink';
 import { PreviewCard } from './Preview';
@@ -73,10 +73,12 @@ export function RemoteImage({ src, alt }: { src: string; alt?: string }) {
 
 /**
  * A code block, with Copy in a bar of its own, as in Claude's apps: over the code, it hid the first
- * line of every block that scrolls sideways. A shell's commands can also run in a new terminal in
- * the session's folder, once asked whether to: the bar asks, in place.
+ * line of every block that scrolls sideways. A shell's commands in Claude's reply can also run in a
+ * new terminal in the session's folder, once asked whether to: the bar asks, in place. Only a
+ * command that shows all it holds: no control character a shell takes as a key, nothing hidden.
  */
 function CodeBlock({ children }: { children?: ReactNode }) {
+  const inReply = useContext(InReply);
   const run = useContext(RunInTerminal);
   const [asking, setAsking] = useState(false);
   const confirm = useRef<HTMLButtonElement>(null);
@@ -89,8 +91,8 @@ function CodeBlock({ children }: { children?: ReactNode }) {
     return <div className="my-2"><PreviewCard source={{ kind: language, code: textOf(children) }} label={language.toUpperCase()} defaultCode /></div>;
   }
   const code = textOf(children);
-  const command = code.replace(/\s+$/, '');
-  const runnable = run && runsInShell(language) && command.trim() !== '' && command.length <= TERMINAL_LIMITS.command;
+  const command = code.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  const runnable = inReply && run && runsInShell(language) && command.trim() !== '' && command.length <= TERMINAL_LIMITS.command && commandRunnable(command);
   return (
     <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
       <div

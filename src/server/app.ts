@@ -15,7 +15,7 @@ import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
-import { sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
+import { commandRunnable, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -784,6 +784,9 @@ app.post('/api/terminals', async (c) => {
   if (body.trust !== undefined && body.trust !== 'trusted' && body.trust !== 'user-only') return c.json({ error: 'trust must be trusted or user-only' }, 400);
   if (body.command !== undefined && (typeof body.command !== 'string' || !body.command.trim() || body.command.length > TERMINAL_LIMITS.command)) {
     return c.json({ error: `The command must be some text, up to ${TERMINAL_LIMITS.command} characters` }, 400);
+  }
+  if (typeof body.command === 'string' && !commandRunnable(body.command)) {
+    return c.json({ error: 'The command holds characters a shell would take as keys, or that cannot be seen' }, 400);
   }
   const colors = body.colors === undefined ? undefined : terminalColors(body.colors);
   if (body.colors !== undefined && !colors) return c.json({ error: 'colors must be a text, a background and a cursor color and 16 more, each #rrggbb' }, 400);

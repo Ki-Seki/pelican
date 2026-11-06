@@ -97,27 +97,30 @@ can read your sessions and have Claude run commands as you, so treat access to i
   this computer, in the folder a request names (in the app, the session's), and can do there
   whatever you can in a terminal. Its socket opens only as Pelican's other one does: a signed-in
   browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; it closes
-  within a second once that browser is signed out, and takes nothing more from it; and it runs
-  in a folder as Claude Code does, so a folder nobody trusted that brings programs is asked about
-  first, and in one kept to your settings only, git runs none of the repository's filters,
-  file-system monitor or hooks folder (the settings Claude Code and `!` commands get there). The
-  shell's environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude
-  Code's mark (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the
-  terminal or service Pelican runs in. At most
-  10 terminals run at once, each shown on at most 8 pages, and a page sends at most 64 KB at a
-  time; a page that stops reading is let go rather than kept in memory, and the shell waits for a
-  slow one instead. What the server keeps of a terminal's screen is bounded too: 2,000 lines, and
-  at most 16 combining marks on a character, however many a program prints. A terminal lives in memory only: one unused for 12 hours with nothing running
-  in it is closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end
-  with Pelican. Nothing runs in a terminal without you: the page sends its shell only what you
-  type, paste or click (the server's copy answers what a program asks of the terminal, once, a
-  color too, from the colors the page says it draws in), and Run in terminal, on a shell command in
-  a reply, asks before it runs it. Claude sees nothing of a terminal unless you put it in a message
-  (Quote, at most its last 200 lines). A link in a terminal opens only with Cmd or Ctrl held, or a
-  tap on a phone, and only an `http` or `https` one, in a new tab with no way back to Pelican. The
-  demo has no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`,
-  is pinned to one version, and CI checks that its files, for every platform, are those of
-  Microsoft's node-pty of that version, against the integrity the npm registry publishes for it.
+  within a second once that browser is signed out, and takes nothing more from it; and it runs in a
+  folder as Claude Code does, so a folder nobody trusted that brings programs is asked about first,
+  and in one kept to your settings only, git runs none of the repository's filters, file-system
+  monitor or hooks folder (the settings Claude Code and `!` commands get there). The shell's
+  environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude Code's mark
+  (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the terminal or
+  service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
+  page sends at most 64 KB at a time; a page that stops reading is let go rather than kept in
+  memory, and the shell waits for a slow one instead. What the server keeps of a terminal's screen
+  is bounded too: 2,000 lines, and at most 16 combining marks on a character, however many a program
+  prints. A terminal lives in memory only: one unused for 12 hours with nothing running in it is
+  closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end with
+  Pelican. Nothing runs in a terminal without you: the page sends its shell only what you type,
+  paste or click (the server's copy answers what a program asks of the terminal, once, a color too,
+  from the colors the page says it draws in), and Run in terminal, on a shell command in Claude's
+  reply (never in a file, or a tool's or a subagent's output), asks before it runs it, and is there
+  only for a command that shows all it holds: none with a control character a shell takes as a key,
+  or a character that cannot be seen, which the server refuses too. Claude sees nothing of a
+  terminal unless you put it in a message (Quote, at most its last 200 lines). A link in a terminal
+  opens only with Cmd or Ctrl held, or a tap on a phone, and only an `http` or `https` one, in a new
+  tab with no way back to Pelican. The demo has no terminal, and `--no-terminal` turns them off. The
+  native part, `@lydell/node-pty`, is pinned to one version, and CI checks that its files, for every
+  platform, are those of Microsoft's node-pty of that version, against the integrity the npm
+  registry publishes for it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'

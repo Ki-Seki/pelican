@@ -175,6 +175,28 @@ describe('a terminal', () => {
     await until(() => shown.lines().includes('ran 42'), 10_000, 'the command');
   }, 20_000);
 
+  it('types a command as a paste where the shell takes pastes, so its lines go in together, then Enter', async () => {
+    // A shell that says it takes pastes, as zsh does, and writes down all it is sent.
+    const typed = path.join(dir, 'typed');
+    Object.assign(testShell, { file: '/bin/sh', args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
+    try {
+      await open(work(), { command: 'echo one\necho two' });
+      await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
+      expect(readFileSync(typed, 'utf8')).toBe('\u001b[200~echo one\necho two\u001b[201~\r');
+    } finally {
+      Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+    }
+  }, 20_000);
+
+  it('runs no command that does not show all it holds', async () => {
+    // Keys a shell's line editor takes (Ctrl+U, Esc, a carriage return), or text turned around.
+    for (const command of ['echo safe\u0015touch pwned', 'echo safe\u001b[201~', 'ls\rtouch pwned', 'echo \u202egnp.exe', 'ls\u009b']) {
+      const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command });
+      expect(refused.status, JSON.stringify(command)).toBe(400);
+    }
+    expect((await api('GET', '/api/terminals')).body.terminals).toEqual([]);
+  });
+
   it('shows on several pages at once, each in step, at the size of the page last typed in or resized', async () => {
     const terminal = await open();
     const phone = await atPrompt(terminal.id, { cols: 40, rows: 20 });

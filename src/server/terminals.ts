@@ -662,8 +662,12 @@ class Term {
     this.tell({ type: 'program', program: name });
   }
 
-  /** Run in terminal: types `text` once the shell is ready for it, its first output (the prompt) gone quiet. */
-  typeWhenReady(text: string): void {
+  /**
+   * Run in terminal: types `command`, and Enter, once the shell is ready for it, its first output
+   * (the prompt) gone quiet. A shell that takes pastes (zsh, bash 5.1 and later, fish) gets it as
+   * one, as if pasted: its lines go in together, and run with the Enter after them.
+   */
+  typeWhenReady(command: string): void {
     let done = false;
     let quiet: NodeJS.Timeout | undefined;
     const type = () => {
@@ -673,7 +677,7 @@ class Term {
       clearTimeout(quiet);
       clearTimeout(latest);
       if (this.exit || this.closed) return;
-      this.pty.write(text);
+      this.pty.write(this.screen.modes.bracketedPasteMode ? `\x1b[200~${command}\x1b[201~\r` : `${command}\r`);
       this.lookAtProgramSoon();
     };
     const listening = this.pty.onData(() => {
@@ -796,7 +800,7 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
   const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
   const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
   terminals.set(term.id, term);
-  if (options.command) term.typeWhenReady(`${options.command}\r`);
+  if (options.command) term.typeWhenReady(options.command);
   if (!sweeping) {
     sweeping = setInterval(() => void closeIdleTerminals(), terminalTiming.idleCheckMs);
     sweeping.unref();

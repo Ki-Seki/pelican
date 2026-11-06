@@ -29,11 +29,13 @@ A terminal beside the conversation, as Claude Desktop has one.
   hours with nothing running in it closes on its own. Its output comes over a connection of its
   own, so it never holds up an approval, and while a phone on a slow link catches up the shell
   waits for it, so Ctrl+C gets through at once.
-- **Run in terminal and Quote.** A shell command in a reply (a `bash`, `sh`, `zsh` or `fish`
-  block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
-  session's folder. Quote puts what you selected in the terminal, or its screen, in your message
-  as a code block, at most its last 200 lines: Claude sees a terminal only that way. `!` commands
-  go into the conversation as before.
+- **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or
+  `fish` block) has Run in terminal, which asks, in place, before it runs it in a new terminal in
+  the session's folder, pasted there, so its lines go in together. Only Claude's replies offer it,
+  not a file or a tool's output, and only for a command with nothing hidden in it. Quote puts what
+  you selected in the terminal, or its screen, in your message as a code block, at most its last
+  200 lines: Claude sees a terminal only that way. `!` commands go into the conversation as
+  before.
 
 ### Security
 

@@ -83,6 +83,13 @@ export function useTerminalsAvailable(): boolean {
 /** Runs a command in a new terminal in the conversation's folder (a code block's Run in terminal); none where there is no terminal. */
 export const RunInTerminal = createContext<((command: string) => void) | undefined>(undefined);
 
+/**
+ * Set around Claude's own reply text, the only place a code block offers Run in terminal: not a
+ * file's Markdown (a README of any repository), a subagent's or a tool's output, a plan, or a
+ * workflow's result, which Claude did not write to you.
+ */
+export const InReply = createContext(false);
+
 /** Whether `folder` is the session's folder or one inside it: the terminals its tab shows. */
 export function within(folder: string, cwd: string): boolean {
   if (folder === cwd) return true;
