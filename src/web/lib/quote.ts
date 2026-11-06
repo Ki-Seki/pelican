@@ -1,7 +1,8 @@
 /**
  * Quoting what you select, in plain text that reads the same in every Claude Code app: lines of a
- * file as `path:7-8` with the lines under it, anything else (a reply, a tool's output) as `>`
- * lines. Quotes wait above the message box and go above your words, each a block of its own.
+ * file as `path:7-8` with the lines under it, the terminal's output as a code block that says it
+ * is the terminal's, anything else (a reply, a tool's output) as `>` lines. Quotes wait above the
+ * message box and go above your words, each a block of its own.
  */
 
 /** What was selected: text from the conversation, or lines of a file from line `start` on, numbered as in the file. */
@@ -16,6 +17,8 @@ const MAX_QUOTE_CHARS = 20_000;
 const HEADER = /^(\S(?:.*\S)?):(\d+)(?:-(\d+))?( \(removed\))?$/;
 const QUOTED = /^>( |$)/;
 const FENCE = /^\s*(```|~~~)/;
+/** The line a quote from the terminal opens with: a fence longer than any run of backticks in it. */
+const TERMINAL_OPEN = /^(`{3,})terminal$/;
 
 const quoted = (lines: readonly string[]) => lines.map((line) => (line ? `> ${line}` : '>')).join('\n');
 
@@ -67,6 +70,37 @@ export function quoteText(selection: Selection): string {
   return body.length > MAX_QUOTE_CHARS ? `${capped(body)}\n> …` : body;
 }
 
+/**
+ * Output from the terminal, quoted as a code block that says where it is from (```terminal), with
+ * the blank lines around it left out: its last MAX_QUOTE_LINES lines, where a command ends and
+ * says what went wrong. Empty when nothing but space was selected.
+ */
+export function terminalQuote(text: string): string {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd());
+  while (lines.length > 0 && !lines[0]) lines.shift();
+  while (lines.length > 0 && !lines.at(-1)) lines.pop();
+  if (lines.length === 0) return '';
+  let body = lines.slice(-MAX_QUOTE_LINES).join('\n');
+  // Past what a message can carry, the end is kept, from the start of a line.
+  if (body.length > MAX_QUOTE_CHARS) body = body.slice(-MAX_QUOTE_CHARS).replace(/^[^\n]*\n/, '');
+  const fence = '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((run) => run[0].length + 1)));
+  return `${fence}terminal\n${body}\n${fence}`;
+}
+
+/** Where a quote that starts at line `at` ends (the line after its last), or undefined when none starts there. */
+function quoteEnd(lines: readonly string[], at: number): number | undefined {
+  const fence = TERMINAL_OPEN.exec(lines[at] ?? '')?.[1];
+  if (fence) {
+    const close = lines.indexOf(fence, at + 1);
+    return close > at ? close + 1 : undefined;
+  }
+  let end = at;
+  if (HEADER.test(lines[end] ?? '') && QUOTED.test(lines[end + 1] ?? '')) end += 1;
+  if (!QUOTED.test(lines[end] ?? '')) return undefined;
+  while (QUOTED.test(lines[end] ?? '')) end += 1;
+  return end;
+}
+
 // A message with its quotes above the words: lib/drafts has it, as it loads with the first screen.
 export { messageWithQuotes } from './drafts';
 
@@ -79,12 +113,9 @@ export function splitQuotes(message: string): { quotes: string[]; text: string }
   const quotes: string[] = [];
   let at = 0;
   for (;;) {
-    let end = at;
-    if (HEADER.test(lines[end] ?? '') && QUOTED.test(lines[end + 1] ?? '')) end += 1;
-    if (!QUOTED.test(lines[end] ?? '')) break;
-    while (QUOTED.test(lines[end] ?? '')) end += 1;
+    const end = quoteEnd(lines, at);
     // Each ends at a blank line, or the message does: words right under one are not of this shape.
-    if (end < lines.length && lines[end] !== '') break;
+    if (end === undefined || (end < lines.length && lines[end] !== '')) break;
     quotes.push(lines.slice(at, end).join('\n'));
     at = end;
     while (at < lines.length && lines[at] === '') at += 1;
@@ -97,8 +128,8 @@ export type PromptPart = { kind: 'text'; text: string } | { kind: 'quote'; from?
 
 /**
  * A prompt cut into its words and its quotes: a quote is a run of lines that start with `>`, with
- * the `path:line` line just above it when there is one (a quote from a file, a comment on a line).
- * Lines in a fenced code block are never a quote.
+ * the `path:line` line just above it when there is one (a quote from a file, a comment on a line),
+ * or the terminal's code block. Lines in any other fenced code block are never a quote.
  */
 export function promptParts(text: string): PromptPart[] {
   const lines = text.split('\n');
@@ -112,6 +143,13 @@ export function promptParts(text: string): PromptPart[] {
   };
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
+    const terminalEnd = fenced || !TERMINAL_OPEN.test(line) ? undefined : quoteEnd(lines, i);
+    if (terminalEnd !== undefined) {
+      flush();
+      parts.push({ kind: 'quote', from: 'Terminal', text: lines.slice(i + 1, terminalEnd - 1).join('\n') });
+      i = terminalEnd - 1;
+      continue;
+    }
     if (FENCE.test(line)) fenced = !fenced;
     const from = !fenced && HEADER.test(line) && QUOTED.test(lines[i + 1] ?? '') ? line : undefined;
     const first = from ? i + 1 : i;
@@ -132,6 +170,11 @@ export function promptParts(text: string): PromptPart[] {
 /** What a quote waiting above the message box is called: where it is from, or how it begins. */
 export function quoteLabel(quote: string): string {
   const [first = '', second = ''] = quote.split('\n');
+  // The terminal's: its one line, or how many it has, as Claude Code names a long paste.
+  if (TERMINAL_OPEN.test(first)) {
+    const lines = quote.split('\n').slice(1, -1);
+    return lines.length === 1 ? lines[0]!.trim() : `Terminal · ${lines.length} lines`;
+  }
   const header = QUOTED.test(second) ? HEADER.exec(first) : null;
   if (header) return `${header[1]!.split('/').pop()}:${header[3] ? `${header[2]}-${header[3]}` : header[2]}`;
   return quote.split('\n').map((line) => line.replace(QUOTED, '').trim()).find(Boolean) ?? '';

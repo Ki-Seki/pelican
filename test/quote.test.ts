@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { commentsMessage } from '../src/web/lib/review';
-import { addQuote, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteLines, quoteText, receiveQuotes, splitQuotes } from '../src/web/lib/quote';
+import { addQuote, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteLines, quoteText, receiveQuotes, splitQuotes, terminalQuote } from '../src/web/lib/quote';
 
 describe('quoteText', () => {
   it('quotes text from the conversation as > lines, without the blank lines around it', () => {
@@ -140,5 +140,43 @@ describe('the file viewer’s Quote', () => {
     const quote = quoteLines('big.txt', 11, 10 + lines.length, lines);
     expect(quote.split('\n')[0]).toBe(`big.txt:11-${10 + MAX_QUOTE_LINES}`);
     expect(quote.split('\n')).toHaveLength(MAX_QUOTE_LINES + 1);
+  });
+});
+
+describe('the terminal’s Quote', () => {
+  it('quotes output as a code block that says it is the terminal’s, without the blank lines around it', () => {
+    expect(terminalQuote('\n\n% npm test   \r\n FAIL  src/theme.test.ts\n\n  expected dark\n\n')).toBe('```terminal\n% npm test\n FAIL  src/theme.test.ts\n\n  expected dark\n```');
+    expect(terminalQuote(' \n\t\n')).toBe('');
+  });
+
+  it('fences it past any backticks the output holds, so none of it can close the block', () => {
+    expect(terminalQuote('echo ```\n```')).toBe('````terminal\necho ```\n```\n````');
+  });
+
+  it('keeps the last lines of a long output, where a command ends and says what went wrong', () => {
+    const lines = Array.from({ length: MAX_QUOTE_LINES + 50 }, (_, i) => `line ${i + 1}`);
+    const quote = terminalQuote(lines.join('\n')).split('\n');
+    expect(quote).toHaveLength(MAX_QUOTE_LINES + 2);
+    expect(quote[1]).toBe('line 51');
+    expect(quote.at(-2)).toBe(`line ${MAX_QUOTE_LINES + 50}`);
+    // Past what a message can carry, from the start of a line.
+    const long = terminalQuote(Array.from({ length: 150 }, (_, i) => `${i} ${'x'.repeat(200)}`).join('\n')).split('\n');
+    expect(long.length).toBeLessThan(150);
+    expect(long[1]).toMatch(/^\d+ x+$/);
+  });
+
+  it('goes above the words, shows as a quote from the terminal, is named by its one line or its lines, and comes back whole when a send fails', () => {
+    const quote = terminalQuote('% npm test\nFAIL src/theme.test.ts');
+    expect(splitQuotes(messageWithQuotes([quote, '> Why?'], 'Fix it'))).toEqual({ quotes: [quote, '> Why?'], text: 'Fix it' });
+    expect(promptParts(messageWithQuotes([quote], 'Fix it'))).toEqual([
+      { kind: 'quote', from: 'Terminal', text: '% npm test\nFAIL src/theme.test.ts' },
+      { kind: 'text', text: 'Fix it' },
+    ]);
+    expect(quoteLabel(quote)).toBe('Terminal · 2 lines');
+    expect(quoteLabel(terminalQuote('  zsh: command not found: nmp'))).toBe('zsh: command not found: nmp');
+    // A code block of one's own, of any other kind, stays the message's.
+    const own = '```bash\nnpm test\n```\n\nWhy?';
+    expect(splitQuotes(own)).toEqual({ quotes: [], text: own });
+    expect(promptParts(own)).toEqual([{ kind: 'text', text: own }]);
   });
 });
