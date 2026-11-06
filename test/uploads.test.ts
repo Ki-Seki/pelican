@@ -2,22 +2,25 @@ import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
 import { findUpload, keepDays, saveUpload, sweepUploads } from '../src/server/files';
 
+// Each test with folders of its own: in any order, one finds no other's uploads or settings.
 let dir: string;
 const saved = { stateDir: config.stateDir, claudeHome: config.claudeHome };
-beforeAll(async () => {
+beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-uploads-'));
   config.stateDir = path.join(dir, 'state');
   config.claudeHome = path.join(dir, 'claude');
   await mkdir(config.claudeHome, { recursive: true });
 });
-afterAll(async () => {
-  Object.assign(config, saved);
+afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+afterAll(() => {
+  Object.assign(config, saved);
 });
 
 const DAY = 24 * 3600_000;
