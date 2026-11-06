@@ -21,4 +21,10 @@ describe('fold', () => {
     const entries = fold([session('a', 'Check', '/code/app', 'idle', 2), session('b', 'Check'), session('c', 'Check')]);
     expect(entries.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', []], ['b', ['c']]]);
   });
+
+  it('never folds a pinned one into another: it leads its own row, and the earlier ones fold into it', () => {
+    const pinned = (s: SessionSummary): SessionSummary => ({ ...s, pinned: true });
+    const entries = fold([session('a', 'Check'), session('b', 'Check'), pinned(session('c', 'Check')), session('d', 'Check'), session('e', 'Check')]);
+    expect(entries.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', ['b']], ['c', ['d', 'e']]]);
+  });
 });

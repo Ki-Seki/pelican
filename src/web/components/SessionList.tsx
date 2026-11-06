@@ -4,7 +4,7 @@ import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, u
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api, isUnreachable } from '../lib/api';
-import { type Entry, fold, foldKey, isActive, single } from '../lib/fold';
+import { type Entry, fold, foldKey, isActive } from '../lib/fold';
 import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { composing, MOD_ARIA } from '../lib/keyboard';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
@@ -17,6 +17,8 @@ const SCRATCH = '\u0000scratch';
 const TEMP = '\u0000temp';
 const ARCHIVED = '\u0000archived';
 const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary', [ARCHIVED]: 'Archived' };
+/** The group pinned sessions show in, at the top of the list in either grouping. */
+const PINNED = '\u0000pinned';
 
 const DOT: Record<SessionStatus, string> = { running: 'bg-run', waiting: 'bg-wait', live: 'bg-live', idle: 'bg-line' };
 const TEXT: Record<SessionStatus, string> = { running: 'text-run', waiting: 'text-wait', live: 'text-live', idle: 'text-faint' };
@@ -73,6 +75,7 @@ function rowName(session: SessionSummary, unread: boolean, showProject: boolean)
     session.title,
     statusLabel(session.status, session.runningIn, session.tasks),
     unread ? 'new activity' : '',
+    session.pinned ? 'pinned' : '',
     session.archived ? 'archived' : '',
     showProject ? (session.scratch ? 'scratch' : session.project) : '',
     timeAgo(session.lastActivity),
@@ -474,39 +477,48 @@ export function SessionList({
       // Archived sessions show under their own chip, or when a search finds them.
       if (project === ARCHIVED) return s.archived && (!q || matches(s, q));
       if (s.archived && !q) return false;
-      // Side chats belong to the session they came from: shown when asked for, or found by a search.
-      if (s.sideChatOf && !q && !prefs.showSideChats) return false;
+      // Side chats belong to the session they came from: shown when asked for, found by a search,
+      // or pinned (as is a temporary session: a pin keeps it in view whatever the list's options).
+      if (s.sideChatOf && !q && !prefs.showSideChats && !s.pinned) return false;
       if (project === TEMP) {
         if (!s.temp) return false;
       } else if (project === SCRATCH) {
         if (!s.scratch) return false;
       } else if (project) {
         if (s.scratch || s.temp || s.project !== project) return false;
-      } else if (s.temp && !q && !prefs.showTemporary) {
+      } else if (s.temp && !q && !prefs.showTemporary && !s.pinned) {
         return false;
       }
       return !q || matches(s, q);
     });
 
+    // Pinned sessions lead, whatever the grouping, each with its status and its earlier runs.
+    const entries = fold(filtered);
+    const out: Group[] = [];
+    const pinned = entries.filter((entry) => entry.session.pinned);
+    if (pinned.length > 0) out.push({ key: PINNED, label: 'Pinned', entries: pinned, count: pinned.length });
+    const rest = entries.filter((entry) => !entry.session.pinned);
+
     if (prefs.listGroup === 'project' && !project) {
-      const byProject = new Map<string, { key: string; label: string; sessions: SessionSummary[] }>();
-      for (const s of filtered) {
+      const byProject = new Map<string, Group>();
+      for (const entry of rest) {
+        const s = entry.session;
         const key = s.temp ? TEMP : s.scratch ? SCRATCH : s.cwd || s.project;
-        const label = s.temp ? 'Temporary' : s.scratch ? 'Scratch' : s.project || '—';
         let group = byProject.get(key);
         if (!group) {
-          group = { key, label, sessions: [] };
+          group = { key, label: s.temp ? 'Temporary' : s.scratch ? 'Scratch' : s.project || '—', entries: [], count: 0 };
           byProject.set(key, group);
         }
-        group.sessions.push(s);
+        group.entries.push(entry);
+        group.count += 1 + entry.earlier.length;
       }
-      return [...byProject.values()].map((g) => ({ key: g.key, label: g.label, entries: fold(g.sessions), count: g.sessions.length }));
+      return [...out, ...byProject.values()];
     }
 
-    const out: Group[] = [];
-    const active = filtered.filter(isActive);
-    if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active.map(single), count: active.length });
-    for (const entry of fold(filtered.filter((s) => !isActive(s)))) {
+    const active = rest.filter((entry) => isActive(entry.session));
+    if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active, count: active.length });
+    for (const entry of rest) {
+      if (isActive(entry.session)) continue;
       const label = dayGroup(entry.session.lastActivity);
       const last = out.at(-1);
       if (last && last.label === label) last.entries.push(entry);
@@ -540,7 +552,7 @@ export function SessionList({
   const byProject = prefs.listGroup === 'project' && !project;
   const compact = prefs.listDensity === 'compact';
   // What "All" shows, counted the way it is filtered.
-  const visibleCount = (sessions ?? []).filter((s) => !s.archived && !(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)).length;
+  const visibleCount = (sessions ?? []).filter((s) => !s.archived && (s.pinned || (!(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)))).length;
   const startNew = () => onNew(project === SCRATCH ? { scratch: true } : defaultStart(sessions ?? [], project && !SPECIAL[project] ? project : undefined));
 
   return (
@@ -649,20 +661,22 @@ export function SessionList({
                     compact={compact}
                     selected={session.id === selectedId}
                     unread={session.id !== selectedId && session.status !== 'running' && isUnread(session.id, session.lastActivity)}
-                    showProject={!byProject}
+                    showProject={!byProject || group.key === PINNED}
                     onOpen={openSession}
                     onArchive={setArchived}
                   />
                 );
                 if (earlier.length === 0) return row(s);
-                const open = unfolded.has(foldKey(s)) || earlier.some((e) => e.id === selectedId);
+                // Unfolded stays unfolded when a newer run takes the row; a pinned row keeps its session.
+                const key = s.pinned ? s.id : foldKey(s);
+                const open = unfolded.has(key) || earlier.some((e) => e.id === selectedId);
                 return (
                   <div key={s.id}>
                     {row(s)}
                     <button
                       type="button"
                       aria-expanded={open}
-                      onClick={() => toggle(setUnfolded, foldKey(s))}
+                      onClick={() => toggle(setUnfolded, key)}
                       className="-mt-2 ml-1.5 flex h-10 items-center gap-1 rounded-full px-1.5 text-[12.5px] text-faint hover:text-fg"
                     >
                       {open ? 'Hide' : `${earlier.length} earlier`}
