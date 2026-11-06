@@ -9,13 +9,17 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import type { TerminalInfo, TerminalList } from '../src/shared/terminal';
+import xtermHeadless from '@xterm/headless';
+
+import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
 import { TERMINAL_CLOSE } from '../src/shared/terminal';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
-import { closeAllTerminals, closeIdleTerminals, shellEnvironment, terminalState, terminalTiming, testShell } from '../src/server/terminals';
+import {
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, shellEnvironment, terminalState, terminalTiming, testShell,
+} from '../src/server/terminals';
 import { Page, pause, until } from './terminal-page';
 
 let dir: string;
@@ -267,6 +271,65 @@ describe('what a program asks of the terminal', () => {
     phone.type(`printf '\\033[5;1H\\360\\237\\232\\200\\033[6n'; IFS= read -rs -t 3 -d R reply; IFS= read -rs -t 0.5 -d R again; echo; echo "at \${reply#??} \${#again}"\r`);
     await phone.sees(/at 5;3 0\r\n/);
   }, 20_000);
+
+  // As delta, bat and glow ask whether the background is light or dark: a color, then device
+  // attributes, whose answer says all answers are in.
+  const colors: TerminalColors = {
+    foreground: '#171717', background: '#fafafa', cursor: '#171717',
+    ansi: ['#24292f', '#cf222e', '#116329', '#4d2d00', '#0969da', '#8250df', '#1b7c83', '#6e7781', '#57606a', '#a40e26', '#1a7f37', '#633c01', '#218bff', '#a475f9', '#3192aa', '#8c959f'],
+  };
+  /** A command that asks `queries`, then for device attributes, and writes every answer, in order, to `to`. */
+  const asking = (queries: string, to: string) => `printf '${queries}\\033[c'; IFS= read -rs -t 3 -d c reply; IFS= read -rs -t 0.5 -d c again; printf '%s|%s' "$reply" "$again" > ${to}`;
+  const answers = async (to: string) => {
+    await until(() => existsSync(to) && readFileSync(to, 'utf8').includes('|'), 10_000, 'the answers');
+    return readFileSync(to, 'utf8');
+  };
+  const DA1 = '\u001b[?1;2';
+  const report = (ident: string, rgb: string) => `\u001b]${ident};rgb:${rgb}\u001b\\`;
+
+  it('answers a color asked for once, before what was asked next, in the colors the pages draw in', async () => {
+    // Nobody looks yet: the colors came with the terminal.
+    const before = path.join(dir, 'colors-before');
+    await open(work(), { colors, command: asking('\\033]11;?\\033\\\\\\033]4;2;?\\007', before) });
+    expect(await answers(before)).toBe(`${report('11', 'fafa/fafa/fafa')}${report('4;2', '1111/6363/2929')}${DA1}|`);
+
+    // One page, then two, each saying its colors: one answer still, before the next.
+    const terminal = await open();
+    const one = await atPrompt(terminal.id, { colors });
+    const once = path.join(dir, 'colors-once');
+    one.type(`${asking('\\033]10;?;?\\033\\\\\\033]4;196;?\\033\\\\', once)}\r`);
+    expect(await answers(once)).toBe(`${report('10', '1717/1717/1717')}${report('11', 'fafa/fafa/fafa')}${report('4;196', 'ffff/0000/0000')}${DA1}|`);
+    const dark = { ...colors, background: '#0a0a0a' };
+    await atPrompt(terminal.id, { colors: dark });
+    const twice = path.join(dir, 'colors-twice');
+    one.type(`${asking('\\033]11;?\\033\\\\', twice)}\r`);
+    expect(await answers(twice)).toBe(`${report('11', '0a0a/0a0a/0a0a')}${DA1}|`);
+
+    // A color a program set is the one it gets, until it puts it back.
+    const set = path.join(dir, 'colors-set');
+    one.type(`printf '\\033]11;#102030\\033\\\\'; ${asking('\\033]11;?\\033\\\\', set)}\r`);
+    expect(await answers(set)).toBe(`${report('11', '1010/2020/3030')}${DA1}|`);
+    const back = path.join(dir, 'colors-back');
+    one.type(`printf '\\033]111\\033\\\\'; ${asking('\\033]11;?\\033\\\\', back)}\r`);
+    expect(await answers(back)).toBe(`${report('11', '0a0a/0a0a/0a0a')}${DA1}|`);
+  }, 30_000);
+
+  it('leaves a color unanswered while no page has said its colors, and answers what comes next', async () => {
+    const unsaid = path.join(dir, 'colors-unsaid');
+    await open(work(), { command: asking('\\033]11;?\\033\\\\', unsaid) });
+    expect(await answers(unsaid)).toBe(`${DA1}|`);
+  }, 20_000);
+
+  it('hears what xterm reads of colors, as it did when this was written', () => {
+    const screen = new xtermHeadless.Terminal({ allowProposedApi: true });
+    const heard: ColorRequest[][] = [];
+    expect(onColorRequests(screen, (requests) => heard.push(requests))).toBe(true);
+    screen.write('\u001b]11;?\u001b\\\u001b]4;3;#ff0000\u0007\u001b]104\u0007', () => undefined);
+    return until(() => heard.length === 3).then(() => {
+      expect(heard).toEqual([[{ type: 0, index: 257 }], [{ type: 1, index: 3, color: [255, 0, 0] }], [{ type: 2 }]]);
+      expect(colorReport(257, [250, 250, 250])).toBe(report('11', 'fafa/fafa/fafa'));
+    });
+  });
 });
 
 describe('flow control', () => {

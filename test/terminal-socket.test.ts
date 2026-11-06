@@ -98,6 +98,29 @@ describe('a terminal’s connection', () => {
     expect(socket().sent.at(-1)).toBe(JSON.stringify({ type: 'resize', cols: 90, rows: 20 }));
   });
 
+  it('says the colors the page draws in on each connection, and again when they change', () => {
+    const colors = { foreground: '#171717', background: '#fafafa', cursor: '#171717', ansi: Array.from({ length: 16 }, () => '#000000') };
+    const connection = new TerminalConnection({
+      url: () => 'ws://pelican/api/terminal?id=t1&cols=80&rows=24',
+      size: () => ({ cols: 80, rows: 24 }),
+      colors: () => colors,
+      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), state: vi.fn() },
+      WebSocket: FakeSocket as unknown as typeof WebSocket,
+    });
+    connection.start();
+    FakeSocket.made.at(-1)!.open();
+    expect(FakeSocket.made.at(-1)!.sent).toEqual([JSON.stringify({ type: 'colors', colors })]);
+    const dark = { ...colors, background: '#0a0a0a' };
+    connection.colors(dark);
+    expect(FakeSocket.made.at(-1)!.sent.at(-1)).toBe(JSON.stringify({ type: 'colors', colors: dark }));
+    // Again after a dropped connection.
+    FakeSocket.made.at(-1)!.end(1006);
+    vi.advanceTimersByTime(500);
+    FakeSocket.made.at(-1)!.open();
+    expect(FakeSocket.made.at(-1)!.sent).toEqual([JSON.stringify({ type: 'colors', colors })]);
+    connection.stop();
+  });
+
   it('sends keys as binary frames, a long paste in frames the server takes', () => {
     const { connection, socket } = connect();
     connection.input('ls\r');

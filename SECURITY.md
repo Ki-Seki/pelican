@@ -107,8 +107,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   slow one instead. A terminal lives in memory only: one unused for 12 hours with nothing running
   in it is closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end
   with Pelican. Nothing runs in a terminal without you: the page sends its shell only what you
-  type, paste or click, and its colors when a program asks for them (the server's copy answers
-  anything else a program asks of the terminal, once), and Run in terminal, on a shell command in
+  type, paste or click (the server's copy answers what a program asks of the terminal, once, a
+  color too, from the colors the page says it draws in), and Run in terminal, on a shell command in
   a reply, asks before it runs it. Claude sees nothing of a terminal unless you put it in a message
   (Quote, at most its last 200 lines). A link in a terminal opens only with Cmd or Ctrl held, or a
   tap on a phone, and only an `http` or `https` one, in a new tab with no way back to Pelican. The

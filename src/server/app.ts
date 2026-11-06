@@ -15,7 +15,7 @@ import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
-import { sizeAllowed, TERMINAL_LIMITS } from '../shared/terminal.js';
+import { sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -785,6 +785,8 @@ app.post('/api/terminals', async (c) => {
   if (body.command !== undefined && (typeof body.command !== 'string' || !body.command.trim() || body.command.length > TERMINAL_LIMITS.command)) {
     return c.json({ error: `The command must be some text, up to ${TERMINAL_LIMITS.command} characters` }, 400);
   }
+  const colors = body.colors === undefined ? undefined : terminalColors(body.colors);
+  if (body.colors !== undefined && !colors) return c.json({ error: 'colors must be a text, a background and a cursor color and 16 more, each #rrggbb' }, 400);
   const ready = await terminalsReady();
   if (!ready.available) return c.json({ error: ready.reason }, terminalsRefused() ? 403 : 503);
   const cwd = await checkedFolder(body.cwd);
@@ -795,6 +797,7 @@ app.post('/api/terminals', async (c) => {
     const terminal = await openTerminal(cwd, { cols: body.cols as number, rows: body.rows as number }, {
       ...(launch.env ? { env: launch.env } : {}),
       ...(typeof body.command === 'string' ? { command: body.command } : {}),
+      ...(colors ? { colors } : {}),
     });
     return c.json({ terminal }, 201);
   } catch (error) {

@@ -7,11 +7,11 @@ import { type ITheme, Terminal } from '@xterm/xterm';
 import { Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
-import { TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
+import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
 import { api } from '../lib/api';
 import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
-import { asksForSecret, bufferText, keySequence, lineBeforeCursor, viewportText } from '../lib/terminal-input';
+import { asksForSecret, bufferText, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText } from '../lib/terminal-input';
 import { type Connection, TerminalConnection } from '../lib/terminal-socket';
 
 /** The output as text, around the rows on screen. */
@@ -30,6 +30,8 @@ export type ScreenHandle = {
   paste: (text: string) => void;
   /** The output as text: the rows on screen now, and what is above and below them. */
   text: () => ScreenText;
+  /** The colors it draws in, for a terminal about to start. */
+  colors: () => TerminalColors | undefined;
 };
 
 /** The font size, the terminal's one setting, set with a pinch (or Ctrl and the wheel); its bounds. */
@@ -151,12 +153,20 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     t.loadAddon(new WebLinksAddon((event, uri) => openLink(event, uri, touch)));
     t.loadAddon(new Unicode11Addon());
     t.unicode.activeVersion = '11';
-    // What programs ask of the terminal is the server's to answer (src/shared/terminal.ts).
+    // What programs ask of the terminal is the server's to answer (src/shared/terminal.ts), a
+    // color too, from the colors this page says; a color a program sets is this page's to draw.
     const quiet = () => true;
     for (const query of [{ final: 'c' }, { prefix: '>', final: 'c' }, { final: 'n' }, { prefix: '?', final: 'n' }, { intermediates: '$', final: 'p' }, { prefix: '?', intermediates: '$', final: 'p' }]) {
       t.parser.registerCsiHandler(query, quiet);
     }
     t.parser.registerDcsHandler({ intermediates: '$', final: 'q' }, quiet);
+    for (const ident of [4, 10, 11, 12]) {
+      t.parser.registerOscHandler(ident, (data) => {
+        const { asks, sets } = colorQuery(ident, data);
+        if (sets) t.write(sets);
+        return asks;
+      });
+    }
     t.attachCustomKeyEventHandler((e) => {
       // Ctrl+` is the page's: it hides the terminal.
       if (togglesTerminal(e)) return false;
@@ -199,9 +209,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     t.onWriteParsed(lookSoon);
     t.buffer.onBufferChange(lookSoon);
 
-    // Its colors follow the page's, light or dark.
+    // Its colors follow the page's, light or dark, and the server answers a program from them.
     const recolor = () => {
       t.options.theme = pageTheme();
+      connection.current?.colors(themeColors(t.options.theme));
     };
     const scheme = matchMedia('(prefers-color-scheme: dark)');
     scheme.addEventListener('change', recolor);
@@ -262,11 +273,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     t.options.disableStdin = false;
     const c = new TerminalConnection({
       url: (cols, rows) => api.terminalSocket(id, cols, rows),
-      // Each connection says this page's own size, as it is fitted now.
+      // Each connection says this page's own size, as it is fitted now, and its colors.
       size: () => {
         fit();
         return { cols: t.cols, rows: t.rows };
       },
+      colors: () => themeColors(t.options.theme),
       events: {
         ready: (screen) => {
           // In the order the output came: what the last connection left is drawn, then all is
@@ -352,6 +364,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       const buffer = t.buffer.active;
       return { before: bufferText(buffer, 0, buffer.viewportY), screen: viewportText(buffer, t.rows), after: bufferText(buffer, buffer.viewportY + t.rows) };
     },
+    colors: () => (term.current ? themeColors(term.current.options.theme) : undefined),
   }), []);
 
   return (

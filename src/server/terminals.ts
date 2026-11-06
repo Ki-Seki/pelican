@@ -11,7 +11,7 @@ import type { RawData, WebSocket } from 'ws';
 
 import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
-  type TerminalAvailability, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
+  type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
 } from '../shared/terminal.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
@@ -141,6 +141,53 @@ function betweenSequences(screen: Screen): boolean {
   return state === undefined || state === 0;
 }
 
+/**
+ * What a program asks of the terminal's colors or sets them to (OSC 4, 10, 11 and 12, and 104, 110,
+ * 111 and 112 to put them back), as xterm reads it for its own colors: a report (0), a color set
+ * (1) or put back (2), by xterm's index: 0 to 255, then 256 the text, 257 the background, 258 the
+ * cursor; no index puts back all 256. A headless copy draws no colors, so xterm does nothing more
+ * with these, and keeps the event to itself; the version is pinned, and test/terminals.test.ts
+ * fails should it stop telling.
+ */
+export type ColorRequest = { type: 0 | 1 | 2; index?: number; color?: [number, number, number] };
+
+export function onColorRequests(screen: Screen, listener: (requests: ColorRequest[]) => void): boolean {
+  const handler = (screen as unknown as { _core?: { _inputHandler?: { onColor?: unknown } } })._core?._inputHandler;
+  if (typeof handler?.onColor !== 'function') return false;
+  (handler.onColor as (listener: (requests: ColorRequest[]) => void) => unknown)(listener);
+  return true;
+}
+
+const COLOR_INDEX = { foreground: 256, background: 257, cursor: 258 } as const;
+
+const rgbOf = (hex: string): [number, number, number] => [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16)) as [number, number, number];
+
+/** A color as the pages draw it (xterm's own 256 colors past the 16 they say), or none while no page has said its colors. */
+function drawnColor(colors: TerminalColors | undefined, index: number): [number, number, number] | undefined {
+  if (index >= 16 && index < 232) {
+    const steps = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+    const at = index - 16;
+    return [steps[Math.floor(at / 36) % 6]!, steps[Math.floor(at / 6) % 6]!, steps[at % 6]!];
+  }
+  if (index >= 232 && index < 256) {
+    const grey = 8 + (index - 232) * 10;
+    return [grey, grey, grey];
+  }
+  if (!colors) return undefined;
+  if (index === COLOR_INDEX.foreground) return rgbOf(colors.foreground);
+  if (index === COLOR_INDEX.background) return rgbOf(colors.background);
+  if (index === COLOR_INDEX.cursor) return rgbOf(colors.cursor);
+  const ansi = colors.ansi[index];
+  return ansi ? rgbOf(ansi) : undefined;
+}
+
+/** A color's report, as xterm.js gives one: `OSC 11 ; rgb:fafa/fafa/fafa ST`. */
+export function colorReport(index: number, [r, g, b]: [number, number, number]): string {
+  const channel = (value: number) => value.toString(16).padStart(2, '0').repeat(2);
+  const ident = index === COLOR_INDEX.foreground ? '10' : index === COLOR_INDEX.background ? '11' : index === COLOR_INDEX.cursor ? '12' : `4;${index}`;
+  return `\x1b]${ident};rgb:${channel(r)}/${channel(g)}/${channel(b)}\x1b\\`;
+}
+
 type Viewer = {
   ws: WebSocket;
   /** Output sent that the page has not acknowledged, in bytes. */
@@ -183,10 +230,14 @@ class Term {
   private paused = false;
   private watching?: NodeJS.Timeout;
   private programLook?: NodeJS.Timeout;
+  /** The colors the pages draw in, as the last to say them did, and those a program set since, by xterm's index. */
+  private colors?: TerminalColors;
+  private readonly setColors = new Map<number, [number, number, number]>();
 
-  constructor(readonly cwd: string, private readonly pty: Pty, shell: string, cols: number, rows: number) {
+  constructor(readonly cwd: string, private readonly pty: Pty, shell: string, cols: number, rows: number, colors?: TerminalColors) {
     this.cols = cols;
     this.rows = rows;
+    this.colors = colors;
     this.program = programName(shell);
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
     // Characters as wide as the pages draw them (TerminalScreen takes the same widths): an emoji
@@ -197,17 +248,37 @@ class Term {
     this.serializer = new SerializeAddon();
     this.screen.loadAddon(this.serializer);
     // The copy answers what programs ask of the terminal (device attributes, the cursor's
-    // position, a mode's state), once, however many pages show it, or none: answers from each page
-    // would come twice, or not at all.
-    this.screen.onData((answer) => {
-      if (!this.exit && !this.closed) this.pty.write(answer);
-    });
+    // position, a mode's state, a color), once, however many pages show it, or none: answers from
+    // each page would come twice, or not at all, and after the copy's, where a program that asked
+    // for a color and then for device attributes has stopped reading.
+    this.screen.onData((answer) => this.answer(answer));
+    onColorRequests(this.screen, (requests) => this.colorRequests(requests));
     pty.onData((text) => this.output(text));
     pty.onExit(({ exitCode, signal }) => this.ended(exitCode, signal));
   }
 
   get pid(): number {
     return this.pty.pid;
+  }
+
+  /** The terminal's answer to what a program asked of it. */
+  private answer(text: string): void {
+    if (!this.exit && !this.closed) this.pty.write(text);
+  }
+
+  /** Colors asked for are answered as the pages draw them; one a program set is that one until put back. */
+  private colorRequests(requests: ColorRequest[]): void {
+    for (const { type, index, color } of requests) {
+      if (type === 1 && index !== undefined && color) {
+        this.setColors.set(index, color);
+      } else if (type === 2) {
+        if (index !== undefined) this.setColors.delete(index);
+        else for (const set of [...this.setColors.keys()]) if (set < 256) this.setColors.delete(set);
+      } else if (type === 0 && index !== undefined) {
+        const rgb = this.setColors.get(index) ?? drawnColor(this.colors, index);
+        if (rgb) this.answer(colorReport(index, rgb));
+      }
+    }
   }
 
   info(): TerminalInfo {
@@ -431,6 +502,8 @@ class Term {
       this.pressure();
     } else if (message?.type === 'resize' && !this.exit) {
       this.resize(message.cols, message.rows, viewer);
+    } else if (message?.type === 'colors') {
+      this.colors = message.colors;
     }
   }
 
@@ -580,7 +653,7 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
  * `env`), and types `command` into it once it is ready. An ended terminal makes room when as many
  * run as may; otherwise TooManyTerminals.
  */
-export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string } = {}): Promise<TerminalInfo> {
+export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string; colors?: TerminalColors } = {}): Promise<TerminalInfo> {
   const refused = refusal();
   if (refused) throw new Error(refused);
   const spawn = await loadPty();
@@ -592,7 +665,7 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
     ended.close();
   }
   const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
-  const term = new Term(cwd, pty, file, size.cols, size.rows);
+  const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
   terminals.set(term.id, term);
   if (options.command) term.typeWhenReady(`${options.command}\r`);
   if (!sweeping) {

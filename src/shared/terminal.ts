@@ -11,9 +11,11 @@
 //
 // The server answers what programs ask of the terminal itself, from its copy of the screen: device
 // attributes (CSI c, CSI > c), status and the cursor's position (CSI n, CSI ? n), a mode's state
-// (CSI $ p, CSI ? $ p) and a setting's (DCS $ q). A page must not answer them too, or a program gets
-// an answer from each page: with xterm.js, a handler that swallows each of them
-// (`terminal.parser.registerCsiHandler({ final: 'c' }, () => true)` and so on) keeps its own quiet.
+// (CSI $ p, CSI ? $ p), a setting's (DCS $ q), and a color (OSC 4, 10, 11 and 12 with `?`), from
+// the colors a page draws in (`colors`) or one a program set. A page must not answer them too, or
+// a program gets an answer from each page, after the others: with xterm.js, a handler that
+// swallows each of them (`terminal.parser.registerCsiHandler({ final: 'c' }, () => true)` and so
+// on, for a color only the asking) keeps its own quiet.
 
 /** How a terminal's shell ended: its exit code, or the signal that ended it (`SIGHUP`). */
 export type TerminalExit = { code: number | null; signal: string | null };
@@ -36,6 +38,13 @@ export type TerminalInfo = {
 /** Whether this Pelican runs terminals and, when it does not, why, in a sentence to show as it is. */
 export type TerminalAvailability = { available: boolean; reason?: string };
 
+/**
+ * The colors a page draws a terminal in, each `#rrggbb`: its text, its background, its cursor,
+ * and the 16 colors programs pick from (black, red, green, yellow, blue, magenta, cyan, white,
+ * then their bright ones). The server answers a program that asks for one from these.
+ */
+export type TerminalColors = { foreground: string; background: string; cursor: string; ansi: string[] };
+
 /** GET /api/terminals */
 export type TerminalList = TerminalAvailability & { terminals: TerminalInfo[] };
 
@@ -49,6 +58,8 @@ export type NewTerminal = {
   trust?: 'trusted' | 'user-only';
   /** Run in terminal: typed into the shell, with Enter, once it is ready for it. */
   command?: string;
+  /** The colors the page draws in, for a program that asks before a page shows the terminal. */
+  colors?: TerminalColors;
 };
 
 /** What the server sends as text frames. What the shell prints comes as binary frames, in between. */
@@ -81,7 +92,9 @@ export type TerminalClientMessage =
    * while a page is far behind, and a page that acknowledges nothing for a while as it waits is
    * closed (TERMINAL_CLOSE.behind).
    */
-  | { type: 'ack'; bytes: number };
+  | { type: 'ack'; bytes: number }
+  /** The colors this page draws in, said on each connection and when they change: the last said are answered. */
+  | { type: 'colors'; colors: TerminalColors };
 
 export const TERMINAL_LIMITS = {
   /** Terminals one Pelican runs at once; ended ones make room. */
@@ -135,11 +148,26 @@ function parsed(text: string): Record<string, unknown> | undefined {
   }
 }
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+/** Colors as a page says them, or undefined for anything else. */
+export function terminalColors(value: unknown): TerminalColors | undefined {
+  const colors = value as Partial<TerminalColors> | undefined;
+  if (!colors || typeof colors !== 'object' || !Array.isArray(colors.ansi) || colors.ansi.length !== 16) return undefined;
+  const all = [colors.foreground, colors.background, colors.cursor, ...colors.ansi];
+  if (!all.every((color) => typeof color === 'string' && HEX_COLOR.test(color))) return undefined;
+  return { foreground: colors.foreground!, background: colors.background!, cursor: colors.cursor!, ansi: [...colors.ansi] };
+}
+
 /** A page's text frame, or undefined for anything else. */
 export function terminalClientMessage(text: string): TerminalClientMessage | undefined {
   const value = parsed(text);
   if (value?.type === 'resize' && sizeAllowed(value.cols, value.rows)) return { type: 'resize', cols: value.cols as number, rows: value.rows as number };
   if (value?.type === 'ack' && Number.isSafeInteger(value.bytes) && (value.bytes as number) > 0) return { type: 'ack', bytes: value.bytes as number };
+  if (value?.type === 'colors') {
+    const colors = terminalColors(value.colors);
+    return colors ? { type: 'colors', colors } : undefined;
+  }
   return undefined;
 }
 

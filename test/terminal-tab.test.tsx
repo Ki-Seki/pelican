@@ -25,6 +25,7 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
       input: (text: string) => typed.push(text),
       paste: (text: string) => pasted.push(text),
       text: () => ({ before: 'line one', screen: 'line two', after: '' }),
+      colors: () => undefined,
     }));
     return <div data-terminal data-shows={props.id ?? ''} />;
   }),

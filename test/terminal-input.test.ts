@@ -2,7 +2,10 @@
 // field, and the screen as text behind a long press (src/web/lib/terminal-input.ts).
 import { describe, expect, it } from 'vitest';
 
-import { asksForSecret, bufferText, type BufferLike, controlCharacter, keySequence, lineBeforeCursor, viewportText } from '../src/web/lib/terminal-input';
+import { terminalClientMessage } from '../src/shared/terminal';
+import {
+  asksForSecret, bufferText, type BufferLike, colorQuery, controlCharacter, keySequence, lineBeforeCursor, themeColors, viewportText,
+} from '../src/web/lib/terminal-input';
 
 describe('the key row', () => {
   it('sends Esc, Tab and the arrows as a terminal does, as the program asked for them', () => {
@@ -95,5 +98,39 @@ describe('the screen as text', () => {
 
   it('reads the cursor’s row up to the cursor, for a prompt', () => {
     expect(lineBeforeCursor(buffer(['out', 'Password: typed'], { x: 10, y: 1 }))).toBe('Password:');
+  });
+});
+
+describe('the colors a program asks for', () => {
+  it('are the server’s to answer: the page swallows the asking, and draws a color set alongside', () => {
+    expect(colorQuery(11, '?')).toEqual({ asks: true });
+    expect(colorQuery(10, '?;?')).toEqual({ asks: true });
+    expect(colorQuery(4, '1;?;196;?')).toEqual({ asks: true });
+    // Setting alone is the page's own.
+    expect(colorQuery(11, '#102030')).toEqual({ asks: false });
+    expect(colorQuery(4, '1;rgb:ff/00/00')).toEqual({ asks: false });
+    // Both: what is set, as a sequence of its own, for the page to draw.
+    expect(colorQuery(10, '#ffffff;?;#00ff00')).toEqual({ asks: true, sets: '\u001b]10;#ffffff\u001b\\\u001b]12;#00ff00\u001b\\' });
+    expect(colorQuery(4, '1;?;2;#00ff00')).toEqual({ asks: true, sets: '\u001b]4;2;#00ff00\u001b\\' });
+    // Past the cursor's color, 10's slots end, as xterm reads them.
+    expect(colorQuery(12, '?;#ffffff')).toEqual({ asks: true });
+  });
+
+  it('are answered from the colors the page says it draws in, each #rrggbb', () => {
+    const theme = {
+      foreground: '#171717', background: '#fafafa', cursor: '#171717',
+      black: '#000000', red: '#cf222e', green: '#116329', yellow: '#4d2d00', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+      brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01', brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f',
+    };
+    const colors = themeColors(theme);
+    expect(colors).toEqual({ foreground: '#171717', background: '#fafafa', cursor: '#171717', ansi: expect.arrayContaining(['#cf222e']) });
+    expect(colors?.ansi).toHaveLength(16);
+    expect(colors?.ansi[1]).toBe('#cf222e');
+    expect(colors?.ansi[15]).toBe('#8c959f');
+    expect(terminalClientMessage(JSON.stringify({ type: 'colors', colors }))).toEqual({ type: 'colors', colors });
+    // Anything else says nothing.
+    expect(themeColors({ ...theme, background: 'rgba(0, 0, 0, 0.5)' })).toBeUndefined();
+    expect(themeColors({ ...theme, brightWhite: undefined } as unknown as typeof theme)).toBeUndefined();
+    expect(terminalClientMessage(JSON.stringify({ type: 'colors', colors: { ...colors, ansi: colors?.ansi.slice(1) } }))).toBeUndefined();
   });
 });

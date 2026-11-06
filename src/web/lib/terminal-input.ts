@@ -3,6 +3,8 @@
  * (components/WorkspaceTerminal): the phone's key row and line field, and the screen as text.
  */
 
+import { type TerminalColors, terminalColors } from '../../shared/terminal';
+
 /** The keys of the phone's key row that a phone's keyboard lacks, as a terminal sends them. */
 export type RowKey = 'esc' | 'tab' | 'up' | 'down' | 'left' | 'right';
 
@@ -78,4 +80,41 @@ export const viewportText = (buffer: BufferLike, rows: number): string => buffer
 /** What the cursor's row says before the cursor: a prompt, when a program waits for a line. */
 export function lineBeforeCursor(buffer: BufferLike): string {
   return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true, 0, buffer.cursorX) ?? '';
+}
+
+/** The 16 colors of an xterm.js theme, in the order programs number them. */
+const ANSI_NAMES = [
+  'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+  'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite',
+] as const;
+
+/** The colors a theme draws in, as the server answers a program that asks for one; none unless each is `#rrggbb`. */
+export function themeColors(theme: Partial<Record<'foreground' | 'background' | 'cursor' | (typeof ANSI_NAMES)[number], string>> | undefined): TerminalColors | undefined {
+  if (!theme) return undefined;
+  return terminalColors({ foreground: theme.foreground, background: theme.background, cursor: theme.cursor, ansi: ANSI_NAMES.map((name) => theme[name]) });
+}
+
+/**
+ * A color sequence a program sent (OSC 4, 10, 11 or 12; `data` is what follows the number): whether
+ * it asks for a color, which is the server's to answer, and, where it also sets some, the
+ * sequence that sets those alone, for the page to draw. One that only sets colors is the page's.
+ */
+export function colorQuery(ident: number, data: string): { asks: boolean; sets?: string } {
+  const slots = data.split(';');
+  const sets: string[] = [];
+  let asks = false;
+  if (ident === 4) {
+    for (let at = 0; at + 1 < slots.length; at += 2) {
+      if (slots[at + 1] === '?') asks = true;
+      else sets.push(`${slots[at]};${slots[at + 1]}`);
+    }
+    return asks ? { asks, ...(sets.length > 0 ? { sets: `\x1b]4;${sets.join(';')}\x1b\\` } : {}) } : { asks };
+  }
+  // 10, 11 and 12 each go on to the next with every `;`: text, background, cursor.
+  slots.forEach((slot, at) => {
+    if (ident + at > 12) return;
+    if (slot === '?') asks = true;
+    else sets.push(`\x1b]${ident + at};${slot}\x1b\\`);
+  });
+  return asks ? { asks, ...(sets.length > 0 ? { sets: sets.join('') } : {}) } : { asks };
 }

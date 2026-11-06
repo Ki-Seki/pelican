@@ -134,7 +134,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
       for (;;) {
         try {
           const size = screen.current?.size() ?? { cols: 80, rows: 24 };
-          const terminal = await api.openTerminal({ cwd: folder, ...size, ...(command ? { command } : {}), ...(trust ? { trust } : {}) });
+          const colors = screen.current?.colors();
+          const terminal = await api.openTerminal({ cwd: folder, ...size, ...(command ? { command } : {}), ...(trust ? { trust } : {}), ...(colors ? { colors } : {}) });
           queryClient.setQueryData<TerminalList>(['terminals'], (old) => ({
             available: true,
             ...old,

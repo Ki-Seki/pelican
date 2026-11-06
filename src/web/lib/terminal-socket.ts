@@ -1,5 +1,5 @@
 import {
-  TERMINAL_CLOSE, TERMINAL_LIMITS, terminalServerMessage, type TerminalExit, type TerminalServerMessage,
+  TERMINAL_CLOSE, TERMINAL_LIMITS, type TerminalColors, terminalServerMessage, type TerminalExit, type TerminalServerMessage,
 } from '../../shared/terminal';
 
 /**
@@ -40,6 +40,8 @@ export type ConnectionOptions = {
   url: (cols: number, rows: number) => string;
   /** The size the page draws the shell at now. */
   size: () => { cols: number; rows: number };
+  /** The colors it draws in now, said on each connection: the server answers a program that asks from them. */
+  colors?: () => TerminalColors | undefined;
   events: ConnectionEvents;
   /** For tests. */
   WebSocket?: typeof WebSocket;
@@ -106,6 +108,11 @@ export class TerminalConnection {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
   }
 
+  /** The colors this page draws in now (light or dark); a connection made later says them too. */
+  colors(colors: TerminalColors | undefined): void {
+    if (colors && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'colors', colors }));
+  }
+
   private connect(): void {
     clearTimeout(this.timer);
     if (this.stopped) return;
@@ -117,7 +124,9 @@ export class TerminalConnection {
     this.unacked = 0;
     this.options.events.state({ kind: 'connecting', again: this.opened });
     ws.onopen = () => {
-      if (this.ws === ws) this.heard = this.now();
+      if (this.ws !== ws) return;
+      this.heard = this.now();
+      this.colors(this.options.colors?.());
     };
     ws.onmessage = (message: MessageEvent) => {
       if (this.ws !== ws) return;

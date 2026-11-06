@@ -7,7 +7,7 @@ import unicode11Addon from '@xterm/addon-unicode11';
 import xtermHeadless, { type Terminal } from '@xterm/headless';
 import WebSocket from 'ws';
 
-import { TERMINAL_LIMITS, terminalServerMessage, type TerminalServerMessage } from '../src/shared/terminal';
+import { type TerminalColors, TERMINAL_LIMITS, terminalServerMessage, type TerminalServerMessage } from '../src/shared/terminal';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 const { Unicode11Addon } = unicode11Addon;
@@ -27,6 +27,8 @@ export type PageOptions = {
   /** Acknowledges what it wrote (a page does); off, a page that reads but never says so. */
   ack?: boolean;
   headers?: Record<string, string>;
+  /** The colors it says it draws in, as the web app's page does once connected. */
+  colors?: TerminalColors;
 };
 
 export class Page {
@@ -55,6 +57,7 @@ export class Page {
     });
     this.ws.on('open', () => {
       this.opened = true;
+      if (options.colors) this.send({ type: 'colors', colors: options.colors });
     });
     this.ws.on('error', () => undefined);
     this.ws.on('close', (code, reason) => {
