@@ -46,7 +46,7 @@ async function folderWith(name: string, files: Record<string, string>): Promise<
 }
 
 /** Asks to start a session there, as the app does: the answer, its size, and how long it took. */
-async function ask(dir: string): Promise<{ status: number; brings: string[]; commands: unknown[]; size: number; ms: number }> {
+async function ask(dir: string): Promise<{ status: number; brings: string[]; commands: unknown[]; more: string[]; size: number; ms: number }> {
   const started = performance.now();
   const response = await app.request('/api/sessions', {
     method: 'POST',
@@ -55,8 +55,8 @@ async function ask(dir: string): Promise<{ status: number; brings: string[]; com
   });
   const text = await response.text();
   const ms = performance.now() - started;
-  const body = JSON.parse(text) as { brings: string[]; commands: unknown[] };
-  return { status: response.status, brings: body.brings, commands: body.commands, size: text.length, ms };
+  const body = JSON.parse(text) as { brings: string[]; commands: unknown[]; more: string[] };
+  return { status: response.status, brings: body.brings, commands: body.commands, more: body.more, size: text.length, ms };
 }
 
 const skill = (lines: string) => `---\nname: x\ndescription: y\n${lines}---\nBody\n`;
@@ -85,9 +85,9 @@ describe('a large hostile file', () => {
     expect(answer.status).toBe(409);
     expect(answer.ms).toBeLessThan(5000);
     expect(answer.size).toBeLessThan(64 * 1024);
-    expect(answer.brings.length).toBeLessThanOrEqual(202);
+    expect(answer.brings.length).toBeLessThanOrEqual(200);
     expect(answer.brings).toContain('Skill x: - {hooks: 1}');
-    expect(answer.brings.at(-1)).toBe('Skill x: more than Pelican shows');
+    expect(answer.more).toEqual(['.claude/skills/x/SKILL.md']);
     expect(answer.commands).toHaveLength(answer.brings.length);
   }, 60_000);
 
@@ -134,14 +134,8 @@ describe('a folder’s other files with more than any project’s', () => {
     expect(answer.status).toBe(409);
     expect(answer.ms).toBeLessThan(10_000);
     expect(answer.size).toBeLessThan(128 * 1024);
-    expect(answer.brings).toEqual(expect.arrayContaining([
-      'SessionStart hook: echo 0',
-      'More than Pelican shows: .claude/settings.json',
-      'MCP server s0: npx m0',
-      'More than Pelican shows: .mcp.json',
-      'Git filter f0: cat 0',
-      'More git config than Pelican shows',
-    ]));
+    expect(answer.brings).toEqual(expect.arrayContaining(['SessionStart hook: echo 0', 'MCP server s0: npx m0', 'Git filter f0: cat 0', 'Git config that git could not read']));
+    expect(answer.more).toEqual(['.git/config', '.claude/settings.json', '.mcp.json']);
     expect(answer.brings.length).toBeLessThan(3 * 202);
   }, 60_000);
 
@@ -152,13 +146,14 @@ describe('a folder’s other files with more than any project’s', () => {
     expect(answer.status).toBe(409);
     expect(answer.size).toBeLessThan(1200 * 1024);
     expect(answer.brings.length).toBeLessThan(40);
-    expect(answer.brings.at(-1)).toBe('More than Pelican shows');
+    expect(answer.more).toHaveLength(40 - answer.brings.length);
+    expect(answer.more).toContain('.claude/commands/c39.md');
   }, 60_000);
 
   it('are read only so far: past what any project’s commands, skills and agents hold, the folder is asked about', async () => {
     const files = Object.fromEntries(Array.from({ length: 3 }, (_, i) => [`.claude/commands/big${i}.md`, `---\nallowed-tools: Bash\n---\n${'x'.repeat(15 * 1024 * 1024)}`]));
-    const brings = (await trustQuestion(await folderWith('large-files', files)))?.brings;
-    expect(brings).toContain('More commands, skills and agents than Pelican reads');
-    expect(brings?.length).toBeLessThanOrEqual(3);
+    const question = await trustQuestion(await folderWith('large-files', files));
+    expect(question?.more).toEqual(['.claude/commands']);
+    expect(question?.brings.length).toBeLessThanOrEqual(2);
   }, 60_000);
 });

@@ -53,8 +53,8 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly signIn = false,
-    /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about, and the commands in it. */
-    readonly trust?: { brings: string[]; commands?: CommandAt[][] },
+    /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about, the commands in it, and the files it shows part of. */
+    readonly trust?: { brings: string[]; commands?: CommandAt[][]; more?: string[] },
     /** The demo saying what it does not do, not something going wrong. */
     readonly demo = false,
   ) {
@@ -155,14 +155,18 @@ const MAX_UPLOAD = 25 * 1024 * 1024;
 export type AuthMode = 'none' | 'password' | 'token';
 export type AuthState = { required: boolean; mode: AuthMode; signedIn: boolean };
 
-/** What a folder brings, as the server says it: its items, and the commands in each where it says where they are. */
-function trustIn(brings: unknown, commands: unknown): { brings: string[]; commands?: CommandAt[][] } {
+/**
+ * What a folder brings, as the server says it: its items, the commands in each where it says where
+ * they are, and the files of which it shows part.
+ */
+function trustIn(brings: unknown, commands: unknown, more: unknown): { brings: string[]; commands?: CommandAt[][]; more: string[] } {
   const items = Array.isArray(brings) ? brings.filter((b): b is string => typeof b === 'string') : [];
+  const files = Array.isArray(more) ? more.filter((m): m is string => typeof m === 'string') : [];
   const at = (item: string, command: unknown) => Array.isArray(command) && command.length === 3 && Number.isInteger(command[0]) && Number.isInteger(command[1])
     && 0 <= command[0] && command[0] <= command[1] && command[1] <= item.length && (command[2] === 'shell' || command[2] === 'argv' || command[2] === 'powershell');
   const each = Array.isArray(brings) && items.length === brings.length && Array.isArray(commands) && commands.length === items.length
     && commands.every((list, i) => Array.isArray(list) && list.every((command) => at(items[i]!, command)));
-  return each ? { brings: items, commands: commands as CommandAt[][] } : { brings: items };
+  return each ? { brings: items, commands: commands as CommandAt[][], more: files } : { brings: items, more: files };
 }
 
 async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
@@ -172,9 +176,9 @@ async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
     headers: { ...MARK, ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean; needsTrust?: boolean; brings?: unknown; commands?: unknown };
+    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean; needsTrust?: boolean; brings?: unknown; commands?: unknown; more?: unknown };
     if (body.signIn) onSignedOut();
-    const trust = body.needsTrust ? trustIn(body.brings, body.commands) : undefined;
+    const trust = body.needsTrust ? trustIn(body.brings, body.commands, body.more) : undefined;
     throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn), trust);
   }
   return response.json();

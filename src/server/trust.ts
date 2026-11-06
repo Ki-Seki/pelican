@@ -5,7 +5,9 @@ import path from 'node:path';
 
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
+import { mayHide, revealItem } from '../shared/hidden.js';
 import type { CommandAt } from '../shared/protocol.js';
+import { type Budget as ReadBudget, sharedBudget } from '../shared/shell-words.js';
 import { config } from './config.js';
 import { openRegular } from './open.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
@@ -33,18 +35,24 @@ export const FULL_SETTINGS: Launch = { settingSources: ['user', 'project', 'loca
 
 /** Starting Claude Code would run what the folder brings, and nobody has said it may. */
 export class NeedsTrust extends Error {
-  constructor(readonly folder: string, readonly brings: string[], readonly commands: CommandAt[][] = []) {
+  constructor(readonly folder: string, readonly brings: string[], readonly commands: CommandAt[][] = [], readonly more: string[] = []) {
     super('Trust this folder before Claude Code starts in it.');
   }
 }
 
-/** An item of what a folder brings: its text, and where in it a command is (CommandAt). */
-type Item = { text: string; commands: CommandAt[] };
+/** An item of what a folder brings: its text, where in it a command is (CommandAt), and whether it is Pelican's own note. */
+type Item = { text: string; commands: CommandAt[]; note?: true };
 
-/** What a folder brings, each item whole, and the commands in each, item by item. */
-export type Brings = { brings: string[]; commands: CommandAt[][] };
+/**
+ * What a folder brings, each item whole, and the commands in each, item by item; and the files of
+ * which the sheet shows part, or none (a path from the folder), which it names above the list.
+ */
+export type Brings = { brings: string[]; commands: CommandAt[][]; more: string[] };
 
 const said = (text: string): Item => ({ text, commands: [] });
+
+/** Pelican's own word on what it could not read: kept first, as a warning is. */
+const note = (text: string): Item => ({ text, commands: [], note: true });
 
 /** `label`, then a command a shell runs or a program and its arguments, then `after`. */
 const runs = (label: string, command: string, how: CommandAt[2], after = ''): Item => ({
@@ -60,66 +68,106 @@ const MAX_READ = 16 * 1024 * 1024;
 
 /**
  * More than any project's file brings, or than the sheet can show: at most this many items, and
- * this much of their text, from one file (a repository's git config counts as one), and from a
- * whole folder. Past them one item says there is more, and the folder is asked about all the same:
- * a hostile file could otherwise make an answer too large for the phone, or the server, to take.
+ * this much of their text as the sheet shows it, from one file (a repository's git config counts as
+ * one), and from a whole folder. Past them, the files with more are named above the list
+ * (Brings.more), and the folder is asked about all the same: a hostile file could otherwise make an
+ * answer too large for the phone, or the server, to take. An item the sheet warns of (a character
+ * written out) and Pelican's own notes go first, so that no number of harmless items leaves one
+ * out; and the repository's git programs are read whatever the folder's other files bring, within
+ * a file's share of their own.
  */
 const FILE_ITEMS = 200;
 const FILE_TEXT = 256 * 1024;
 const FOLDER_ITEMS = 1000;
 const FOLDER_TEXT = 1024 * 1024;
 
+/** An item kept, the file it is from, whether it goes first (a warning, a note), and its size as the sheet shows it. */
+type Found = { item: Item; file: string; first: boolean; size: number };
+
 /**
- * Items, each once, up to a number of them and of their text; the first that does not fit makes
- * them `full`, and no more are taken but what is added `always` (a short note). An item said twice
- * with its commands in other places has every space but a plain one written out.
+ * What a folder brings, gathered as it is read, each item once: one said twice with its commands
+ * in other places has every space but a plain one written out. Each is read as the sheet reads it
+ * (revealItem), its shell commands within one budget for all of a folder's items, a command not
+ * read past it marked so ('argv', every such space written out): the sheet, reading the same
+ * items within as much, then reads no more than this did, and shows what this judged.
  */
-class Items {
-  private readonly kept = new Map<string, CommandAt[]>();
-  private size = 0;
-  full = false;
+class Gathered {
+  private readonly kept = new Map<string, Found>();
+  private readonly files = new Map<string, { items: number; text: number }>();
+  private readonly first = { items: 0, text: 0 };
+  private readonly rest = { items: 0, text: 0 };
 
-  constructor(private readonly most: number, private readonly chars: number) {}
+  /**
+   * @param most at most this many items, and this much of their text, in all (the others go where they fit after the first)
+   * @param budget what reading their shell commands may take, shared by every item a question shows
+   * @param more the files with more than is kept, by their path from the folder
+   */
+  constructor(private readonly most: { items: number; text: number }, private readonly budget: ReadBudget, readonly more: Set<string>) {}
 
-  add({ text, commands }: Item, always = false): void {
-    const known = this.kept.get(text);
+  add(item: Item, file: string): void {
+    const known = this.kept.get(item.text);
     if (known !== undefined) {
-      if (JSON.stringify(known) !== JSON.stringify(commands)) this.kept.set(text, [[0, text.length, 'argv']]);
+      if (JSON.stringify(known.item.commands) !== JSON.stringify(item.commands)) {
+        const first = known.first;
+        this.read(known, { text: item.text, commands: [[0, item.text.length, 'argv']], ...(known.item.note ? { note: true } : {}) });
+        if (known.first && !first) this.first.items += 1;
+      }
       return;
     }
-    if (!always && (this.full || this.kept.size >= this.most || this.size + text.length > this.chars)) {
-      this.full = true;
+    const found: Found = { item, file, first: false, size: 0 };
+    this.read(found, item);
+    const own = this.files.get(file) ?? { items: 0, text: 0 };
+    // What goes first, up to the folder's share; the others, up to a file's and the folder's.
+    const fits = found.first
+      ? this.first.items < this.most.items && this.first.text + found.size <= this.most.text
+      : own.items < FILE_ITEMS && own.text + found.size <= FILE_TEXT && this.rest.items < this.most.items && this.rest.text + found.size <= this.most.text;
+    if (!fits) {
+      this.more.add(file);
       return;
     }
-    this.kept.set(text, commands);
-    this.size += text.length;
+    const counts = found.first ? this.first : this.rest;
+    counts.items += 1;
+    counts.text += found.size;
+    if (!found.first) this.files.set(file, { items: own.items + 1, text: own.text + found.size });
+    this.kept.set(item.text, found);
   }
 
+  /** An item as the sheet shows it: its size, whether it warns, and its commands as read. */
+  private read(found: Found, item: Item): void {
+    if (!mayHide(item.text)) {
+      Object.assign(found, { item, size: item.text.length, first: Boolean(item.note) });
+      return;
+    }
+    const shown = revealItem(item.text, item.commands, this.budget);
+    Object.assign(found, { item: { ...item, commands: shown.commands ?? item.commands }, size: shown.text.length, first: Boolean(item.note) || shown.hidden });
+  }
+
+  /** What is kept, in the order it came: every item that goes first, and the others while they fit with them. */
   get list(): Item[] {
-    return [...this.kept].map(([text, commands]) => ({ text, commands }));
-  }
-}
-
-/** What one file brings (Items), read only as far as fits: past it, `more` says there is more. */
-function capped(items: Iterable<Item>, more: string): Item[] {
-  const kept = new Items(FILE_ITEMS, FILE_TEXT);
-  for (const item of items) {
-    kept.add(item);
-    if (kept.full) {
-      kept.add(said(more), true);
-      break;
+    const room = { items: this.most.items - this.first.items, text: this.most.text - this.first.text };
+    const list: Item[] = [];
+    for (const found of this.kept.values()) {
+      if (!found.first) {
+        if (room.items <= 0 || found.size > room.text) {
+          this.more.add(found.file);
+          continue;
+        }
+        room.items -= 1;
+        room.text -= found.size;
+      }
+      list.push(found.item);
     }
+    return list;
   }
-  return kept.list;
 }
 
 /**
  * A file's text, read only when it is a regular file of a sane size (`odd` when something else is
  * there): a named pipe in its place would hold one of Node's few file threads until someone wrote
  * to it, and a folder from a tarball can bring one. With a budget, a file larger than what is left
- * of it is not read, and spends it.
+ * of it is not read (`unread`), and spends it.
  */
-async function readText(file: string, budget?: Budget): Promise<{ text?: string; odd?: true }> {
+async function readText(file: string, budget?: Budget): Promise<{ text?: string; odd?: true; unread?: true }> {
   let handle: Awaited<ReturnType<typeof openRegular>>;
   try {
     handle = await openRegular(file);
@@ -130,7 +178,7 @@ async function readText(file: string, budget?: Budget): Promise<{ text?: string;
   try {
     const { size } = await handle.stat();
     if (size > MAX_READ) return { odd: true };
-    if (budget && (budget.bytes -= size) < 0) return {};
+    if (budget && (budget.bytes -= size) < 0) return { unread: true };
     return { text: decoded(await handle.readFile()) };
   } catch {
     return { odd: true };
@@ -155,10 +203,11 @@ function decoded(bytes: Buffer): string {
  * and whether it has words that are not JSON as Pelican reads it: Claude Code may read more than
  * that, so a folder's such file is asked about rather than taken to bring nothing.
  */
-async function readJsonFile(file: string): Promise<{ value: unknown; odd?: true; unparsed?: true }> {
-  const { text, odd } = await readText(file);
+async function readJsonFile(file: string, budget?: Budget): Promise<{ value: unknown; odd?: true; unparsed?: true; unread?: true }> {
+  const { text, odd, unread } = await readText(file, budget);
   try {
-    return { value: text === undefined ? undefined : JSON.parse(text) as unknown, ...(odd ? { odd } : {}) };
+    // Nested deeper than JSON.parse goes, or not JSON: not read.
+    return { value: text === undefined ? undefined : JSON.parse(text) as unknown, ...(odd ? { odd } : {}), ...(unread ? { unread } : {}) };
   } catch {
     return { value: undefined, ...(text?.trim() ? { unparsed: true as const } : {}) };
   }
@@ -477,7 +526,7 @@ function* fromMarkdown(what: string, text: string, shell: boolean): Generator<It
   // frontmatter that uses them and names a power anywhere is asked about, and says so beside what
   // was read of it, as an escape such as `\n` reads otherwise than it is written.
   if (front && /allowed|hook|mcp|permission/i.test(front) && (/\\|^[ \t]*\?|!!/m.test(front) || (powers === 0 && front.includes('{')))) {
-    yield said(`${what}: settings Pelican cannot read in full`);
+    yield note(`${what}: settings Pelican cannot read in full`);
   }
   if (shell) {
     for (const command of fenced(text)) yield runs(`${what} runs: `, command, 'shell');
@@ -489,8 +538,9 @@ function* fromMarkdown(what: string, text: string, shell: boolean): Generator<It
 const MARKDOWN = [['commands', 'Command'], ['skills', 'Skill'], ['agents', 'Agent']] as const;
 
 /**
- * More than any project has: past this many files (or entries looked at, or bytes of them read),
- * the folder is asked about instead of being read without end.
+ * More than any project has: past this many Markdown files (or entries looked at), or bytes read
+ * of them and of a folder's settings and MCP servers, what is left is not read, but named, and the
+ * folder is asked about instead of being read without end.
  */
 type Budget = { files: number; entries: number; bytes: number };
 const budgetFor = (): Budget => ({ files: 500, entries: 10_000, bytes: 32 * 1024 * 1024 });
@@ -516,33 +566,55 @@ async function markdownIn(root: string, budget: Budget): Promise<string[]> {
   return files;
 }
 
-/** What a folder's own commands, skills and agents bring (see fromMarkdown), to `found` while it takes more. */
-async function fromClaudeFolder(dir: string, from: string, budget: Budget, found: Items): Promise<void> {
+/**
+ * What a folder's own commands, skills and agents bring (see fromMarkdown), to `found`, each item
+ * by its file's path from `from`. Past the budget, what is left of them is not read, and each
+ * folder of them is named (Brings.more).
+ */
+async function fromClaudeFolder(dir: string, from: string, budget: Budget, found: Gathered): Promise<void> {
   for (const [kind, what] of MARKDOWN) {
     const root = path.join(dir, '.claude', kind);
+    if (spent(budget)) {
+      if (await exists(root)) found.more.add(path.relative(from, root));
+      continue;
+    }
     for (const file of await markdownIn(root, budget)) {
-      if (found.full) return;
       const skill = /^skill\.md$/i.test(path.basename(file));
       // A skill is its SKILL.md; the other files in its folder are documents Claude may read.
       if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
       const { text, odd } = await readText(file, budget);
-      if (spent(budget)) return;
+      if (spent(budget)) break;
+      const named = path.relative(from, file);
       if (odd || text === undefined) {
-        found.add(said(`Cannot be read: ${path.relative(from, file)}`));
+        found.add(note(`Cannot be read: ${named}`), named);
         continue;
       }
       const name = path.relative(root, skill ? path.dirname(file) : file.slice(0, -'.md'.length)) || path.basename(root);
-      const named = `${what} ${kind === 'commands' ? '/' : ''}${name}`;
-      for (const item of capped(fromMarkdown(named, text, kind !== 'agents'), `${named}: more than Pelican shows`)) found.add(item);
+      const label = `${what} ${kind === 'commands' ? '/' : ''}${name}`;
+      gather(fromMarkdown(label, text, kind !== 'agents'), named, found);
     }
+    if (spent(budget)) found.more.add(path.relative(from, root));
+  }
+}
+
+/**
+ * What one file brings, to `found`: all of it, so that an item the sheet warns of is found
+ * wherever it is (Gathered keeps a file's share of the rest). Reading it going wrong, as it may for
+ * a value nested deeper than the stack goes, the file is one Pelican cannot read, and asked about.
+ */
+function gather(items: Iterable<Item>, file: string, found: Gathered): void {
+  try {
+    for (const item of items) found.add(item, file);
+  } catch {
+    found.add(note(`Cannot be read: ${file}`), file);
   }
 }
 
 /** A setting of a git config as git reads it: its name in git's spelling, its value, the file it is in. */
 type GitEntry = { name: string; value: string; file: string };
 
-/** The repository's own git config, as far as it could be read, and every file it includes. */
-type GitConfig = { entries: GitEntry[]; includes: string[]; unread: boolean };
+/** The repository's own git config, as far as it could be read, and every file it includes, with the file that does. */
+type GitConfig = { entries: GitEntry[]; includes: Array<{ value: string; file: string }>; unread: boolean };
 
 /** `filter.Evil.clean`: section `filter`, subsection `Evil` (its case kept, as git keeps it), key `clean`. */
 function nameParts(name: string): { section: string; subsection?: string; key: string } {
@@ -639,7 +711,7 @@ async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
       break;
     }
     const include = pending[next]!;
-    repo.includes.push(include.value);
+    repo.includes.push({ value: include.value, file: include.file });
     const file = includeTarget(include.value, include.file);
     if (!file) repo.unread = true;
     if (!file || read.has(file)) continue;
@@ -678,30 +750,35 @@ function gitRuns(): Promise<boolean> {
 
 const UNREAD_GIT = 'Git config that git could not read';
 
-/** Programs the repository's git config makes git start on its own, even for `git status`. */
-function* gitPrograms(repo: GitConfig): Generator<Item> {
+/** Programs the repository's git config makes git start on its own, even for `git status`, each with the file it is in. */
+function* gitPrograms(repo: GitConfig, config: string): Generator<[Item, string]> {
   for (const entry of repo.entries) {
     const { section, subsection, key } = nameParts(entry.name);
     if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key) && entry.value) {
-      yield runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell');
+      yield [runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell'), entry.file];
     } else if (section === 'core' && key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
-      yield runs('Git fsmonitor: ', entry.value, 'shell');
+      yield [runs('Git fsmonitor: ', entry.value, 'shell'), entry.file];
     } else if (section === 'core' && key === 'hookspath' && entry.value) {
-      yield said(`Git hooks folder: ${entry.value}`);
+      yield [said(`Git hooks folder: ${entry.value}`), entry.file];
     }
   }
   // An included file can change (another branch, a pull), and with it what git runs.
-  for (const include of repo.includes) yield said(`Git config includes: ${include}`);
-  if (repo.unread) yield said(UNREAD_GIT);
+  for (const include of repo.includes) yield [note(`Git config includes: ${include.value}`), include.file];
+  if (repo.unread) yield [note(UNREAD_GIT), config];
 }
 
-/** What git would run of the repository's own config, also when git could not read it all. */
-async function gitBrings(top: string): Promise<Item[]> {
+/**
+ * What git would run of the repository's own config, also when git could not read it all, to
+ * `found`, read whatever the folder's other files bring: what goes first, and a file's share of
+ * the rest.
+ */
+async function gitBrings(top: string, from: string, found: Gathered): Promise<void> {
+  const config = path.join(top, '.git', 'config');
   try {
     const repo = await repositoryConfig(top);
-    return repo ? capped(gitPrograms(repo), 'More git config than Pelican shows') : [];
+    if (repo) for (const [item, file] of gitPrograms(repo, config)) found.add(item, path.relative(from, file));
   } catch {
-    return [said(UNREAD_GIT)];
+    found.add(note(UNREAD_GIT), path.relative(from, config));
   }
 }
 
@@ -716,35 +793,38 @@ export async function whatFolderBrings(folder: string): Promise<Brings> {
   const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
   // Every item, each whole: the part of a command that matters can come after any amount of
-  // padding, or after any number of harmless items (the sheet scrolls). Once each (Items), and as
-  // many as fit, which is more than any project brings: past them the sheet says there is more.
-  const found = new Items(FOLDER_ITEMS, FOLDER_TEXT);
-  const add = (items: Iterable<Item>) => {
-    for (const item of items) found.add(item);
-  };
-  // A file of the folder's that is not a regular file, or not JSON, is asked about instead.
+  // padding, or after any number of harmless items (the sheet scrolls). Once each, those the sheet
+  // warns of and Pelican's notes first, and as many others as fit, more than any project brings:
+  // past them the sheet names the files with more. Their shell commands are read within one
+  // budget, which the sheet keeps to (Gathered).
+  const more = new Set<string>();
+  const reading = sharedBudget();
+  const found = new Gathered({ items: FOLDER_ITEMS, text: FOLDER_TEXT }, reading, more);
+  // The repository's git programs: read first, and kept whatever the rest brings, a file's share.
+  const git = new Gathered({ items: FILE_ITEMS, text: FILE_TEXT }, reading, more);
+  if (top) await gitBrings(top, dir, git);
+  const budget = budgetFor();
+  // A file of the folder's that is not a regular file, or not JSON, is asked about instead; one
+  // past what is read of a folder's files is named.
   const json = async (file: string): Promise<unknown> => {
-    const { value, odd, unparsed } = await readJsonFile(file);
-    if (odd || unparsed) found.add(said(`Cannot be read: ${path.relative(dir, file)}`));
+    const named = path.relative(dir, file);
+    const { value, odd, unparsed, unread } = await readJsonFile(file, budget);
+    if (unread) more.add(named);
+    if (odd || unparsed) found.add(note(`Cannot be read: ${named}`), named);
     return value;
   };
-  const budget = budgetFor();
   for (let d = dir; !homes.has(d); d = path.dirname(d)) {
     for (const name of ['settings.json', 'settings.local.json']) {
       const file = path.join(d, '.claude', name);
-      add(capped(fromSettings(await json(file)), `More than Pelican shows: ${path.relative(dir, file)}`));
+      gather(fromSettings(await json(file)), path.relative(dir, file), found);
     }
     const mcp = path.join(d, '.mcp.json');
-    add(capped(fromMcp(await json(mcp)), `More than Pelican shows: ${path.relative(dir, mcp)}`));
+    gather(fromMcp(await json(mcp)), path.relative(dir, mcp), found);
     await fromClaudeFolder(d, dir, budget, found);
-    if (found.full) break;
     if (d === top || path.dirname(d) === d) break;
   }
-  if (spent(budget)) found.add(said('More commands, skills and agents than Pelican reads'));
-  if (top && !found.full) add(await gitBrings(top));
-  if (found.full) found.add(said('More than Pelican shows'), true);
-  const items = found.list;
-  return { brings: items.map((item) => item.text), commands: items.map((item) => item.commands) };
+  const items = [...found.list, ...git.list];
+  return { brings: items.map((item) => item.text), commands: items.map((item) => item.commands), more: [...more] };
 }
 
 /** What the folder brings (whatFolderBrings), item by item. */
@@ -788,8 +868,9 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
  */
 export async function trustQuestion(folder: string): Promise<({ folder: string } & Brings) | undefined> {
   if (await folderTrusted(folder)) return undefined;
-  const { brings, commands } = await whatFolderBrings(folder);
-  return brings.length > 0 ? { folder: await real(folder), brings, commands } : undefined;
+  const { brings, commands, more } = await whatFolderBrings(folder);
+  // A file not read in full may bring anything: asked about too.
+  return brings.length > 0 || more.length > 0 ? { folder: await real(folder), brings, commands, more } : undefined;
 }
 
 /**
@@ -803,9 +884,9 @@ export async function launchFor(folder: string): Promise<Launch> {
     const env = await gitOff(dir);
     return { settingSources: ['user'], ...(Object.keys(env).length > 0 ? { env } : {}) };
   }
-  const { brings, commands } = await whatFolderBrings(dir);
-  if (brings.length === 0) return FULL_SETTINGS;
-  throw new NeedsTrust(dir, brings, commands);
+  const { brings, commands, more } = await whatFolderBrings(dir);
+  if (brings.length === 0 && more.length === 0) return FULL_SETTINGS;
+  throw new NeedsTrust(dir, brings, commands, more);
 }
 
 /** For tests: forget what was read. */

@@ -104,6 +104,10 @@ const BLANK_IN_MONOSPACE = /[\ufa2e\ufa2f]/u;
 /** An emoji, kept whole (the group), a character that may not show as what it is, a space, or a blank in monospace. */
 const PARTS = new RegExp(`(${EMOJI.source})|${UNSEEN.source}|${SPACE.source}|${BLANK_IN_MONOSPACE.source}`, 'gu');
 
+/** Whether a text holds anything revealHidden may write out, read as anything: without one, it shows as it is. */
+const MAY_HIDE = new RegExp(`${UNSEEN.source}|${SPACE.source}|${BLANK_IN_MONOSPACE.source}`, 'u');
+export const mayHide = (text: string) => MAY_HIDE.test(text);
+
 /** The joiner and the non-joiner, which Persian, Arabic and the Indic scripts write with. */
 const JOINER = /^[\u200c\u200d]$/u;
 

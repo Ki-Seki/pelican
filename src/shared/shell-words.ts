@@ -357,8 +357,8 @@ const MOST_MADE = 200_000;
 /** A budget for one command. Several readings may share one (sharedBudget), each taking at most this much of it. */
 export const commandBudget = (): Budget => ({ steps: MOST_STEPS, made: MOST_MADE });
 
-/** What the commands of one approval's tool input, or of one trust sheet, may take in all: two commands' worth. */
-export const sharedBudget = (): Budget => ({ steps: 2 * MOST_STEPS, made: 2 * MOST_MADE });
+/** What the commands of one approval's tool input, or of one trust sheet's items, may take in all: as much as one command. */
+export const sharedBudget = (): Budget => ({ steps: MOST_STEPS, made: MOST_MADE });
 
 /** What the readings of one command share. */
 type Shared = {

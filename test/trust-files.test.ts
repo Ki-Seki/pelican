@@ -9,7 +9,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { folderBrings, forgetTrust, launchFor, NeedsTrust, trustQuestion } from '../src/server/trust';
+import { folderBrings, forgetTrust, launchFor, NeedsTrust, trustQuestion, whatFolderBrings } from '../src/server/trust';
 
 let root: string;
 const pipes: string[] = [];
@@ -48,7 +48,7 @@ describe.skipIf(process.platform === 'win32')('a named pipe in a folder nobody t
       await pipeAt(path.join(dir, name));
       // More than Node's four file threads: any check that waited on the pipe would stall the rest.
       const checks = await Promise.all(Array.from({ length: 6 }, () => within(trustQuestion(dir), 2000)));
-      for (const check of checks) expect(check).toEqual({ folder: dir, brings: [`Cannot be read: ${name}`], commands: [[]] });
+      for (const check of checks) expect(check).toEqual({ folder: dir, brings: [`Cannot be read: ${name}`], commands: [[]], more: [] });
       await expect(within(launchFor(dir), 2000)).rejects.toBeInstanceOf(NeedsTrust);
       const other = path.join(root, 'other.txt');
       await writeFile(other, 'hello');
@@ -123,7 +123,10 @@ describe('a folder with more commands than any project has', () => {
     const dir = path.join(root, 'many');
     await mkdir(path.join(dir, '.claude', 'commands'), { recursive: true });
     await Promise.all(Array.from({ length: 510 }, (_, i) => writeFile(path.join(dir, '.claude', 'commands', `c${i}.md`), 'Say hi.\n')));
-    expect(await folderBrings(dir)).toEqual(['More commands, skills and agents than Pelican reads']);
+    // Nothing to list of what was read, but what was not is named, and the folder asked about.
+    expect(await whatFolderBrings(dir)).toEqual({ brings: [], commands: [], more: ['.claude/commands'] });
+    expect((await trustQuestion(dir))?.more).toEqual(['.claude/commands']);
+    await expect(launchFor(dir)).rejects.toBeInstanceOf(NeedsTrust);
   });
 }, 20_000);
 
