@@ -168,6 +168,8 @@ describe('quoted text a shell runs later', () => {
       `cat > fix.sh <<'EOF'\nw 'a${N}b'\nEOF\nbash fix.sh`, `T=$(mktemp); w 'a${N}b' > "$T"; cat "$T"`, `git commit -qm x && ./deploy.sh 'a${N}b'`,
       `[ -f "$x" ] && w 'a${N}b'`, `[ "$a" = "$b" ] || test -n "$c" && w 'a${N}b'`, `set -euo pipefail; READ_ME=1 w 'a${N}b'`,
       `cp ~/Desktop/'Shot 1${N}AM.png' docs/ && open docs/'Shot 1${N}AM.png'`, `sed -i '' 's/a/b/' x.txt && w 'a${N}b'`,
+      // A file in a folder named hooks is no git hook: React keeps its hooks so.
+      `cat > src/hooks/useThing.ts <<'EOF'\nexport const a = 'x${N}y'; // a${N}b\nEOF\nnpm test`,
     ]) {
       expect(revealHidden(command, { runs: 'shell' }), command).toEqual({ text: command, hidden: false });
     }

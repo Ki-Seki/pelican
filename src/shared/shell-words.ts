@@ -125,7 +125,7 @@ type Command = {
  * for `fix.sh`. A part an expansion, braces or a pattern make is not known (undefined); a name is
  * empty where the path ends in `/`.
  */
-type Path = { name?: string; folder?: string };
+type Path = { name?: string; folder?: string; hook?: true };
 
 /** A heredoc that waits for its body: the line that ends it, whether tabs before its lines go, whether its body is as it is, and where it goes. */
 type Heredoc = { end: string; tabs: boolean; quoted: boolean; input: Input };
@@ -321,7 +321,9 @@ function pathOf(word: Word): Path {
   const name = chars.slice(slash + 1).join('');
   const before = chars.slice(0, Math.max(slash, 0));
   const folder = slash < 0 ? '.' : before.slice(before.lastIndexOf('/') + 1).join('');
-  return { ...(name.includes('\u0000') ? {} : { name: name.toLowerCase() }), ...(folder.includes('\u0000') ? {} : { folder: folder.toLowerCase() }) };
+  // A git hook: what git runs on its own, in the repository's .git/hooks.
+  const hook = /(?:^|\/)\.git\/hooks\/[^/\u0000]+$/i.test(chars.join(''));
+  return { ...(name.includes('\u0000') ? {} : { name: name.toLowerCase() }), ...(folder.includes('\u0000') ? {} : { folder: folder.toLowerCase() }), ...(hook ? { hook } : {}) };
 }
 
 /** At most this deep in `$( )`, quotes, `${ }` and the like; deeper, every such character counts. */
@@ -1575,7 +1577,7 @@ class Reader {
      * folder is not known (`> "$t"`) may be anywhere; another operand (git's, curl's) is a file
      * only where it is plain text.
      */
-    const put = ({ name: file, folder }: Path, content: Input | null, surely = true) => {
+    const put = ({ name: file, folder, hook }: Path, content: Input | null, surely = true) => {
       if (file === undefined || folder === undefined) {
         if (surely) across.anywhere = true;
         return;
@@ -1586,7 +1588,7 @@ class Reader {
       // What a program runs on its own once it is there: make's and npm's recipes, not followed; a
       // git hook, and what a shell reads as it starts (now, or in the user's next one), read as scripts.
       if (RUN_BY_OTHERS.has(file)) throw new Lost();
-      if (folder === 'hooks' || STARTUP_FILES.includes(file)) across.runs.add(file);
+      if (hook || STARTUP_FILES.includes(file)) across.runs.add(file);
       // A heredoc's body is read after its line: what went in is compared once the file runs.
       const known = files.get(file);
       if (content === null || known === null) files.set(file, null);
