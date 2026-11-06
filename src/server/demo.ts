@@ -12,6 +12,7 @@ import { SETTINGS_SCREENSHOT } from './demo-image.js';
 import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { DEMO_WORKFLOW_FILES, demoWorkflowRun, WORKFLOW_DEMO } from './demo-workflows.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
+import { setPinned } from './pinned.js';
 
 /**
  * `pelican --demo`: a made-up home with a few sessions, for trying Pelican
@@ -222,6 +223,9 @@ ${LOGIN_NEW}
 });
 `;
 
+/** Pinned, as a session you keep coming back to is: the list shows its Pinned group. */
+const RELEASE_NOTES = 'd1e4c7f3-4444-4d4e-bf60-000000000004';
+
 const SESSIONS: DemoSession[] = [
   {
     id: 'a3f1c2d4-1111-4a1b-8c3d-000000000001',
@@ -367,7 +371,7 @@ const SESSIONS: DemoSession[] = [
     },
   },
   {
-    id: 'd1e4c7f3-4444-4d4e-bf60-000000000004',
+    id: RELEASE_NOTES,
     title: 'Release notes for v2.4',
     project: 'docs-site',
     branch: 'main',
@@ -774,6 +778,7 @@ export async function prepareDemo(): Promise<void> {
   // Its own config and state too: the demo never reads or writes your password, token or push keys.
   config.configDir = path.join(root, 'config');
   config.stateDir = path.join(root, 'state');
+  await setPinned(RELEASE_NOTES, true);
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.PELICAN_SCRATCH_DIR = path.join(root, 'scratch');
 }

@@ -228,8 +228,66 @@ async function walkable(sessions, answer) {
 }
 
 /**
- * The list, its sheets, a new session in another folder, and every session with its sheets; then
- * Changes and files, walked through in `walked` (see walkable).
+ * The Pinned group, grouped by time and then by project: it comes first and holds the pinned
+ * sessions. Then a pinned row's Unpin: shown by a finger's slide to the right on a phone, which
+ * stops short of acting, and beside Archive on hover on a computer, where it is not pressed.
+ */
+async function walkPinned(page, sessions, size, where) {
+  const pinned = sessions.filter((s) => s.pinned && !s.archived && s.title).map((s) => s.title);
+  if (pinned.length === 0) {
+    notes.push(`${where}: no session is pinned`);
+    return;
+  }
+  const missing = (what) => problems.push(`${where}: ${what}`);
+  const first = () => page.evaluate(() => {
+    const section = document.querySelector('section');
+    return {
+      heading: section?.querySelector('h2, button[aria-expanded]')?.textContent?.trim().replace(/\d+$/, '') ?? '',
+      rows: [...(section?.querySelectorAll('a[aria-label]') ?? [])].map((row) => row.getAttribute('aria-label')),
+    };
+  });
+  for (const group of ['Time', 'Project']) {
+    if (group === 'Project') {
+      await page.getByRole('button', { name: 'List options', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Project', exact: true }).click();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+    }
+    const { heading, rows } = await first();
+    if (heading !== 'Pinned') missing(`grouped by ${group.toLowerCase()}, the list starts with "${heading}", not Pinned`);
+    for (const title of pinned) if (!rows.some((row) => row.startsWith(`${title}, `))) missing(`grouped by ${group.toLowerCase()}, Pinned does not hold "${title}"`);
+  }
+  await page.getByRole('button', { name: 'List options', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Time', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const row = page.locator('section').first().locator('a[aria-label]').first();
+  const box = await row.boundingBox();
+  if (!box) return missing('the first pinned row has no place on the screen');
+  if (size === 'phone') {
+    const cdp = await page.context().newCDPSession(page);
+    const y = box.y + box.height / 2;
+    const touch = (type, x) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+    await touch('touchStart', box.x + 30);
+    for (const dx of [20, 45, 70, 90]) await touch('touchMove', box.x + 30 + dx);
+    await touch('touchEnd', box.x + 120);
+    const unpin = page.getByRole('button', { name: 'Unpin', exact: true });
+    if (!(await unpin.waitFor({ timeout: 2000 }).then(() => true, () => false))) missing('a slide to the right on a pinned row shows no Unpin');
+    // A tap elsewhere closes the row again.
+    await page.mouse.click(5, 5);
+    await cdp.detach();
+  } else {
+    await row.hover();
+    const unpin = page.getByRole('button', { name: /^Unpin: / }).first();
+    await page.waitForTimeout(250);
+    if (!(await unpin.isVisible()) || await unpin.evaluate((el) => getComputedStyle(el).opacity) !== '1') missing('pointing at a pinned row shows no Unpin');
+  }
+  await page.waitForTimeout(250);
+}
+
+/**
+ * The list, its sheets and its Pinned group, a new session in another folder, and every session
+ * with its sheets; then Changes and files, walked through in `walked` (see walkable).
  */
 async function driveApp(browser, base, sessions, walked) {
   // The list folds side chats away under their session.
@@ -248,6 +306,9 @@ async function driveApp(browser, base, sessions, walked) {
       for (const title of titles) {
         if (!(await page.getByText(title, { exact: true }).first().isVisible())) problems.push(`app, ${size}, ${scheme}: the list does not show "${title}"`);
       }
+      at = 'the Pinned group';
+      await walkPinned(page, sessions, size, `app, ${size}, ${scheme}`);
+      at = 'the list';
       for (const label of LIST_BUTTONS) {
         await press(page, label, `app, ${size}`);
         await page.goto(base, { waitUntil: 'networkidle' });
