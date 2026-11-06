@@ -2,19 +2,19 @@
  * A terminal's screen as output that draws it again, for a page that comes in (`ready`): the
  * scrollback, the alternate screen of a program such as vim, and the modes it set.
  *
- * The screen is written as xterm's own serializer writes it (@xterm/addon-serialize 0.14.0, by
- * the xterm.js authors, MIT: its string serializer, below), but for what that one drew otherwise:
- * a bold character after a dim one came back plain, as the SGR that ended dim (22) ended bold too;
- * a wrapped line of nothing but empty cells left a `-` at its start, as its moves by 0 went by 1,
- * and the next line's first cell took this one's background;
- * a line wrapped onto one that begins with empty cells lost its last character to the next line's
- * first; a cursor moved from past the last column landed a column off; colored empty cells at a
- * screen's end, and those of the first line to scroll in, came back in the usual colors; a mark in
- * a cell of its own joined the character before it; and the alternate screen's empty cells took the
- * colors a program last printed in. What the
- * serializer leaves out follows it (modesBeyondSnapshot). test/terminal-snapshot.test.ts compares,
- * over random output, a page that comes back with one that saw it all, and lists what neither
- * carries.
+ * The screen is written as xterm's own serializer writes it (@xterm/addon-serialize 0.14.0, by the
+ * xterm.js authors, MIT: its string serializer, below), but for what that one drew otherwise: a
+ * bold character after a dim one came back plain, as the SGR that ended dim (22) ended bold too; a
+ * wrapped line of nothing but empty cells left a `-` at its start, as its moves by 0 went by 1, and
+ * the next line's first cell took this one's background; a line wrapped onto one that begins with
+ * empty cells lost its last character to the next line's first; a cursor moved from past the last
+ * column landed a column off; colored empty cells at a screen's end, and those of the first line
+ * to scroll in, came back in the usual colors; a mark in a cell of its own joined the character
+ * before it; a line xterm kept longer than the screen after a resize wrapped onto lines of its
+ * own; and the alternate screen's empty cells took the colors a program last printed in, while
+ * the normal screen lost its rows that scroll, tab stops and saved cursor. What the serializer
+ * leaves out follows it (modesBeyondSnapshot). test/terminal-snapshot.test.ts compares, over
+ * random output, a page that comes back with one that saw it all, and lists what neither carries.
  *
  * Copyright (c) 2019 The xterm.js authors (the serializer). MIT.
  */
