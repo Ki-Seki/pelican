@@ -7,60 +7,62 @@ A terminal beside the conversation, as Claude Desktop has one.
 ### Highlights
 
 - **Terminal.** A Terminal tab beside Changes and Files runs your login shell on the computer, in
-  the session's folder, with the environment Claude Code has there, as in Claude Desktop:
-  `npm test` and `git status` see the files Claude is editing, and git by hand goes there.
-  Ctrl+\` shows it, as in Desktop, and hides it again from inside it. Each terminal is a tab
-  named after the program in front (zsh, npm, vim); + opens another, Open in terminal at the top
-  of a folder in Files opens one there, and End hangs the shown one up, as closing a window does,
-  asking first while a program runs in it. On a computer you type straight into it, select to
-  Quote or Copy, and Ctrl and the wheel sets the text size. Its colors and font are Pelican's,
-  light or dark.
-- **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the
-  screen with your phone's own keyboard, so dictation and input methods such as Chinese pinyin
-  work, and Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows,
-  `|` `~` `/` `-` and paste, and a key there sends what you typed first, so tab completes it. A
-  full-screen program such as vim or htop gets every key as you type it, a password prompt hides
-  what you type, a swipe scrolls back, a pinch sets the size, and a long press opens the screen as
-  text, to select from, quote or copy.
-- **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when
-  you come back the page connects again by itself and shows the screen as it was, scrollback and
-  a program such as vim included. A shell that ends keeps its last screen, with Start again; so
-  does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
-  hours with nothing running in it closes on its own, and one nobody typed into that no page
-  shows makes room when 10 run; with 10 in use, the Terminal tab lists those in other folders,
-  to end one. Its output comes over a connection of its
-  own, so it never holds up an approval, and while a phone on a slow link catches up the shell
-  waits for it, so Ctrl+C gets through at once.
-- **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or
-  `fish` block) has Run in terminal, which asks, in place, before it runs it in a new terminal in
-  the session's folder, pasted there, so its lines go in together. Only Claude's replies offer it,
-  not a file or a tool's output, and only for a command with nothing hidden in it. Quote puts what
-  you selected in the terminal, or its screen, in your message as a code block, at most its last
-  200 lines: Claude sees a terminal only that way. `!` commands go into the conversation as
-  before.
+  the session's folder, with the environment Claude Code has there, as in Claude Desktop: `npm test`
+  and `git status` see the files Claude is editing, and git by hand goes there. Ctrl+\` shows it, as
+  in Desktop, and hides it again from inside it. Each terminal is a tab named after the program in
+  front (zsh, npm, vim); + opens another, Open in terminal at the top of a folder in Files opens one
+  there, and End hangs the shown one up, as closing a window does, asking first while a program runs
+  in it. On a computer you type straight into it, select to Quote or Copy, and Ctrl and the wheel
+  sets the text size. Its colors and font are Pelican's, light or dark, and a program that asks for
+  its colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
+- **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
+  with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, and
+  Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-`
+  and paste, a finger's size each, scrolling sideways on a narrow phone, and a key there sends what
+  you typed first, so tab completes it. A line typed while the connection comes back stays until it
+  can go. A full-screen program such as vim or htop gets every key as you type it, a password prompt
+  hides what you type, a swipe scrolls back and ↓ comes back to the newest output, a pinch sets the
+  size, and a long press opens the screen as text, to select from, quote or copy. A screen reader
+  hears what a line printed.
+- **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
+  come back the page connects again by itself and shows the screen as it was, scrollback and a
+  program such as vim, with its mouse and cursor, included, without changing the size the shell has
+  on another page. A shell that ends keeps its last screen, with Start again; so does one Pelican
+  ended when it stopped, as all terminals end with Pelican. One unused for 12 hours with nothing
+  running in it closes on its own, and one nobody typed into that no page shows makes room when 10
+  run; with 10 in use, the Terminal tab lists those in other folders, to end one. Its output comes
+  over a connection of its own, so it never holds up an approval, and while a phone on a slow link
+  catches up the shell waits for it, so Ctrl+C gets through at once.
+- **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or `fish`
+  block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
+  session's folder, pasted there, so its lines go in together. Only Claude's replies offer it, not a
+  file or a tool's output, and only for a command with nothing hidden in it. Quote puts what you
+  selected in the terminal, or its screen, in your message as a code block, at most its last 200
+  lines: Claude sees a terminal only that way. `!` commands go into the conversation as before.
 
 ### Security
 
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
-  trusted that brings programs is asked about first, and in one kept to your settings only, git
-  runs none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`),
-  npm's (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there
-  as in any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is
-  written to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service
-  install`) starts Pelican without them.
+  trusted that brings programs is asked about first, and in one kept to your settings only, git runs
+  none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
+  (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there as in
+  any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is written
+  to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
+  starts Pelican without them.
 - A paste into a terminal, and the phone's line, leave out control characters, as xterm, kitty
   and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
   the shell's paste early and run without Enter.
+- What a terminal keeps of its screen is bounded: 2,000 lines, and at most 16 combining marks on
+  a character, so no output can fill Pelican's memory.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
   the few lines of @lydell's own against those read for this version, and that none of it runs
-  anything as npm installs it.
-  It is optional: where it cannot load, such as on Alpine (musl) or after an install with
-  `--omit=optional`, the terminal says why, and `!` commands work as before.
+  anything as npm installs it. It is optional: where it cannot load, such as on Alpine (musl) or
+  after an install with `--omit=optional`, the terminal says why, and `!` commands work as before.
 
 ### Site, docs and project
 
