@@ -111,6 +111,16 @@ const fileName = (file: string) => file.split('/').pop() || file;
 const CARD = 'rounded-xl border border-line bg-panel';
 /** A card of one line, as Claude Desktop's: as wide as what it says, never wider than the column. */
 const LINE = 'flex min-h-10 min-w-0 items-center gap-2 pr-1 pl-2.5 text-[13px] pointer-coarse:min-h-11';
+/** Beside pictures, a file is a square tile of a thumbnail's size, as in Claude Desktop. */
+const TILE = 'size-[120px] shrink-0';
+const TILE_FACE = `${CARD} flex size-full flex-col items-start justify-between gap-1.5 p-2.5 text-left`;
+
+/**
+ * How the files of one call lie, as Claude Desktop lays them out: pictures that come alone at their
+ * own size, side by side (`natural`); beside other files, pictures as small squares and the other
+ * files as tiles of the same size (`square`); other files alone as cards of a line.
+ */
+type Layout = { natural: boolean; square: boolean };
 
 /** A file's type, as Claude Desktop marks a card: its extension, small. */
 function Badge({ name }: { name: string }) {
@@ -128,12 +138,36 @@ function Label({ name, size, muted = false }: { name: string; size?: number; mut
   );
 }
 
+/** A tile's words: its name over two lines at most, its size, and why it cannot be had (`why`). */
+function TileLabel({ name, size, why }: { name: string; size?: number; why?: string }) {
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5 self-stretch">
+      <span className={`line-clamp-2 font-mono text-[12px] leading-snug break-all ${why ? 'text-faint' : 'text-fg/90'}`}>{name}</span>
+      {size !== undefined && <span className="text-[11px] leading-tight text-faint tabular-nums">{formatBytes(size)}</span>}
+      {why && <span className="text-[11px] leading-tight text-faint">{why}</span>}
+    </span>
+  );
+}
+
+/** Over a picture or a tile, in its corner: shown on a touch screen, else when pointed at or focused. */
+const CORNER = 'absolute top-1.5 right-1.5 rounded-lg bg-bg/85 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100';
+
 /** Why a file Claude sent cannot be had, as the server says it too (app.ts). */
 const GONE = 'No longer on this computer';
 const TOO_LARGE = 'Larger than Pelican serves (200 MB)';
 
 /** A file Claude sent that cannot be had: named and sized, muted, with why, and nothing to tap. */
-function Unavailable({ name, size, why }: { name: string; size?: number; why: string }) {
+function Unavailable({ name, size, why, square }: { name: string; size?: number; why: string; square: boolean }) {
+  if (square) {
+    return (
+      <div className={TILE}>
+        <div className={TILE_FACE}>
+          <Badge name={name} />
+          <TileLabel name={name} size={size} why={why} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={`${CARD} w-fit max-w-full`}>
       <div className={`${LINE} pr-3`}>
@@ -194,10 +228,10 @@ function TextBody({ text, markdown, truncated }: { text: string; markdown: boole
 }
 
 /**
- * A file Claude sent, as its type shows: in place (`open`), or as a card that opens it. `state`:
- * whether it is still there to have, as its call's files were found.
+ * A file Claude sent, as its type shows: in place (`open`), or as a card that opens it, laid out as
+ * its call's files lie. `state`: whether it is still there to have, as its call's files were found.
  */
-function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: string; file: DeliveredFile; open: boolean; state?: SentState }) {
+function SentFile({ sessionId, file, open: startOpen, layout, state }: { sessionId: string; file: DeliveredFile; open: boolean; layout: Layout; state?: SentState }) {
   const kind = sentKind(file);
   const name = fileName(file.path);
   const [open, setOpen] = useState(startOpen);
@@ -211,7 +245,7 @@ function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: stri
     staleTime: 60_000,
   });
   const gone = state === 'gone' || (error instanceof ApiError && error.status === 410);
-  if (gone || state === 'large') return <Unavailable name={name} size={file.size} why={gone ? GONE : TOO_LARGE} />;
+  if (gone || state === 'large') return <Unavailable name={name} size={file.size} why={gone ? GONE : TOO_LARGE} square={layout.square} />;
   const failure = error ? <div className="px-3 pb-2 text-[12px] text-danger">{(error as Error).message}</div> : null;
 
   // On the site, a picture too large to come as data has nothing to show it from.
@@ -219,15 +253,17 @@ function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: stri
   if (kind === 'picture' && open && !broken && !noData && !error) {
     const src = STATIC_DEMO ? data?.image : api.sentUrl(sessionId, file.path);
     if (!src) return <div className={`${CARD} ${LINE} w-fit max-w-full`}><Badge name={name} /><Label name={name} size={file.size} /><Loader2 className="mr-2 size-3.5 animate-spin text-faint" /></div>;
+    // Alone, a picture at its own size, up to 360 by 480; beside other files, a square of 120.
     return (
-      <div className="basis-full">
-        <div className="group relative w-fit max-w-full">
-          <button type="button" aria-label={`Open ${name}`} onClick={() => openImage(src)} className="block max-w-full">
-            <img src={src} alt={name} title={name} loading="lazy" decoding="async" onError={() => setBroken(true)} className="max-h-80 max-w-full rounded-xl border border-line bg-panel" />
-          </button>
-          <div className="absolute top-1.5 right-1.5 rounded-lg bg-bg/85 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
-            <Save sessionId={sessionId} file={file.path} {...(STATIC_DEMO ? { href: src } : {})} />
-          </div>
+      <div className={`group relative ${layout.natural ? 'w-fit max-w-[min(100%,480px)]' : TILE}`}>
+        <button type="button" aria-label={`Open ${name}`} onClick={() => openImage(src)} className={layout.natural ? 'block max-w-full' : 'block size-full'}>
+          <img
+            src={src} alt={name} title={name} loading="lazy" decoding="async" onError={() => setBroken(true)}
+            className={`rounded-xl border border-line bg-panel ${layout.natural ? 'block max-h-[360px] max-w-full' : 'size-full object-contain'}`}
+          />
+        </button>
+        <div className={CORNER}>
+          <Save sessionId={sessionId} file={file.path} {...(STATIC_DEMO ? { href: src } : {})} />
         </div>
       </div>
     );
@@ -242,14 +278,25 @@ function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: stri
   if (kind === 'pdf' || kind === 'file') {
     // A PDF opens in a tab of its own, in the browser's viewer; anything else is saved.
     const pdf = kind === 'pdf';
+    const link = {
+      href: api.sentUrl(sessionId, file.path, !pdf),
+      ...(pdf ? { target: '_blank', rel: 'noopener' } : { download: name }),
+      'aria-label': pdf ? `Open ${name}` : `Download ${name}`,
+    };
+    if (layout.square) {
+      return (
+        <div className={`group relative ${TILE}`}>
+          <a {...link} className={`${TILE_FACE} hover:bg-hover`}>
+            <Badge name={name} />
+            <TileLabel name={name} size={file.size} />
+          </a>
+          {pdf ? <div className={CORNER}><Save sessionId={sessionId} file={file.path} /></div> : <Download aria-hidden className="absolute top-3 right-3 size-3.5 text-faint" />}
+        </div>
+      );
+    }
     return (
       <div className={`${CARD} ${LINE} w-fit max-w-full`}>
-        <a
-          href={api.sentUrl(sessionId, file.path, !pdf)}
-          {...(pdf ? { target: '_blank', rel: 'noopener' } : { download: name })}
-          aria-label={pdf ? `Open ${name}` : `Download ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-2 self-stretch"
-        >
+        <a {...link} className="flex min-w-0 flex-1 items-center gap-2 self-stretch">
           <Badge name={name} />
           <Label name={name} size={file.size} />
           {!pdf && <Download className="mr-2.5 size-3.5 shrink-0 text-faint" />}
@@ -260,10 +307,23 @@ function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: stri
   }
   // Text, and a picture or a page while it is closed (or cannot be shown): a card that opens it.
   const unshowable = broken || noData || (kind === 'page' && data?.truncated);
+  const toggle = { type: 'button' as const, 'aria-label': name, 'aria-expanded': open && !unshowable, disabled: Boolean(unshowable), onClick: () => setOpen((v) => !v) };
+  // A tile while it is closed and has nothing to say; open, it takes the width what it shows needs.
+  if (layout.square && !open && !unshowable && !failure) {
+    return (
+      <div className={`group relative ${TILE}`}>
+        <button {...toggle} className={`${TILE_FACE} hover:bg-hover`}>
+          <Badge name={name} />
+          <TileLabel name={name} size={file.size} />
+        </button>
+        <div className={CORNER}><Save sessionId={sessionId} file={file.path} /></div>
+      </div>
+    );
+  }
   return (
     <div className={`${CARD} overflow-hidden ${open && kind === 'text' ? 'basis-full' : 'w-fit max-w-full'}`}>
       <div className={LINE}>
-        <button type="button" aria-label={name} aria-expanded={open && !unshowable} disabled={Boolean(unshowable)} onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left">
+        <button {...toggle} className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left">
           <Badge name={name} />
           <Label name={name} size={file.size} />
           {!unshowable && (isLoading ? <Loader2 className="size-3.5 shrink-0 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />)}
@@ -292,6 +352,8 @@ function SentFiles({ call }: { call: ToolCall }) {
   // In place, unless Claude meant them as files to save.
   const open = call.name === 'Artifact' || delivered?.display !== 'attach';
   const missed = delivered?.missed ?? 0;
+  const pictures = files.filter((file) => sentKind(file) === 'picture').length;
+  const layout: Layout = { natural: pictures === files.length, square: pictures > 0 && pictures < files.length };
   // Whether each is still there to have, known before any of them shows: older sessions are full of
   // files that have since moved. Should nobody be able to say, they show as they would.
   const paths = [...new Set(files.map((file) => file.path))].slice(0, 50);
@@ -305,10 +367,10 @@ function SentFiles({ call }: { call: ToolCall }) {
   const checked = states.data !== undefined || states.isError;
   if (!sessionId) return null;
   return (
-    // What shows in place takes a line of its own; cards sit side by side, as in Claude Desktop.
-    <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} aria-busy={!checked} className="my-1.5 flex flex-wrap items-start gap-1.5">
+    // What shows in place at full width takes a line of its own; the rest sit side by side and wrap.
+    <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} aria-busy={!checked} className="my-1.5 flex flex-wrap items-start gap-2">
       {caption && <div className="basis-full text-[13.5px] text-muted">{caption}</div>}
-      {checked && files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} state={states.data?.get(file.path)} />)}
+      {checked && files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} layout={layout} state={states.data?.get(file.path)} />)}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>

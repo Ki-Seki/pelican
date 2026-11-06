@@ -111,6 +111,43 @@ describe('a file Claude sent', () => {
     expect(asked).toEqual([]);
   });
 
+  it('lays pictures that come alone side by side, each at its own size up to 360 tall and 480 wide, as in Claude Desktop', async () => {
+    const shots = [1, 2, 3, 4].map((n) => `${WORK}/shots/phone-${n}.png`);
+    show([prompt, ...sent('s17', shots)]);
+    const group = screen.getByRole('group', { name: 'Sent 4 files' });
+    await within(group).findByRole('img', { name: 'phone-1.png' });
+    for (const picture of within(group).getAllByRole('img')) {
+      expect(picture.getAttribute('class')).toMatch(/\bmax-h-\[360px\] max-w-full\b/);
+      const frame = picture.closest('.group')!;
+      expect(frame.className).toContain('max-w-[min(100%,480px)]');
+      // Nothing gives a picture a line of its own.
+      expect(frame.parentElement).toBe(group);
+      expect(frame.className).not.toContain('basis-full');
+    }
+    expect(within(group).getAllByRole('link', { name: /^Download phone-/ })).toHaveLength(4);
+  });
+
+  it('shows pictures beside other files as small squares, and the other files as tiles of their size', async () => {
+    show([prompt, ...sent('s18', [`${WORK}/shots/dark.png`, `${WORK}/week-45.pdf`, `${WORK}/build.zip`])]);
+    const group = screen.getByRole('group', { name: 'Sent 3 files' });
+    const picture = await within(group).findByRole('img', { name: 'dark.png' });
+    const square = (element: Element) => element.closest('.size-\\[120px\\]');
+    expect(picture.getAttribute('class')).toContain('object-contain');
+    expect(square(picture)).toBeTruthy();
+    const pdf = within(group).getByRole('link', { name: 'Open week-45.pdf' });
+    expect(square(pdf)).toBeTruthy();
+    expect(pdf.textContent).toContain('2 KB');
+    expect(square(within(group).getByRole('link', { name: 'Download week-45.pdf' }))).toBe(square(pdf));
+    expect(square(within(group).getByRole('link', { name: 'Download build.zip' }))).toBeTruthy();
+  });
+
+  it('shows other files alone as cards of a line', async () => {
+    show([prompt, ...sent('s19', [`${WORK}/week-45.pdf`, `${WORK}/build.zip`])]);
+    const pdf = await screen.findByRole('link', { name: 'Open week-45.pdf' });
+    expect(pdf.closest('.size-\\[120px\\]')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Download build.zip' }).closest('.size-\\[120px\\]')).toBeNull();
+  });
+
   it('stays a card Claude meant to attach, read nowhere until it is opened', async () => {
     show([prompt, ...sent('s5', [`${WORK}/shots/dark.png`, `${WORK}/report.md`, `${WORK}/page.html`], { display: 'attach' })]);
     const card = await screen.findByRole('button', { name: 'report.md' });
