@@ -75,8 +75,9 @@ describe('what the trust sheet lists', () => {
     expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
   });
 
-  it('warns of nothing when there is nothing hidden', () => {
-    sheet(['SessionStart hook: echo hi']);
+  it('warns of nothing when there is nothing hidden, an emoji or a no-break space in a command neither', () => {
+    sheet(['SessionStart hook: echo hi', 'Stop hook: say "Done \u2705\ufe0f\u00a0\u{1f389}"']);
+    expect(items()[1]).toBe('Stop hook: say "Done \u2705\ufe0f\u00a0\u{1f389}"');
     expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
   });
 });

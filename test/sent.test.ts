@@ -20,6 +20,8 @@ const A = randomUUID();
 const B = randomUUID();
 const MB = 1024 * 1024;
 const ODD = ['page.constructor', 'page.__proto__', 'page.toString', 'photo\u202egnp.command'];
+/** A screenshot, named as macOS names it: a narrow no-break space before AM. */
+const SCREENSHOT = 'Screenshot 2026-11-06 at 10.00.00\u202fAM.png';
 /** Sent, then moved away: a name a page would take for markup, with a character that turns text around. */
 const GONE = 'old <img src=x onerror=alert(1)> \u202efdp.pdf';
 const PAGE = '<!doctype html><h1>Hi</h1>\n';
@@ -66,6 +68,7 @@ beforeAll(async () => {
   await mkdir(work, { recursive: true });
   await writeFile(path.join(work, 'report.md'), '# Report\n\nAll good.\n');
   await writeFile(path.join(work, 'chart.png'), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
+  await writeFile(path.join(work, SCREENSHOT), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
   await writeFile(path.join(work, 'notes.pdf'), '%PDF-1.4\n%%EOF\n');
   await writeFile(path.join(work, 'data.zip'), Buffer.from([0x50, 0x4b, 3, 4, 0, 0]));
   await writeFile(path.join(work, 'page.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>');
@@ -97,7 +100,7 @@ beforeAll(async () => {
         send('asked-other', '/etc/hosts'),
         send('failed', ['missing.md']),
         send('unanswered', ['/Users/ada/.ssh/id_ed25519']),
-        send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin']),
+        send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', SCREENSHOT]),
         send('refused', ['secret.txt']),
         send('odd', [...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE]),
         send('media', Object.keys(MEDIA)),
@@ -108,8 +111,8 @@ beforeAll(async () => {
     { type: 'user', content: [answer('failed', 'Attachment "missing.md" does not exist.', true)], toolUseResult: 'Error: Attachment "missing.md" does not exist.' },
     {
       type: 'user',
-      content: [answer('kinds', '6 files delivered to user.')],
-      toolUseResult: record(['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin'].map((f) => path.join(work, f))),
+      content: [answer('kinds', '7 files delivered to user.')],
+      toolUseResult: record(['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', SCREENSHOT].map((f) => path.join(work, f))),
     },
     {
       type: 'user',
@@ -170,7 +173,7 @@ describe('what Claude Code records a SendUserFile call delivered', () => {
 
 describe('files Claude sent', () => {
   it('are what Claude Code recorded it delivered, from calls that ran: not what Claude asked for, nor a call that failed, was only written, or was refused', async () => {
-    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE, ...Object.keys(MEDIA)].map((f) => path.join(work, f)).sort());
+    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', SCREENSHOT, ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE, ...Object.keys(MEDIA)].map((f) => path.join(work, f)).sort());
     expect([...(await sentFiles(B))]).toEqual([path.join(root, 'other', 'theirs.txt')]);
   });
 });
@@ -386,6 +389,16 @@ describe('a file Claude sent, by a link', () => {
       const read = await shown(A, path.join(work, name));
       expect(await read.json()).toEqual({ path: name, size: PAGE.length, text: PAGE });
     }
+  });
+
+  it('is saved under its own name when nothing in it hides: a screenshot as macOS names it', async () => {
+    const response = await linked(A, path.join(work, SCREENSHOT), '&download=1');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(SCREENSHOT)}`);
+    expect(response.headers.get('content-disposition')).toContain('10.00.00%E2%80%AFAM.png');
+    // As a picture, it is itself.
+    const picture = await linked(A, path.join(work, SCREENSHOT));
+    expect(picture.headers.get('content-type')).toBe('image/png');
   });
 
   it('is saved under the name its card shows: a character that turns text around shown as such', async () => {

@@ -191,7 +191,8 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption)) : undefined } : undefined;
   const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
-  // saves. Words keep their emoji whole; a name or a rule shows every hidden character.
+  // saves. Words keep the joiners and selectors their scripts write with; a name or a rule shows
+  // every one outside an emoji (src/shared/hidden.ts).
   const [head, about] = [headline(request, cwd), request.description].map((text) => (text ? revealHidden(text, { prose: true }) : undefined));
   const [server, always] = [request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
   // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.

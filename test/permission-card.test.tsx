@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { revealHidden } from '../src/shared/hidden';
 import type { PermissionRequest } from '../src/shared/protocol';
 
 const { PermissionCard } = await import('../src/web/components/PermissionCard');
@@ -54,5 +55,16 @@ describe('an approval to send a file', () => {
     expect(screen.getByText('Claude wants to send you a file')).toBeTruthy();
     expect(screen.getByText('/tmp/re⟨U+202E⟩txt.md')).toBeTruthy();
     expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
+  });
+
+  it('names a screenshot as macOS does, keeps its caption’s emoji whole, and warns of nothing', () => {
+    const screenshot = '/Users/ada/Desktop/Screenshot 2026-11-06 at 10.00.00\u202fAM.png';
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: [screenshot], caption: 'Here it is \u2714\ufe0f' })} />);
+    // Exactly: a matcher's own spacing would make the narrow space a plain one.
+    expect(screen.getByRole('listitem').textContent).toBe(screenshot);
+    expect(screen.getByText('Here it is \u2714\ufe0f')).toBeTruthy();
+    expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
+    // The name its card and its download take is its own.
+    expect(revealHidden('Screenshot 2026-11-06 at 10.00.00\u202fAM.png')).toEqual({ text: 'Screenshot 2026-11-06 at 10.00.00\u202fAM.png', hidden: false });
   });
 });
