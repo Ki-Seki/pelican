@@ -113,11 +113,11 @@ function CodeBlock({ children }: { children?: ReactNode }) {
                 setAsking(false);
                 run(command);
               }}
-              className="h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg"
+              className="h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg pointer-coarse:h-7 pointer-coarse:px-3.5"
             >
               Run
             </button>
-            <button type="button" onClick={() => setAsking(false)} className="h-6 shrink-0 rounded-full px-2 text-[12px] text-muted hover:bg-hover hover:text-fg">Cancel</button>
+            <button type="button" onClick={() => setAsking(false)} className="h-6 shrink-0 rounded-full px-2 text-[12px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-7 pointer-coarse:px-3">Cancel</button>
           </>
         ) : (
           <>
