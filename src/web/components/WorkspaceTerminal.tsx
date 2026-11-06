@@ -293,8 +293,9 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
       {confirmEnd && shown ? (
         <div className="flex h-10 shrink-0 items-center gap-2 pr-2 pl-4 text-[13px]">
           <span className="min-w-0 flex-1 truncate">End <span className="font-mono">{shown.program}</span>? It is still running.</span>
-          <button type="button" onClick={() => end(shown)} className="h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg">End</button>
-          <button type="button" onClick={() => setConfirmEnd(false)} className="h-8 shrink-0 rounded-full bg-chip px-3.5">Cancel</button>
+          {/* A finger's 44px: 40 on a touch screen, and a little more around. */}
+          <button type="button" onClick={() => end(shown)} className="relative h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">End</button>
+          <button type="button" onClick={() => setConfirmEnd(false)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
         </div>
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-0.5 pr-2 pl-3">
@@ -546,7 +547,8 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const placeholder = mode.direct ? `Keys go to ${program}` : mode.secret ? 'Password' : 'Type a command';
   return (
     <div className={`shrink-0 border-t border-line pt-1.5 ${safe}`}>
-      <div className="flex gap-1 px-2" role="toolbar" aria-label="Keys">
+      {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. */}
+      <div className="no-scrollbar flex gap-1 overflow-x-auto px-2" role="toolbar" aria-label="Keys">
         {ROW.filter((k) => k.key !== 'paste' || canPaste).map((k) => (
           <button
             key={k.key}
@@ -557,7 +559,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
             onPointerDown={(e) => e.preventDefault()}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => tap(k.key)}
-            className={`grid h-9 min-w-0 place-items-center rounded-lg font-mono text-[12.5px] ${k.wide ? 'flex-[1.45]' : 'flex-1'} ${k.key === 'ctrl' && ctrl ? 'bg-fg text-bg' : 'bg-chip text-muted active:bg-hover'}`}
+            className={`grid h-9 shrink-0 place-items-center rounded-lg font-mono text-[12.5px] ${k.wide ? 'min-w-11 flex-[1.45]' : 'min-w-9 flex-1'} ${k.key === 'ctrl' && ctrl ? 'bg-fg text-bg' : 'bg-chip text-muted active:bg-hover'}`}
           >
             {k.label}
           </button>
