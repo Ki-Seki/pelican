@@ -1,8 +1,9 @@
-import { useSyncExternalStore } from 'react';
+import { X } from 'lucide-react';
+import { useId, useSyncExternalStore } from 'react';
 
-import { MOD } from '../lib/keyboard';
+import { shortcutList } from '../lib/keyboard';
 import { enterSends, usePrefs } from '../lib/prefs';
-import { Sheet, SheetHeading } from './Sheet';
+import { Modal } from './Modal';
 
 let shown = false;
 const listeners = new Set<() => void>();
@@ -17,24 +18,17 @@ export const shortcutsShown = () => shown;
 function Keys({ keys }: { keys: string[] }) {
   return (
     <span className="flex shrink-0 items-center gap-1">
-      {keys.map((key) => (
-        <kbd key={key} className="min-w-6 rounded-md border border-line bg-chip px-1.5 py-0.5 text-center font-sans text-[12px] text-muted">{key}</kbd>
+      {keys.map((key, i) => (
+        <kbd key={i} className="grid h-6 min-w-6 place-items-center rounded-md border border-line bg-bg px-1.5 font-sans text-[12px] text-muted">{key}</kbd>
       ))}
     </span>
   );
 }
 
-function Row({ label, keys, or }: { label: string; keys: string[]; or?: string[] }) {
-  return (
-    <div className="flex items-center gap-3 px-3 py-2 text-[14px]">
-      <span className="min-w-0 flex-1">{label}</span>
-      <Keys keys={keys} />
-      {or && <><span className="text-[12px] text-faint">or</span><Keys keys={or} /></>}
-    </div>
-  );
-}
-
-/** The keys Pelican knows, the same as Claude Desktop's and the CLI's where they overlap. */
+/**
+ * The keys Pelican knows: Claude Desktop's web keys, by part, as lib/keyboard has them. Only a key
+ * that works is listed; the message box's follow the Enter key setting.
+ */
 export function ShortcutsSheet() {
   const open = useSyncExternalStore(
     (listener) => {
@@ -44,26 +38,43 @@ export function ShortcutsSheet() {
     () => shown,
   );
   usePrefs();
+  const titleId = useId();
+  const close = () => showShortcuts(false);
   // The composer's own rule: Auto sends on Enter where the pointer is fine (not an iPad with a keyboard).
-  const enter = enterSends();
+  const parts = shortcutList({ enterSends: enterSends() });
   return (
-    <Sheet open={open} onClose={() => showShortcuts(false)} title="Keyboard shortcuts" done>
-      <Row label="Send" keys={enter ? ['Enter'] : [MOD, 'Enter']} {...(enter ? { or: [MOD, 'Enter'] } : {})} />
-      <Row label="New line" keys={enter ? ['Shift', 'Enter'] : ['Enter']} />
-      <Row label="Stop Claude" keys={['Esc']} />
-      <Row label="Search sessions" keys={[MOD, 'K']} />
-      <Row label="Transcript view" keys={['Ctrl', 'O']} />
-      <Row label="Changes and files" keys={[MOD, 'Shift', 'D']} />
-      <Row label="Side chat" keys={[MOD, ';']} />
-      <Row label="Close pane" keys={[MOD, '\\']} />
-      <Row label="Close a sheet" keys={['Esc']} />
-      <Row label="Keyboard shortcuts" keys={[MOD, '/']} />
-      <SheetHeading>In Changes and files</SheetHeading>
-      <Row label="Send comments" keys={[MOD, 'Enter']} />
-      <SheetHeading>In the message box</SheetHeading>
-      <Row label="Commands" keys={['/']} />
-      <Row label="Files and agents" keys={['@']} />
-      <Row label="Shell command" keys={['!']} />
-    </Sheet>
+    <Modal open={open} onClose={close} labelledBy={titleId}>
+      <div className="flex h-full w-full items-end justify-center sm:items-start sm:p-6 sm:pt-[8vh]">
+        <div className="animate-fade absolute inset-0 bg-black/20 transition-opacity duration-200 group-data-closing/modal:opacity-0" onClick={close} />
+        <div className="animate-sheet pb-safe relative flex max-h-[85%] w-full max-w-[900px] flex-col rounded-t-2xl border border-line bg-panel shadow-2xl transition-[translate,opacity] duration-200 group-data-closing/modal:translate-y-full motion-reduce:transition-none sm:max-h-full sm:rounded-2xl sm:group-data-closing/modal:translate-y-3 sm:group-data-closing/modal:opacity-0">
+          <div className="flex shrink-0 items-center justify-between px-6 pt-5 pb-3">
+            <h2 id={titleId} className="text-[17px] font-semibold">Keyboard shortcuts</h2>
+            <button type="button" aria-label="Close" onClick={close} className="-mr-2 grid size-9 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
+              <X className="size-[18px]" />
+            </button>
+          </div>
+          <div className="grid min-h-0 grid-cols-1 gap-x-10 gap-y-5 overflow-y-auto overscroll-contain px-6 pb-6 sm:grid-cols-2 lg:grid-cols-3">
+            {parts.map((part) => (
+              <section key={part.group} aria-label={part.group}>
+                <h3 className="pb-1.5 text-[12px] font-medium text-faint">{part.group}</h3>
+                {part.rows.map((row) => (
+                  <div key={row.id} data-key={row.id} className="flex min-h-8 items-center justify-between gap-3 py-0.5 text-[13.5px] leading-snug">
+                    <span className="min-w-0">{row.label}</span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {row.keys.map((keys, i) => (
+                        <span key={i} className="contents">
+                          {i > 0 && <span className="text-[12px] text-faint">{row.range ? '–' : 'or'}</span>}
+                          <Keys keys={keys} />
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </section>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }

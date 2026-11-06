@@ -8,6 +8,8 @@
   ⇧⌘O (Ctrl+Shift+O) starts one, ⇧⌘, (Ctrl+Shift+,) opens Settings, and ⌃⇧D shows or hides
   Changes and files on a Mac too. ⌘K still searches; ⌘, and ⌘⇧D work as well where a browser
   passes them on, and keys a browser keeps for itself are left to it.
+- The list of keys (⌘/ or Ctrl+/) is Desktop's: in its parts (General, This session, Panes, Message
+  box, Quotes and comments), wide on a computer, naming only the keys that work.
 
 ## 0.4.0
 

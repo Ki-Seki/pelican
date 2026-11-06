@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+let coarse = false;
 beforeAll(() => {
   window.matchMedia = ((query: string) => ({
-    matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    matches: query === '(pointer: coarse)' ? coarse : false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
     this.setAttribute('open', '');
@@ -15,41 +16,79 @@ beforeAll(() => {
 });
 
 const { ShortcutsSheet, showShortcuts } = await import('../src/web/components/Shortcuts');
-const { closesPane } = await import('../src/web/lib/keyboard');
+const { closesPane, KEY_IDS, keyWorks, KEYS } = await import('../src/web/lib/keyboard');
 
 afterEach(() => {
   act(() => showShortcuts(false));
   cleanup();
+  coarse = false;
 });
 
-/** Each row of the sheet as its name and its keys, and the headings between them. */
-function rows(): string[] {
+/** The sheet as its parts, each with its rows as their names and keys ("Search sessions: Ctrl Shift K"). */
+function parts(): Record<string, string[]> {
   render(<ShortcutsSheet />);
   act(() => showShortcuts(true));
-  const sheet = document.querySelector('dialog[open]')!;
-  const items = [...sheet.querySelectorAll('div')].filter((el) => el.querySelector('kbd') ? el.matches('.gap-3') : el.children.length === 0 && /^In /.test(el.textContent ?? ''));
-  return items.map((row) => {
-    const keys = [...row.querySelectorAll('kbd')].map((k) => k.textContent);
-    return keys.length > 0 ? `${row.querySelector('span')!.textContent}: ${keys.join(' ')}` : `# ${row.textContent}`;
-  });
+  const sheet = document.querySelector('dialog[open]') as HTMLElement;
+  expect(within(sheet).getByRole('heading', { name: 'Keyboard shortcuts' })).toBeTruthy();
+  return Object.fromEntries([...sheet.querySelectorAll('section')].map((section) => [
+    section.getAttribute('aria-label'),
+    [...section.querySelectorAll('[data-key]')].map((row) => {
+      const keys = [...row.querySelectorAll('kbd')].map((k) => k.textContent).join(' ');
+      return `${row.firstElementChild!.textContent}: ${keys}`;
+    }),
+  ]));
 }
 
 describe('the keyboard shortcuts sheet', () => {
-  it('lists the keys of the panes beside the conversation, as Claude Desktop has them, under the names the app gives them', () => {
-    const listed = rows();
-    // Off Apple keyboards (as here) the modifier is Ctrl; on them, ⌘.
-    expect(listed).toEqual(expect.arrayContaining([
-      'Transcript view: Ctrl O',
-      'Changes and files: Ctrl Shift D',
-      'Side chat: Ctrl ;',
-      'Close pane: Ctrl \\',
-      'Send comments: Ctrl Enter',
-    ]));
-    // Sending the comments works in Changes and files, and says so.
-    const heading = listed.indexOf('# In Changes and files');
-    expect(heading).toBeGreaterThan(0);
-    expect(listed[heading + 1]).toBe('Send comments: Ctrl Enter');
-    expect(listed.some((row) => /view modes/.test(row))).toBe(false);
+  it('lists Claude Desktop’s web keys by part, as the table has them, as this keyboard prints them', () => {
+    // Off Apple keyboards (as here) the keys are Ctrl, Alt and Shift; on them, ⌃ ⌥ ⇧ ⌘.
+    expect(parts()).toEqual({
+      General: [
+        'Search sessions: Ctrl Shift K',
+        'New session: Ctrl Shift O',
+        'Settings: Ctrl Shift ,',
+        'Keyboard shortcuts: Ctrl /',
+        'Close a menu or sheet: Esc',
+      ],
+      'This session': ['Side chat: Ctrl ;', 'Transcript view: Ctrl O'],
+      Panes: ['Changes and files: Ctrl Shift D', 'Close pane: Ctrl \\'],
+      'Message box': [
+        'Send: Enter Ctrl Enter',
+        'New line: Shift Enter',
+        'Stop: Esc',
+        'Commands: /',
+        'Files and agents: @',
+        'Shell command: !',
+      ],
+      'Quotes and comments': ['Changes and files: send all comments: Ctrl Enter'],
+    });
+  });
+
+  it('names only keys that work: those of parts still to come wait for them', () => {
+    const listed = Object.values(parts()).flat().map((row) => row.slice(0, row.lastIndexOf(':')));
+    for (const id of KEY_IDS) {
+      const { label } = KEYS[id];
+      if (!keyWorks(id)) expect(listed, label).not.toContain(label);
+    }
+    expect(listed).not.toContain('Command menu');
+    expect(listed).not.toContain('Rename');
+    // The browser's own (Copy, Paste) are shown in menus, not here.
+    expect(listed).not.toContain('Copy');
+  });
+
+  it('says Send and New line as the Enter key setting has them', () => {
+    // Auto: a touch screen's Enter starts a new line.
+    coarse = true;
+    const box = parts()['Message box']!;
+    expect(box).toContain('Send: Ctrl Enter');
+    expect(box).toContain('New line: Enter');
+  });
+
+  it('closes with its button, and Esc is the dialog’s own', () => {
+    parts();
+    const sheet = document.querySelector('dialog[open]') as HTMLElement;
+    act(() => within(sheet).getByRole('button', { name: 'Close' }).click());
+    expect(document.querySelector('dialog[data-closing]')).not.toBeNull();
   });
 
   it('Close pane is Cmd/Ctrl+\\ and nothing else', () => {
