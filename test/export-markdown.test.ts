@@ -322,6 +322,12 @@ describe('a reply in the export', () => {
     }
   });
 
+  it('takes an ftp:// address for a bare link, as GitHub’s reader and VS Code’s preview do, which a backquote may be in', () => {
+    expect(reply('Mirror: ftp://mirror.example/pub/`4.2 <img src="https://evil.example/m.png"> `')).toBe('Mirror: ftp://mirror.example/pub/`4.2 &lt;img src="https://evil.example/m.png"> `');
+    // In a prompt, it is code, as an http:// one is.
+    expect(asText('Get it from ftp://files.example/pub/4.2')).toBe('Get it from `ftp://files.example/pub/4.2`');
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

@@ -18,11 +18,11 @@ export const asCode = (code: string) => (/[\r\n]/.test(code) ? codeBlock(code) :
 
 /**
  * Where a Markdown reader with GitHub's extensions makes a link of bare text: an address that
- * starts with http://, https:// or www., or an email. It does that to the text an escape leaves,
- * so only code keeps one text. An email is looked for only where a run of the characters it is
- * made of starts, so a long run of them is read once.
+ * starts with http://, https://, ftp:// (GitHub's and VS Code's preview) or www., or an email.
+ * It does that to the text an escape leaves, so only code keeps one text. An email is looked for
+ * only where a run of the characters it is made of starts, so a long run of them is read once.
  */
-const BARE_LINK = /(?<![\p{L}\p{N}])(?:(?:https?:\/\/|www\.)[^\s<`]*[^\s<`.,:;!?"')\]}*_~]|(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/giu;
+const BARE_LINK = /(?<![\p{L}\p{N}])(?:(?:(?:https?|ftp):\/\/|www\.)[^\s<`]*[^\s<`.,:;!?"')\]}*_~]|(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/giu;
 /**
  * Each character that could make Markdown of text, escaped; a `<` as `&lt;`, since a bare link
  * just before it takes a backslash into its address, which leaves the `<` to start HTML.
@@ -1116,7 +1116,8 @@ const AUTOLINK_SOME = new RegExp(`<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\x00-\\x20
  * comment, a declaration or an instruction. Any other is text in all of them, as written.
  */
 const HTML_START = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s>]|\/>|$)|\/[A-Za-z]|[!?])/y;
-const BARE_START = /https?:\/\/|www\./iy;
+/** Where a bare link starts, for some reader: GitHub's and markdown-it (VS Code's preview) take `ftp://` too. */
+const BARE_START = /(?:https?|ftp):\/\/|www\./iy;
 /** A picture's words that are written as the words of a link to it: no brackets, backslashes, backquotes or line breaks. */
 const SIMPLE_WORDS = /^[^[\]\\`\n]{0,1000}$/;
 /** A line that starts a link's reference definition, which the reader takes whole: no `[` or `]` in its label but escaped. */
@@ -1710,7 +1711,7 @@ function inline(text: string, { sure, breaks = [], context }: { sure: boolean; b
     } else {
       if (sure && c === ']' && text[i + 1] === '(') looked(i, linkEnd(text, i + 1));
       else if (sure && c === ']' && text[i + 1] === '[') looked(i, bracketEnd(text, i + 1));
-      else if (sure && (c === 'h' || c === 'H' || c === 'w' || c === 'W')) {
+      else if (sure && (c === 'h' || c === 'H' || c === 'w' || c === 'W' || c === 'f' || c === 'F')) {
         BARE_START.lastIndex = i;
         if (BARE_START.test(text)) looked(i, { end: stop[i], read: 0 });
       }
