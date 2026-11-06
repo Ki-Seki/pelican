@@ -2,6 +2,20 @@
 
 ## 0.4.1
 
+Pinned sessions and the files Claude sends you, as in Claude Desktop; approvals that show what a
+command hides; and what the reviews of 0.4.0 left.
+
+### Highlights
+
+- **Pinned sessions, as in Claude Desktop.** On a phone, a short swipe left on a row shows Pin
+  (Unpin on a pinned row) beside Archive, Archive at the edge as in Mail; a swipe all the way across
+  archives, with Undo, as before. On a computer the pin sits beside Archive when you point at a row,
+  and Pin is in the session menu; in the list, Undo shows for five seconds. A row takes no swipe
+  right, which is Safari's Back, nor one that starts at the very edge of the screen. Pinned sessions
+  lead the list under Pinned, grouped by time or by project, and under their project's filter, each
+  with its status (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on
+  the computer for all your browsers: a session pinned in Claude Desktop is not pinned here, and
+  Desktop's pins are left alone. Archiving a session unpins it.
 - **Files Claude sends you, as in Claude Desktop.** In the sessions Pelican runs, Claude can send
   you files (Claude Code's SendUserFile): Pelican now tells Claude Code it shows them, the way
   Claude Code expects of an app that does, which turns that tool on and nothing else. Before, the
@@ -17,64 +31,97 @@
   "Failed to send" if it fails, in Claude Desktop's words, and sent files are never folded away
   among steps. Asked to send one from outside the session's folder, the approval says "Claude wants
   to send you a file" and lists it, instead of the call's raw input.
+
+### Fixes
+
 - A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
   this computer" before you tap anything, the same for every type, with its name and size and
   nothing to tap; one past 200 MB says it is larger than Pelican serves, and a text file that large
   still shows its start. A browser tab that opens one anyway says so in a page, not in JSON.
 - A character in a sent file's name that hides or turns text around shows as ⟨U+202E⟩, with the
   approval's warning, on its card, in the step that sends it and in the name it is saved under: a
-  script named to read as a picture no longer does.
+  script named to read as a picture no longer does. A screenshot keeps the name macOS gave it.
 - Files Claude sent in Claude Desktop show from Claude Code's record of what it delivered, so one
   Claude named by a relative path shows too; a file Claude Code did not deliver never shows.
-- The demo, and the live demo on the website, have a file Claude sent: in "Try the dark theme on my
-  phone", a screenshot of the settings page in dark.
 - A download, of a file Claude sent or from Changes and files, sends the file as it was when you
   asked for it: one that grew meanwhile, such as a log still being written, went on past the size it
   had announced, and past the 200 MB limit. One cut short meanwhile breaks the download off.
 - A file whose extension names what every JavaScript object has, such as `.constructor`, opens as a
   file: sent by Claude it failed with a server error, in Changes and files it showed as a broken
   picture, and as an upload it would not open.
-- A step Claude is still writing keeps its icon and its verb at their size beside a long command.
-- Behind a tunnel or a proxy that cannot reach Pelican, a 502, 503 or 504 shows the quiet "Can't
-  reach" line, which keeps trying, instead of the error.
-- A conversation shows its day above its first message too, and above the first prompt of each new
-  day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
-- Pinned sessions, as in Claude Desktop. Pin one with a swipe right on its row on a phone (left is
-  still Archive), with the pin beside Archive when you point at a row on a computer, or with Pin in
-  the session menu; in the list, Undo shows for five seconds. Pinned sessions lead the list under
-  Pinned, grouped by time or by project, and under their project's filter, each with its status
-  (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on the computer
-  for all your browsers: a session pinned in Claude Desktop is not pinned here, and Desktop's pins
-  are left alone. Archiving a session unpins it.
 - On a computer, a row's buttons cut none of its words: the words under them fade out, and in a
   compact row the project and time make room for them. From the keyboard, Pin, Unpin and Archive
   leave focus on the session's row where it went, or on the next row when it leaves the list, and
   Undo brings focus back to it; Archive used to drop it to the page.
-- The demo, and the live demo on the website, have a pinned session.
+- A step Claude is still writing keeps its icon and its verb at their size beside a long command.
+- A conversation shows its day above its first message too, and above the first prompt of each new
+  day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
 - A `!` command that is a command in backquotes, such as `` `grep x f` ``, takes exit code 1 as
   an answer, as Claude Code does, not as a failure: where a command would start, Pelican reads a
   backquote as Claude Code's parser does, after `;`, `|`, `if` or an assignment too.
-- A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
-  recommends; other tags after a black flag, which can spell anything unseen, are left out. The
-  repository's check for hidden characters holds the docs to the same three.
-- An approval shows every character that does not show as what it is, as `⟨U+E0078⟩`, and warns
-  of it: tags, variation selectors, fillers, soft hyphens and spaces other than a plain one too,
-  which showed as nothing, so a command could read as `./build.sh` and run another file. What
-  Claude says a command does keeps its emoji whole.
-- Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of
-  its Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its
-  quotes are quotes, a quote from a file its lines as code. A reply keeps to itself in any reader
-  (GitHub, VS Code's preview): a heading in it sits under the speakers' (`##` becomes `####`), so
-  none passes for "You" or "Claude"; its HTML is text, as the conversation shows it, so none hides
-  the turns after it; a picture is a link that names its site, never loaded when the file is read;
-  and a code block it leaves open ends with it. Addresses and emails in prompts and Claude Code's
-  notes stay text, as code, where a reader would link them.
 - Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
   the message boxes; it sat 2px lower.
 - An Agent call's steps come a page at a time, the newest first, with Show earlier, as a workflow
-  agent's do: a long subagent's transcript, tens of megabytes, no longer reaches the phone whole.
-  A step too large to show says what was left out of it, and the transcript is read only from the
-  session's own folder.
+  agent's do: a long subagent's transcript, tens of megabytes, no longer reaches the phone whole. A
+  page with no step in it, such as a long answer at the end, is read past, so the card counts the
+  steps it shows, never "Last 0 steps", and Show earlier always brings at least one more; a page
+  that cannot be read says why, and Show earlier asks again. A step too large to show says what was
+  left out of it, and the transcript is read only from the session's own folder.
+- Behind a tunnel or a proxy that cannot reach Pelican, a 502, 503 or 504 shows the quiet "Can't
+  reach" line, which keeps trying, instead of the error.
+- Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of its
+  Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its quotes
+  are quotes, a quote from a file its lines as code. A reply keeps to itself in any reader (GitHub,
+  VS Code's preview): a heading in it sits under the speakers' (`##` becomes `####`), so none passes
+  for "You" or "Claude"; its HTML is text, as the conversation shows it, so none hides the turns
+  after it; a picture is a link that names its site, never loaded when the file is read; its links
+  by reference are written with their addresses and its footnotes under labels of its own, so two
+  replies' `[^1]` are two footnotes and no reply changes where another's links lead or what its
+  footnotes say; and a code block it leaves open ends with it. Addresses and emails in prompts and
+  Claude Code's notes stay text, as code, where a reader would link them.
+
+### Security
+
+- An approval shows the characters that show as nothing or turn text around, as `⟨U+E0078⟩`, and
+  warns of them: besides the zero-width and direction-changing ones, tags, a variation selector
+  after a letter or a run of them, fillers, soft hyphens, a carriage return, a code point not
+  assigned yet and the others Chrome draws as nothing or as a blank, so a command can no longer read
+  as `./build.sh` and run another file. The trust sheet, the line saying why Claude Code asks and a
+  sent file's name show them the same way.
+- A space other than a plain one in a command shows as `⟨U+00A0⟩`, with the warning, unless Pelican
+  finds it in quotes, a heredoc's body or a comment: a shell takes it as part of a word, so `echo
+  done⟨U+00A0⟩# ; curl … | sh` read as a comment and ran curl, and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh`
+  ran ./setup.sh. Pelican reads the command as bash, zsh, dash and macOS's bash 3.2 do, and the
+  scripts it hands a shell: after `bash -c`, `eval`, `ssh`, `trap` or an alias, in a heredoc or pipe
+  into `sh`, a script it writes and then runs. Where it cannot tell, every such space shows. The
+  same goes for a Monitor's command and, in the trust sheet, for a hook, a helper, a skill's command
+  and a git filter; between the arguments of an MCP server, or of a hook run without a shell, every
+  such space shows. A string another program runs in a shell of its own, such as python's
+  `os.system`, is not followed.
+- In a PowerShell command such a space shows as it is, as PowerShell takes it for a space, unless
+  the command hands a script to bash, sh, wsl or ssh, which read it otherwise: then every one shows,
+  with the warning; in the trust sheet too, for a hook PowerShell runs.
+- Ordinary text on an approval shows as it is, with no warning, as in Claude Code and Claude
+  Desktop: an emoji whole, in a command too, with its style, keycap, skin tone, flag and the joiners
+  between its pictures (a joined emoji such as a technologist warned in 0.4.0); a space other than a
+  plain one in a path, in words or in a command's quotes, such as the narrow one macOS puts in a
+  screenshot's name or a full-width one between Chinese words in a commit message; Apple's logo.
+  Words keep the joiners Persian and the Indic scripts are written with: what Claude says a command
+  does, a web search, what an agent is to do, a task, a tool's message and the caption of a file it
+  asks to send (a web search in Sinhala or Persian warned).
+- The trust sheet lists a hook's arguments: a hook run without a shell (with `args`) showed only its
+  program.
+- A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
+  recommends; other tags after a black flag, which can spell anything unseen, are left out. The
+  repository's check for hidden characters holds the docs to the same three.
+
+### Site, docs and project
+
+- The demo, and the live demo on the website, have a pinned session and a file Claude sent: in "Try
+  the dark theme on my phone", a screenshot of the settings page in dark.
+- The tests pass in any order and hold on a busy computer: each starts from a state of its own, a
+  page's tests wait up to 3 seconds for what they look for, and those that start a shell or Pelican
+  give it time to start and leave nothing running when they fail.
 
 ## 0.4.0
 
