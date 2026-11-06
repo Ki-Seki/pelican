@@ -115,12 +115,14 @@ function CodeBlock({ children }: { children?: ReactNode }) {
                 setAsking(false);
                 run(command);
               }}
-              // Looks 28px on a touch screen, takes a finger's 44px (up and down; beside each other, they share the gap).
-              className="relative h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg after:absolute after:-inset-x-0.5 after:-inset-y-2 pointer-coarse:h-7 pointer-coarse:px-3.5"
+              // Looks 28px on a touch screen, takes a finger's 44px: up to the bar's edge, which the
+              // block's rounded corners clip, and the rest down over the code; beside each other,
+              // the two share the gap.
+              className="relative h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg after:absolute after:-inset-x-0.5 after:-top-0.5 after:-bottom-3.5 pointer-coarse:h-7 pointer-coarse:px-3.5"
             >
               Run
             </button>
-            <button type="button" onClick={() => setAsking(false)} className="relative h-6 shrink-0 rounded-full px-2 text-[12px] text-muted after:absolute after:-inset-x-0.5 after:-inset-y-2 hover:bg-hover hover:text-fg pointer-coarse:h-7 pointer-coarse:px-3">Cancel</button>
+            <button type="button" onClick={() => setAsking(false)} className="relative h-6 shrink-0 rounded-full px-2 text-[12px] text-muted after:absolute after:-inset-x-0.5 after:-top-0.5 after:-bottom-3.5 hover:bg-hover hover:text-fg pointer-coarse:h-7 pointer-coarse:px-3">Cancel</button>
           </>
         ) : (
           <>
