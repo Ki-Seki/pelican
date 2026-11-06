@@ -133,6 +133,9 @@ afterEach(async () => {
   localStorage.clear();
   for (const chat of [SESSION, OTHER, `new:${CWD}`, CWD]) setComments(chat, []);
   media = {};
+  // Opened beside the conversation, Changes and files stays open from one session to the next, in
+  // memory as well as in storage: the next test starts with it closed, as a first visit does.
+  setPrefs({ workspacePane: false });
   Object.assign(server, { answers: [], hold: undefined, sent: [], shells: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address; one closed on a phone
   // goes back through the history a moment later, which must land before the next test begins.
@@ -162,6 +165,10 @@ function sendText(text: string) {
   fireEvent.change(box(), { target: { value: text } });
   fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
 }
+
+/** What waits above the box to be put back: what did not go, and what Put back took out of the box for it. */
+const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
+const setAside = () => screen.queryAllByText(/^Set aside:/).map((row) => row.textContent?.replace(/^Set aside:\s*/, ''));
 
 describe('opening a chat', () => {
   it('puts the keys in the message box on a computer', async () => {
@@ -214,6 +221,30 @@ describe('a message that did not go', () => {
     await waitFor(() => expect(box().value).toBe('Why does this log say the export failed?'));
     expect(screen.getByLabelText('Remove export.log')).toBeTruthy();
     await waitFor(() => expect(stored()?.attachments).toEqual([expect.objectContaining({ id: 'up-export.log' })]), { timeout: 2000 });
+  });
+
+  it('with a file, while a / command was typed, waits with its file: the command goes without it, and Put back brings both', async () => {
+    server.answers = [new ApiError('Can’t reach studio', 0)];
+    session();
+    await loaded();
+    await attach('export.log');
+    const release = holdNextSend();
+    sendText('Why does this log say the export failed?');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: '/compact' } });
+    release();
+    await waitFor(() => expect(waiting()).toEqual(['Why does this log say the export failed? · export.log']));
+    expect(screen.queryByLabelText('Remove export.log')).toBeNull();
+    await waitFor(() => expect(stored()).toMatchObject({ text: '/compact', held: [{ text: 'Why does this log say the export failed?', attachments: [expect.objectContaining({ id: 'up-export.log' })] }] }), { timeout: 2000 });
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    expect(server.sent[1]).toMatchObject({ text: '/compact', attachments: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Put back Why does this log say the export failed? with export.log' }));
+    expect(box().value).toBe('Why does this log say the export failed?');
+    expect(screen.getByLabelText('Remove export.log')).toBeTruthy();
+    sendText('Why does this log say the export failed?');
+    await waitFor(() => expect(server.sent).toHaveLength(3));
+    expect(server.sent[2]).toMatchObject({ text: 'Why does this log say the export failed?', attachments: ['up-export.log'] });
   });
 
   it('comes back with its files when the trust question is put away', async () => {
@@ -319,9 +350,6 @@ describe('a message from the box that does not go', () => {
     await waitFor(() => expect(box().value).toBe('Why does the export fail?\n\nAlso: the logs'));
   });
 
-  /** What waits above the box to be put back. */
-  const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
-
   it('a / command, while more was typed, waits above the box: the words typed never become its arguments', async () => {
     server.answers = [new Error('Can’t reach studio')];
     session();
@@ -335,10 +363,11 @@ describe('a message from the box that does not go', () => {
     await waitFor(() => expect(waiting()).toEqual(['/compact']));
     expect(box().value).toBe('next question');
     // Put back, it takes the box, and the words wait in its place until they are put back in turn.
-    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Put back /compact' }));
     expect(box().value).toBe('/compact');
-    expect(waiting()).toEqual(['next question']);
-    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '/compact', held: ['next question'] }), { timeout: 2000 });
+    expect(waiting()).toEqual([]);
+    expect(setAside()).toEqual(['next question']);
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '/compact', held: [{ text: 'next question' }] }), { timeout: 2000 });
   });
 
   it('a ! command that does not run, while more was typed, waits above the box, never lost', async () => {
@@ -354,13 +383,13 @@ describe('a message from the box that does not go', () => {
     await screen.findByText('Can’t reach studio');
     await waitFor(() => expect(waiting()).toEqual(['!npm test']));
     expect(box().value).toBe('Then fix what fails');
-    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: 'Then fix what fails', held: ['!npm test'] }), { timeout: 2000 });
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: 'Then fix what fails', held: [{ text: '!npm test' }] }), { timeout: 2000 });
     // Sent, the words go; the command still waits, in the box's draft too.
     sendText('Then fix what fails');
     await waitFor(() => expect(server.sent.map((body) => body.text)).toEqual(['Then fix what fails']));
     expect(waiting()).toEqual(['!npm test']);
-    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '', held: ['!npm test'] }), { timeout: 2000 });
-    fireEvent.click(screen.getByRole('button', { name: 'Put back' }));
+    await waitFor(() => expect(loadDraft(SESSION)).toMatchObject({ text: '', held: [{ text: '!npm test' }] }), { timeout: 2000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Put back !npm test' }));
     expect(box().value).toBe('!npm test');
     expect(waiting()).toEqual([]);
   });
@@ -376,6 +405,32 @@ describe('/clear', () => {
     cleanup();
     expect(loadDraft(SESSION)).toBeUndefined();
     session();
+    expect(box().value).toBe('');
+  });
+});
+
+describe('a new session, once its first message starts it', () => {
+  it('takes what waits above its box along: the session it was for shows it, the next new session in the folder does not', async () => {
+    server.answers = [new Error('Can’t reach studio'), undefined];
+    const view = fresh();
+    const release = holdNextSend();
+    sendText('/init');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    fireEvent.change(box(), { target: { value: 'then explain the layout' } });
+    release();
+    await waitFor(() => expect(waiting()).toEqual(['/init']));
+    sendText('then explain the layout');
+    await waitFor(() => expect(loadDraft(CREATED)).toMatchObject({ text: '', held: [{ text: '/init' }] }));
+    expect(server.sent.map((body) => body.text)).toEqual(['/init', 'then explain the layout']);
+    view.unmount();
+    expect(loadDraft(`new:${CWD}`)).toBeUndefined();
+    // The session it started, as App opens it.
+    session(CREATED);
+    await loaded();
+    expect(waiting()).toEqual(['/init']);
+    cleanup();
+    fresh();
+    expect(waiting()).toEqual([]);
     expect(box().value).toBe('');
   });
 });

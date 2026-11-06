@@ -235,6 +235,28 @@ describe('a file’s Quote and Copy', () => {
     expect(clear(screen.getByText('Claude wants to run npm test').closest('button')!)).toBe(true);
   });
 
+  it('on a phone, end as far above the edge as the view’s other lowest rows, 8px where there is no home indicator; beside the conversation, the 6px of a computer', async () => {
+    /** How far above the edge a row ends with no home indicator: pb-safe's 8px at least, or a floor of its own. */
+    const floor = (row: Element) => (row.classList.contains('pb-safe') ? '8px' : /pb-\[max\(0\.375rem,env\(safe-area-inset-bottom\)\)\]/.test(row.className) ? '6px' : 'none');
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const client = new QueryClient();
+    const at = (node: React.ReactNode) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+    const view = render(at(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+    select(1, 2);
+    expect(floor((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe('8px');
+    // The view's other lowest rows: the comments, with Send now, and the bar saying Claude waits.
+    act(() => setComments(CWD, [{ id: 'c1', path: 'src/a.ts', kind: 'same', line: 2, code: 'const b = 2;', note: 'Rename b' }]));
+    expect(floor(screen.getByRole('button', { name: 'Send now' }).parentElement!)).toBe('8px');
+    act(() => setComments(CWD, []));
+    view.rerender(at(<Workspace open cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} />));
+    expect(floor(screen.getByText('Claude wants to run npm test').closest('button')!)).toBe('8px');
+    view.rerender(at(<Workspace open docked cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />));
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
+    select(1, 2);
+    expect(floor((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe('6px');
+  });
+
   it('beside the conversation, on a tablet, keep clear of the home indicator as on a phone, as do Send now and the end of what scrolls', async () => {
     history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
     const at = (node: React.ReactNode) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;

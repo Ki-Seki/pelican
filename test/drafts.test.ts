@@ -80,17 +80,19 @@ describe('drafts', () => {
     expect(loadDraft('s1')).toMatchObject({ text: '', quotes: ['> the failing line'] });
   });
 
-  it('keep what waits to be put back once the message beside it was sent, and take it to another folder', () => {
-    saveDraft('s1', 'Then fix what fails', [], [], ['!npm test']);
-    expect(loadDraft('s1')).toMatchObject({ text: 'Then fix what fails', held: ['!npm test'] });
+  it('keep what waits to be put back, files and all, once the message beside it was sent, and take it to another folder', () => {
+    saveDraft('s1', 'Then fix what fails', [], [], [{ text: '!npm test' }]);
+    expect(loadDraft('s1')).toMatchObject({ text: 'Then fix what fails', held: [{ text: '!npm test' }] });
     clearDraft('s1', 'Then fix what fails');
-    expect(loadDraft('s1')).toMatchObject({ text: '', held: ['!npm test'] });
-    saveDraft('new:/code/acme', '', [], [], ['/compact']);
+    expect(loadDraft('s1')).toMatchObject({ text: '', held: [{ text: '!npm test' }] });
+    saveDraft('new:/code/acme', '/compact', [], [], [{ text: 'What does this show?', attachments: [file], aside: true }]);
     moveDraft('new:/code/acme', 'new:/code/site');
-    expect(loadDraft('new:/code/site')?.held).toEqual(['/compact']);
+    // Set aside by Put back, it says so after a reload too.
+    expect(loadDraft('new:/code/site')?.held).toEqual([{ text: 'What does this show?', attachments: [file], aside: true }]);
     expect(loadDraft('new:/code/acme')).toBeUndefined();
-    store.set('pelican:drafts', JSON.stringify({ s1: { text: '', held: ['!kept', 3, null, ' '], at: 1 } }));
-    expect(loadDraft('s1')?.held).toEqual(['!kept']);
+    // A text alone, as kept before its files waited with it; what holds neither words nor files goes.
+    store.set('pelican:drafts', JSON.stringify({ s1: { text: '', held: ['!kept', 3, null, ' ', { text: ' ' }, { text: '', attachments: [file, { id: 3 }], aside: 'yes' }], at: 1 } }));
+    expect(loadDraft('s1')?.held).toEqual([{ text: '!kept' }, { text: '', attachments: [file] }]);
   });
 
   it('take their quotes along to another folder, and drop what is not a quote', () => {

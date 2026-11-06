@@ -11,7 +11,7 @@ import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments, useCommentsChat } from '../lib/review';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
-import { SelectionFoot } from './FileViewer';
+import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
 import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
@@ -237,7 +237,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // inset is 0 there), so nothing moves.
   const waits = !docked && Boolean(needsYou);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
-  const selectionFoot = useMemo(() => (foot ? { at: foot, safe: comments.length === 0 && !waits } : undefined), [foot, comments.length, waits]);
+  const selectionFoot = useMemo<SelectionFootAt | undefined>(
+    () => (foot ? { at: foot, ...(comments.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
+    [foot, comments.length, waits, docked],
+  );
 
   // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
   // now (⌘↵) sends them on their own.

@@ -20,6 +20,10 @@ const server = vi.hoisted(() => ({
   git: { repo: false } as GitStatus,
   /** The turns Claude Code's record says changed files. */
   turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] as SessionChanges['turns'],
+  /** A side question does not reach the computer. */
+  drop: false,
+  /** Holds the next side question's answer until it settles. */
+  hold: undefined as Promise<void> | undefined,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -55,6 +59,10 @@ vi.mock('../src/web/lib/api', async (original) => {
       },
       side: async (id: string, body: { question: string; settings: RunSettings; uuid: string }) => {
         server.side.push({ id, ...body });
+        const held = server.hold;
+        server.hold = undefined;
+        await held;
+        if (server.drop) throw new actual.ApiError('Can’t reach studio', 0);
         return { sessionId: SIDE };
       },
     },
@@ -94,7 +102,7 @@ afterEach(() => {
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
-  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] });
+  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, hold: undefined });
   history.replaceState(null, '', '/');
 });
 
@@ -372,6 +380,30 @@ describe('the side chat', () => {
     expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
   });
 
+  it('beside the conversation on a tablet, keeps its box clear of the home indicator, as the conversation’s box beside it is; a phone’s sheet keeps clear itself', async () => {
+    /** How deep the box's foot is padded: as deep as the home indicator where there is one, 8px at least, or 8px. */
+    const foot = (box: HTMLElement) => (box.closest('.pb-safe, .pb-2')!.classList.contains('pb-safe') ? 'clear of the edge' : '8px');
+    media = { '(min-width: 1024px)': true, '(pointer: coarse)': true };
+    session();
+    await loaded();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    expect(pane()).not.toBeNull();
+    expect(foot(within(pane()!).getByLabelText('Side question'))).toBe('clear of the edge');
+    expect(foot(screen.getByLabelText('Message Claude'))).toBe('clear of the edge');
+    cleanup();
+    media = { '(pointer: coarse)': true };
+    session();
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
+    const box = within(sheet).getByLabelText('Side question');
+    expect(foot(box)).toBe('8px');
+    expect(box.closest('.pb-safe')).not.toBeNull();
+  });
+
   it('is a sheet over the conversation on a phone', async () => {
     media = {};
     session();
@@ -381,6 +413,111 @@ describe('the side chat', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
     expect(within(sheet).getByText('Reads this session · changes nothing')).toBeTruthy();
     expect(pane()).toBeNull();
+  });
+});
+
+describe('a side question that did not go', () => {
+  const question = 'why is the cache key per user?';
+  const sideBox = () => screen.getByLabelText('Side question') as HTMLTextAreaElement;
+  const toggle = () => act(() => {
+    fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+  });
+  /** Whatever the box was going to do once shown has been done. */
+  const settled = () => act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  /** Holds the next side question's answer: what it returns lets it go. */
+  function holdNext(): () => Promise<void> {
+    let release = () => {};
+    server.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => act(async () => release());
+  }
+  const ask = (text: string) => {
+    fireEvent.change(sideBox(), { target: { value: text } });
+    fireEvent.keyDown(sideBox(), { key: 'Enter', keyCode: 13, ctrlKey: true });
+  };
+
+  it('comes back to its box once, also once the side chat beside the conversation is closed and opened again', async () => {
+    computer(1280);
+    server.drop = true;
+    session();
+    await loaded();
+    toggle();
+    ask(question);
+    await within(pane()!).findByText('Can’t reach studio');
+    await waitFor(() => expect(sideBox().value).toBe(question));
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
+    expect(pane()).toBeNull();
+    toggle();
+    await settled();
+    expect(sideBox().value).toBe(question);
+  });
+
+  it('keeps what was typed after it came back, the side chat closed and opened again', async () => {
+    computer(1280);
+    server.drop = true;
+    session();
+    await loaded();
+    toggle();
+    ask(question);
+    await waitFor(() => expect(sideBox().value).toBe(question));
+    fireEvent.change(sideBox(), { target: { value: 'what does the build cache hold?' } });
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
+    toggle();
+    await settled();
+    expect(sideBox().value).toBe('what does the build cache hold?');
+  });
+
+  it('on a phone, comes back once to the sheet’s box, closed with Done and opened again', async () => {
+    media = {};
+    server.drop = true;
+    session();
+    await loaded();
+    const open = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+      fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+      return screen.findByRole('dialog', { name: 'Side chat' });
+    };
+    const sheet = await open();
+    ask(question);
+    await waitFor(() => expect(sideBox().value).toBe(question));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull());
+    await open();
+    await settled();
+    expect(sideBox().value).toBe(question);
+  });
+
+  it('asked, and the side chat put away before the question went: opened again, the box holds it once', async () => {
+    computer(1280);
+    server.drop = true;
+    session();
+    await loaded();
+    toggle();
+    const release = holdNext();
+    ask(question);
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
+    await release();
+    toggle();
+    await settled();
+    expect(sideBox().value).toBe(question);
+    expect(within(pane()!).getByText('Can’t reach studio')).toBeTruthy();
+  });
+
+  it('starting with / or !, comes back as words above what was typed since: a side chat takes no commands', async () => {
+    computer(1280);
+    server.drop = true;
+    session();
+    await loaded();
+    toggle();
+    const release = holdNext();
+    ask('/etc/hosts: who reads it?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    fireEvent.change(sideBox(), { target: { value: 'and when?' } });
+    await release();
+    await waitFor(() => expect(sideBox().value).toBe('/etc/hosts: who reads it?\n\nand when?'));
+    expect(within(pane()!).queryByText(/^Not sent:/)).toBeNull();
   });
 });
 

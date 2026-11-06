@@ -210,6 +210,31 @@ async function walkWorkspace(page, base, session, where, step, later = []) {
   await page.waitForLoadState('networkidle');
 }
 
+/** The name the site build gives a saved answer (scripts/site.mjs, src/web/lib/static-demo.ts). */
+function requestKey(value) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/**
+ * Where Changes and files is walked through: the newest session with a folder where a turn
+ * changed files (`answer` asks the demo for a session's changes, or reads the answer the site
+ * saved), else the newest with a folder. The newest may have no such turn: in the demo's workflow
+ * session, the edits are its agents'.
+ */
+async function walkable(sessions, answer) {
+  const folders = sessions.filter((s) => !s.sideChatOf && s.cwd);
+  for (const session of folders) {
+    const changes = await answer(`sessions/${encodeURIComponent(session.id)}/changes`).catch(() => undefined);
+    if (changes?.turns?.some((turn) => turn.files?.length > 0)) return session;
+  }
+  return folders[0];
+}
+
 /**
  * The newest session with a folder that Claude changed files in: Show, in its Changes, offers a
  * turn. A newer one can have changed nothing, as /diff would say of it; failing any, the newest.
@@ -231,14 +256,13 @@ async function sessionToWalk(page, base, sessions) {
  * The list, its sheets, a new session in another folder, and every session with its sheets; then
  * Changes and files, walked through in the newest session that has a folder and changed files.
  */
-async function driveApp(browser, base, sessions) {
+async function driveApp(browser, base, sessions, walked) {
   // The list folds side chats away under their session.
   const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
   // Sessions older than a day (the usage page's history) are all of one plain kind: the first size
   // and theme open every session, the others today's, which hold all a conversation can show.
   const today = sessions.filter((s) => Date.now() - (s.lastActivity ?? 0) < 24 * 60 * 60_000);
   let all = true;
-  let walked;
   for (const [size, options] of Object.entries(SIZES)) {
     for (const scheme of ['light', 'dark']) {
       const context = await browser.newContext({ ...options, colorScheme: scheme });
@@ -519,14 +543,17 @@ try {
     const server = await serveFolder(site);
     stop = async () => server.stop();
     await checkSite(browser, server.base);
-    await driveApp(browser, `${server.base}demo/`, await savedSessions(site));
+    const sessions = await savedSessions(site);
+    const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);
+    await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
     stop = demo.stop;
     const { sessions } = await (await fetch(`${demo.base}api/sessions`, { headers: MARK })).json();
     if (!sessions?.length) problems.push('the demo has no sessions');
-    await driveApp(browser, demo.base, sessions ?? []);
+    const asked = (request) => fetch(`${demo.base}api/${request}`, { headers: MARK }).then((r) => r.json());
+    await driveApp(browser, demo.base, sessions ?? [], await walkable(sessions ?? [], asked));
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
     await checkUsage(browser, demo.base);

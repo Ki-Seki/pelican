@@ -126,15 +126,19 @@ from every app.
   command alone, and one that failed says Failed, or Stopped, where its live card said how it
   ended. A running one's Stop is named for it.
 - Claude's answer to a background task's note shows after the note, not in the reply before it.
-- A message that does not go comes back to the message box, above anything typed since. A `!` or
-  `/` command comes back only into an empty box: with words typed since, which would change it, it
-  waits above the box, Not sent, with Put back, as does a message that comes back while a command
-  is typed, also across reloads. One sent for you (Send now, Compact, Retry, Cancel) leaves the box
-  as it is.
+- A message that does not go comes back to the message box, files and all, above anything typed
+  since. A `!` or `/` command comes back only into an empty box; with words or files there, it
+  waits above the box, Not sent, with Put back, as does a message, files and all, that comes back
+  while a command is typed. What waits stays across reloads, and in a new session goes on with the
+  session once it starts. Put back brings words and files back together, or, where they cannot
+  share the box, swaps them with what is there, which waits in its place, Set aside. One sent for
+  you (Send now, Compact, Retry, Cancel) leaves the box as it is.
 - A path or "files changed" tapped while the side chat is open puts it away and opens Changes and
   files.
-- Side chat in the session menu leaves the keys in the side chat's box. Quotes that do not fit above
-  the message box fade at its edge, and removing one with the keyboard moves on to the next.
+- Side chat in the session menu leaves the keys in the side chat's box, which, beside the
+  conversation on a tablet, keeps clear of the home indicator, level with the conversation's.
+  Quotes that do not fit above the message box fade at its edge, and removing one with the
+  keyboard moves on to the next.
 - A conversation opens without the code of Changes and files, which follows once it is up, and
   Settings without the usage page.
 

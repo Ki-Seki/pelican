@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import type { Attachment } from '../src/shared/protocol';
+
 beforeAll(() => {
   // A computer: a fine pointer, so Enter sends unless set otherwise.
   window.matchMedia = ((query: string) => ({
@@ -165,24 +167,34 @@ describe('quotes above the message box', () => {
 });
 
 describe('a message that did not go, given back while more was typed', () => {
-  type Given = { text: string; key: number; back: true; attachments?: Array<{ id: string; name: string; mime: string; size: number; path: string }> };
-  /** The box for chat `key` with `typed` in it, then `given` back to it (its send failed); and the same box after a reload. */
-  function typedThenGiven(typed: string, given: Omit<Given, 'key' | 'back'>, key = 'g1') {
+  type Given = { text: string; key: number; back: true; attachments?: Attachment[] };
+  /**
+   * The box for chat `key` with `typed` in it, then `given` back to it (its send failed); and the
+   * same box after a reload. Files in the box come from its saved draft.
+   */
+  function typedThenGiven(typed: string, given: Omit<Given, 'key' | 'back'>, key = 'g1', onSend: (...args: unknown[]) => void = () => {}) {
     const node = (draft?: Given) => (
       <QueryClientProvider client={new QueryClient()}>
-        <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={() => {}} onStop={() => {}} draftKey={key} {...(draft ? { draft } : {})} />
+        <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={() => {}} draftKey={key} {...(draft ? { draft } : {})} />
       </QueryClientProvider>
     );
     const view = render(node());
     const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
     fireEvent.change(box(), { target: { value: typed } });
-    view.rerender(node({ ...given, key: 1, back: true }));
-    return { box, reload: () => (view.unmount(), render(node())) };
+    let sends = 0;
+    /** Another message given back, from another send that failed. */
+    const give = (next: Omit<Given, 'key' | 'back'>) => view.rerender(node({ ...next, key: (sends += 1), back: true }));
+    give(given);
+    return { box, give, reload: () => (view.unmount(), render(node())) };
   }
   const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
-  /** What waits above the box, each with Put back. */
+  /** What waits above the box, each with Put back: what did not go, and what Put back took out of the box for it. */
   const waiting = () => screen.queryAllByText(/^Not sent:/).map((row) => row.textContent?.replace(/^Not sent:\s*/, ''));
-  const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: 'Put back' })[at]!);
+  const setAside = () => screen.queryAllByText(/^Set aside:/).map((row) => row.textContent?.replace(/^Set aside:\s*/, ''));
+  const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: /^Put back / })[at]!);
+  const upload = (name: string): Attachment => ({ id: `up-${name}`, name, mime: 'text/plain', size: 20, path: `/tmp/${name}` });
+  /** The files in the box, which go with what is sent from it. */
+  const inBox = () => screen.queryAllByRole('button', { name: /^Remove (?!the quote )/ }).map((b) => b.getAttribute('aria-label')!.replace(/^Remove /, ''));
 
   it('joins what was typed, above it and a blank line apart', async () => {
     const { box } = typedThenGiven('Also: the logs', { text: 'Why does the export fail?' });
@@ -203,17 +215,33 @@ describe('a message that did not go, given back while more was typed', () => {
     expect(screen.getByLabelText('Remove shot.png')).toBeTruthy();
   });
 
-  it('a / command waits above the box: the words typed never become its arguments, and Put back swaps the two', async () => {
+  it('a / command waits above the box: the words typed never become its arguments, and Put back swaps the two, the words set aside, never sent', async () => {
     const { box } = typedThenGiven('next question', { text: '/compact' });
     await frame();
     expect(box().value).toBe('next question');
     expect(waiting()).toEqual(['/compact']);
     putBack();
     expect(box().value).toBe('/compact');
-    expect(waiting()).toEqual(['next question']);
+    expect(waiting()).toEqual([]);
+    expect(setAside()).toEqual(['next question']);
     putBack();
     expect(box().value).toBe('next question');
-    expect(waiting()).toEqual(['/compact']);
+    expect(setAside()).toEqual(['/compact']);
+  });
+
+  it('names the buttons of each row for what it puts back, so two rows are told apart', async () => {
+    const { give } = typedThenGiven('next question', { text: '/compact' }, 'g9');
+    give({ text: '!npm test\nnpm run lint', attachments: [upload('trace.txt')] });
+    await frame();
+    expect(waiting()).toEqual(['/compact', '!npm test · trace.txt']);
+    expect(screen.getAllByRole('button', { name: /^Put back / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Put back /compact', 'Put back !npm test with trace.txt']);
+    expect(screen.getAllByRole('button', { name: /^Discard / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Discard /compact', 'Discard !npm test with trace.txt']);
+    // Named as it reads: the visible Put back starts each name.
+    expect(screen.getAllByRole('button', { name: /^Put back / }).every((b) => b.textContent === 'Put back')).toBe(true);
+    // A long first line is named by its start, cut between words.
+    give({ text: '/review the export job, its retries, its logging and the tests that cover them all' });
+    await frame();
+    expect(screen.getByRole('button', { name: 'Put back /review the export job, its retries, its logging and the…' })).toBeTruthy();
   });
 
   it('a ! command waits above the box too, and Put back puts it in once the box is empty', async () => {
@@ -234,6 +262,65 @@ describe('a message that did not go, given back while more was typed', () => {
     await frame();
     expect(box().value).toBe('!ls -la');
     expect(waiting()).toEqual(['Why does the export fail?']);
+  });
+
+  it('a message with files, while a command is typed, waits with its files: the command goes without them, and Put back brings words and files back together', async () => {
+    const onSend = vi.fn();
+    const { box, reload } = typedThenGiven('/compact', { text: 'Why does this log say the export failed?', attachments: [upload('export.log')] }, 'g4', onSend);
+    await frame();
+    expect(box().value).toBe('/compact');
+    expect(inBox()).toEqual([]);
+    expect(waiting()).toEqual(['Why does this log say the export failed? · export.log']);
+    // So it stays across a reload.
+    reload();
+    expect(waiting()).toEqual(['Why does this log say the export failed? · export.log']);
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith('/compact', [], 'steer');
+    putBack();
+    expect(box().value).toBe('Why does this log say the export failed?');
+    expect(inBox()).toEqual(['export.log']);
+    expect(waiting()).toEqual([]);
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenLastCalledWith('Why does this log say the export failed?', [upload('export.log')], 'steer');
+  });
+
+  it('a message of files alone, while a command is typed, waits too: its files never go into the box beside the command', async () => {
+    const { box } = typedThenGiven('!ls -la', { text: '', attachments: [upload('export.log'), upload('trace.txt')] }, 'g5');
+    await frame();
+    expect(box().value).toBe('!ls -la');
+    expect(inBox()).toEqual([]);
+    expect(waiting()).toEqual(['2 files']);
+    fireEvent.change(box(), { target: { value: '' } });
+    putBack();
+    expect(inBox()).toEqual(['export.log', 'trace.txt']);
+    expect(box().value).toBe('');
+  });
+
+  it('a command that comes back to a box holding files waits above it: the files never go with it', async () => {
+    saveDraft('g6', '', [upload('notes.txt')]);
+    const onSend = vi.fn();
+    const { box } = typedThenGiven('', { text: '/compact' }, 'g6', onSend);
+    await frame();
+    expect(box().value).toBe('');
+    expect(inBox()).toEqual(['notes.txt']);
+    expect(waiting()).toEqual(['/compact']);
+  });
+
+  it('Put back trades places with what is in the box, words and files: a command never takes the files typed beside other words', async () => {
+    saveDraft('g7', '', [upload('notes.txt')]);
+    const onSend = vi.fn();
+    const { box } = typedThenGiven('Summarise these notes', { text: '/compact' }, 'g7', onSend);
+    await frame();
+    expect(waiting()).toEqual(['/compact']);
+    putBack();
+    expect(box().value).toBe('/compact');
+    expect(inBox()).toEqual([]);
+    expect(setAside()).toEqual(['Summarise these notes · notes.txt']);
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith('/compact', [], 'steer');
+    putBack();
+    expect(box().value).toBe('Summarise these notes');
+    expect(inBox()).toEqual(['notes.txt']);
   });
 
   it('waits there across a reload, and Discard lets it go for good', async () => {

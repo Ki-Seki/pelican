@@ -524,6 +524,10 @@ export function Chat({
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
         saveSessionChoice(created, sent);
         if (from === 'box') clearDraft(viewId, text);
+        // What is left in the box, typed since or waiting above it to be put back, goes on with
+        // the session it was for, not with the next new session in this folder.
+        composer.current?.saveDraft();
+        moveDraft(viewId, created);
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
