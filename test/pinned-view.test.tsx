@@ -114,6 +114,9 @@ describe('pinned sessions in the list', () => {
     expect(pinned.getByText('2 tasks')).toBeTruthy();
     expect(pinned.getByRole('button', { name: '2 earlier' })).toBeTruthy();
     expect(pinned.getAllByRole('link')[0]!.getAttribute('aria-label')).toBe('Fix the login test, Needs you, pinned, app, 5 minutes ago');
+    // Their heading says so: the rows carry no pin of their own, only their Unpin buttons do.
+    expect(pinnedSection().querySelectorAll('a .lucide-pin, a .lucide-pin-off')).toHaveLength(0);
+    expect(pinnedSection().querySelectorAll('button[aria-label^="Unpin: "] .lucide-pin-off')).toHaveLength(4);
     // The earlier runs fold into the pinned one, not into a row of their own.
     expect(titles('Today')).toEqual(['Tidy the docs']);
   });
@@ -282,45 +285,93 @@ describe('pinned sessions in the list', () => {
 });
 
 describe('a finger on a row', () => {
-  const slide = async (title: string, dx: number) => {
+  /** A finger on a row's title at `from` (180px from the screen's left), across by `dx` and down by `dy`, then let go. */
+  const slide = async (title: string, dx: number, { from = 180, dy = 0 } = {}) => {
     const row = screen.getByRole('link', { name: new RegExp(`^${title}`) });
-    const at = { pointerType: 'touch', isPrimary: true, pointerId: 1, clientY: 100 };
-    fireEvent.pointerDown(row, { ...at, clientX: 180 });
-    for (const step of [0.25, 0.5, 0.75, 1]) fireEvent.pointerMove(row, { ...at, clientX: 180 + dx * step });
-    fireEvent.pointerUp(row, { ...at, clientX: 180 + dx });
+    const at = { pointerType: 'touch', isPrimary: true, pointerId: 1 };
+    fireEvent.pointerDown(row, { ...at, clientX: from, clientY: 100 });
+    for (const step of [0.25, 0.5, 0.75, 1]) fireEvent.pointerMove(row, { ...at, clientX: from + dx * step, clientY: 100 + dy * step });
+    fireEvent.pointerUp(row, { ...at, clientX: from + dx, clientY: 100 + dy });
   };
+  /** The buttons a slide shows under the rows, left to right, by the names a screen reader gives them. */
+  const under = () => [...document.querySelectorAll('button[data-row-action]:not([aria-label])')].map((button) => button.textContent);
 
-  it('pins it with a slide to the right, as far as Archive’s slide to the left', async () => {
+  it('slid a little to the left, shows Pin and Archive side by side, Archive at the edge, and leaves them to a tap', async () => {
     list();
     await screen.findByText('Pinned');
-    await act(() => slide('Tidy the docs', 200));
-    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
-    expect(titles('Pinned')).toContain('Tidy the docs');
-    await act(() => slide('Release notes', 200));
-    await waitFor(() => expect(pin).toHaveBeenCalledWith('p1', false));
-    await act(() => slide('Fix the login test', -200));
-    await waitFor(() => expect(archive).toHaveBeenCalledWith('p2', true));
-  });
-
-  it('a shorter slide shows the button and leaves it to a tap', async () => {
-    list();
-    await screen.findByText('Pinned');
-    await act(() => slide('Tidy the docs', 80));
+    await act(() => slide('Tidy the docs', -100));
+    expect(under()).toEqual(['Pin', 'Archive']);
     expect(pin).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
     await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
+    expect(titles('Pinned')).toContain('Tidy the docs');
+    // A pinned row has Unpin there; a tap on the row closes it rather than opening the session.
+    await act(() => slide('Release notes', -100));
+    expect(under()).toEqual(['Unpin', 'Archive']);
+    fireEvent.click(screen.getByRole('link', { name: /^Release notes, / }));
+    await waitFor(() => expect(under()).toEqual([]));
+    await act(() => slide('Release notes', -100));
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin' }));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('p1', false));
+    expect(archive).not.toHaveBeenCalled();
   });
 
-  it('an archived row slides only left, to Unarchive', async () => {
+  it('slid all the way to the left, archives it when let go, with Undo, also once it shows its buttons', async () => {
     list();
     await screen.findByText('Pinned');
-    fireEvent.click(screen.getByRole('button', { name: /^Archived/ }));
-    await act(() => slide('Old idea', 200));
+    await act(() => slide('Tidy the docs', -300));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('t1', true));
+    expect(screen.getByRole('status').textContent).toContain('Archived');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('t1', false));
+    await act(() => slide('Fix the login test', -100));
+    expect(under()).toEqual(['Unpin', 'Archive']);
+    await act(() => slide('Fix the login test', -200));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('p2', true));
+    expect(pin).not.toHaveBeenCalled();
+  });
+
+  it('takes no slide to the right, which is Safari’s Back, nor one that starts at the edge of the screen', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await act(() => slide('Tidy the docs', 300));
+    await act(() => slide('Release notes', 300));
+    expect(under()).toEqual([]);
+    // Within 24px of either edge, either way, it is the browser's.
+    await act(() => slide('Tidy the docs', 300, { from: 20 }));
+    await act(() => slide('Tidy the docs', -300, { from: 20 }));
+    await act(() => slide('Tidy the docs', -300, { from: window.innerWidth - 20 }));
+    expect(under()).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(pin).not.toHaveBeenCalled();
     expect(archive).not.toHaveBeenCalled();
-    await act(() => slide('Old idea', -200));
+    await act(() => slide('Tidy the docs', -100, { from: window.innerWidth - 30 }));
+    expect(under()).toEqual(['Pin', 'Archive']);
+  });
+
+  it('leaves a slide more up or down than across to the list, which scrolls', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await act(() => slide('Tidy the docs', -60, { dy: 40 }));
+    expect(under()).toEqual([]);
+    await act(() => slide('Tidy the docs', -100, { dy: 40 }));
+    expect(under()).toEqual(['Pin', 'Archive']);
+  });
+
+  it('shows Unarchive alone on an archived row, which a full slide does', async () => {
+    list();
+    await screen.findByText('Pinned');
+    fireEvent.click(screen.getByRole('button', { name: /^Archived/ }));
+    await act(() => slide('Old idea', 300));
+    expect(under()).toEqual([]);
+    await act(() => slide('Old idea', -80));
+    expect(under()).toEqual(['Unarchive']);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(archive).not.toHaveBeenCalled();
+    await act(() => slide('Old idea', -300));
     await waitFor(() => expect(archive).toHaveBeenCalledWith('o1', false));
+    expect(pin).not.toHaveBeenCalled();
   });
 });
 
