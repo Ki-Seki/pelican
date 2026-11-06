@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, open, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, open, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -18,6 +18,7 @@ const saved = { ...config };
 const savedClaude = process.env.CLAUDE_CONFIG_DIR;
 const A = randomUUID();
 const B = randomUUID();
+const MB = 1024 * 1024;
 const ODD = ['page.constructor', 'page.__proto__', 'page.toString'];
 const PAGE = '<!doctype html><h1>Hi</h1>\n';
 
@@ -74,6 +75,10 @@ beforeAll(async () => {
   await writeFile(path.join(root, 'other', 'theirs.txt'), 'another session’s\n');
   // Named by what every object has (Object.prototype): no type of picture.
   for (const name of ODD) await writeFile(path.join(work, name), PAGE);
+  // Changed while they are downloaded.
+  await writeFile(path.join(work, 'grow.bin'), Buffer.alloc(MB, 1));
+  await writeFile(path.join(work, 'shrink.bin'), Buffer.alloc(MB, 1));
+  await writeFile(path.join(work, 'empty.txt'), '');
 
   await transcript(A, work, [
     { type: 'user', content: [{ type: 'text', text: 'Send me what you made' }] },
@@ -87,7 +92,7 @@ beforeAll(async () => {
         send('unanswered', ['/Users/ada/.ssh/id_ed25519']),
         send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin']),
         send('refused', ['secret.txt']),
-        send('odd', ODD),
+        send('odd', [...ODD, 'grow.bin', 'shrink.bin', 'empty.txt']),
       ],
     },
     { type: 'user', content: [answer('ran')], toolUseResult: record([path.join(work, 'report.md')], { caption: 'The report', display: 'render' }) },
@@ -103,7 +108,7 @@ beforeAll(async () => {
       content: [answer('refused', '1 file could NOT be delivered to the user')],
       toolUseResult: record([{ path: path.join(root, 'secret.txt'), size: 17, isImage: false, pathValidated: true, upload_error: 'not sent: it now resolves to what was not approved' }]),
     },
-    { type: 'user', content: [answer('odd', '3 files delivered to user.')], toolUseResult: record(ODD.map((f) => path.join(work, f))) },
+    { type: 'user', content: [answer('odd', '6 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt'].map((f) => path.join(work, f))) },
   ]);
   await transcript(B, path.join(root, 'other'), [
     { type: 'user', content: [{ type: 'text', text: 'Send me yours' }] },
@@ -155,7 +160,7 @@ describe('what Claude Code records a SendUserFile call delivered', () => {
 
 describe('files Claude sent', () => {
   it('are what Claude Code recorded it delivered, from calls that ran: not what Claude asked for, nor a call that failed, was only written, or was refused', async () => {
-    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD].map((f) => path.join(work, f)).sort());
+    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt'].map((f) => path.join(work, f)).sort());
     expect([...(await sentFiles(B))]).toEqual([path.join(root, 'other', 'theirs.txt')]);
   });
 });
@@ -245,5 +250,21 @@ describe('a file Claude sent, by a link', () => {
       const read = await shown(A, path.join(work, name));
       expect(await read.json()).toEqual({ path: name, size: PAGE.length, text: PAGE });
     }
+  });
+
+  it('sends exactly the bytes it said, however the file changes meanwhile', async () => {
+    const grown = await linked(A, path.join(work, 'grow.bin'), '&download=1');
+    expect(grown.headers.get('content-length')).toBe(String(MB));
+    await appendFile(path.join(work, 'grow.bin'), Buffer.alloc(8 * MB, 2));
+    expect((await grown.arrayBuffer()).byteLength).toBe(MB);
+    // Cut short meanwhile: the response breaks off rather than ending as if it were whole.
+    const cut = await linked(A, path.join(work, 'shrink.bin'), '&download=1');
+    expect(cut.headers.get('content-length')).toBe(String(MB));
+    await truncate(path.join(work, 'shrink.bin'), 100);
+    await expect(cut.arrayBuffer()).rejects.toThrow();
+    const empty = await linked(A, path.join(work, 'empty.txt'));
+    expect(empty.status).toBe(200);
+    expect(empty.headers.get('content-length')).toBe('0');
+    expect(await empty.text()).toBe('');
   });
 });

@@ -3,8 +3,6 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
-import { Readable } from 'node:stream';
-
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -27,6 +25,7 @@ import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
 import { defaultMode, knownModels, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
+import { exactBytes } from './open.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
@@ -670,7 +669,8 @@ app.get('/api/file', async (c) => {
 
 /**
  * A file of the folder, downloaded: as an attachment that runs nothing where it opens (no
- * sniffing, the sandbox's policy), read as it is, up to 200 MB. Asked for by a plain link.
+ * sniffing, the sandbox's policy), read as it is when asked for, up to 200 MB: a file that grows
+ * meanwhile sends no more than that. Asked for by a plain link.
  */
 app.get('/api/file/raw', async (c) => {
   const cwd = await folderOf(c);
@@ -694,7 +694,7 @@ app.get('/api/file/raw', async (c) => {
     await opened.handle.close();
     return c.body(null, 200, headers);
   }
-  return c.body(Readable.toWeb(opened.handle.createReadStream()) as ReadableStream, 200, headers);
+  return c.body(exactBytes(opened.handle, 0, opened.size), 200, headers);
 });
 
 /**
@@ -854,7 +854,8 @@ const SENT_MAX_BYTES = 200 * 1024 * 1024;
 /**
  * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;
  * a PDF for the browser's own viewer, in a tab of its own; anything else, and anything asked for
- * with `download`, as an attachment. Read only, as it is on disk now, up to 200 MB, never sniffed.
+ * with `download`, as an attachment. Read only, as it is on disk when asked for (a file that grows
+ * meanwhile sends no more), up to 200 MB, never sniffed.
  */
 app.get('/api/sessions/:id/sent/raw', async (c) => {
   const file = c.req.query('path') ?? '';
@@ -891,7 +892,7 @@ app.get('/api/sessions/:id/sent/raw', async (c) => {
     await opened.handle.close();
     return c.body(null, 200, headers);
   }
-  return c.body(Readable.toWeb(opened.handle.createReadStream()) as ReadableStream, 200, headers);
+  return c.body(exactBytes(opened.handle, 0, opened.size), 200, headers);
 });
 
 app.get('/api/sessions/:id/agents/:agent', async (c) => {
