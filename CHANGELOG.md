@@ -20,8 +20,8 @@ your usage from every app.
   no MCP servers, never Bypass), and is told so with each question, as in Desktop. Nothing goes
   back to the session, which keeps working. It sits beside the conversation from 1024px wide,
   taking turns with Changes and files, and is a sheet on a phone. Side chats are Claude Code
-  sessions titled "Side chat", folded under their session, and continue in the CLI and Desktop;
-  opened from the list, one keeps its box for questions only.
+  sessions titled "Side chat", kept out of the session list (List options > Side chats shows them),
+  and continue in the CLI and Desktop; opened from the list, one keeps its box for questions only.
 - **Quote.** Select text in a reply, a step's output or a file and tap Quote. The quote waits
   above the message box with your draft and goes above your words as a `>` quote; lines of a file
   carry where they are, as `src/app.ts:7-8`.
@@ -89,9 +89,9 @@ your usage from every app.
 
 ### Sessions and the list
 
-- Claude Desktop's side chats stay folded under their session also once Claude Code has given
-  them the session's title again, as it does when their Claude exits; most showed as more sessions
-  with that title.
+- Claude Desktop's side chats stay out of the list also once Claude Code has given them the
+  session's title again, as it does when their Claude exits; most showed as more sessions with
+  that title.
 
 ### The conversation
 
@@ -162,9 +162,9 @@ your usage from every app.
 
 - In a folder kept to your settings only, a `!` command runs git as Claude Code does there, with
   none of the repository's own programs (its file-system monitor, filters or hooks folder).
-- Changes and files reads only regular files inside the session's folder, links followed and
-  checked. Downloads come as inert attachments. Search runs the ripgrep inside Claude Code with no
-  config, an empty environment, no git and no links followed.
+- Changes and files reads only regular files inside the folder it is asked about (the session's),
+  links followed and checked. Downloads come as inert attachments. Search runs the ripgrep inside
+  Claude Code with no config, an empty environment, no git and no links followed.
 - Show all on a long `!` command reads the file Claude Code saved its output in by that file's
   name alone, from the session's own `tool-results` folder, or, for a record a branch copied, from
   that of the session its row says it came from, when the record's path names that session: a

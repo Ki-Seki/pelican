@@ -51,8 +51,8 @@ return agent('Run the checkout tests and report what fails.', { label: 'test:che
 `;
 
 const RESULT = [
-  { verdicts: [{ finding: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:48', verdict: 'confirmed' }] },
-  { verdicts: [{ finding: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:21', verdict: 'confirmed' }] },
+  { verdicts: [{ finding: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:6', verdict: 'confirmed' }] },
+  { verdicts: [{ finding: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:5', verdict: 'confirmed' }] },
 ];
 
 const launchText = (flow: { task: string; run: string; name: string }, summary: string, dir: string) => {
@@ -95,8 +95,8 @@ function reviewAgents(start: number): WorkflowAgent[] {
     resultPreview: JSON.stringify(result), promptPreview: prompt,
   });
   return [
-    agent(1, 'review:server', 1, 'a1c3e5a7b9d1f3a52', 20, 181_000, 120_800, { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:48' }] }, 'Review the server side of the checkout flow and list real defects.', 'StructuredOutput'),
-    agent(2, 'review:client', 1, 'a2d4f6b8c0e2a4b63', 22, 95_300, 88_200, { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:21' }] }, 'Review the client side of the checkout flow and list real defects.', 'StructuredOutput'),
+    agent(1, 'review:server', 1, 'a1c3e5a7b9d1f3a52', 20, 181_000, 120_800, { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:6' }] }, 'Review the server side of the checkout flow and list real defects.', 'StructuredOutput'),
+    agent(2, 'review:client', 1, 'a2d4f6b8c0e2a4b63', 22, 95_300, 88_200, { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:5' }] }, 'Review the client side of the checkout flow and list real defects.', 'StructuredOutput'),
     agent(3, 'verify:server', 2, 'a3e5a7c9d1f3b5c74', 181_100, 180_000, 131_900, RESULT[0], 'Re-check each finding for the server: [The checkout accepts an empty card holder name]', 'StructuredOutput'),
     agent(4, 'verify:client', 2, 'a4f6b8d0e2a4c6d85', 95_400, 52_000, 71_400, RESULT[1], 'Re-check each finding for the client: [The order summary shows the customer name unescaped]', 'StructuredOutput'),
   ];
@@ -115,13 +115,13 @@ function fixAgents(start: number, now: number): WorkflowAgent[] {
       index: 1, label: 'fix:empty-name', phaseIndex: 1, phaseTitle: 'Fix', agentId: 'b1a3c5e7d9f1a3b52', model: 'claude-opus-5-5', state: 'done',
       queuedAt: start + 30, startedAt: start + 30, lastProgressAt: start + 61_000, durationMs: 61_000, tokens: 54_300, toolCalls: toolCalls('b1a3c5e7d9f1a3b52'), attempt: 1,
       lastToolName: 'Bash', resultPreview: 'The checkout now refuses an empty card holder name, with a test that fails without the fix.',
-      promptPreview: 'Fix this finding, with a test that fails without the fix: The checkout accepts an empty card holder name (src/server/checkout.ts:48)',
+      promptPreview: 'Fix this finding, with a test that fails without the fix: The checkout accepts an empty card holder name (src/server/checkout.ts:6)',
     },
     {
       index: 2, label: 'fix:unescaped-name', phaseIndex: 1, phaseTitle: 'Fix', agentId: 'b2b4d6f8e0a2b4c63', model: 'claude-opus-5-5', state: 'progress',
       queuedAt: start + 32, startedAt: start + 32, lastProgressAt: now - 6_000, tokens: 48_200, toolCalls: toolCalls('b2b4d6f8e0a2b4c63'), attempt: 1,
       lastToolName: 'Edit', lastToolSummary: 'src/checkout/Summary.tsx',
-      promptPreview: 'Fix this finding, with a test that fails without the fix: The order summary shows the customer name unescaped (src/checkout/Summary.tsx:21)',
+      promptPreview: 'Fix this finding, with a test that fails without the fix: The order summary shows the customer name unescaped (src/checkout/Summary.tsx:5)',
     },
   ];
 }
@@ -189,12 +189,12 @@ function steps(cwd: string): Record<string, { prompt: string; steps: Array<{ at:
       prompt: 'Review the server side of the checkout flow and list real defects.',
       steps: [
         { at: 4_000, role: 'assistant', content: [tool('s1', 'Grep', { pattern: 'cardHolder', path: `${cwd}/src/server` })] },
-        { at: 5_000, role: 'user', content: [result('s1', 'src/server/checkout.ts:48:  const cardHolder = body.cardHolder ?? \'\'')] },
+        { at: 5_000, role: 'user', content: [result('s1', 'src/server/checkout.ts:6:  const cardHolder = body.cardHolder ?? \'\'')] },
         { at: 9_000, role: 'assistant', content: [read('s2', 'src/server/checkout.ts')] },
         { at: 10_000, role: 'user', content: [result('s2', '    46\texport async function placeOrder(body: OrderBody) {\n    47\t  const items = await cart.items(body.cartId)\n    48\t  const cardHolder = body.cardHolder ?? \'\'\n    49\t  return payments.charge({ items, cardHolder })\n    50\t}')] },
         { at: 30_000, role: 'assistant', content: [tool('s3', 'Bash', { command: 'npm test -- checkout', description: 'Run the checkout tests' })] },
         { at: 70_000, role: 'user', content: [result('s3', ' PASS  test/checkout.test.ts (14 tests)\n\nTests: 14 passed, 14 total')] },
-        { at: 180_000, role: 'assistant', content: [done('s4', { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:48' }] })] },
+        { at: 180_000, role: 'assistant', content: [done('s4', { findings: [{ title: 'The checkout accepts an empty card holder name', file: 'src/server/checkout.ts:6' }] })] },
         { at: 181_000, role: 'user', content: [result('s4', 'Structured output provided successfully')] },
       ],
     },
@@ -204,8 +204,8 @@ function steps(cwd: string): Record<string, { prompt: string; steps: Array<{ at:
         { at: 3_000, role: 'assistant', content: [read('c1', 'src/checkout/Summary.tsx')] },
         { at: 4_000, role: 'user', content: [result('c1', '    20\t<h2>Order for</h2>\n    21\t<div dangerouslySetInnerHTML={{ __html: order.customerName }} />')] },
         { at: 40_000, role: 'assistant', content: [tool('c2', 'Grep', { pattern: 'dangerouslySetInnerHTML', path: `${cwd}/src` })] },
-        { at: 41_000, role: 'user', content: [result('c2', 'src/checkout/Summary.tsx:21')] },
-        { at: 95_000, role: 'assistant', content: [done('c3', { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:21' }] })] },
+        { at: 41_000, role: 'user', content: [result('c2', 'src/checkout/Summary.tsx:5')] },
+        { at: 95_000, role: 'assistant', content: [done('c3', { findings: [{ title: 'The order summary shows the customer name unescaped', file: 'src/checkout/Summary.tsx:5' }] })] },
         { at: 95_300, role: 'user', content: [result('c3', 'Structured output provided successfully')] },
       ],
     },
@@ -230,7 +230,7 @@ function steps(cwd: string): Record<string, { prompt: string; steps: Array<{ at:
       ],
     },
     b1a3c5e7d9f1a3b52: {
-      prompt: 'Fix this finding, with a test that fails without the fix: The checkout accepts an empty card holder name (src/server/checkout.ts:48)',
+      prompt: 'Fix this finding, with a test that fails without the fix: The checkout accepts an empty card holder name (src/server/checkout.ts:6)',
       steps: [
         { at: 3_000, role: 'assistant', content: [read('f1', 'src/server/checkout.ts')] },
         { at: 4_000, role: 'user', content: [result('f1', '    48\t  const cardHolder = body.cardHolder ?? \'\'')] },
@@ -242,12 +242,12 @@ function steps(cwd: string): Record<string, { prompt: string; steps: Array<{ at:
       ],
     },
     b2b4d6f8e0a2b4c63: {
-      prompt: 'Fix this finding, with a test that fails without the fix: The order summary shows the customer name unescaped (src/checkout/Summary.tsx:21)',
+      prompt: 'Fix this finding, with a test that fails without the fix: The order summary shows the customer name unescaped (src/checkout/Summary.tsx:5)',
       steps: [
         { at: 4_000, role: 'assistant', content: [read('g1', 'src/checkout/Summary.tsx')] },
         { at: 5_000, role: 'user', content: [result('g1', '    21\t<div dangerouslySetInnerHTML={{ __html: order.customerName }} />')] },
         { at: 50_000, role: 'assistant', content: [tool('g2', 'Grep', { pattern: 'customerName', path: `${cwd}/src` })] },
-        { at: 51_000, role: 'user', content: [result('g2', 'src/checkout/Summary.tsx:21\nsrc/checkout/Receipt.tsx:9')] },
+        { at: 51_000, role: 'user', content: [result('g2', 'src/checkout/Summary.tsx:5\nsrc/checkout/Receipt.tsx:9')] },
         // At work on it now: the edit its row names, not answered yet.
         { at: 95_000, role: 'assistant', content: [tool('g3', 'Edit', { file_path: `${cwd}/src/checkout/Summary.tsx`, old_string: '      <div dangerouslySetInnerHTML={{ __html: order.customerName }} />', new_string: '      <div>{order.customerName}</div>' })] },
       ],
@@ -331,8 +331,8 @@ export const WORKFLOW_DEMO: DemoSession = {
         role: 'assistant',
         at: reviewStart + 380_000,
         content: [
-          text('Both findings held up:\n\n- **The checkout accepts an empty card holder name** (`src/server/checkout.ts:48`): the order goes through and the payment fails later.\n- **The order summary shows the customer name unescaped** (`src/checkout/Summary.tsx:21`): a name with markup in it runs in the page.\n\nI\'ll fix both, each with a test, then run the checkout tests again.'),
-          tool(FIXES.call, 'Workflow', { script: FIXES_SCRIPT, args: { findings: [{ slug: 'empty-name', title: RESULT[0]!.verdicts[0]!.finding, file: 'src/server/checkout.ts:48' }, { slug: 'unescaped-name', title: RESULT[1]!.verdicts[0]!.finding, file: 'src/checkout/Summary.tsx:21' }] } }),
+          text('Both findings held up:\n\n- **The checkout accepts an empty card holder name** (`src/server/checkout.ts:6`): the order goes through and the payment fails later.\n- **The order summary shows the customer name unescaped** (`src/checkout/Summary.tsx:5`): a name with markup in it runs in the page.\n\nI\'ll fix both, each with a test, then run the checkout tests again.'),
+          tool(FIXES.call, 'Workflow', { script: FIXES_SCRIPT, args: { findings: [{ slug: 'empty-name', title: RESULT[0]!.verdicts[0]!.finding, file: 'src/server/checkout.ts:6' }, { slug: 'unescaped-name', title: RESULT[1]!.verdicts[0]!.finding, file: 'src/checkout/Summary.tsx:5' }] } }),
         ],
       },
       { role: 'user', at: fixesStart, content: [result(FIXES.call, launchText(FIXES, FIXES_SUMMARY, dir))], result: launched(FIXES, FIXES_SUMMARY, dir) },

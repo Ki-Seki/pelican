@@ -73,6 +73,9 @@ describe('the demo', () => {
   it('shows what Rewind would put back, from the conversation', () => {
     expect(rewindPreview(getView(SESSION).messages, 'm1')).toMatchObject({ canRewind: true, files: [`${CWD}/theme.css`, `${CWD}/src/settings/Settings.tsx`] });
     expect(rewindPreview(getView(SESSION).messages, 'mine')).toEqual({ canRewind: false });
+    // An edit's lines count as they change back: the lines its old and new text share stay.
+    const edit: ChatMessage = { uuid: 'e1', role: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: `${CWD}/tests/login.spec.ts`, old_string: "  await page.click('text=Sign in');\n  await page.waitForTimeout(500);", new_string: "  await page.click('text=Sign in');\n  await expect(page).toHaveURL('/home');" } }] };
+    expect(rewindPreview([{ uuid: 'p1', role: 'user', blocks: [{ type: 'text', text: 'Fix it' }] }, edit], 'p1')).toMatchObject({ insertions: 1, deletions: 1 });
   });
 
   it('starts a new session in the page, which the list and the chat then show', async () => {

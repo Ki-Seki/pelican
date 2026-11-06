@@ -43,6 +43,7 @@ import type {
 import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
+import { sdkPackage } from './claude-code.js';
 import { config } from './config.js';
 import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
@@ -778,8 +779,11 @@ export class SessionRun {
       shouldQuery: respond && i === parts.length - 1,
       message: { role: 'user', content: text },
     }));
+    // Rows of the shape Claude Code's bash mode writes from 2.1.80 on (Pelican builds them so), which
+    // the page reads by that version, as it reads the transcript's.
+    const version = sdkPackage().claudeCodeVersion ?? '2.1.80';
     for (const message of messages) {
-      const chat = toChatMessage({ type: 'user', uuid: message.uuid, ...(message.isSynthetic ? { isMeta: true } : {}), message: message.message });
+      const chat = toChatMessage({ type: 'user', uuid: message.uuid, version, ...(message.isSynthetic ? { isMeta: true } : {}), message: message.message });
       if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     }
     if (this.closed) throw new RunClosed();

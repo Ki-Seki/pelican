@@ -605,7 +605,6 @@ app.get('/api/sessions/:id/usage', async (c) => {
   return c.json({ usage: (await sessionUsage(id, await sessionFiles(id, file))) ?? null });
 });
 
-/** The folder a workspace request is about: the session's own, which must exist. */
 /** Whether a path is inside the demo's own folder (the demo never shows anything else). */
 async function inDemo(dir: string): Promise<boolean> {
   try {

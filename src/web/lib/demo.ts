@@ -82,6 +82,17 @@ const FILE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 const lines = (text: string) => (text ? text.split('\n').length : 0);
 
+/** The lines an edit changed: what its old and new text share at either end did not change. */
+function changedLines(before: string, after: string): { added: number; removed: number } {
+  const a = before ? before.split('\n') : [];
+  const b = after ? after.split('\n') : [];
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1;
+  return { added: b.length - start - end, removed: a.length - start - end };
+}
+
 const assistant = (blocks: Block[]): ChatMessage => ({
   uuid: newId(), role: 'assistant', blocks, timestamp: Date.now(), messageId: `msg_demo_${newId().slice(0, 12)}`, model: 'claude-opus-5-5',
 });
@@ -308,8 +319,9 @@ export function rewindPreview(messages: ChatMessage[], uuid: string): RewindResu
       if (block.name === 'Write') deletions += lines(str(block.input.content));
       const edits = Array.isArray(block.input.edits) ? (block.input.edits as Array<Record<string, unknown>>) : [block.input];
       for (const edit of edits) {
-        insertions += lines(str(edit.old_string));
-        deletions += lines(str(edit.new_string));
+        const { added, removed } = changedLines(str(edit.old_string), str(edit.new_string));
+        insertions += removed;
+        deletions += added;
       }
     }
   }

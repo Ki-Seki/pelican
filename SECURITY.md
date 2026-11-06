@@ -93,9 +93,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   trusted folder, git runs for the Changes panel with hooks, the file-system monitor, external
   diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of a work
   tree outside the folder.
-- **Files stay in their folder.** Changes and files reads only regular files inside the session's
-  folder, named by a relative path without `..` whose real path, links followed, is still inside
-  it. A download comes as an attachment, with no sniffing and the sandbox's content policy, so it
+- **Files stay in their folder.** Changes and files reads only regular files inside the folder a
+  request names (in the app, the session's), by a relative path without `..` whose real path,
+  links followed, is still inside it. It does not hold a signed-in browser to its sessions'
+  folders: whoever can use Pelican can name another folder, as they can run commands there. A download comes as an attachment, with no sniffing and the sandbox's content policy, so it
   never runs in Pelican's page. Search runs the ripgrep inside Claude Code's own binary, by its
   full path, with no config file, an empty environment, no git and no links followed (or a scan
   in Node where that is not there), within limits on files, lines, time and output. What a turn

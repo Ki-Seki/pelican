@@ -181,6 +181,15 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     expect(getRun(sessionId)!.busy).toBe(false);
   });
 
+  it('that failed is marked so in what the page gets live, as in what a reload reads back', async () => {
+    const { buildItems } = await import('../src/web/lib/turns');
+    const { sessionId, events } = await idleSession();
+    startShell(sessionId, folder, 'echo "FAIL theme.test.ts" >&2; exit 1');
+    await until(() => liveShells(sessionId).length === 0);
+    const messages = events.flatMap((e) => (e.type === 'message' ? [e.message] : []));
+    expect(buildItems(messages).find((item) => item.kind === 'shell')).toMatchObject({ stderr: 'FAIL theme.test.ts', ended: 'failed' });
+  });
+
   it('Stop ends it; it goes in with what it printed, and Claude does not answer', async () => {
     const { sessionId, claude, events } = await idleSession();
     const shell = startShell(sessionId, folder, 'echo started; sleep 30');
