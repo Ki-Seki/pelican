@@ -9,7 +9,7 @@ import { type Held, loadDraft, useDraftSaver } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
 import { composing, hasKeyboard, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
-import { messageWithQuotes, quoteLabel, receiveQuotes, splitQuotes, withQuote } from '../lib/quote';
+import { labelIsCode, messageWithQuotes, quoteLabel, receiveQuotes, splitQuotes, withQuote } from '../lib/quote';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
@@ -696,8 +696,8 @@ export function Composer({
               return (
                 <li key={`${i}:${quote}`} title={quote} className="flex h-8 max-w-[15rem] shrink-0 items-center gap-1.5 rounded-full border border-line bg-bg pr-0.5 pl-2.5 text-[12.5px] text-muted">
                   <Quote aria-hidden className="size-3 shrink-0 text-faint" />
-                  {/* A file's lines go by where they are; other quotes by how they begin. */}
-                  <span className={`min-w-0 truncate ${quote.startsWith('>') ? '' : 'font-mono text-[12px]'}`}>{label}</span>
+                  {/* A file's lines go by where they are, the terminal's by their line or how many; other quotes by how they begin. */}
+                  <span className={`min-w-0 truncate ${labelIsCode(quote) ? 'font-mono text-[12px]' : ''}`}>{label}</span>
                   <button
                     type="button"
                     aria-label={`Remove the quote ${label}`}

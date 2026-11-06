@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { commentsMessage } from '../src/web/lib/review';
-import { addQuote, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteLines, quoteText, receiveQuotes, splitQuotes, terminalQuote } from '../src/web/lib/quote';
+import { addQuote, labelIsCode, MAX_QUOTE_LINES, messageWithQuotes, promptParts, quoteLabel, quoteLines, quoteText, receiveQuotes, splitQuotes, terminalQuote } from '../src/web/lib/quote';
 
 describe('quoteText', () => {
   it('quotes text from the conversation as > lines, without the blank lines around it', () => {
@@ -174,6 +174,11 @@ describe('the terminal’s Quote', () => {
     ]);
     expect(quoteLabel(quote)).toBe('Terminal · 2 lines');
     expect(quoteLabel(terminalQuote('  zsh: command not found: nmp'))).toBe('zsh: command not found: nmp');
+    // Named in the code font only by code: a line, a file's place; a count or a reply's words in plain type.
+    expect(labelIsCode(quote)).toBe(false);
+    expect(labelIsCode(terminalQuote('zsh: command not found: nmp'))).toBe(true);
+    expect(labelIsCode('src/a.ts:7\n> one')).toBe(true);
+    expect(labelIsCode('> Why?')).toBe(false);
     // A code block of one's own, of any other kind, stays the message's.
     const own = '```bash\nnpm test\n```\n\nWhy?';
     expect(splitQuotes(own)).toEqual({ quotes: [], text: own });

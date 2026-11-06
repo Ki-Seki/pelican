@@ -181,6 +181,16 @@ export function quoteLabel(quote: string): string {
 }
 
 /**
+ * Whether what quoteLabel calls a quote is code, for the code font: where a file quote is from, or
+ * the terminal's one line; not how a quote of a reply begins, nor how many lines the terminal gave.
+ */
+export function labelIsCode(quote: string): boolean {
+  const lines = quote.split('\n');
+  if (TERMINAL_OPEN.test(lines[0] ?? '')) return lines.length === 3;
+  return !QUOTED.test(lines[0] ?? '');
+}
+
+/**
  * Quotes on their way to a message box, by the box's draft key (the chat's view id). The box open
  * for that key takes them at once; with none open, they wait here for it.
  */
