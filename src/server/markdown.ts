@@ -42,11 +42,12 @@ export function inlineText(text: string): string {
 
 /**
  * A line of words as it reads: its indentation kept as spaces that stay, and nothing at its start
- * taken for a heading, a list, a quote, a rule or code.
+ * taken for a heading, a list, a quote, a rule, code or a table's delimiter row (`:--` makes the
+ * line above it a table's head).
  */
 export function textLine(line: string): string {
   const [, indent = '', rest = ''] = /^([ \t]*)(.*)$/s.exec(line)!;
-  const body = inlineText(rest).replace(/^(?:[#+=-]|\d+(?=[.)]))/, (start) => (/\d/.test(start) ? `${start}\\` : `\\${start}`));
+  const body = inlineText(rest).replace(/^(?:[#+=:-]|\d+(?=[.)]))/, (start) => (/\d/.test(start) ? `${start}\\` : `\\${start}`));
   return `${indent.replace(/\t/g, '    ').replace(/ /g, '&nbsp;')}${body}`;
 }
 

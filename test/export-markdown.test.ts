@@ -475,3 +475,12 @@ describe('a reply in the export', () => {
     }
   }, 60_000);
 });
+
+describe('a prompt in the export', () => {
+  it('makes no table of a line like a delimiter row under the line above it', () => {
+    expect(asText('Columns to keep, aligned left:\n:--')).toBe('Columns to keep, aligned left:\\\n\\:--');
+    const kinds: string[] = [];
+    walk(tree(asText('Columns to keep, aligned left:\n:--\nRight:\n--:\n| a |\n|:-|')), (node) => kinds.push(node.type));
+    expect(kinds).not.toContain('table');
+  });
+});
