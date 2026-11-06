@@ -374,6 +374,11 @@ async function walkRowButtons(page, where) {
       await page.getByRole('dialog').getByRole('button', { name: density, exact: true }).click();
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
+      // A compact row's time on one line, a date ("Oct 25") too.
+      if (density === 'Compact') {
+        const wrapped = await page.locator('a[href^="?s="] span.tabular-nums').evaluateAll((spans) => spans.filter((span) => span.getClientRects().length > 1 || span.getBoundingClientRect().height > 24).map((span) => span.textContent));
+        for (const time of wrapped) problems.push(`${where}, ${width}px, compact: the time "${time}" takes more than a line`);
+      }
       const rows = page.locator('a[href^="?s="]');
       const count = Math.min(await rows.count(), 12);
       for (let i = 0; i < count; i += 1) {

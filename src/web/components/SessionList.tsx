@@ -143,7 +143,8 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
       {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} tasks={session.tasks} />}
       <span className={`min-w-0 flex-1 truncate text-[14.5px] ${unread ? 'font-semibold' : ''}`}>{session.title}</span>
       {showProject && <span className={`max-w-[35%] shrink-0 truncate text-[12px] text-faint ${GIVES_WAY}`}>{session.scratch ? 'Scratch' : session.project}</span>}
-      <span className={`w-8 shrink-0 text-right text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
+      {/* As wide as "11h" at least, and as a date ("Oct 25") on one line. */}
+      <span className={`min-w-8 shrink-0 whitespace-nowrap text-right text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
     </a>
   );
 });
