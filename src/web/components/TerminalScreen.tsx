@@ -356,12 +356,13 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
   return (
     <div className="relative min-h-0 flex-1">
+      {/* The keys' hidden field is as large as Safari needs, or it zooms the page in when a tap gives it the keys. */}
       <div
         ref={box}
         role="region"
         aria-label={label}
         data-terminal
-        className={`absolute inset-0 ${touch ? 'touch-none select-none [-webkit-touch-callout:none]' : ''}`}
+        className={`absolute inset-0 [&_.xterm-helper-textarea]:text-[16px] ${touch ? 'touch-none select-none [-webkit-touch-callout:none]' : ''}`}
       />
       {reconnecting && (
         <div className="pointer-events-none absolute top-2 right-3 flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-muted shadow-sm">
