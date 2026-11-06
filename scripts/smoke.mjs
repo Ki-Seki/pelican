@@ -153,13 +153,18 @@ function selectLines(page, from, to) {
   }, [from, to]);
 }
 
+/** The terminal's code, xterm.js with it: a part of its own that only the Terminal tab loads. */
+const TERMINAL_CODE = /\/WorkspaceTerminal-[\w-]+\.js$/;
+
 /**
  * Changes and files, walked as someone reading the session does: Files, a file, two of its lines
  * selected and quoted into the message; a search of the files' text; Show, a turn, and the diff of
- * a file it changed (the session is one where a turn changed files: see walkable). The page's watch
- * catches what goes wrong on the way; this, what never shows.
+ * a file it changed (the session is one where a turn changed files: see walkable); then the
+ * Terminal tab, which no step before it has loaded, and where both demos say that nothing runs
+ * (Ctrl+` opens it beside the conversation). The page's watch catches what goes wrong on the way;
+ * this, what never shows. `requested`: every address the page has asked for so far.
  */
-async function walkWorkspace(page, base, session, where, step) {
+async function walkWorkspace(page, base, session, where, step, requested) {
   const url = `${base}?s=${encodeURIComponent(session.id)}`;
   // The site's demo has no computer to search with, and says so.
   const live = !base.endsWith('/demo/');
@@ -199,6 +204,23 @@ async function walkWorkspace(page, base, session, where, step) {
   if (!(await changed.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('the turn lists no file');
   await changed.click();
   if (!(await page.locator('[role="group"][aria-label^="Changes to "]').waitFor({ timeout: 5000 }).then(() => true, () => false))) missing('a file the turn changed shows no diff');
+  await page.waitForLoadState('networkidle');
+
+  step('Terminal');
+  if (requested.some((url) => TERMINAL_CODE.test(url))) missing('the terminal’s code loads before its tab is opened');
+  const wide = (page.viewportSize()?.width ?? 0) >= 1024;
+  if (wide) {
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.keyboard.press('Control+Backquote');
+    view = page.locator('aside[aria-label="Changes and files"]');
+    if (!(await view.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Ctrl+` does not open the terminal');
+  } else {
+    view = await openWorkspace(page, `${url}&w=terminal`);
+    if (!view) return missing('the Terminal tab does not open');
+  }
+  if (!(await view.getByText(/nothing runs here/).first().waitFor({ timeout: 8000 }).then(() => true, () => false))) missing('the Terminal tab does not say that nothing runs in the demo');
+  if (!requested.some((url) => TERMINAL_CODE.test(url))) missing('the Terminal tab shows without its code');
+  if (await view.getByRole('button', { name: 'Terminal', exact: true }).getAttribute('aria-pressed') !== 'true') missing('the Terminal tab is not the one shown');
   await page.waitForLoadState('networkidle');
 }
 
@@ -244,6 +266,8 @@ async function driveApp(browser, base, sessions, walked) {
       const page = await context.newPage();
       let at = 'the list';
       watch(page, () => `app, ${size}, ${scheme}, ${at}`);
+      const requested = [];
+      page.on('request', (request) => requested.push(request.url()));
       await page.goto(base, { waitUntil: 'networkidle' });
       for (const title of titles) {
         if (!(await page.getByText(title, { exact: true }).first().isVisible())) problems.push(`app, ${size}, ${scheme}: the list does not show "${title}"`);
@@ -262,7 +286,7 @@ async function driveApp(browser, base, sessions, walked) {
         for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
       }
       at = 'Changes and files';
-      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; });
+      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; }, requested);
       all = false;
       await context.close();
     }
