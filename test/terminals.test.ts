@@ -172,15 +172,29 @@ describe('a terminal', () => {
     await until(() => shown.lines().includes('ran 42'), 10_000, 'the command');
   }, 20_000);
 
-  it('shows on several pages at once, each in step; the last size said is the shell’s', async () => {
+  it('shows on several pages at once, each in step, at the size of the page last typed in or resized', async () => {
     const terminal = await open();
     const phone = await atPrompt(terminal.id, { cols: 40, rows: 20 });
+    const heard = phone.messages.length;
+    // Another page comes in: it is told the size the shell has, the phone's.
     const computer = await atPrompt(terminal.id, { cols: 120, rows: 40 });
-    // The computer came last: its size is the shell's, and the phone is told.
+    expect(computer.ready).toMatchObject({ cols: 40, rows: 20 });
+    expect(phone.messages.slice(heard).some((m) => m.type === 'size')).toBe(false);
+    // Typed in, it says its own size first (TerminalScreen does): the shell takes it, the phone is told.
+    computer.send({ type: 'resize', cols: 120, rows: 40 });
     await until(() => phone.messages.some((m) => m.type === 'size' && m.cols === 120 && m.rows === 40));
     phone.type('stty size\r');
     await computer.sees(/40 120\r\n/);
     await phone.sees(/40 120\r\n/);
+    // The phone's link drops (it slept, or its network changed), and its page connects again by
+    // itself, at its own size: nobody touched it, so the shell stays the computer's.
+    await phone.close();
+    const back = await atPrompt(terminal.id, { cols: 40, rows: 20 });
+    expect(back.ready).toMatchObject({ cols: 120, rows: 40 });
+    const from = computer.output.length;
+    computer.type('stty size\r');
+    await computer.sees(/40 120\r\n/, 10_000, from);
+    expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
   }, 20_000);
 });
 

@@ -446,7 +446,12 @@ class Term {
     this.pressure();
   }
 
-  /** A page's socket: it gets the screen as it is, then the output, and its size becomes the shell's. */
+  /**
+   * A page's socket: it gets the screen as it is, then the output. Its size becomes the shell's
+   * when no other page shows the terminal; otherwise the shell keeps the size of the page last
+   * typed in or resized, and this one is told it until its own user types or resizes (a page that
+   * connects again by itself, after a phone slept or its network changed, takes nothing away).
+   */
   attach(ws: WebSocket, cols: number, rows: number): void {
     if (this.viewers.size >= TERMINAL_LIMITS.viewers) {
       ws.close(TERMINAL_CLOSE.tooManyViewers, 'Open on too many pages');
@@ -460,9 +465,10 @@ class Term {
       joining: { at: this.received, held: [], bytes: 0, until: Date.now() + terminalTiming.cutMs, timer: setTimeout(() => this.cut(), terminalTiming.cutMs) },
       stopBeating: () => undefined,
     };
+    const alone = this.viewers.size === 0;
     this.viewers.add(viewer);
     this.lastActive = Date.now();
-    if (!this.exit) this.resize(cols, rows, viewer);
+    if (!this.exit && alone) this.resize(cols, rows, viewer);
     // Called once the copy has taken in all output so far, the new size included.
     this.screen.write('', () => this.cut());
     // A tick goes once its screen has: `ready` is always first.
