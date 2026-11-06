@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- A `!` command that is a command in backquotes, such as `` `grep x f` ``, takes exit code 1 as
+  an answer, as Claude Code does, not as a failure: where a command would start, Pelican reads a
+  backquote as Claude Code's parser does, after `;`, `|`, `if` or an assignment too.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

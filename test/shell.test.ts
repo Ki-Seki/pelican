@@ -210,6 +210,29 @@ describe('the record of a ! command', () => {
     expect(text({ command: 'grep x 2>/dev/null # note', printed: '', code: 1 })).toBe(answer);
   });
 
+  it('reads a command that starts with a backquote as Claude Code’s parser does: it breaks off there and starts over after it', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    // Each as the bundled CLI's own parser reads it (2.1.318): the statement after the backquote is
+    // `grep x f`, its closing backquote opening another, so it is grep's 1.
+    for (const command of ['`grep nothing /dev/null`', ' `grep x f` ', 'echo a; `grep x f`', '`grep x f` | cat', 'x=1 `grep x f`', '! `grep x f`', '`git grep x`', 'if a; then b; else `grep x f`; fi', '(`grep x f`)', 'cd a && (echo; `grep x f`)', '`#c\ngrep x f`']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    // Here the statement read starts with a, grep or echo and the backquote after it, which is no
+    // command; and a backquote that is not where a command's name would be starts nothing.
+    for (const command of ['`a`; grep x f', '`grep` x f', '`echo a`', 'echo `grep x f`', 'x=`grep x f`', '"`grep x f`"', 'time `grep x f`']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    // In a group inside another compound, or in a case's patterns where the pattern it reads leaves
+    // a backquote open, the outermost compound takes the rest of the line.
+    for (const command of ['{ { `grep x f`; }; }; grep y f', 'if a; then (`grep x f`); fi; grep y f', 'case x in a) `grep x f`;; esac; grep y f']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    expect(text({ command: 'case x in a) `pwd`;; esac; grep y f', printed: '', code: 1 })).toBe(answer);
+    // In a backquote, a `(` holds none: the next one ends it.
+    expect(text({ command: 'echo `a (b`; grep x f', printed: '', code: 1 })).toBe(answer);
+  });
+
   it('gives Claude the start of a long output and where all of it was saved, in Claude Code’s words', () => {
     const file = '/home/me/.claude/projects/-work/5e25f65d-1b8b-4490-a3d3-43540da07ef3/tool-results/b1b2gp6fw.txt';
     expect(text({ printed: `${'z'.repeat(30_000)}\n`, savedTo: file })).toBe(
