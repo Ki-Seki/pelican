@@ -35,7 +35,7 @@ import { startShell, stopShell } from './shell-runs.js';
 import { isSideChat } from './side-chat.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
-import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, PICTURE_TYPES, readProjectFile } from './workspace.js';
+import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, PICTURE_TYPES, readProjectFile, typeOf } from './workspace.js';
 import { searchText } from './search.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
@@ -867,10 +867,11 @@ app.get('/api/sessions/:id/sent/raw', async (c) => {
   }
   const name = path.basename(file);
   const ext = path.extname(name).slice(1).toLowerCase();
+  const picture = typeOf(PICTURE_TYPES, ext);
   const disposition = (how: 'inline' | 'attachment') => `${how}; filename*=UTF-8''${encodeURIComponent(name)}`;
-  const asked = c.req.query('download') === undefined ? (PICTURE_TYPES[ext] ? 'picture' : ext === 'pdf' ? 'pdf' : 'download') : 'download';
-  const headers: Record<string, string> = asked === 'picture'
-    ? { 'Content-Type': PICTURE_TYPES[ext]!, 'Cache-Control': KEPT_ASKING, ...INERT }
+  const asked = c.req.query('download') === undefined ? (picture ? 'picture' : ext === 'pdf' ? 'pdf' : 'download') : 'download';
+  const headers: Record<string, string> = asked === 'picture' && picture
+    ? { 'Content-Type': picture, 'Cache-Control': KEPT_ASKING, ...INERT }
     : asked === 'pdf'
       ? { 'Content-Type': 'application/pdf', 'Content-Disposition': disposition('inline'), 'Cache-Control': 'private, no-store', ...SENT_PDF }
       : { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition('attachment'), 'Cache-Control': 'private, no-store', ...INERT };

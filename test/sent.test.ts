@@ -18,6 +18,8 @@ const saved = { ...config };
 const savedClaude = process.env.CLAUDE_CONFIG_DIR;
 const A = randomUUID();
 const B = randomUUID();
+const ODD = ['page.constructor', 'page.__proto__', 'page.toString'];
+const PAGE = '<!doctype html><h1>Hi</h1>\n';
 
 /** What Claude Code records of a SendUserFile result, for files at these paths. */
 const record = (files: Array<string | Record<string, unknown>>, extra: Record<string, unknown> = {}) => ({
@@ -70,6 +72,8 @@ beforeAll(async () => {
   await big.close();
   await mkdir(path.join(root, 'other'), { recursive: true });
   await writeFile(path.join(root, 'other', 'theirs.txt'), 'another session’s\n');
+  // Named by what every object has (Object.prototype): no type of picture.
+  for (const name of ODD) await writeFile(path.join(work, name), PAGE);
 
   await transcript(A, work, [
     { type: 'user', content: [{ type: 'text', text: 'Send me what you made' }] },
@@ -83,6 +87,7 @@ beforeAll(async () => {
         send('unanswered', ['/Users/ada/.ssh/id_ed25519']),
         send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin']),
         send('refused', ['secret.txt']),
+        send('odd', ODD),
       ],
     },
     { type: 'user', content: [answer('ran')], toolUseResult: record([path.join(work, 'report.md')], { caption: 'The report', display: 'render' }) },
@@ -98,6 +103,7 @@ beforeAll(async () => {
       content: [answer('refused', '1 file could NOT be delivered to the user')],
       toolUseResult: record([{ path: path.join(root, 'secret.txt'), size: 17, isImage: false, pathValidated: true, upload_error: 'not sent: it now resolves to what was not approved' }]),
     },
+    { type: 'user', content: [answer('odd', '3 files delivered to user.')], toolUseResult: record(ODD.map((f) => path.join(work, f))) },
   ]);
   await transcript(B, path.join(root, 'other'), [
     { type: 'user', content: [{ type: 'text', text: 'Send me yours' }] },
@@ -149,7 +155,7 @@ describe('what Claude Code records a SendUserFile call delivered', () => {
 
 describe('files Claude sent', () => {
   it('are what Claude Code recorded it delivered, from calls that ran: not what Claude asked for, nor a call that failed, was only written, or was refused', async () => {
-    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin'].map((f) => path.join(work, f)).sort());
+    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD].map((f) => path.join(work, f)).sort());
     expect([...(await sentFiles(B))]).toEqual([path.join(root, 'other', 'theirs.txt')]);
   });
 });
@@ -227,5 +233,17 @@ describe('a file Claude sent, by a link', () => {
   it('is not served past 200 MB', async () => {
     const response = await linked(A, path.join(work, 'huge.bin'));
     expect(response.status).toBe(413);
+  });
+
+  it('is no picture for an extension every object has a property of: it downloads, and reads as text', async () => {
+    for (const name of ODD) {
+      const response = await linked(A, path.join(work, name));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('application/octet-stream');
+      expect(response.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''${name}`);
+      expect(await response.text()).toBe(PAGE);
+      const read = await shown(A, path.join(work, name));
+      expect(await read.json()).toEqual({ path: name, size: PAGE.length, text: PAGE });
+    }
   });
 });

@@ -319,20 +319,26 @@ export const PICTURE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'i
 const IMAGE: Record<string, string> = { ...PICTURE_TYPES, svg: 'image/svg+xml' };
 
 /**
+ * The type a table gives an extension, from the table's own entries: an extension such as
+ * `constructor` or `__proto__` names what every object has, and is no type.
+ */
+export const typeOf = (types: Record<string, string>, ext: string): string | undefined => (Object.hasOwn(types, ext) ? types[ext] : undefined);
+
+/**
  * A file to read on the phone: text up to half a megabyte, images as data, other binaries named
  * only. A named pipe or a device is not read (`openRegular`): opening one could hold up every
  * file read of the server. `images`: which files count as pictures (by default an SVG does too).
  */
 export async function readProjectFile(cwd: string, relative: string, images: Record<string, string> = IMAGE): Promise<FileContent> {
   const full = await insideReal(cwd, relative);
-  const ext = path.extname(full).slice(1).toLowerCase();
+  const image = typeOf(images, path.extname(full).slice(1).toLowerCase());
   const handle = await openRegular(full);
   try {
     const info = await handle.stat();
-    if (images[ext] && info.size <= 4 * 1024 * 1024) {
+    if (image && info.size <= 4 * 1024 * 1024) {
       const data = Buffer.alloc(info.size);
       await handle.read(data, 0, info.size, 0);
-      return { path: relative, size: info.size, image: `data:${images[ext]};base64,${data.toString('base64')}` };
+      return { path: relative, size: info.size, image: `data:${image};base64,${data.toString('base64')}` };
     }
     const length = Math.min(info.size, MAX_FILE);
     const data = Buffer.alloc(length);

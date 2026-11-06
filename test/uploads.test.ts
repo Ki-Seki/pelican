@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { keepDays, saveUpload, sweepUploads } from '../src/server/files';
+import { findUpload, keepDays, saveUpload, sweepUploads } from '../src/server/files';
 
 let dir: string;
 const saved = { stateDir: config.stateDir, claudeHome: config.claudeHome };
@@ -40,5 +40,14 @@ describe('uploads', () => {
     expect(await keepDays()).toBe(1);
     await writeFile(path.join(config.claudeHome, 'settings.json'), 'not json');
     expect(await keepDays()).toBe(30);
+  });
+
+  it('are typed by their extension, and one named for what every object has is a plain file', async () => {
+    const png = await saveUpload(new File(['x'], 'shot.png', { type: 'image/png' }));
+    expect((await findUpload(png.id))?.mime).toBe('image/png');
+    for (const name of ['notes.constructor', 'notes.__proto__']) {
+      const odd = await saveUpload(new File(['x'], name, { type: '' }));
+      expect((await findUpload(odd.id))?.mime).toBe('application/octet-stream');
+    }
   });
 });

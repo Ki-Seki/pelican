@@ -220,4 +220,11 @@ describe('workspace', () => {
     expect(() => inside(repo, '/etc/passwd')).toThrow();
     await expect(readProjectFile(repo, '../../etc/hosts')).rejects.toThrow();
   });
+
+  it('reads a file whose extension names what every object has as text, never as a picture', async () => {
+    for (const name of ['page.constructor', 'page.__proto__']) {
+      await writeFile(path.join(repo, name), '<h1>Hi</h1>\n');
+      expect(await readProjectFile(repo, name)).toEqual({ path: name, size: 12, text: '<h1>Hi</h1>\n' });
+    }
+  });
 });
