@@ -9,6 +9,10 @@
   (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on the computer
   for all your browsers: a session pinned in Claude Desktop is not pinned here, and Desktop's pins
   are left alone. Archiving a session unpins it.
+- On a computer, a row's buttons cut none of its words: the words under them fade out, and in a
+  compact row the project and time make room for them. From the keyboard, Pin, Unpin and Archive
+  leave focus on the session's row where it went, or on the next row when it leaves the list, and
+  Undo brings focus back to it; Archive used to drop it to the page.
 - The demo, and the live demo on the website, have a pinned session.
 
 ## 0.4.0
