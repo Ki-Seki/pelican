@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Recording a command starts no Claude here.
 vi.mock('../src/server/runner', () => ({ ensureRun: async () => ({ appendShell: async () => {}, busy: false }), getRun: () => undefined }));
@@ -39,15 +39,61 @@ function groupRuns(pgid: number): boolean {
   return true;
 }
 
-/** The process group a command wrote down (its shell's own id, `$$`), once it has. */
-async function groupOf(file: string): Promise<number> {
-  for (let i = 0; i < 200; i += 1) {
-    const text = await readFile(file, 'utf8').catch(() => '');
-    if (text.trim()) return Number(text);
+/** In the test under way: the process groups its commands wrote down, and the Pelicans it started. */
+const groups: number[] = [];
+const pelicans: ChildProcess[] = [];
+
+/**
+ * The process group a command wrote down (its shell's own id, `$$`), once it has: up to `ms` by
+ * the clock, as a busy computer can be slow to start a shell.
+ */
+async function groupOf(file: string, ms = 10_000): Promise<number> {
+  for (const end = Date.now() + ms; ;) {
+    const text = (await readFile(file, 'utf8').catch(() => '')).trim();
+    if (text) {
+      const group = Number(text);
+      // It is signalled as -group: 0 would be the test's own group, 1 every process it may signal.
+      if (!Number.isSafeInteger(group) || group <= 1) throw new Error(`${file} names no process group: ${text}`);
+      groups.push(group);
+      return group;
+    }
+    if (Date.now() >= end) throw new Error(`${file} was not written in ${ms / 1000} seconds`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`${file} was never written`);
 }
+
+/**
+ * Ends a Pelican a test started, and all it started, however far it got: stopped first, so it
+ * starts nothing more, while each process it started is ended with its process group (a `!`
+ * command has one of its own, which outlives Pelican); then Pelican itself.
+ */
+function endPelican(child: ChildProcess): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    child.kill('SIGSTOP');
+    for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).split('\n')) {
+      const [pid = 0, ppid = 0] = line.trim().split(/\s+/).map(Number);
+      if (ppid !== child.pid || !Number.isSafeInteger(pid) || pid <= 1) continue;
+      for (const target of [-pid, pid]) {
+        try {
+          process.kill(target, 'SIGKILL');
+        } catch {
+          // No group of its own, or gone already.
+        }
+      }
+    }
+  } finally {
+    child.kill('SIGKILL');
+  }
+}
+
+// What a test left running, when it failed or ran out of time, is ended after it.
+afterEach(async () => {
+  // Commands started here, written down or not yet: asked, then made to end, at once.
+  await stopAllShells(0);
+  for (const child of pelicans.splice(0)) endPelican(child);
+  for (const group of groups.splice(0)) groupRuns(group);
+});
 
 const exists = (file: string) => stat(file).then(() => true, () => false);
 const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,11 +181,11 @@ startShell(${JSON.stringify(SESSION)}, ${JSON.stringify(dir)}, ${JSON.stringify(
       env: { ...env, PELICAN_HOST: '127.0.0.1', PELICAN_PORT: '0', SHELL: '/bin/sh' },
       stdio: 'ignore',
     });
+    pelicans.push(child);
     const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
-    const pgid = await groupOf(ready).catch((error: unknown) => {
-      child.kill('SIGKILL');
-      throw error;
-    });
+    // A fresh Pelican through tsx, then its shell: a second or so alone, several on a busy
+    // computer. The tests give it as long again to stop.
+    const pgid = await groupOf(ready, 20_000);
     return { child, exited, pgid };
   }
 
@@ -152,7 +198,7 @@ startShell(${JSON.stringify(SESSION)}, ${JSON.stringify(dir)}, ${JSON.stringify(
     expect(await exited).toBe(0);
     expect(await exists(tidied)).toBe(true);
     expect(groupRuns(pgid)).toBe(false);
-  }, 30_000);
+  }, 40_000);
 
   it('end with Pelican at once when it is told twice, even one that ignores the asking', async () => {
     const ready = path.join(dir, 'served-stubborn');
@@ -164,5 +210,5 @@ startShell(${JSON.stringify(SESSION)}, ${JSON.stringify(dir)}, ${JSON.stringify(
     expect(await exited).toBe(0);
     expect(Date.now() - started).toBeLessThan(5000);
     expect(groupRuns(pgid)).toBe(false);
-  }, 30_000);
+  }, 40_000);
 });
