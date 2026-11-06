@@ -290,11 +290,15 @@ function liveAgent(item: Record<string, unknown>): WorkflowAgent | undefined {
     if (value) out[key] = value;
   }
   // Its prompt and what it returned are not sent with every frame: nothing shows them but the
-  // agent opened, which reads them from its transcript and the run's journal.
+  // agent opened, which reads them from its transcript and the run's journal. One with no
+  // transcript yet (queued, or ended before it started) has only Claude Code's preview of its
+  // prompt (400 characters at most) to show.
   const error = text('error', 600);
   const tool = text('lastToolSummary', 160);
+  const prompt = out.agentId ? undefined : text('promptPreview', 401);
   if (error) out.error = error;
   if (tool) out.lastToolSummary = tool;
+  if (prompt) out.promptPreview = prompt;
   if (item.isolation === 'worktree' || item.isolation === 'remote') out.isolation = item.isolation;
   if (item.lastAttemptReason === 'stalled' || item.lastAttemptReason === 'throttled' || item.lastAttemptReason === 'user-retry') out.lastAttemptReason = item.lastAttemptReason;
   for (const key of ['skipped', 'blocked', 'cached'] as const) if (item[key] === true) out[key] = true;

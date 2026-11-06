@@ -171,7 +171,7 @@ describe('the record of a ! command', () => {
     expect(text({ printed: 'out\nerr\n', code: 1 })).toBe('<bash-stdout></bash-stdout><bash-stderr>out\nerr\n</bash-stderr>');
     const long = `${'a'.repeat(20_000)}${'b'.repeat(20_000)}\n`;
     expect(text({ printed: long, code: 3 })).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'a'.repeat(20_000)}${'b'.repeat(10_000)}</bash-stderr>`);
-    expect(text({ printed: long, code: 3, inlineMax: 5000 })).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'a'.repeat(5000)}</bash-stderr>`);
+    expect(text({ printed: long, code: 3, readMax: 5000, inlineMax: 5000 })).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'a'.repeat(5000)}</bash-stderr>`);
     // Two bytes each: 15,000 of them fill 30,000 bytes.
     expect(text({ printed: `${'é'.repeat(20_000)}\n`, code: 1 })).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'é'.repeat(15_000)}</bash-stderr>`);
   });
@@ -184,6 +184,30 @@ describe('the record of a ! command', () => {
     for (const command of ['grep TODO src | wc -l', 'npm test', 'git status', 'echo "grep"; false']) {
       expect(text({ command, printed: 'x\n', code: 1 })).toBe('<bash-stdout></bash-stdout><bash-stderr>x\n</bash-stderr>');
     }
+  });
+
+  it('reads exit code 1 by the last statement of the line, as Claude Code’s parse takes it apart: a subshell or a group is one, a comment none', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    // The CLI's own rows for these, from its bash mode in a terminal: its statement is `(grep`, `(cd` or `{`.
+    for (const command of ['(grep nothing /dev/null)', '(cd . && grep nothing /dev/null)', '{ grep nothing /dev/null; }']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    expect(text({ command: 'echo a && (grep nothing /dev/null)', printed: 'a\n', code: 1 })).toBe('<bash-stdout></bash-stdout><bash-stderr>a\n</bash-stderr>');
+    for (const command of ['grep nothing /dev/null # a;b', 'grep nothing /dev/null # trailing comment', 'echo x | grep nothing', 'grep "a;b" /dev/null']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    // As its parser takes these apart: quotes, substitutions, here-documents and [[ … ]] hold no
+    // statement's end; a here-document's line after its << is part of the statement before it.
+    for (const command of ['echo $(a; b) `c; d` ${x:-e;f} && grep x f', "grep x <<'EOF'\nbody; x)\nEOF", 'grep x <<<"a;b"', '[[ -n $a && $b ]] || grep x f', 'grep x f # (a | b) ; c']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    for (const command of ['x=$(grep a b)', 'cat <<EOF | grep x\nbody\nEOF', '! grep x f', '[[ -f x ]]', 'grep x f && echo done']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    // After a redirection, its parser takes a comment for more words, and its `;` ends the statement.
+    expect(text({ command: 'grep x 2>/dev/null # note; more', printed: '', code: 1 })).toBe(failure);
+    expect(text({ command: 'grep x 2>/dev/null # note', printed: '', code: 1 })).toBe(answer);
   });
 
   it('gives Claude the start of a long output and where all of it was saved, in Claude Code’s words', () => {
@@ -228,7 +252,7 @@ describe('a long ! output, as it goes to Claude', () => {
 
   it('is saved whole where Claude Code saves one, beside the session’s transcript, readable only by you', async () => {
     const output = `${'z'.repeat(30_000)}\n`;
-    const result = await forClaude(session, { command: 'cat big.log', output: printed(output), code: 0, durationMs: 5 }, 30_000);
+    const result = await forClaude(session, { command: 'cat big.log', output: printed(output), code: 0, durationMs: 5 });
     expect(result.savedTo).toMatch(new RegExp(`^${project()}/${session}/tool-results/b[0-9a-z]{8}\\.txt$`));
     expect(await readFile(result.savedTo!, 'utf8')).toBe(output);
     expect((await stat(result.savedTo!)).mode & 0o777).toBe(0o600);
@@ -236,18 +260,18 @@ describe('a long ! output, as it goes to Claude', () => {
   });
 
   it('goes inline up to the limit in bytes, and when the command failed, as in Claude Code', async () => {
-    const inline = await forClaude(session, { command: 'cat log', output: printed(`${'y'.repeat(29_999)}\n`), code: 0, durationMs: 5 }, 30_000);
+    const inline = await forClaude(session, { command: 'cat log', output: printed(`${'y'.repeat(29_999)}\n`), code: 0, durationMs: 5 });
     expect(inline.savedTo).toBeUndefined();
     expect(bashModeMessages(inline, true)[1]!.text).toBe(`<bash-stdout>${'y'.repeat(29_999)}</bash-stdout><bash-stderr></bash-stderr>`);
     // 15,000 two-byte characters and a newline: 30,001 bytes, one past the limit.
-    const wide = await forClaude(session, { command: 'cat log', output: printed(`${'é'.repeat(15_000)}\n`), code: 0, durationMs: 5 }, 30_000);
+    const wide = await forClaude(session, { command: 'cat log', output: printed(`${'é'.repeat(15_000)}\n`), code: 0, durationMs: 5 });
     expect(wide.savedTo).toBeDefined();
-    const failed = await forClaude(session, { command: 'npm test', output: printed('x'.repeat(40_000)), code: 1, durationMs: 5 }, 30_000);
+    const failed = await forClaude(session, { command: 'npm test', output: printed('x'.repeat(40_000)), code: 1, durationMs: 5 });
     expect(failed.savedTo).toBeUndefined();
   });
 
   it('goes inline, cut where Claude gets no more, where it cannot be saved, as from Claude Code when its copy fails', async () => {
-    const result = await forClaude('not-a-session', { command: 'cat big.log', output: printed('z'.repeat(40_000)), code: 0, durationMs: 5 }, 30_000);
+    const result = await forClaude('not-a-session', { command: 'cat big.log', output: printed('z'.repeat(40_000)), code: 0, durationMs: 5 });
     expect(result.savedTo).toBeUndefined();
     expect(bashModeMessages(result, true)[1]!.text).toBe(`<bash-stdout>${'z'.repeat(30_000)}</bash-stdout><bash-stderr></bash-stderr>`);
   });
@@ -255,7 +279,7 @@ describe('a long ! output, as it goes to Claude', () => {
   it.skipIf(process.platform === 'win32')('is saved whole past what Pelican holds, written as it came, up to the 64MB Claude Code saves', async () => {
     // 300,000 bytes: more than the pages keep, and more than Claude ever gets inline.
     const middle = await runCommand(os.tmpdir(), `'${process.execPath}' -e 'process.stdout.write("é".repeat(150000))'`);
-    const saved = await forClaude(session, middle, 30_000);
+    const saved = await forClaude(session, middle);
     middle.output.release();
     expect(await readFile(saved.savedTo!, 'utf8')).toBe('é'.repeat(150_000));
     expect(bashModeMessages(saved, true)[1]!.text).toContain('Output too large (293KB). Full output saved to:');
@@ -264,7 +288,7 @@ describe('a long ! output, as it goes to Claude', () => {
     const huge = await runCommand(os.tmpdir(), `head -c ${SAVED_BYTES + 5_000_000} /dev/zero | tr '\\0' x`);
     expect(huge.output.bytes).toBe(SAVED_BYTES + 5_000_000);
     expect(process.memoryUsage().rss - before).toBeLessThan(100e6);
-    const cut = await forClaude(session, huge, 30_000);
+    const cut = await forClaude(session, huge);
     huge.output.release();
     expect((await stat(cut.savedTo!)).size).toBe(SAVED_BYTES);
     expect(bashModeMessages(cut, true)[1]!.text).toContain(`Output exceeded the 64MB persist limit; only the first 64MB were saved to: ${cut.savedTo}\n`);
@@ -285,7 +309,7 @@ describe('how Claude Code’s bash mode takes a ! command, from the settings', (
   afterAll(() => rm(project, { recursive: true, force: true }));
 
   it('Claude answers unless the settings say respondToBashCommands: false, as in the CLI', async () => {
-    expect(await bashModeSettings(project)).toEqual({ respond: true, inlineMax: 30_000 });
+    expect(await bashModeSettings(project)).toEqual({ respond: true, readMax: 30_000, inlineMax: 30_000 });
     await set({ respondToBashCommands: false });
     expect((await bashModeSettings(project)).respond).toBe(false);
   });
@@ -303,7 +327,73 @@ describe('how Claude Code’s bash mode takes a ! command, from the settings', (
   it('gives Claude as much inline as bashOutputMaxChars says, held to Claude Code’s 4,000 to 128,000', async () => {
     for (const [value, inline] of [[5000, 5000], [1000, 4000], [200_000, 128_000], [-1, 30_000], ['lots', 30_000]] as const) {
       await set({ bashOutputMaxChars: value });
-      expect((await bashModeSettings(project)).inlineMax).toBe(inline);
+      expect(await bashModeSettings(project)).toMatchObject({ readMax: inline, inlineMax: inline });
     }
+  });
+
+  describe('BASH_MAX_OUTPUT_LENGTH', () => {
+    const before = process.env.BASH_MAX_OUTPUT_LENGTH;
+    afterEach(() => {
+      if (before === undefined) delete process.env.BASH_MAX_OUTPUT_LENGTH;
+      else process.env.BASH_MAX_OUTPUT_LENGTH = before;
+    });
+
+    it('sets how much Claude Code reads back where bashOutputMaxChars is unset, from 1 to 150,000, read as Claude Code reads a number', async () => {
+      for (const [value, read] of [['5000', 5000], ['1000', 1000], [' 1.5e3 ', 1500], ['1,000', 1000], ['12abc', 12], ['200000', 150_000], ['abc', 30_000], ['0', 30_000], ['-5', 30_000], ['', 30_000]] as const) {
+        process.env.BASH_MAX_OUTPUT_LENGTH = value;
+        expect(await bashModeSettings(project)).toEqual({ respond: true, readMax: read, inlineMax: 30_000 });
+      }
+    });
+
+    it('comes from the settings’ env over Pelican’s own, as Claude Code sets it, and gives way to bashOutputMaxChars', async () => {
+      process.env.BASH_MAX_OUTPUT_LENGTH = '8000';
+      await set({ env: { BASH_MAX_OUTPUT_LENGTH: '5000' } });
+      expect(await bashModeSettings(project)).toMatchObject({ readMax: 5000, inlineMax: 30_000 });
+      await set({ env: { BASH_MAX_OUTPUT_LENGTH: '5000' }, bashOutputMaxChars: 8000 });
+      expect(await bashModeSettings(project)).toMatchObject({ readMax: 8000, inlineMax: 8000 });
+    });
+  });
+});
+
+describe('a ! output under BASH_MAX_OUTPUT_LENGTH, as Claude Code’s bash mode wrote these (2.1.318)', () => {
+  const session = '6e25f65d-1b8b-4490-a3d3-43540da07ef4';
+  const project = () => path.join(config.claudeHome, 'projects', '-work-limits');
+  beforeAll(async () => {
+    await mkdir(project(), { recursive: true });
+    await writeFile(path.join(project(), `${session}.jsonl`), `${JSON.stringify({ type: 'user', uuid: 'p1', sessionId: session, message: { role: 'user', content: 'hi' } })}\n`);
+    await refreshTranscriptIndex();
+  });
+  const ran = (printed: string, code = 0): ShellResult => ({ command: 'python3 report.py', output: (() => {
+    const output = new CommandOutput();
+    output.add(Buffer.from(printed));
+    return output;
+  })(), code, durationMs: 5 });
+  const row = (result: ForClaude) => bashModeMessages(result, true)[1]!.text;
+
+  it('at 5000: one past it is saved whole, its preview from what was read back, and a failed one is cut there', async () => {
+    const limits = { readMax: 5000, inlineMax: 30_000 };
+    expect(row(await forClaude(session, ran('x'.repeat(5000)), limits))).toBe(`<bash-stdout>${'x'.repeat(5000)}</bash-stdout><bash-stderr></bash-stderr>`);
+    const saved = await forClaude(session, ran('x'.repeat(5001)), limits);
+    expect(path.basename(saved.savedTo!)).toMatch(/^b[0-9a-z]{8}\.txt$/);
+    expect(row(saved)).toBe(`<bash-stdout><persisted-output>\nOutput too large (4.9KB). Full output saved to: ${saved.savedTo}\n\nPreview (first 2KB):\n${'x'.repeat(2000)}\n...\n</persisted-output></bash-stdout><bash-stderr></bash-stderr>`);
+    expect(row(await forClaude(session, ran('x'.repeat(6000), 1), limits))).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'x'.repeat(5000)}</bash-stderr>`);
+    // At 1000 the preview is the 1000 bytes read back, with nothing after it to say more.
+    const small = await forClaude(session, ran('x'.repeat(1001)), { readMax: 1000, inlineMax: 30_000 });
+    expect(row(small)).toContain(`Output too large (1001 bytes). Full output saved to: ${small.savedTo}\n\nPreview (first 2KB):\n${'x'.repeat(1000)}\n</persisted-output>`);
+  });
+
+  it('at 50,000: read back whole, it goes inline up to 30,000 characters, past that its text to a file under a call’s id; a failed one goes whole', async () => {
+    const limits = { readMax: 50_000, inlineMax: 30_000 };
+    // 40,000 bytes, 20,000 characters: inline.
+    expect(row(await forClaude(session, ran('é'.repeat(20_000)), limits))).toBe(`<bash-stdout>${'é'.repeat(20_000)}</bash-stdout><bash-stderr></bash-stderr>`);
+    const text = await forClaude(session, ran(`${'x'.repeat(35_000)}\n\n\n`), limits);
+    expect(path.basename(text.savedTo!)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.txt$/);
+    expect(await readFile(text.savedTo!, 'utf8')).toBe('x'.repeat(35_000));
+    expect(row(text)).toContain(`<persisted-output>\nOutput too large (34.2KB). Full output saved to: ${text.savedTo}\n\nPreview (first 2KB):\n`);
+    const whole = await forClaude(session, ran('x'.repeat(60_000)), limits);
+    expect(path.basename(whole.savedTo!)).toMatch(/^b[0-9a-z]{8}\.txt$/);
+    expect(row(await forClaude(session, ran('x'.repeat(40_000), 1), limits))).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'x'.repeat(40_000)}</bash-stderr>`);
+    // At its 150,000 at most, all of a failed one Claude Code reads is kept.
+    expect(row(await forClaude(session, ran('x'.repeat(160_000), 1), { readMax: 150_000, inlineMax: 30_000 }))).toBe(`<bash-stdout></bash-stdout><bash-stderr>${'x'.repeat(150_000)}</bash-stderr>`);
   });
 });

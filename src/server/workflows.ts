@@ -655,17 +655,18 @@ export type WorkflowAnswer = { workflow: Workflow; tag: string };
 const tagOf = (value: unknown) => `"${createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 27)}"`;
 
 /**
- * Whether a run nothing has said the end of is still at work. Its agents writing now say so. A
- * Claude Code that found it in the session without a record of its end wrote an orphan's notice:
- * then only the run's own agents say it lives on (the Claude Code that started it, still at it,
- * writes after that notice), not that some Claude Code has the session open, as the one that wrote
- * the notice does. Without that notice, a Claude Code with the session open may be running it.
+ * Whether a run nothing has said the end of is still at work. Its agents writing now say so.
+ * Without word of its end, a Claude Code with the session open may be running it. A Claude Code
+ * that found it in the session without a record of its end wrote an orphan's notice: then it runs
+ * only while a Claude Code has the session open, and that alone is not enough, as the one that wrote
+ * the notice has it open too: its agents went on after the notice (the Claude Code that started it,
+ * still at it), or write now.
  */
 async function stillRunning(sessionId: string, lastAt: number, orphan: Notice | undefined): Promise<boolean> {
   const quiet = Date.now() - lastAt;
-  if (quiet < ACTIVE_MS) return true;
-  if (orphan) return orphan.at !== undefined && lastAt > orphan.at && quiet < QUIET_MS;
-  return (await liveProcesses()).has(sessionId);
+  if (!orphan) return quiet < ACTIVE_MS || (await liveProcesses()).has(sessionId);
+  const wentOn = quiet < ACTIVE_MS || (orphan.at !== undefined && lastAt > orphan.at && quiet < QUIET_MS);
+  return wentOn && (await liveProcesses()).has(sessionId);
 }
 
 /**
@@ -754,12 +755,14 @@ export async function workflowView(sessionId: string, callId: string, live?: Wor
 
 // ---- A workflow agent's own transcript --------------------------------------------------------
 
-/** How many of an agent's messages a page holds at most, and about how much text. */
+/** How many of an agent's messages a page holds at most, and how many bytes of them. */
 const PAGE_MAX = 300;
 const PAGE_BYTES = 768 * 1024;
-/** One message, at most, on a page: a call with a large value (a StructuredOutput of findings) is cut to this. */
+/** One message, at most, on a page, in bytes: a call with a large value (a StructuredOutput of findings) is cut to this. */
 const MESSAGE_MAX = 128 * 1024;
 const PART_MAX = 8 * 1024;
+/** What a value comes to on a page, in bytes. */
+const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value) ?? '');
 
 /** A value as text no longer than `max`: a string cut, anything else as its JSON, cut. */
 function shortValue(value: unknown, max: number): unknown {
@@ -788,28 +791,72 @@ function shortBlock(block: Block): Block {
   }
 }
 
-/** A message as a page carries it, with its size: one too large has its parts cut, and then as many of them as fit. */
+const many = (n: number, unit: string) => `${n.toLocaleString('en-US')} more ${unit}${n === 1 ? '' : 's'}`;
+
+/**
+ * A block, its parts cut already (shortBlock), made to fit `room` bytes: a call keeps as many of
+ * its input's keys as fit and a result as many of its parts, each saying how many more were left
+ * out; anything else that large is left out, saying so.
+ */
+function fitBlock(block: Block, room: number): Block {
+  if (bytesOf(block) <= room) return block;
+  // The note's own room.
+  let used = 96;
+  if (block.type === 'tool_use') {
+    const entries = Object.entries(block.input);
+    const input: Record<string, unknown> = {};
+    used += bytesOf({ ...block, input: {} });
+    for (const [key, value] of entries) {
+      const weight = bytesOf(key) + bytesOf(value) + 2;
+      if (used + weight > room) break;
+      input[key] = value;
+      used += weight;
+    }
+    const left = entries.length - Object.keys(input).length;
+    return { ...block, input: { ...input, '…': `${many(left, 'key')} of its input left out` } };
+  }
+  if (block.type === 'tool_result' && Array.isArray(block.content)) {
+    const content: Exclude<ToolResultBlock['content'], string> = [];
+    used += bytesOf({ ...block, content: [] });
+    for (const part of block.content) {
+      const weight = bytesOf(part) + 1;
+      if (used + weight > room) break;
+      content.push(part);
+      used += weight;
+    }
+    return { ...block, content: [...content, { type: 'text', text: `… (${many(block.content.length - content.length, 'part')} of this result left out)`, truncated: true }], truncated: true };
+  }
+  return { type: 'text', text: '… (a part too large to show left out)', truncated: true };
+}
+
+/**
+ * A message as a page carries it, with its size in bytes: one too large has its parts cut, then
+ * as many of them as fit, the first made to fit (fitBlock), whatever its shape, and a word on how
+ * many more were left out.
+ */
 const sized = new WeakMap<ChatMessage, { message: ChatMessage; size: number }>();
 function onPage(message: ChatMessage): { message: ChatMessage; size: number } {
   const known = sized.get(message);
   if (known) return known;
   let shown = message;
-  let size = JSON.stringify(message).length;
+  let size = bytesOf(message);
   if (size > MESSAGE_MAX) {
+    const room = MESSAGE_MAX - bytesOf({ ...message, blocks: [] }) - 1024;
     const blocks: Block[] = [];
     let total = 0;
     const parts = message.blocks.map(shortBlock);
-    for (const [i, block] of parts.entries()) {
-      const weight = JSON.stringify(block).length;
-      if (total + weight > MESSAGE_MAX - 1024 && blocks.length > 0) {
-        blocks.push({ type: 'text', text: `… (${parts.length - i} more parts)`, truncated: true });
+    for (const [i, part] of parts.entries()) {
+      const block = blocks.length === 0 ? fitBlock(part, room) : part;
+      const weight = bytesOf(block) + 1;
+      if (total + weight > room && blocks.length > 0) {
+        blocks.push({ type: 'text', text: `… (${many(parts.length - i, 'part')} of this message left out)`, truncated: true });
         break;
       }
       blocks.push(block);
       total += weight;
     }
     shown = { ...message, blocks };
-    size = JSON.stringify(shown).length;
+    size = bytesOf(shown);
   }
   const out = { message: shown, size };
   sized.set(message, out);
@@ -895,12 +942,15 @@ export async function workflowAgentPage(
   const prompt = promptOf(all) ?? agent?.promptPreview ?? fromRecord?.promptPreview;
   const result = entry?.state === 'done' ? entry.result : undefined;
   const shown = result ?? agent?.resultPreview ?? fromRecord?.resultPreview;
+  // Done by its run's word while the journal has it only started: its result follows there.
+  const coming = !shown && agent?.state === 'done' && entry?.state === 'started';
   const page: WorkflowAgentPage = {
     messages: all.slice(offset, end).map((m) => onPage(m).message),
     total: all.length,
     offset,
     ...(prompt ? { prompt: clip(prompt, PROMPT_MAX) } : {}),
     ...(shown ? { result: shown } : {}),
+    ...(coming ? { resultComing: true } : {}),
   };
   return { ...page, tag: tagOf(page) };
 }

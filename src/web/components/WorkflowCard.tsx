@@ -254,19 +254,32 @@ async function newSteps(client: QueryClient, key: AgentKey, sessionId: string, c
   return newest();
 }
 
-/** Its pages of messages: the newest, kept up to date while it runs, and earlier ones as asked for. */
+/** How long an agent's result may take to reach the run's journal once it is done, before its Outcome says it returned nothing. */
+const RESULT_WAIT_MS = 10_000;
+
+/**
+ * Its pages of messages: the newest, kept up to date while it runs, and earlier ones as asked for.
+ * Done before its result reached the run's journal, it is asked for again each second, briefly.
+ */
 function useAgentMessages(sessionId: string, callId: string, agentId: string | undefined, running: boolean, onScreen: boolean) {
   const client = useQueryClient();
   // An agent still queued has no id yet, and nothing to read.
   const enabled = Boolean(sessionId && agentId);
   const key = useMemo((): AgentKey => ['workflow-agent', sessionId, callId, agentId ?? ''], [sessionId, callId, agentId]);
+  const [waited, setWaited] = useState(false);
   const latest = useQuery({
     queryKey: key,
     queryFn: () => newSteps(client, key, sessionId, callId, agentId!),
     enabled,
     staleTime: running ? 0 : 60_000,
-    refetchInterval: running && onScreen ? 3000 : false,
+    refetchInterval: (query) => (!onScreen ? false : running ? 3000 : query.state.data?.resultComing && !waited ? 1000 : false),
   });
+  const coming = Boolean(latest.data?.resultComing) && !running;
+  useEffect(() => {
+    if (!coming) return undefined;
+    const timer = setTimeout(() => setWaited(true), RESULT_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [coming]);
   // It just ended: what it did in its last seconds, once.
   const wasRunning = useRef(running);
   const refetch = latest.refetch;
@@ -296,7 +309,7 @@ function useAgentMessages(sessionId: string, callId: string, agentId: string | u
       setLoading(false);
     }
   };
-  return { page, messages, offset, older, loading, error: latest.error as Error | null };
+  return { page, messages, offset, older, loading, error: latest.error as Error | null, awaiting: coming && !waited };
 }
 
 /** The steps an opened agent shows before Show all: its last few, as the CLI's agent card does. */
@@ -325,8 +338,8 @@ function AgentDetail({ agent, status, callId, cwd, onScreen, verbose }: { agent:
   ]);
   const prompt = pages.page?.prompt ?? agent.promptPreview;
   const result = pages.page?.result ?? agent.resultPreview;
-  // Nothing to say it returned nothing until its page is read, if there is one to read.
-  const read = Boolean(pages.page) || !agent.agentId;
+  // Nothing to say it returned nothing until its page is read, if there is one to read, and its result had time to come.
+  const read = (Boolean(pages.page) && !pages.awaiting) || !agent.agentId;
   const outcome = status === 'done' ? (result || !read ? undefined : '(empty)')
     : status === 'running' ? 'Still running…'
       : status === 'queued' ? 'Waiting for an agent slot.'

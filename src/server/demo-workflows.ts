@@ -128,11 +128,12 @@ function fixAgents(start: number, now: number): WorkflowAgent[] {
 
 /**
  * The fixes as this Pelican's Claude would report them while they run: as the runner sends them,
- * without the agents' prompts and results, which an agent opened reads from its own files.
+ * without the agents' prompts and results, which an agent opened reads from its own files (one
+ * still queued, with none yet, keeps its prompt's preview).
  */
 export function demoFixes(now = Date.now()): Workflow {
   const start = now - 2 * MIN - 41_000;
-  const agents = fixAgents(start, now).map(({ promptPreview: _prompt, resultPreview: _result, ...agent }) => agent);
+  const agents = fixAgents(start, now).map(({ promptPreview, resultPreview: _result, ...agent }) => (agent.agentId || !promptPreview ? agent : { ...agent, promptPreview }));
   return {
     runId: FIXES.run, taskId: FIXES.task, name: FIXES.name, description: FIXES_SUMMARY, status: 'running', startedAt: start,
     totalTokens: agents.reduce((sum, a) => sum + (a.tokens ?? 0), 0), totalToolCalls: agents.reduce((sum, a) => sum + (a.toolCalls ?? 0), 0),

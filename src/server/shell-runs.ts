@@ -87,7 +87,7 @@ async function record(sessionId: string, cwd: string, id: string, result: ShellR
     if (shuttingDown) return;
     const settings = await bashModeSettings(cwd);
     const respond = result.endedBy === undefined && settings.respond;
-    const toClaude = await forClaude(sessionId, result, settings.inlineMax);
+    const toClaude = await forClaude(sessionId, result, settings);
     const run = await ensureRun(sessionId);
     // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
     await run.appendShell(toClaude, respond && !run.busy, id);

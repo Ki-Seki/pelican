@@ -53,8 +53,8 @@ describe('workspace', () => {
     }
   }, 15_000);
 
-  // Homebrew's git on some Macs ships a system config with `remote.origin.fetch` alone, so that
-  // `git remote` names origin in every repository; without an address there is nowhere to push.
+  // A system or managed git config can set `remote.origin.fetch` alone, so that `git remote`
+  // names origin in every repository; without an address there is nowhere to push.
   it('finds no remote in a repository whose system or global config names one with no address', async () => {
     const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-remote-'));
     const saved = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_SYSTEM, nosystem: process.env.GIT_CONFIG_NOSYSTEM };

@@ -115,6 +115,18 @@ describe('where a turn’s "files changed" goes', () => {
     const under = filesChangedUnder(items, [turn('p1', 1), turn('n1', 2)]);
     expect([...under].map(([answer, t]) => [answer, t.uuid])).toEqual([['a2', 'p1'], ['a3', 'n1']]);
   });
+
+  it('under the answer to a message sent with only a file, which /diff counts as a turn of its own', () => {
+    const items = buildItems([
+      user('p1', 'Fix it'),
+      assistant('a1', [{ type: 'text', text: 'Done.' }]),
+      // As Pelican writes a message of files alone: the block that tells Claude where they are.
+      user('f1', 'Attached files:\n- /tmp/w/uploads/0b7e2c1a-1111-4111-8111-111111111111/spec.pdf (spec.pdf)'),
+      assistant('a2', [{ type: 'text', text: 'Read it, and changed the theme.' }]),
+    ]);
+    const under = filesChangedUnder(items, [turn('p1', 1), turn('f1', 2)]);
+    expect([...under].map(([answer, t]) => [answer, t.uuid])).toEqual([['a1', 'p1'], ['a2', 'f1']]);
+  });
 });
 
 describe('buildItems: workflows', () => {

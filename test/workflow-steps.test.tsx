@@ -119,15 +119,38 @@ describe('an agent at work, opened', () => {
     expect(pages.mock.calls.length).toBeGreaterThan(asked);
   }, 15_000);
 
-  it('asks for no steps while it is queued, with no id yet', async () => {
-    const queued = { ...agent(2, 'start', { queuedAt: Date.now() - 5000 }), agentId: undefined } as Agent;
+  it('asks for no steps while it is queued, with no id yet, and shows the prompt it waits with', async () => {
+    const queued = { ...agent(2, 'start', { queuedAt: Date.now() - 5000, promptPreview: 'Review the client side of the checkout.' }), agentId: undefined } as Agent;
     vi.spyOn(api, 'workflow').mockResolvedValue(flow({ agents: [agent(1, 'progress', { startedAt: Date.now() - 60_000 }), queued] }));
     const pages = vi.spyOn(api, 'workflowAgent').mockRejectedValue(new Error('Not found'));
     show([call, launched]);
     fireEvent.click(await screen.findByText('review:2'));
     expect(card().textContent).toContain('Waiting for an agent slot.');
+    fireEvent.click(within(card()).getByRole('button', { name: 'Prompt' }));
+    expect(card().textContent).toContain('Review the client side of the checkout.');
     await new Promise((resolve) => setTimeout(resolve, 3500));
     expect(pages).not.toHaveBeenCalled();
+  }, 10_000);
+});
+
+describe('an agent done before its result reached the run’s journal, opened', () => {
+  it('asks again each second for what it returned, instead of saying it returned nothing', async () => {
+    let page: Partial<WorkflowAgentPage> = { resultComing: true };
+    vi.spyOn(api, 'workflow').mockResolvedValue(flow({ agents: [agent(1, 'done', { durationMs: 9000 })] }));
+    const pages = vi.spyOn(api, 'workflowAgent').mockImplementation(async () => ({ messages: step(1), total: 2, offset: 0, ...page }));
+    show([call, launched]);
+    fireEvent.click(await screen.findByText('review:1'));
+    await waitFor(() => expect(pages).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(card().textContent).not.toContain('(empty)');
+    // Claude Code writes the journal's result line: the next ask has it.
+    page = { result: 'No findings.' };
+    await waitFor(() => expect(card().textContent).toContain('No findings.'), { timeout: 3000 });
+    const asked = pages.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Once there, it is not asked for again.
+    expect(pages.mock.calls.length).toBe(asked);
+    expect(card().textContent).not.toContain('(empty)');
   }, 10_000);
 });
 

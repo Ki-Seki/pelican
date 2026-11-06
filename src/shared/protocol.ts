@@ -147,8 +147,12 @@ export type Workflow = {
   source: 'live' | 'record' | 'journal';
 };
 
-/** One page of a workflow agent's own transcript, with its prompt and what it returned. */
-export type WorkflowAgentPage = MessagesPage & { prompt?: string; result?: string };
+/**
+ * One page of a workflow agent's own transcript, with its prompt and what it returned.
+ * `resultComing`: done by its run's word, its result not in the run's journal yet, where Claude
+ * Code writes it just after; asked for again, it is there.
+ */
+export type WorkflowAgentPage = MessagesPage & { prompt?: string; result?: string; resultComing?: true };
 export type Block = TextBlock | ThinkingBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
 export type ChatMessage = {

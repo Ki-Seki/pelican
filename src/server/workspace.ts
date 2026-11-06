@@ -148,8 +148,8 @@ export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'un
   const base = await defaultBranch(cwd).catch(() => undefined);
   if (base) out.base = base.name;
   // Somewhere to push to: a remote with an address, read from the config, which contacts nothing.
-  // Not `git remote`, which also names one that has only a fetch line (Homebrew's system config
-  // sets `remote.origin.fetch`), and so names origin in every repository.
+  // Not `git remote`, which also names one that has only a fetch line (a system or managed git
+  // config may set `remote.origin.fetch`), and so names origin in every repository.
   if (await git(cwd, ['config', '--get-regexp', '^remote\\..+\\.(push)?url$'], 5000).then((found) => found.trim() !== '', () => false)) out.remote = true;
   // Since the branch split: what git diff says changed since then, and the new files status found.
   let since: string | undefined;

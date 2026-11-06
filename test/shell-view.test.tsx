@@ -162,6 +162,32 @@ describe('a running command', () => {
     expect(screen.getByText(/first line/)).toBeTruthy();
   });
 
+  it('that failed says so once recorded, quietly, where its live card said its exit code, as the record tells it', () => {
+    const recorded = (output: string) => buildItems([user('c', '<bash-input>npm test</bash-input>'), user('o', output)])[0];
+    // Claude Code's bash mode puts a failed command's output under stderr, with stdout empty, also when it printed nothing.
+    expect(recorded('<bash-stdout></bash-stdout><bash-stderr>FAIL theme.test.ts\n</bash-stderr>')).toMatchObject({ stderr: 'FAIL theme.test.ts', ended: 'failed' });
+    expect(recorded('<bash-stdout></bash-stdout><bash-stderr></bash-stderr>')).toMatchObject({ stdout: '', stderr: '', ended: 'failed' });
+    expect(recorded('<bash-stdout></bash-stdout><bash-stderr>started\n\n(stopped after 30 minutes)</bash-stderr>')).toMatchObject({ ended: 'stopped' });
+    // One that went well: its output, or Claude Code's word that it printed none.
+    expect(recorded('<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')).not.toHaveProperty('ended');
+    expect(recorded('<bash-stdout>2 passed</bash-stdout><bash-stderr></bash-stderr>')).not.toHaveProperty('ended');
+    // In one message with its command, as Claude Desktop writes it.
+    expect(buildItems([user('d', '<bash-input>false</bash-input><bash-stdout></bash-stdout><bash-stderr></bash-stderr>')])[0]).toMatchObject({ ended: 'failed' });
+
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's13', shells: [live({ id: 'r13', output: 'FAIL\n', done: { code: 1 } })] }));
+    const record = [user('r13', '<bash-input>npm test</bash-input>'), user('o13', '<bash-stdout></bash-stdout><bash-stderr>FAIL\n</bash-stderr>')];
+    const { rerender } = render(<MessageList sessionId="s13" view={view(record)} mode="normal" />);
+    expect(screen.getByText('Exit code 1')).toBeTruthy();
+    act(() => handleShellEvent({ type: 'shells', sessionId: 's13', shells: [] }));
+    rerender(<MessageList sessionId="s13" view={view(record)} mode="normal" />);
+    expect(screen.queryByText('Exit code 1')).toBeNull();
+    expect(screen.getByText('Failed')).toBeTruthy();
+    cleanup();
+    render(<MessageList sessionId="s14" view={view([user('r14', '<bash-input>npm run dev</bash-input>'), user('o14', '<bash-stdout></bash-stdout><bash-stderr>ready\n\n(stopped)</bash-stderr>')])} mode="normal" />);
+    expect(screen.getByText('Stopped')).toBeTruthy();
+    expect(screen.queryByText('Failed')).toBeNull();
+  });
+
   it('that printed nothing shows the command alone; its record keeps Claude Code’s words for Claude', () => {
     const record = [user('r12', '<bash-input>touch a.txt</bash-input>'), user('o12', '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>')];
     expect(buildItems(record)).toEqual([{ kind: 'shell', key: 'r12', command: 'touch a.txt', stdout: '', stderr: '' }]);
@@ -170,6 +196,7 @@ describe('a running command', () => {
     const { container } = render(<MessageList sessionId="s12" view={view(record)} mode="normal" />);
     expect(screen.getByText('touch a.txt')).toBeTruthy();
     expect(screen.queryByText(/completed with no output/)).toBeNull();
+    expect(screen.queryByText('Failed')).toBeNull();
     expect(container.querySelector('pre')).toBeNull();
   });
 });

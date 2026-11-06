@@ -156,9 +156,11 @@ function selectLines(page, from, to) {
 /**
  * Changes and files, walked as someone reading the session does: Files, a file, two of its lines
  * selected and quoted into the message; a search of the files' text; Show, a turn, and the diff of
- * a file it changed. The page's watch catches what goes wrong on the way; this, what never shows.
+ * a file it changed, in the first of `later` sessions that has a turn, should this one have none
+ * (one whose work runs in the background may have changed nothing itself). The page's watch
+ * catches what goes wrong on the way; this, what never shows.
  */
-async function walkWorkspace(page, base, session, where, step) {
+async function walkWorkspace(page, base, session, where, step, later = []) {
   const url = `${base}?s=${encodeURIComponent(session.id)}`;
   // The site's demo has no computer to search with, and says so.
   const live = !base.endsWith('/demo/');
@@ -186,13 +188,20 @@ async function walkWorkspace(page, base, session, where, step) {
   else if (live && !(await view.locator('mark').count())) missing(`searching the files for "${word}" does not find it in ${file}`);
 
   step('Show, a turn and its diff');
-  view = await openWorkspace(page, `${url}&w=changes`);
-  if (!view) return missing('Changes does not open');
-  const show = view.getByRole('button', { name: /^Show:/ });
-  if (!(await show.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Changes has no Show');
-  await show.click();
-  const turn = page.getByRole('dialog', { name: 'Show' }).getByRole('button', { name: /^T\d+ · / }).first();
-  if (!(await turn.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Show offers no turn');
+  let turn;
+  for (const other of [session, ...later]) {
+    view = await openWorkspace(page, `${base}?s=${encodeURIComponent(other.id)}&w=changes`);
+    if (!view) return missing('Changes does not open');
+    const show = view.getByRole('button', { name: /^Show:/ });
+    if (!(await show.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Changes has no Show');
+    await show.click();
+    const offered = page.getByRole('dialog', { name: 'Show' }).getByRole('button', { name: /^T\d+ · / }).first();
+    if (await offered.waitFor({ timeout: 5000 }).then(() => true, () => false)) {
+      turn = offered;
+      break;
+    }
+  }
+  if (!turn) return missing('Show offers no turn');
   await turn.click();
   const changed = view.locator('button:has(> span[title])').first();
   if (!(await changed.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('the turn lists no file');
@@ -203,7 +212,8 @@ async function walkWorkspace(page, base, session, where, step) {
 
 /**
  * The list, its sheets, a new session in another folder, and every session with its sheets; then
- * Changes and files, walked through in the newest session that has a folder.
+ * Changes and files, walked through in the newest session that has a folder (a turn, in the
+ * newest that has one).
  */
 async function driveApp(browser, base, sessions) {
   // The list folds side chats away under their session.
@@ -235,8 +245,8 @@ async function driveApp(browser, base, sessions) {
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
         for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
       }
-      const walked = sessions.find((s) => !s.sideChatOf && s.cwd);
-      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; });
+      const [walked, ...later] = sessions.filter((s) => !s.sideChatOf && s.cwd);
+      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; }, later.slice(0, 3));
       all = false;
       await context.close();
     }

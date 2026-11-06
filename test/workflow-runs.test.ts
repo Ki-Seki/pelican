@@ -127,7 +127,25 @@ describe('how a run nothing said the end of stands', () => {
     await transcript(id, [said('Review it'), call('toolu_g'), launched('toolu_g', runId, 'w3'), orphan('toolu_g', runId, 'w3')], Date.now() - 20 * MIN);
     await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
     await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5 * MIN));
+    elsewhere.add(id);
     expect((await workflowView(id, 'toolu_g'))!.workflow.status).toBe('running');
+  });
+
+  it('one whose agents went on after that notice is stopped once no Claude Code has the session open', async () => {
+    // The Claude Code that started it died without a word of its own after the notice was written.
+    const id = newSession();
+    const runId = 'wf_2222ffff-222';
+    await transcript(id, [said('Review it'), call('toolu_d'), launched('toolu_d', runId, 'w6'), orphan('toolu_d', runId, 'w6')], Date.now() - 30 * MIN);
+    await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
+    await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5 * MIN));
+    expect((await workflowView(id, 'toolu_d'))!.workflow.status).toBe('stopped');
+    // Even with its agents writing just now.
+    await appendFile(path.join(folder(id), `subagents/workflows/${runId}/agent-a1.jsonl`), `${toolStep('a1', 2, 'a1-1r', Date.now() - 1000).join('\n')}\n`);
+    const now = (await workflowView(id, 'toolu_d'))!.workflow;
+    expect(now.agents[0]!.lastProgressAt).toBeGreaterThan(Date.now() - 60_000);
+    expect(now.status).toBe('stopped');
+    elsewhere.add(id);
+    expect((await workflowView(id, 'toolu_d'))!.workflow.status).toBe('running');
   });
 
   it('one whose agents went on after that notice and then fell silent for longer than Claude Code lets them is stopped', async () => {
@@ -201,6 +219,31 @@ describe('a workflow agent’s prompt', () => {
     expect(page?.prompt).toBe('Review the server.\nReport every finding.');
     // The frames are no steps of its.
     expect(page?.messages.map((m) => m.uuid)).toEqual(['u0', 'u1', 'a1-1a', 'a1-1r']);
+  });
+});
+
+describe('an agent done before its result reached the journal', () => {
+  it('says its result is coming while the journal has it only started, and gives it once there', async () => {
+    // This Pelican's Claude reports it done; Claude Code appends the journal's result line just after.
+    const id = newSession();
+    const runId = 'wf_6666aaaa-666';
+    await transcript(id, [said('Review it'), call('toolu_rc'), launched('toolu_rc', runId, 'w6')]);
+    const journal = await put(id, `subagents/workflows/${runId}/journal.jsonl`, `{"type":"launched"}\n${started('v2:a', 'a1', 'review:server')}\n`);
+    await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, steps('a1', Date.now() - 5000));
+    const live: Workflow = { runId, taskId: 'w6', status: 'running', phases: [], agents: [{ index: 1, label: 'review:server', state: 'done', agentId: 'a1' }], source: 'live' };
+    const early = await workflowAgentPage(id, 'toolu_rc', 'a1', {}, live);
+    expect(early).toMatchObject({ resultComing: true });
+    expect(early).not.toHaveProperty('result');
+    await appendFile(journal, '{"type":"result","key":"v2:a","agentId":"a1","result":"No findings."}\n');
+    const later = await workflowAgentPage(id, 'toolu_rc', 'a1', {}, live);
+    expect(later).toMatchObject({ result: 'No findings.' });
+    expect(later).not.toHaveProperty('resultComing');
+    // One that returned nothing has a result line all the same: nothing more is coming.
+    const empty = newSession();
+    await transcript(empty, [said('Review it'), call('toolu_re'), launched('toolu_re', 'wf_6666bbbb-666', 'w7')]);
+    await put(empty, 'subagents/workflows/wf_6666bbbb-666/journal.jsonl', `${started('v2:a', 'a1', 'review:server')}\n{"type":"result","key":"v2:a","agentId":"a1","result":""}\n`);
+    await put(empty, 'subagents/workflows/wf_6666bbbb-666/agent-a1.jsonl', steps('a1', Date.now() - 5000));
+    expect(await workflowAgentPage(empty, 'toolu_re', 'a1', {}, { ...live, runId: 'wf_6666bbbb-666', taskId: 'w7' })).not.toHaveProperty('resultComing');
   });
 });
 
@@ -343,6 +386,38 @@ describe('an agent’s steps, asked for while it works', () => {
     // What it held, cut, as text: its start is there to read.
     expect(String(input.findings).startsWith('[{"title":"finding 0"')).toBe(true);
     expect(String(input.summary).length).toBeLessThan(10_000);
+  });
+
+  it('stay bounded whatever shape a large message has, and say what was left out', async () => {
+    let n = 0;
+    /** The page of an agent whose transcript is these rows after its prompt, in bytes as sent, and as read. */
+    async function pageOf(rows: Row[]) {
+      const id = newSession();
+      const runId = `wf_6b6b6b6b-${String((n += 1)).padStart(3, '0')}`;
+      await transcript(id, [call('toolu_s'), launched('toolu_s', runId, 'w8')]);
+      await put(id, `subagents/workflows/${runId}/journal.jsonl`, `${started('v2:a', 'a1', 'big')}\n`);
+      const all = [{ type: 'user', message: { role: 'user', content: 'Review it.' } }, ...rows];
+      await put(id, `subagents/workflows/${runId}/agent-a1.jsonl`, `${all.map((r, i) => JSON.stringify({ parentUuid: i ? `b${i - 1}` : null, isSidechain: true, agentId: 'a1', uuid: `b${i}`, timestamp: new Date(Date.now() - 1000 + i).toISOString(), ...r })).join('\n')}\n`);
+      const text = await (await ask(`/api/sessions/${id}/workflows/toolu_s/agents/a1`)).text();
+      return { bytes: Buffer.byteLength(text), page: JSON.parse(text) as WorkflowAgentPage };
+    }
+    const use = (input: Record<string, unknown>, name = 'StructuredOutput') => ({ type: 'assistant', message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name, input }] } });
+    // A call whose input has very many small keys.
+    const keys = await pageOf([use(Object.fromEntries(Array.from({ length: 200_000 }, (_, i) => [`file-${i}.ts`, 'ok'])))]);
+    expect(keys.bytes).toBeLessThan(140_000);
+    const input = (keys.page.messages[1]!.blocks[0] as { input: Record<string, unknown> }).input;
+    expect(input['file-0.ts']).toBe('ok');
+    expect(input['…']).toMatch(/^1\d\d,\d{3} more keys of its input left out$/);
+    // One result made of many parts, each under what a part is cut to.
+    const parts = await pageOf([use({}, 'mcp__docs__read'), { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: Array.from({ length: 600 }, (_, i) => ({ type: 'text', text: `${i} ${'r'.repeat(7000)}` })) }] } }]);
+    expect(parts.bytes).toBeLessThan(140_000);
+    const result = parts.page.messages[2]!.blocks[0] as { content: Array<{ text: string }> };
+    expect(result.content[0]!.text.startsWith('0 rrr')).toBe(true);
+    expect(result.content.at(-1)!.text).toMatch(/^… \(5\d\d more parts of this result left out\)$/);
+    // Many blocks of text in characters of three bytes each, 60,000 of them: bounded in bytes, not characters.
+    const blocks = await pageOf([{ type: 'assistant', message: { id: 'm1', role: 'assistant', content: Array.from({ length: 60 }, () => ({ type: 'text', text: '审'.repeat(1000) })) } }]);
+    expect(blocks.bytes).toBeLessThan(140_000);
+    expect((blocks.page.messages[1]!.blocks.at(-1) as { text: string }).text).toMatch(/^… \(\d+ more parts of this message left out\)$/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -13,6 +13,9 @@ import { refreshTranscriptIndex } from '../src/server/transcripts';
 
 const SESSION = '7a7a7a7a-1111-4222-8333-555555555555';
 const OTHER = '7a7a7a7a-1111-4222-8333-666666666666';
+/** A branch of SESSION (Claude Code's forkSession: its rows copied, each saying from where), and a third session. */
+const FORK = '7a7a7a7a-1111-4222-8333-777777777777';
+const THIRD = '7a7a7a7a-1111-4222-8333-888888888888';
 const saved = { ...config };
 let dir: string;
 let folder: string;
@@ -36,11 +39,26 @@ beforeAll(async () => {
   await mkdir(folder, { recursive: true });
   await writeFile(path.join(folder, 'b1b2gp6fw.txt'), OUTPUT);
   await writeFile(path.join(folder, 'blines000.txt'), LINES);
+  await writeFile(path.join(folder, 'bown00000.txt'), 'saved for SESSION\n');
   await writeFile(path.join(dir, 'secret.txt'), 'not for the phone\n');
   await symlink(path.join(dir, 'secret.txt'), path.join(folder, 'blinked00.txt'));
+  // A file with a second name, made in the folder: not one Claude Code wrote there.
+  await link(path.join(dir, 'secret.txt'), path.join(folder, 'bhardlnk0.txt'));
   await mkdir(path.join(projects, OTHER), { recursive: true });
   // Another session's folder made a link to this one's.
   await symlink(folder, path.join(projects, OTHER, 'tool-results'));
+  // The branch: its records of SESSION's long output, one copied from SESSION and one copied from
+  // THIRD (a branch of a branch), which both name SESSION's file; and one of its own naming it.
+  const record = (uuid: string, name: string, extra: Record<string, unknown>) => JSON.stringify({
+    type: 'user', uuid, sessionId: FORK, ...extra,
+    message: { role: 'user', content: `<bash-stdout><persisted-output>\nOutput too large (390.6KB). Full output saved to: ${path.join(folder, name)}\n\nPreview (first 2KB):\nx\n...\n</persisted-output></bash-stdout><bash-stderr></bash-stderr>` },
+  });
+  await writeFile(path.join(projects, `${FORK}.jsonl`), [
+    record('f1', 'b1b2gp6fw.txt', { forkedFrom: { sessionId: SESSION, messageUuid: 'f1' } }),
+    record('f2', 'blines000.txt', { parentUuid: 'f1', forkedFrom: { sessionId: THIRD, messageUuid: 'f2' } }),
+    record('f3', 'bhardlnk0.txt', { parentUuid: 'f2', forkedFrom: { sessionId: SESSION, messageUuid: 'f3' } }),
+    record('f4', 'bown00000.txt', { parentUuid: 'f3' }),
+  ].join('\n') + '\n');
   await refreshTranscriptIndex();
 });
 afterAll(async () => {
@@ -73,7 +91,7 @@ describe('a long ! command’s saved output, for Show all', () => {
   });
 
   it('is nothing else: no path, no other kind of name, no link, not another session’s, and only for you', async () => {
-    for (const name of ['../secret.txt', '..', 'b1b2gp6fw', 'b1b2gp6fw.txt.bak', '.hidden.txt', 'blinked00.txt', 'missing0.txt']) {
+    for (const name of ['../secret.txt', '..', 'b1b2gp6fw', 'b1b2gp6fw.txt.bak', '.hidden.txt', 'blinked00.txt', 'bhardlnk0.txt', 'missing0.txt']) {
       expect((await page(name)).status, name).toBe(404);
     }
     expect((await ask(`/api/sessions/${SESSION}/tool-results/..%2F..%2F${SESSION}.jsonl`)).status).toBe(404);
@@ -82,5 +100,25 @@ describe('a long ! command’s saved output, for Show all', () => {
     expect((await ask('/api/sessions/not-a-session/tool-results/b1b2gp6fw.txt')).status).toBe(404);
     expect((await page('b1b2gp6fw.txt', -1)).status).toBe(404);
     expect((await ask(`/api/sessions/${SESSION}/tool-results/b1b2gp6fw.txt`, false)).status).toBe(401);
+  });
+});
+
+describe('a branch’s copy of a long ! command’s record, for Show all', () => {
+  const branch = (name: string) => ask(`/api/sessions/${FORK}/tool-results/${encodeURIComponent(name)}`);
+
+  it('reads the saved output in the folder of the session it was copied from, when that is the one its path names', async () => {
+    const response = await branch('b1b2gp6fw.txt');
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as SavedOutputPage).text).toBe(`x${'é'.repeat((SAVED_PAGE_BYTES - 1) / 2)}`);
+  });
+
+  it('is gone when the row came from another session than the path names, or is the branch’s own, and never a file with another name', async () => {
+    // Copied from THIRD, a branch of a branch, though the path names SESSION's folder.
+    expect((await branch('blines000.txt')).status).toBe(404);
+    // Not a copy: the branch's own row naming another session's file.
+    expect((await branch('bown00000.txt')).status).toBe(404);
+    expect((await branch('bhardlnk0.txt')).status).toBe(404);
+    // A session with no such record reads only its own folder.
+    expect((await ask(`/api/sessions/${OTHER}/tool-results/blines000.txt`)).status).toBe(404);
   });
 });
