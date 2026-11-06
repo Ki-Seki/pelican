@@ -133,7 +133,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { claudeEnv, closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
 const { oneLine } = await import('../src/server/push');
 const { sideChatPrompt } = await import('../src/server/side-chat');
 const { fork } = await import('../src/server/actions');
@@ -227,6 +227,26 @@ describe('starting Claude', () => {
     expect(getRun(sessionId)!.busy).toBe(true);
     // Published once, before the transcript has it, for pages watching from the start.
     expect(messages()).toHaveLength(0);
+  });
+
+  it('tells Claude Code it shows the files Claude sends, in Claude Code’s environment only, new or resumed', async () => {
+    const { claude, sessionId, run } = await start();
+    expect(claude.options.env).toMatchObject({ CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1', PATH: process.env.PATH });
+    // Not Desktop's entrypoint, which would bring Desktop's other ways along.
+    expect(claude.options.env?.CLAUDE_CODE_ENTRYPOINT).toBe(process.env.CLAUDE_CODE_ENTRYPOINT);
+    // Pelican's own environment, which its `!` commands get, stays without it.
+    expect(process.env.CLAUDE_CODE_ATTACHMENTS_BY_PATH).toBeUndefined();
+    run.close();
+    await settle();
+    await sendMessage({ sessionId, cwd: folder }, { text: 'Send me the report', attachments: [], settings: {} });
+    const resumed = claudes.at(-1)!;
+    expect(resumed).not.toBe(claude);
+    expect(resumed.options).toMatchObject({ resume: sessionId, env: { CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1' } });
+  });
+
+  it('keeps a folder’s settings off with the switch on, in a folder kept to the user’s settings', () => {
+    const env = claudeEnv({ settingSources: ['user'], env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: '' } });
+    expect(env).toMatchObject({ CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor' });
   });
 
   it('turns /clear away: in the same process it would carry on under another id', async () => {

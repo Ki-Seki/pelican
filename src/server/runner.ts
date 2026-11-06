@@ -155,6 +155,16 @@ const REFUSED = 'The user doesn\'t want to proceed with this tool use. The tool 
 const STOP_AND_WAIT = `${REFUSED} STOP what you are doing and wait for the user to tell you how to proceed.`;
 const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, the user said:\n${note}`;
 
+/**
+ * What Claude Code runs with: Pelican's environment, what the folder's trust adds, and the word
+ * Claude Code takes from a host that shows the files Claude sends (SendUserFile) from where they
+ * are on this computer. That word turns on SendUserFile and nothing else, and Claude Code keeps
+ * it from the commands it runs; a `!` command runs without it too, as it is set here only.
+ */
+export function claudeEnv(launch: Launch): Record<string, string | undefined> {
+  return { ...process.env, ...launch.env, CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1' };
+}
+
 /** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
 const CLEARS = /^\/(clear|reset|new)(\s|$)/;
 const AFRESH = 'To start afresh, open a new session in this folder.';
@@ -481,7 +491,7 @@ export class SessionRun {
       perTaskStopAffordance: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       settingSources: this.launch.settingSources,
-      ...(this.launch.env ? { env: { ...process.env, ...this.launch.env } } : {}),
+      env: claudeEnv(this.launch),
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
