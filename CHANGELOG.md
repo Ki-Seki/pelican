@@ -19,10 +19,12 @@
   draft, and come back as they were when a message does not go.
 - **Desktop's formats, both ways.** A quote with a note goes as Desktop's `<!-- reply -->` block,
   one without as an `<!-- attach -->` block (lines of a file with their path and lines), a line
-  comment as "In `path` at line N:" with its code fenced, and Desktop's rules come along: secrets
-  masked, 1,500 characters at most, an `@` that would mention a file defused, 99 quotes with a note
-  in a message. Desktop and the CLI see Pelican's quotes as replies, and Pelican shows Desktop's,
-  and its own older ones, as quiet quotes.
+  comment as "In `path` at line N:" with its code fenced, and Desktop's rules come along, ported
+  from its own code: in a quote, keys and tokens masked, 1,500 characters at most and an `@` that
+  would mention a file defused; in a comment, Claude Code's own tags (`<system-reminder>`…)
+  escaped, so code cannot speak as Claude Code; 99 quotes with a note in a message. Desktop and the
+  CLI see Pelican's quotes as replies, and Pelican shows Desktop's, comments without code too, and
+  its own older ones, as quiet quotes.
 
 ### Changes in behavior
 
