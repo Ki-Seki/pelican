@@ -6,7 +6,7 @@ import type { TerminalExit, TerminalInfo, TerminalList } from '../../shared/term
 import { announce } from '../lib/announce';
 import { api, ApiError, type TrustChoice } from '../lib/api';
 import { baseName } from '../lib/format';
-import { composing } from '../lib/keyboard';
+import { composing, hasKeyboard } from '../lib/keyboard';
 import { terminalQuote } from '../lib/quote';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
 import { cleanPaste, controlCharacter, keySequence, type RowKey } from '../lib/terminal-input';
@@ -309,7 +309,12 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
                   role="tab"
                   aria-selected={selected}
                   title={t.cwd}
-                  onClick={() => show(t.id)}
+                  onClick={(e) => {
+                    show(t.id);
+                    // Picked with a mouse on a computer, it takes the keys, to type in at once, as
+                    // the Terminal tab and + do (a key on the tab keeps them on the tabs).
+                    if (e.detail > 0 && hasKeyboard()) requestAnimationFrame(() => screen.current?.focus());
+                  }}
                   className={`h-8 max-w-[11rem] shrink-0 truncate rounded-full px-3 font-mono text-[12.5px] pointer-coarse:h-9 ${selected ? 'bg-chip' : 'hover:bg-hover'} ${over ? 'text-faint' : selected ? 'text-fg' : 'text-muted hover:text-fg'}`}
                 >
                   {label(t)}

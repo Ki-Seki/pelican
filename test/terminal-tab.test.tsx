@@ -16,6 +16,8 @@ const typed: string[] = [];
 const pasted: string[] = [];
 /** The screen's connection is down, coming back: what is typed goes nowhere. */
 let offline = false;
+/** How often the screen was given the keys. */
+let focused = 0;
 let screenProps: Record<string, any> = {};
 
 vi.mock('../src/web/components/TerminalScreen', () => ({
@@ -23,7 +25,9 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
     screenProps = props;
     useImperativeHandle(ref, () => ({
       size: () => ({ cols: 90, rows: 30 }),
-      focus: () => undefined,
+      focus: () => {
+        focused += 1;
+      },
       input: (text: string) => !offline && typed.push(text) > 0,
       paste: (text: string) => !offline && pasted.push(text) > 0,
       text: () => ({ before: 'line one', screen: 'line two', after: '' }),
@@ -65,8 +69,9 @@ vi.mock('../src/web/lib/api', async (original) => {
 
 let coarse = false;
 beforeAll(() => {
+  // A touch screen, or a computer's mouse and keyboard.
   window.matchMedia = ((query: string) => ({
-    matches: query.includes('coarse') ? coarse : false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    matches: query.includes('coarse') ? coarse : query.includes('fine') ? !coarse : false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   // jsdom draws nothing, so scrolls nothing: the screen as text scrolls to where the screen was.
   Element.prototype.scrollIntoView ??= () => undefined;
@@ -93,6 +98,7 @@ beforeEach(() => {
   refuse = undefined;
   coarse = false;
   offline = false;
+  focused = 0;
   sessionStorage.clear();
 });
 afterEach(cleanup);
@@ -134,8 +140,10 @@ describe('the Terminal tab', () => {
     expect(opened).toEqual([]);
     // The newest shows first; a tab shows its own.
     expect(shows()).toBe('t2');
-    fireEvent.click(screen.getByRole('tab', { name: 'zsh' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'zsh' }), { detail: 1 });
     expect(shows()).toBe('t1');
+    // Clicked on a computer, the tab gives the screen the keys, to type in at once.
+    await waitFor(() => expect(focused).toBe(1));
     // The program in front changes the name.
     act(() => screenProps.onProgram('t1', 'vim'));
     await waitFor(() => expect(tabs()).toEqual(['vim', 'npm · web']));
