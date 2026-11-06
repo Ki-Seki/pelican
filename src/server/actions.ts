@@ -91,11 +91,13 @@ function asText(text: string): string {
   return paragraphs.filter((lines) => lines.length > 0).map((lines) => lines.join('\\\n')).join('\n\n');
 }
 
-/** A prompt as the conversation shows it: its words as text, and the quotes above them as quotes, under where one is from. */
+/**
+ * A prompt as the conversation shows it: its words as text, and the quotes above them as quotes;
+ * one from a file under where it is from, its lines as code, as the conversation shows them.
+ */
 const prompt = (text: string) => promptParts(text).map((part) => {
   if (part.kind === 'text') return asText(part.text);
-  const body = asText(part.text);
-  const quote = part.from ? `${inlineCode(part.from)}${body ? `\\\n${body}` : ''}` : body;
+  const quote = part.from ? [inlineCode(part.from), ...(part.text ? [codeBlock(part.text)] : [])].join('\n') : asText(part.text);
   return quote.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
 });
 

@@ -236,14 +236,18 @@ describe('the export, read as the conversation reads', () => {
     expect(html).toContain('<h2>Claude</h2>\n<p>After the fence.</p>\n<h2>You</h2>\n<p>And then</p>');
   });
 
-  it('keeps a quote in a prompt a quote, under where it is from, and what it says text', async () => {
+  it('keeps a quote in a prompt a quote: one from a file under where it is from, its lines as code, as the conversation shows them', async () => {
     const sessionId = await session(11, 'Quoted', [
-      user('src/app.ts:7-8\n> const a = *b*;\n>   return a;\n\n> # not a heading\n\nWhy?'),
+      user('src/app.ts:7-8\n> const a = *b*;\n>   return <Total value={a} />;\n\n> # not a heading\n\nWhy?'),
+      user('src/fence.ts:1\n> ```\n\nAnd this?'),
     ]);
     const { markdown } = await exportMarkdown(sessionId);
     const html = read(markdown);
-    expect(html).toContain(`<blockquote>\n<p><code>src/app.ts:7-8</code><br/>\nconst a = *b*;<br/>\n${'\u00a0'.repeat(2)}return a;</p>\n</blockquote>`);
+    expect(html).toContain('<blockquote>\n<p><code>src/app.ts:7-8</code></p>\n<pre><code>const a = *b*;\n  return &lt;Total value={a} /&gt;;\n</code></pre>\n</blockquote>');
+    // One without a path is words, as the conversation shows it.
     expect(html).toContain('<blockquote>\n<p># not a heading</p>\n</blockquote>\n<p>Why?</p>');
+    // A fence in what it quotes ends nothing.
+    expect(html).toContain('<pre><code>```\n</code></pre>\n</blockquote>\n<p>And this?</p>');
   });
 
   it('keeps every speaker a speaker: a heading in a prompt or a reply never passes for one', async () => {
