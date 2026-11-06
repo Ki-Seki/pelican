@@ -66,6 +66,22 @@ describe('the pins', () => {
     expect([...await pinnedIds()]).toEqual([id(4)]);
   });
 
+  it('follow the state folder: the demo’s own folder holds only the demo’s pins', async () => {
+    const { file, pinnedIds, setPinned } = await start();
+    await setPinned(id(8), true);
+    const { config } = await import('../src/server/config');
+    const mine = config.stateDir;
+    const demo = await mkdtemp(path.join(os.tmpdir(), 'pelican-pins-demo-'));
+    folders.push(demo);
+    config.stateDir = demo;
+    expect([...await pinnedIds()]).toEqual([]);
+    await setPinned(id(9), true);
+    expect(await read(path.join(demo, 'pinned.json'))).toEqual({ ids: [id(9)] });
+    expect(await read(file)).toEqual({ ids: [id(8)] });
+    config.stateDir = mine;
+    expect([...await pinnedIds()]).toEqual([id(8)]);
+  });
+
   it('stay as they were when a write fails, with no half-written file left', async () => {
     const { dir, file, pinnedIds, setPinned } = await start();
     await setPinned(id(6), true);

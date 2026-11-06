@@ -231,6 +231,18 @@ describe('pin', () => {
     expect((await archivedIds()).has(id)).toBe(true);
     await archive(false);
   });
+
+  it('goes with a session that is deleted', async () => {
+    const { pinnedIds } = await import('../src/server/pinned');
+    const gone = '0d0d0d0d-0000-4000-8000-000000000001';
+    const project = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-w-gone');
+    await mkdir(project, { recursive: true });
+    const row = { type: 'user', uuid: 'u1', parentUuid: null, sessionId: gone, cwd: '/w/gone', timestamp: new Date().toISOString(), message: { role: 'user', content: 'Tidy up' } };
+    await writeFile(path.join(project, `${gone}.jsonl`), `${JSON.stringify(row)}\n`);
+    expect((await pin({ pinned: true }, gone)).status).toBe(200);
+    expect((await ask(`/api/sessions/${gone}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await pinnedIds()).has(gone)).toBe(false);
+  });
 });
 
 describe('the page', () => {

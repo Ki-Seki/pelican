@@ -6,13 +6,12 @@ import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
 import { shortTitle } from '../shared/titles.js';
-import { archivedIds } from './archive.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
+import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
-import { pinnedIds } from './pinned.js';
 import { sideChatSource } from './side-chat.js';
 import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
@@ -36,14 +35,6 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
   if (summarized && info.summary && oneLine(info.summary)) return oneLine(info.summary);
   return shortTitle(info.summary || info.firstPrompt || '') || undefined;
 }
-
-/** What Pelican keeps of its own about sessions: which are archived, and which pinned. */
-type Kept = { archived: Set<string>; pinned: Set<string> };
-
-const kept = async (): Promise<Kept> => {
-  const [archived, pinned] = await Promise.all([archivedIds(), pinnedIds()]);
-  return { archived, pinned };
-};
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
 async function summarize(
@@ -89,7 +80,7 @@ async function summarize(
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(working > 0 ? { tasks: working } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
-    // Never both (app.ts); should a write have failed between the two files, archived wins.
+    // Never both (kept.ts); should the files say both (written by hand), archived wins.
     ...(archived.has(info.sessionId) ? { archived: true } : pinned.has(info.sessionId) ? { pinned: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
     ...(other && !other.busy ? { openIn: other.app ?? 'another app' } : {}),
@@ -194,7 +185,9 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 
 export async function sessionSummary(sessionId: string, status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status, tasks, await liveProcesses(), await kept()) : undefined;
+  if (!info) return undefined;
+  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
+  return summarize(info, status, tasks, live, ours);
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

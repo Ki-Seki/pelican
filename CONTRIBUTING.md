@@ -50,7 +50,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/claude-code.ts` | Which Claude Code runs, its version, and whether it is signed in |
 | `src/server/history.ts` | Reads a transcript, across compactions, incrementally |
 | `src/server/feed.ts` | Delivers a session's new messages to the pages watching it |
-| `src/server/archive.ts`, `pinned.ts` | Archived and pinned sessions: Pelican's own, in its state folder (`session-sets.ts`), apart from Claude Desktop's |
+| `src/server/kept.ts`, `archive.ts`, `pinned.ts` | Archived and pinned sessions, never both: Pelican's own, in its state folder, apart from Claude Desktop's |
 | `src/server/live.ts`, `waiting.ts` | Sessions other apps are running, from Claude Code's own registry, and when one waits for you |
 | `src/server/trust.ts` | Folder trust: what a folder would run, and whether it is trusted |
 | `src/server/phone.ts` | `pelican phone`: the phone's address and its one-time QR code |
