@@ -5,11 +5,27 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { BASH_CAVEAT, bashModeMessages, bashModeSettings, CommandOutput, type ForClaude, forClaude, MAX_RUN_MS, SAVED_BYTES, type ShellResult, startCommand } from '../src/server/shell';
+import { BASH_CAVEAT, bashModeMessages, bashModeSettings, CommandOutput, type CommandRun, type ForClaude, forClaude, MAX_RUN_MS, SAVED_BYTES, type ShellResult, startCommand } from '../src/server/shell';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 
+/** The commands the test under way started. */
+const started: CommandRun[] = [];
+/** A command started for a test: it does not outlive the test. */
+const start = (...args: Parameters<typeof startCommand>) => {
+  const run = startCommand(...args);
+  started.push(run);
+  return run;
+};
+// What a test left running, when it failed or ran out of time, is stopped after it: asked, then
+// made to two seconds later, which is waited for. What a command left running once its shell was
+// done is the test's to end.
+afterEach(async () => {
+  const runs = started.splice(0);
+  for (const run of runs) run.stop();
+  for (const end = Date.now() + 3000; runs.some((run) => run.alive()) && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50));
+});
 /** A command run to its end. */
-const runCommand = (cwd: string, command: string, limitMs?: number) => startCommand(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
+const runCommand = (cwd: string, command: string, limitMs?: number) => start(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
 /** The command and its output as one text, as Claude reads them. */
 const bashModeText = (result: ForClaude) => bashModeMessages(result, true).map((message) => message.text).join('');
 /** What a command printed, kept as a command's output is. */
@@ -48,10 +64,11 @@ const gone = (pid: number) => until(() => !alive(pid));
 describe.skipIf(process.platform === 'win32')('a ! command', () => {
   it('returns when its shell is done, leaving what it started in the background running, and says only what Claude Code says', async () => {
     // Timed from what the shell printed last, as it ends: a busy computer can be slow to start a
-    // login shell, and that is no part of it.
+    // login shell, and that is no part of it. One still running after 15 seconds is too slow.
     let printedAt = 0;
-    const result = await startCommand(os.tmpdir(), 'sleep 30 & echo $!', { onOutput: () => { printedAt = Date.now(); } }).result;
+    const result = await start(os.tmpdir(), 'sleep 30 & echo $!', { limitMs: 15_000, onOutput: () => { printedAt = Date.now(); } }).result;
     const after = Date.now() - printedAt;
+    if (result.endedBy) throw new Error(`The login shell (${process.env.SHELL || '/bin/bash'}) was not done in 15 seconds: it is too slow to start`);
     const pid = Number(all(result.output).trim());
     // Not in the try: with no pid printed, its finally would signal the test's own process group.
     expect(alive(pid)).toBe(true);
@@ -107,7 +124,7 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
 describe.skipIf(process.platform === 'win32')('a live ! command', () => {
   it('hands on its output as it comes, before it ends', async () => {
     const seen: Array<{ text: string; at: number }> = [];
-    const run = startCommand(os.tmpdir(), 'echo first; sleep 1; echo second', { onOutput: (text) => seen.push({ text, at: Date.now() }) });
+    const run = start(os.tmpdir(), 'echo first; sleep 1; echo second', { onOutput: (text) => seen.push({ text, at: Date.now() }) });
     const result = await run.result;
     const ended = Date.now();
     expect(seen.map((s) => s.text).join('')).toBe('first\nsecond\n');
@@ -122,7 +139,7 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
 
   it('Stop ends it and everything it started, and the record says so', async () => {
     let pid = 0;
-    const run = startCommand(os.tmpdir(), 'sleep 30 & echo $!; wait', { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
+    const run = start(os.tmpdir(), 'sleep 30 & echo $!; wait', { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
     expect(await until(() => pid > 0), 'the shell printed a process id within 10 seconds').toBe(true);
     expect(alive(pid)).toBe(true);
     run.stop();
@@ -134,7 +151,7 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
 
   it('ends what ignores the polite request too', async () => {
     let pid = 0;
-    const run = startCommand(os.tmpdir(), "sh -c 'trap \"\" TERM; echo $$; sleep 30'", { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
+    const run = start(os.tmpdir(), "sh -c 'trap \"\" TERM; echo $$; sleep 30'", { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
     expect(await until(() => pid > 0), 'the shell printed a process id within 10 seconds').toBe(true);
     run.stop();
     await run.result;
