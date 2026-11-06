@@ -75,6 +75,32 @@ describe('the session list', () => {
     expect(summaries.filter((s) => s.tasks !== undefined).map((s) => s.id)).toEqual([id(2)]);
   });
 
+  it('says which sessions are pinned, from Pelican’s own pins: never one archived, nor one Claude Desktop starred', async () => {
+    const { setPinned } = await import('../src/server/pinned');
+    const { setArchived } = await import('../src/server/archive');
+    // Desktop keeps its own pins, as stars, in its own folder: Pelican does not read them.
+    const savedHome = config.home;
+    config.home = dir;
+    const desktop = path.join(dir, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'account', 'org');
+    await mkdir(desktop, { recursive: true });
+    await writeFile(path.join(desktop, `local_${id(4)}.json`), JSON.stringify({ sessionId: `local_${id(4)}`, cliSessionId: id(4), isStarred: true }));
+    await setPinned(id(2), true);
+    await setPinned(id(6), true);
+    await setArchived(id(6), true);
+    try {
+      const summaries = await listSummaries(() => undefined);
+      expect(summaries.filter((s) => s.pinned).map((s) => s.id)).toEqual([id(2)]);
+      expect(summaries.find((s) => s.id === id(6))).toMatchObject({ archived: true });
+      expect(summaries.find((s) => s.id === id(6))?.pinned).toBeUndefined();
+      expect(summaries.find((s) => s.id === id(4))?.pinned).toBeUndefined();
+    } finally {
+      config.home = savedHome;
+      await setPinned(id(2), false);
+      await setPinned(id(6), false);
+      await setArchived(id(6), false);
+    }
+  });
+
   it('finds a session it has not listed yet without reading them all', async () => {
     await writeFile(path.join(project, `${id(5)}.jsonl`), rows(id(5), 'task 5'));
     vi.mocked(listSessions).mockClear();

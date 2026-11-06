@@ -29,6 +29,11 @@ export type SessionSummary = {
   sideChatOf?: string;
   /** Put away from the list in Pelican; the transcript is untouched. */
   archived?: boolean;
+  /**
+   * Kept at the top of the list in Pelican: its own pins, apart from Claude Desktop's. Never
+   * together with `archived`.
+   */
+  pinned?: boolean;
   /** Open (idle) in another app too, which does not see what is sent here until it reopens the session. */
   openIn?: string;
   /** The other app working on it right now, or waiting there for an answer: "the terminal", "Claude Desktop". */
