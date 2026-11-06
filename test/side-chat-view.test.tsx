@@ -22,6 +22,8 @@ const server = vi.hoisted(() => ({
   turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] as SessionChanges['turns'],
   /** A side question does not reach the computer. */
   drop: false,
+  /** A message to a side chat already made does not reach the computer. */
+  refuse: false,
   /** Holds the next side question's answer until it settles. */
   hold: undefined as Promise<void> | undefined,
 }));
@@ -55,6 +57,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       },
       send: async (id: string, body: { text: string }) => {
         server.sent.push({ id, text: body.text });
+        if (server.refuse) throw new actual.ApiError('Can’t reach studio', 0);
         return { sessionId: id };
       },
       side: async (id: string, body: { question: string; settings: RunSettings; uuid: string }) => {
@@ -104,7 +107,7 @@ afterEach(async () => {
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
-  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, hold: undefined });
+  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, refuse: false, hold: undefined });
   history.replaceState(null, '', '/');
 });
 
@@ -567,6 +570,68 @@ describe('a side question that did not go', () => {
     await release();
     await waitFor(() => expect(sideBox().value).toBe('/etc/hosts: who reads it?\n\nand when?'));
     expect(within(pane()!).queryByText(/^Not sent:/)).toBeNull();
+  });
+});
+
+describe('a quote sent at once from the side chat’s note box that does not go', () => {
+  const toggle = () => act(() => {
+    fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+  });
+  /** A mouse's selection of `words` in the side chat, quoted with `note`, and sent at once with ⌘↵. */
+  async function sendNow(words: string, note: string) {
+    const rect = { x: 10, y: 40, top: 40, left: 10, bottom: 60, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+    const text = (await within(pane()!).findByText(words, { exact: false })).firstChild!;
+    const range = document.createRange();
+    range.setStart(text, text.textContent!.indexOf(words));
+    range.setEnd(text, text.textContent!.indexOf(words) + words.length);
+    fireEvent.pointerDown(text.parentElement!, { pointerType: 'mouse' });
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(text.parentElement!, { pointerType: 'mouse' });
+    const pill = await screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+    fireEvent.click(within(pill).getByRole('button', { name: /^Quote/ }));
+    const field = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note');
+    fireEvent.change(field, { target: { value: note } });
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Quote with a note' })).toBeNull());
+  }
+
+  it('waits again in the side chat’s box, its note with it', async () => {
+    computer(1280);
+    sessionStorage.setItem('pelican:side-chats', JSON.stringify({ [SESSION]: { id: SIDE, first: 'u2' } }));
+    server.sideMessages = [
+      { uuid: 'u2', role: 'user', blocks: [{ type: 'text', text: 'What does the cache do?' }], timestamp: Date.now() - 40_000 },
+      { uuid: 'a2', role: 'assistant', blocks: [{ type: 'text', text: 'It caches the build output, per user.' }], timestamp: Date.now() - 30_000 },
+    ];
+    server.refuse = true;
+    session();
+    await loaded();
+    toggle();
+    await sendNow('It caches the build output', 'Where is it kept?');
+    await waitFor(() => expect(server.sent).toEqual([{ id: SIDE, text: '<!-- reply -->\n> It caches the build output\n\nWhere is it kept?' }]));
+    expect(await within(pane()!).findByRole('button', { name: 'Your note on “It caches the build output”: Where is it kept?' })).toBeTruthy();
+    expect(within(pane()!).getByText('Can’t reach studio')).toBeTruthy();
+  });
+
+  it('sent while the side chat’s first question is still starting, waits in its box, its note with it', async () => {
+    computer(1280);
+    session();
+    await loaded();
+    toggle();
+    let release = () => {};
+    server.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fireEvent.change(screen.getByLabelText('Side question'), { target: { value: 'What does the cache do?' } });
+    fireEvent.keyDown(screen.getByLabelText('Side question'), { key: 'Enter', keyCode: 13 });
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    await sendNow('the cache', 'and where is it kept?');
+    expect(await within(pane()!).findByRole('button', { name: 'Your note on “the cache”: and where is it kept?' })).toBeTruthy();
+    await act(async () => release());
+    expect(server.side).toHaveLength(1);
+    expect(server.sent).toEqual([]);
   });
 });
 

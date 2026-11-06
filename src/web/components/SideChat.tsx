@@ -7,7 +7,7 @@ import { clearDraft, putBackWaiting, takeWaiting } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
-import { messageWith, sendNowMessage } from '../lib/quote';
+import { messageWith, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
 import { Composer, type ComposerDraft } from './Composer';
@@ -227,18 +227,20 @@ export function SideChat({
 
   /**
    * Asks a question, with what waits above the side chat's box (a passage it was started with), or
-   * sends `now`, a quote with its note from the note box, as it is.
+   * sends `now`, a quote with its note from the note box, as one reply. Either way, what does not
+   * go comes back: words to the box, a quote with its note to wait above it.
    */
-  const ask = async (text: string, mode: SendMode = 'steer', now?: string) => {
+  const ask = async (text: string, mode: SendMode = 'steer', now?: WaitingItem) => {
     // The first question is still making the side chat: this one waits in the box.
     if (asking.current) {
-      if (!now) setGiveBack({ text, key: Date.now(), back: true });
+      if (now) putBackWaiting(draftKey, [now]);
+      else setGiveBack({ text, key: Date.now(), back: true });
       return;
     }
     setError(undefined);
     const uuid = newId();
-    const taken = now ? [] : takeWaiting(draftKey);
-    const said = now ?? messageWith(taken, text);
+    const taken = now ? [now] : takeWaiting(draftKey);
+    const said = now ? sendNowMessage(now.text, now.note ?? '') : messageWith(taken, text);
     const giveItBack = (failure: unknown) => {
       setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
       putBackWaiting(draftKey, taken);
@@ -284,7 +286,7 @@ export function SideChat({
   const quoteTarget = useMemo<QuoteTarget>(() => ({
     chat: draftKey,
     side: true,
-    sendNow: (item) => void askRef.current('', 'steer', sendNowMessage(item.text, item.note ?? '')),
+    sendNow: (item) => void askRef.current('', 'steer', item),
   }), [draftKey]);
 
   // A question it was opened with (/btw and a question) is asked at once.
