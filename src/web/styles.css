@@ -121,6 +121,16 @@ body {
   height: var(--app-h, 100dvh);
 }
 
+/* Typing in a phone's terminal line while what can be seen is short (data-short, lib/viewport: its
+   keyboard is up, or it lies on its side): Changes and files' header and tabs, and the terminal's
+   own tabs, make way, so the screen keeps rows to read; with room for the line alone, the key row
+   too, so the line stays above the keyboard. They come back once the line is left or the keyboard
+   goes down. */
+:root[data-short] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='short'],
+:root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='tiny'] {
+  display: none;
+}
+
 /* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px
    the session list folds away while it is open, so the conversation keeps its room: the pane marks
    the page (data-pane), App marks its columns (data-layout, data-list). */

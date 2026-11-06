@@ -363,15 +363,16 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* Typing on a phone while what can be seen is short, its rows make room for the screen (styles.css). */}
       {confirmEnd && shown ? (
-        <div className="flex h-10 shrink-0 items-center gap-2 pr-2 pl-4 text-[13px]">
+        <div data-makes-room="short" className="flex h-10 shrink-0 items-center gap-2 pr-2 pl-4 text-[13px]">
           <span className="min-w-0 flex-1 truncate">End <span className="font-mono">{shown.program}</span>? {stillRunning(shown)}</span>
           {/* A finger's 44px: 40 on a touch screen, and a little more around. */}
           <button type="button" onClick={() => end(shown)} className="relative h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">End</button>
           <button type="button" onClick={() => setConfirmEnd(false)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
         </div>
       ) : (
-        <div className="flex h-10 shrink-0 items-center gap-0.5 pr-2 pl-3">
+        <div data-makes-room="short" className="flex h-10 shrink-0 items-center gap-0.5 pr-2 pl-3">
           <div role="tablist" aria-label="Terminals" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {tabs.map((t) => {
               const selected = t.id === shown?.id;
@@ -686,8 +687,9 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
           The browser did not let Pelican read the clipboard. Allow it in the browser’s site settings, or touch and hold the line, then Paste.
         </p>
       )}
-      {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. */}
-      <div className="no-scrollbar flex gap-1 overflow-x-auto px-2" role="toolbar" aria-label="Keys">
+      {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. Where the */}
+      {/* keyboard leaves room for the line alone (a phone on its side), they make way for it (styles.css). */}
+      <div data-makes-room="tiny" className="no-scrollbar flex gap-1 overflow-x-auto px-2" role="toolbar" aria-label="Keys">
         {ROW.filter((k) => k.key !== 'paste' || canPaste).map((k) => (
           <button
             key={k.key}
@@ -714,6 +716,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
       >
         <input
           ref={field}
+          data-terminal-line
           type={mode.secret ? 'password' : 'text'}
           aria-label={mode.direct ? `Keys for ${program}` : 'Command'}
           placeholder={placeholder}

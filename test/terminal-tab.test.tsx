@@ -499,6 +499,11 @@ describe('the Terminal tab on a phone', () => {
     // An empty field's Backspace is the shell's.
     fireEvent.keyDown(field(), { key: 'Backspace' });
     expect(typed.at(-1)).toBe('\u007f');
+    // Typed in while what can be seen is short, the line keeps its room (styles.css): the terminal's
+    // tabs make way, and the key row too when there is room for the line alone.
+    expect(field().hasAttribute('data-terminal-line')).toBe(true);
+    expect(screen.getByRole('tablist', { name: 'Terminals' }).closest('[data-makes-room]')?.getAttribute('data-makes-room')).toBe('short');
+    expect(screen.getByRole('toolbar', { name: 'Keys' }).getAttribute('data-makes-room')).toBe('tiny');
   });
 
   it('gives a full-screen program every key as it is typed, and hides what is typed at a password prompt', async () => {

@@ -315,14 +315,14 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     return (
       <SendComments.Provider value={onSendComments}>
       <SelectionFoot.Provider value={selectionFoot}>
-      <aside aria-label="Changes and files" onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
-        <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
+      <aside aria-label="Changes and files" data-workspace onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
+        <div data-makes-room="short" className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
           <button type="button" aria-label="Close" title={`Close (${PANE_KEYS})`} onClick={onClose} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
             <X className="size-[18px]" />
           </button>
         </div>
-        <div className="shrink-0 px-4">{header}</div>
+        <div data-makes-room="short" className="shrink-0 px-4">{header}</div>
         {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
         {terminal}
         <div ref={setFoot} className="shrink-0" />
@@ -339,6 +339,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       ref={view}
       role="region"
       aria-label="Changes and files"
+      data-workspace
       tabIndex={-1}
       onKeyDown={(e) => {
         onKeyDown(e);
@@ -350,13 +351,13 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       className="app-height animate-fade fixed inset-x-0 top-0 z-30 flex flex-col bg-bg outline-none"
     >
       <div className="pt-safe shrink-0">
-        <div className="flex items-center gap-0.5 px-2 py-1.5">
+        <div data-makes-room="short" className="flex items-center gap-0.5 px-2 py-1.5">
           <button type="button" aria-label="Back to the conversation" onClick={onClose} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
           <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-medium">{baseName(cwd)}</h2>
         </div>
-        <div className="px-3">{header}</div>
+        <div data-makes-room="short" className="px-3">{header}</div>
       </div>
       {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
       {terminal}
