@@ -489,6 +489,11 @@ describe('a reply in the export', () => {
       ['links, then code', `${'[a](u) '.repeat(megabyte / 14)}\`<b>\``],
       ['table rows', `| a | b |\n| - | - |\n${'| `x|y` | [l](u) |\n'.repeat(megabyte / 20)}`],
       ['lazy lines in footnotes', `${'[^a]: '.repeat(45)}x\n${'y\n'.repeat(megabyte / 2)}`],
+      // Read from the end by patterns anchored there, each took time with the square of the run.
+      ['blank lines, then words', `a${'\n'.repeat(60_000)}b`],
+      ['blank lines of spaces, then words', `a${'\n '.repeat(30_000)}b`],
+      ['a line of HTML with blanks in it', `<div>\na${' '.repeat(120_000)}b\n</div>`],
+      ['a line of HTML with tabs in it', `<div>\na${'\t'.repeat(120_000)}b\n</div>`],
     ] as const) {
       const started = performance.now();
       reply(said);

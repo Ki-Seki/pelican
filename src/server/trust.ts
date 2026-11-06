@@ -437,8 +437,14 @@ function* fromMarkdown(what: string, text: string, shell: boolean): Generator<It
   const lines = front?.split('\n') ?? [];
   const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
   const comment = (line: string) => line.trimStart().startsWith('#');
-  // Only spaces and tabs end a line in YAML: another space is part of what it says.
-  const trimEnd = (line: string) => line.replace(/[ \t]+$/, '');
+  // Only spaces and tabs end a line in YAML: another space is part of what it says. Read from the
+  // line's end, once: as a pattern anchored at the end (/[ \t]+$/), a run of them took time with its
+  // square, 87 seconds for a skill of 480 KB.
+  const trimEnd = (line: string) => {
+    let end = line.length;
+    while (end > 0 && (line[end - 1] === ' ' || line[end - 1] === '\t')) end -= 1;
+    return line.slice(0, end);
+  };
   // Keys of the frontmatter itself, not of a map inside it.
   const top = indent(lines.find((line) => line.trim() && !comment(line)) ?? '');
   // Under a key: a blank line, one further in, or a list's item or a comment as far in.

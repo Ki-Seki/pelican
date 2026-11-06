@@ -91,6 +91,22 @@ describe('a large hostile file', () => {
     expect(answer.commands).toHaveLength(answer.brings.length);
   }, 60_000);
 
+  it('whose frontmatter has a long run of blanks in a line is read in moments: a skill of 200 KB held the server for 15 seconds', async () => {
+    const run = ' '.repeat(200_000);
+    for (const [name, lines, shown] of [
+      ['in a line under a key', `hooks:\n  x${run}y\n`, `Skill x: hooks:\n  x${run}y`],
+      ['before a line under a key', `hooks:\n${run}x\n`, `Skill x: hooks:\n${run}x`],
+      ['in a key’s line', `hooks: a${run}b\n`, `Skill x: hooks: a${run}b`],
+      ['at the end of a key’s line, tabs too', `hooks: a${' \t'.repeat(100_000)}\n`, 'Skill x: hooks: a'],
+    ] as const) {
+      const dir = await folderWith(`blanks-${name.replace(/\W+/g, '-')}`, { '.claude/skills/x/SKILL.md': skill(lines) });
+      const started = performance.now();
+      const question = await trustQuestion(dir);
+      expect(performance.now() - started, name).toBeLessThan(2000);
+      expect(question?.brings, name).toEqual([shown]);
+    }
+  }, 300_000);
+
   it('whose ```! block or frontmatter never ends is read once, not once a character', async () => {
     // As Claude Code's patterns, read by backtracking: 8 s each at this size.
     const dir = await folderWith('never-ends', {

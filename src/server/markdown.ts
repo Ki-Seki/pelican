@@ -184,6 +184,24 @@ const space = (c: string | undefined) => c === ' ' || c === '\t';
  */
 const blank = (line: string | undefined) => line !== undefined && /^[ \t]*$/.test(line);
 
+/**
+ * A line without the spaces and tabs at its end, read from its end once: a pattern anchored at the
+ * end (/[ \t]+$/) takes time with the square of a run of them that something else follows.
+ */
+function blanksTrimmed(line: string): string {
+  let end = line.length;
+  while (end > 0 && space(line[end - 1])) end -= 1;
+  return line.slice(0, end);
+}
+
+/** Text without the blank lines at its end (a line break, then spaces and tabs), read from its end once, as blanksTrimmed. */
+function blankLinesTrimmed(text: string): string {
+  let start = text.length;
+  while (start > 0 && (space(text[start - 1]) || text[start - 1] === '\n')) start -= 1;
+  const cut = text.indexOf('\n', start);
+  return cut < 0 ? text : text.slice(0, cut);
+}
+
 /** A label as readers match it: case and runs of blanks aside (micromark's normalizeIdentifier). */
 const normalize = (label: string) => label.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '').toLowerCase().toUpperCase();
 
@@ -547,7 +565,7 @@ export function reply(said: string, id = 1): string {
     } else if (block.kind === 'html') {
       block.lines.forEach((line, i) => {
         const next = block.lines[i + 1];
-        const words = blank(line.text) ? '' : textLine(line.text.replace(/[ \t]+$/, ''));
+        const words = blank(line.text) ? '' : textLine(blanksTrimmed(line.text));
         out[line.at] = line.prefix + words + (words && next && !blank(next.text) ? '\\' : '');
       });
       owed = blankIn(chain);
@@ -603,7 +621,7 @@ export function reply(said: string, id = 1): string {
     }
     const all = out.filter((line): line is string => line !== undefined).join('\n');
     // Blank lines where definitions ended it are no end of the reply's own.
-    return /\n[ \t]*$/.test(text) ? all : all.replace(/(?:\n[ \t]*)+$/, '');
+    return /\n[ \t]*$/.test(text) ? all : blankLinesTrimmed(all);
   };
 
   const lines = text.split(/\r\n?|\n/);
