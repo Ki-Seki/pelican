@@ -18,7 +18,8 @@ import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, shellEnvironment, terminalState, terminalTiming, testShell,
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState, terminalTiming,
+  testShell,
 } from '../src/server/terminals';
 import { Page, pause, until } from './terminal-page';
 
@@ -247,6 +248,48 @@ describe('a page that comes back', () => {
     // The word at column 40 on every line, the emoji counted as two cells (and two UTF-16 units).
     expect(drawn.every((line) => line.indexOf('end') === 39)).toBe(true);
   }, 90_000);
+
+  it('keeps the modes a full-screen program set: how the mouse is reported, a hidden cursor, its shape, the rows that scroll', async () => {
+    const terminal = await open();
+    const all = await atPrompt(terminal.id);
+    // As htop, fzf and neovim start: SGR mouse reports, the cursor hidden, a steady bar; and a
+    // status line kept out of the rows that scroll (1 to 20).
+    all.type(`printf '\\033[?1049h\\033[?1002h\\033[?1006h\\033[?25l\\033[6 q\\033[1;20r\\033[H\\033[2JTUI\\033[5;7H'; read -r x; printf '\\033[r\\033[0 q\\033[?25h\\033[?1006l\\033[?1002l\\033[?1049l'\r`);
+    await until(() => all.screen.buffer.active.type === 'alternate' && all.lines()[0] === 'TUI', 5000, 'the program');
+    await pause(200);
+    const late = page(terminal.id);
+    await late.readied();
+    await until(() => late.screen.buffer.active.type === 'alternate' && late.lines()[0] === 'TUI', 5000, 'its screen');
+    type Core = {
+      coreMouseService: { activeEncoding: string; activeProtocol: string };
+      coreService: { isCursorHidden: boolean; decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } };
+      buffer: { scrollTop: number; scrollBottom: number };
+    };
+    const state = (shown: Page) => {
+      const core = (shown.screen as unknown as { _core: Core })._core;
+      const { cursorX, cursorY } = shown.screen.buffer.active;
+      return {
+        mouse: `${core.coreMouseService.activeProtocol} ${core.coreMouseService.activeEncoding}`,
+        hidden: core.coreService.isCursorHidden,
+        shape: `${core.coreService.decPrivateModes.cursorStyle} ${core.coreService.decPrivateModes.cursorBlink}`,
+        scrolls: [core.buffer.scrollTop, core.buffer.scrollBottom],
+        cursor: [cursorX, cursorY],
+      };
+    };
+    expect(state(all)).toEqual({ mouse: 'DRAG SGR', hidden: true, shape: 'bar false', scrolls: [0, 19], cursor: [6, 4] });
+    expect(state(late)).toEqual(state(all));
+    all.type('\r');
+    await until(() => late.screen.buffer.active.type === 'normal', 5000, 'the shell again');
+    expect(state(late)).toMatchObject({ mouse: 'NONE DEFAULT', hidden: false, scrolls: [0, 23] });
+  }, 20_000);
+
+  it('reads what xterm keeps of those modes, as it did when this was written', async () => {
+    const screen = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+    // Rows 3 to 20 scroll, and with origin mode the cursor's row counts from the first of them.
+    await new Promise<void>((done) => screen.write('\u001b[?1016h\u001b[?25l\u001b[3;20r\u001b[?6h\u001b[2;5H\u001b[4 q', done));
+    expect(modesBeyondSnapshot(screen)).toBe('\u001b[?1016h\u001b[3;20r\u001b[2;5H\u001b[4 q\u001b[?25l');
+    expect(modesBeyondSnapshot(new xtermHeadless.Terminal({ cols: 80, rows: 24 }))).toBe('');
+  });
 
   it('comes once its time is up, every time, while a program left a sequence open and prints nothing more', async () => {
     terminalTiming.cutMs = 30;
