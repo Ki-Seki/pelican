@@ -72,6 +72,12 @@ describe('colours', () => {
     }
   });
 
+  it('ring what has the keys in a colour that stands out from what it sits on: a chip, the pill, the bar', () => {
+    for (const t of Object.values(themes)) {
+      for (const surface of ['bg', 'panel', 'hover']) expect(contrast(t.faint!, t[surface]!)).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it('keep faint a step lighter than muted, so the two still read apart', () => {
     for (const t of Object.values(themes)) {
       expect(contrast(t.muted!, t.bg!) / contrast(t.faint!, t.bg!)).toBeGreaterThan(1.3);

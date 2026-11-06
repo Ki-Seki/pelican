@@ -88,14 +88,15 @@ export function WaitingChips({ items, touch, open, onOpen, onRemove, list }: {
           );
         }
         return (
-          <li key={item.id} title={name} className={`flex h-8 max-w-[12.5rem] shrink-0 items-center rounded-full border bg-bg text-[12.5px] ${active ? 'border-fg' : 'border-line'}`}>
+          // Keyboard focus on its main part rings the whole chip; its × shows its own.
+          <li key={item.id} title={name} className={`flex h-8 max-w-[12.5rem] shrink-0 items-center rounded-full border bg-bg text-[12.5px] has-[>button:first-child:focus-visible]:ring-2 has-[>button:first-child:focus-visible]:ring-faint ${active ? 'border-fg' : 'border-line'}`}>
             <button
               type="button"
               aria-label={name}
               aria-haspopup="dialog"
               aria-expanded={active}
               onClick={(e) => onOpen(item, e.currentTarget.parentElement!)}
-              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-full pl-2.5 outline-none focus-visible:bg-hover"
+              className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-full pl-2.5 outline-none"
             >
               <ChipIcon item={item} />
               <ChipText item={item} />

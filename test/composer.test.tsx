@@ -143,6 +143,9 @@ describe('what waits above the message box', () => {
     const reply = items[1]!.querySelectorAll('span');
     expect(reply[0]!.className).toContain('text-faint');
     expect(reply[1]!.className).toContain('text-fg');
+    // Tabbed to, a chip says it has the keys with a ring around it (its × with the browser's own).
+    expect(items[1]!.className).toContain('has-[>button:first-child:focus-visible]:ring-2');
+    expect(items[1]!.className).toContain('has-[>button:first-child:focus-visible]:ring-faint');
   });
 
   it('on a phone are a finger tall and have no ×: Remove is in what a tap opens', async () => {

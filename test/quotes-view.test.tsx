@@ -101,6 +101,8 @@ describe('text selected with a mouse', () => {
     expect(pill()).toBeNull();
     wait(20);
     expect(actions()).toEqual(['Start a side chat', QUOTE]);
+    // Tabbed to, each part says it has the keys with a ring.
+    for (const part of pill()!.querySelectorAll('button')) expect(part.className).toContain('focus-visible:ring-2');
   });
 
   it('says Send to side chat once one is open, and offers no side chat in a side chat', () => {
@@ -324,6 +326,7 @@ describe('text selected under a finger', () => {
     expect(screen.getByTestId('frame').contains(dock)).toBe(true);
     expect(dock.className).toContain('h-11');
     expect(actions()).toEqual(['Start a side chat', 'Quote']);
+    for (const part of dock.querySelectorAll('button')) expect(part.className).toContain('focus-visible:ring-2');
     // A handle moves: the bar goes, and comes back once it rests.
     select(screen.getByTestId('reply'), 49, 75);
     expect(pill()).toBeNull();

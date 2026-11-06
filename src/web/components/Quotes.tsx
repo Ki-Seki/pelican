@@ -264,7 +264,8 @@ export function SelectionActions({ within, dockTo, onDock }: {
   );
 }
 
-const PART = 'flex h-full items-center whitespace-nowrap outline-none focus-visible:bg-hover hover:bg-hover';
+/** A part of the pill or the bar: keyboard focus rings it, inside the pill's round ends. */
+const PART = 'flex h-full items-center whitespace-nowrap rounded-full outline-none focus-visible:bg-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-faint';
 
 /** Desktop's pill above a mouse's selection: Start a side chat · Quote ↵. */
 function Pill({ picked, bounds, sideLabel, onSideChat, onQuote, onGone }: {
@@ -325,14 +326,14 @@ function Pill({ picked, bounds, sideLabel, onSideChat, onQuote, onGone }: {
       className="animate-fade fixed z-30 flex h-8 items-center overflow-hidden rounded-full border border-line bg-panel text-[13px] font-medium text-fg shadow-lg select-none"
     >
       {sideLabel && (
-        <button type="button" onClick={onSideChat} className={`${PART} gap-1.5 pr-2.5 pl-3 ${onQuote ? '' : 'pr-3'}`}>
+        <button type="button" onClick={onSideChat} className={`${PART} gap-1.5 pr-2.5 pl-3 hover:bg-hover ${onQuote ? '' : 'pr-3'}`}>
           <MessagesSquare className="size-3.5 text-muted" />
           {sideLabel}
         </button>
       )}
       {sideLabel && onQuote && <span aria-hidden className="h-4 w-px shrink-0 bg-line" />}
       {onQuote && (
-        <button type="button" onClick={onQuote} aria-keyshortcuts={ariaKeys('quote')} className={`${PART} gap-1.5 pr-3 ${sideLabel ? 'pl-2.5' : 'pl-3'}`}>
+        <button type="button" onClick={onQuote} aria-keyshortcuts={ariaKeys('quote')} className={`${PART} gap-1.5 pr-3 hover:bg-hover ${sideLabel ? 'pl-2.5' : 'pl-3'}`}>
           <TextQuote className="size-3.5 text-muted" />
           Quote
           {quoteKey && <span aria-hidden className="ml-0.5 text-[11.5px] font-normal text-faint">{quoteKey}</span>}
@@ -359,7 +360,7 @@ function Dock({ picked, frame, sideLabel, onSideChat, onQuote }: { picked: Picke
     const clear = el.getBoundingClientRect().top - HANDLE_ROOM;
     if (lines.last.bottom > clear) scroller.scrollTop += lines.last.bottom - clear;
   }, [picked, frame]);
-  const item = 'flex h-full items-center gap-2 outline-none active:bg-hover focus-visible:bg-hover';
+  const item = `${PART} gap-2 active:bg-hover`;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center px-3">
       <div
