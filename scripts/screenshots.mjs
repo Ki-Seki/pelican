@@ -55,6 +55,8 @@ async function phoneShots(scheme) {
   await page.waitForTimeout(1200);
   await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
   await page.waitForTimeout(500);
+  // Scrolled up to the chart, the conversation offers a way back to its end; a picture needs none.
+  await page.evaluate(() => document.querySelector('[aria-label="Jump to latest"]')?.remove());
   await grab();
   // The site's phone frames draw a status bar over the top 40px (about 48px of the app at their
   // scale), so the pictures that go in them are taken that much shorter, to show the whole screen.
