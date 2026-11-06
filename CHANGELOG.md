@@ -164,7 +164,7 @@ command hides; and what the reviews of 0.4.0 left.
   the dark theme on my phone", a screenshot of the settings page in dark. Export as Markdown
   downloads the session in the live demo too, where it fetched nothing, its folder named
   `~/code/acme-web` as the demo shows it, not by where the site was built.
-- The docs say what the install takes: about 150 MB to download, under 400 MB on disk.
+- The docs say what the install takes: about 150 MB to download, about 400 MB on disk.
 - The tests pass in any order, at any time of day, and hold on a busy computer: each starts from a
   state of its own, a page's tests wait up to 3 seconds for what they look for, and those that
   start a shell or Pelican give it time to start and leave nothing running when they fail. CI checks
