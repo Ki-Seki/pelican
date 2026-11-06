@@ -221,16 +221,23 @@ describe('an Agent call’s steps', () => {
   const agentCall: ChatMessage = { uuid: 'a-ag', role: 'assistant', blocks: [{ type: 'tool_use', id: 'toolu_ag', name: 'Agent', input: { description: 'Look around', prompt: 'Look around the shop.' } }], timestamp: at };
   const agentDone: ChatMessage = { uuid: 'r-ag', role: 'user', timestamp: at + 1000, blocks: [{ type: 'tool_result', tool_use_id: 'toolu_ag', content: 'All clear.\nagentId: ag1' }] };
 
+  /** Messages of words alone, as a subagent writes between steps and at its end. */
+  const words = (n: number): ChatMessage[] => Array.from({ length: n }, (_, i) => ({ uuid: `w${i}`, role: 'assistant', blocks: [{ type: 'text', text: `Looking further, ${i}.` }] }));
+  /** Its transcript paged as the server pages it, 20 messages a page; an earlier page waits for `ready`. */
+  const serveAgent = (all: ChatMessage[], ready: () => Promise<void> = async () => {}) => vi.spyOn(api, 'subagent').mockImplementation(async (_s, _a, before) => {
+    if (before !== undefined) await ready();
+    const end = before ?? all.length;
+    const offset = Math.max(0, end - 20);
+    return { messages: all.slice(offset, end), total: all.length, offset };
+  });
+  const asked = (pages: ReturnType<typeof serveAgent>) => pages.mock.calls.map((c) => c[2]);
+
   // Each page draws every step loaded so far, so this keeps to few: pages of 20 messages (10
   // steps) here, where the server's are 60; and, drawn on a busy computer, more time than most.
   it('come a page at a time, the newest first, saying when earlier ones are left to show', async () => {
     // 25 steps (50 messages).
     const all = stepsOf(0, 24);
-    const pages = vi.spyOn(api, 'subagent').mockImplementation(async (_s, _a, before) => {
-      const end = before ?? all.length;
-      const offset = Math.max(0, end - 20);
-      return { messages: all.slice(offset, end), total: all.length, offset };
-    });
+    const pages = serveAgent(all);
     // Verbose: the call is open, with its instructions, its steps and its answer.
     show([agentCall, agentDone]);
     fireEvent.click(await screen.findByText('Steps it took'));
@@ -247,5 +254,63 @@ describe('an Agent call’s steps', () => {
     expect(pages).toHaveBeenLastCalledWith(SESSION, 'ag1', 10);
     expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
     expect(shown(0)).toBe(true);
+  }, 20_000);
+
+  it('read past a newest page with no step in it, never counting none while earlier pages have some', async () => {
+    // 15 steps (30 messages), then 25 messages of words: the newest page holds no step.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pages = serveAgent([...stepsOf(0, 14), ...words(25)], () => held);
+    show([agentCall, agentDone]);
+    fireEvent.click(await screen.findByText('Steps it took'));
+    await waitFor(() => expect(asked(pages)).toEqual([undefined, 35]));
+    // While the page before is read: no count, and nothing to show earlier yet.
+    expect(screen.getByRole('button', { name: 'Steps it took' })).toBeTruthy();
+    expect(screen.queryByText(/\b0 steps\b/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
+    release();
+    // Messages 15 to 34: the answer to step 7, steps 8 to 14, then words.
+    await screen.findByText('Last 7 steps');
+    expect(shown(14) && shown(8) && !shown(7)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('15 steps');
+    expect(asked(pages)).toEqual([undefined, 35, 15]);
+  }, 20_000);
+
+  it('at Show earlier, read past pages with no step in them to the steps before', async () => {
+    // Steps 0 to 4 (10 messages), 25 messages of words, then steps 5 to 14 (20 messages).
+    const pages = serveAgent([...stepsOf(0, 4), ...words(25), ...stepsOf(5, 14)]);
+    show([agentCall, agentDone]);
+    fireEvent.click(await screen.findByText('Steps it took'));
+    await screen.findByText('Last 10 steps');
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('15 steps');
+    expect(asked(pages)).toEqual([undefined, 35, 15]);
+    expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
+  }, 20_000);
+
+  it('with no step on any page, say so once read to the start', async () => {
+    const pages = serveAgent(words(45));
+    show([agentCall, agentDone]);
+    fireEvent.click(await screen.findByText('Steps it took'));
+    expect(await screen.findByText('No steps were recorded.')).toBeTruthy();
+    expect(asked(pages)).toEqual([undefined, 25, 5]);
+  }, 20_000);
+
+  it('say why an earlier page could not be read, and ask again at Show earlier', async () => {
+    let reachable = false;
+    serveAgent([...stepsOf(0, 14), ...words(25)], async () => {
+      if (!reachable) throw new Error('Can’t reach Pelican');
+    });
+    show([agentCall, agentDone]);
+    fireEvent.click(await screen.findByText('Steps it took'));
+    expect(await screen.findByText('Can’t reach Pelican')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Steps it took' })).toBeTruthy();
+    reachable = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('Last 7 steps');
+    expect(screen.queryByText('Can’t reach Pelican')).toBeNull();
   }, 20_000);
 });
