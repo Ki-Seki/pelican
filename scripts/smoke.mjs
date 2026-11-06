@@ -214,24 +214,31 @@ async function walkQuote(page, base, session, where, phone) {
   const missing = (what) => problems.push(`${where}, session ${session.id}: ${what}`);
   await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(300);
+  // The first words of a paragraph of a reply: under a finger they are selected as the system's
+  // long press would, after a touch; with a mouse, dragged over with its button down.
   const words = await page.evaluate((touch) => {
     const paragraph = [...document.querySelectorAll('[data-quote-what="reply"] p')].find((p) => (p.firstChild?.textContent ?? '').trim().split(/\s+/).length >= 4);
     const node = paragraph?.firstChild;
-    if (!node) return '';
-    const text = node.textContent;
-    const end = text.split(/\s+/).slice(0, 3).join(' ').length;
+    if (!node) return undefined;
     paragraph.scrollIntoView({ block: 'center' });
-    // A finger's selection begins with a touch, a mouse's with its button; then the words are selected.
-    paragraph.dispatchEvent(new PointerEvent('pointerdown', { pointerType: touch ? 'touch' : 'mouse', bubbles: true }));
     const range = document.createRange();
     range.setStart(node, 0);
-    range.setEnd(node, end);
-    getSelection().removeAllRanges();
-    getSelection().addRange(range);
-    paragraph.dispatchEvent(new PointerEvent('pointerup', { pointerType: touch ? 'touch' : 'mouse', bubbles: true }));
-    return range.toString();
+    range.setEnd(node, node.textContent.split(/\s+/).slice(0, 3).join(' ').length);
+    const box = range.getBoundingClientRect();
+    if (touch) {
+      paragraph.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }
+    return { text: range.toString(), from: { x: box.left + 1, y: box.top + box.height / 2 }, to: { x: box.right - 1, y: box.top + box.height / 2 } };
   }, phone);
   if (!words) return missing('no paragraph of a reply to quote');
+  if (!phone) {
+    await page.mouse.move(words.from.x, words.from.y);
+    await page.mouse.down();
+    await page.mouse.move(words.to.x, words.to.y, { steps: 6 });
+    await page.mouse.up();
+  }
   const actions = page.getByRole('toolbar', { name: 'Selected text' });
   if (!(await actions.waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('selecting words of a reply offers no Quote');
   const note = 'Keep this as it is';
@@ -250,8 +257,8 @@ async function walkQuote(page, base, session, where, phone) {
     if (!(await page.locator('ul[aria-label="With your next message"] li').first().waitFor({ timeout: 2000 }).then(() => true, () => false))) return missing('the note box adds no chip above the message box');
   }
   await page.getByLabel('Message Claude').fill('And go on');
-  await page.getByRole('button', { name: 'Send' }).click();
-  const quoted = page.locator('blockquote', { hasText: words.trim() }).first();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const quoted = page.locator('blockquote', { hasText: words.text.trim() }).first();
   if (!(await quoted.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing('the prompt sent shows no quote');
   if (await page.getByText('<!-- reply', { exact: false }).count()) missing('the prompt sent shows its reply marker');
 }
