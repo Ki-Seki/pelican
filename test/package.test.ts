@@ -34,6 +34,16 @@ describe('the package npm installs', () => {
     expect(existsSync(path.join(root, 'npm-shrinkwrap.json'))).toBe(false);
   });
 
+  it('is the version the changelog’s newest section names, in the lockfile too', async () => {
+    const read = async (name: string) => JSON.parse(await readFile(path.join(root, name), 'utf8')) as { version: string; packages: Record<string, { version?: string }> };
+    const changelog = await readFile(path.join(root, 'CHANGELOG.md'), 'utf8');
+    const newest = /^## (\S+)$/m.exec(changelog)?.[1];
+    const { version } = await read('package.json');
+    expect(version).toBe(newest);
+    const lock = await read('package-lock.json');
+    expect([lock.version, lock.packages['']?.version]).toEqual([version, version]);
+  });
+
   it('serves the demo with nothing installed beside it but the Agent SDK', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-package-'));
     let child: ReturnType<typeof spawn> | undefined;
