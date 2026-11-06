@@ -343,9 +343,10 @@ const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|pe
  */
 function fromMarkdown(what: string, text: string, shell: boolean): Item[] {
   const found: Item[] = [];
-  // Found as Claude Code finds it: the closing --- may end a line rather than stand on its own.
-  const front = /^\uFEFF?---\s*\n([\s\S]*?)---\s*\n?/.exec(text.replace(/\r\n/g, '\n'))?.[1];
-  const lines = front?.split(/\r?\n/) ?? [];
+  // Found as Claude Code finds it: the closing --- may end a line rather than stand on its own. Its
+  // YAML ends a line at a carriage return alone too.
+  const front = /^\uFEFF?---\s*\n([\s\S]*?)---\s*\n?/.exec(text.replace(/\r\n?/g, '\n'))?.[1];
+  const lines = front?.split('\n') ?? [];
   const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
   // Keys of the frontmatter itself, not of a map inside it.
   const top = indent(lines.find((line) => line.trim() && !line.trim().startsWith('#')) ?? '');
@@ -353,18 +354,25 @@ function fromMarkdown(what: string, text: string, shell: boolean): Item[] {
   lines.forEach((line, i) => {
     const power = POWERS.exec(line);
     if (!power || (indent(line) !== top && !line.includes('{'))) return;
-    // The value, with the lines under it (a list, a map), on one line.
-    const value = [power[2]!.trim()];
-    for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) if (lines[j]!.trim()) value.push(lines[j]!.trim());
-    const mode = value.join(' ').replace(/^["']|["']$/g, '');
+    // A key of the frontmatter's with the lines under it (a list, a map, a block of text), as they
+    // are written, each on its line: YAML reads a line break in a block as one, and a line that
+    // went on from a `#` would read as a comment. Up to the next key, so each line is read once. A
+    // flow map's line inside another value is that line alone.
+    const block = [line.slice(indent(line)).trimEnd()];
+    if (indent(line) === top) {
+      for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) block.push(lines[j]!.slice(Math.min(top, indent(lines[j]!))).trimEnd());
+      while (block.length > 1 && !block.at(-1)!.trim()) block.pop();
+    }
+    const mode = [power[2]!, ...block.slice(1)].map((part) => part.trim()).filter(Boolean).join(' ').replace(/^["']|["']$/g, '');
     if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
     // Hooks and MCP servers hold commands in YAML: shown as written, every space but a plain one written out.
-    const shown = line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`;
+    const shown = block.join('\n');
     found.push(/^(?:hooks|mcp)/i.test(power[1]!) ? runs(`${what}: `, shown, 'argv') : said(`${what}: ${shown}`));
   });
   // YAML says the same thing in more ways than a line scan reads (escapes, ? keys, tags, flow maps):
-  // frontmatter that uses them and names a power anywhere is asked about.
-  if (front && found.length === 0 && /allowed|hook|mcp|permission/i.test(front) && /\\|^[ \t]*\?|!!|\{/m.test(front)) {
+  // frontmatter that uses them and names a power anywhere is asked about, and says so beside what
+  // was read of it, as an escape such as `\n` reads otherwise than it is written.
+  if (front && /allowed|hook|mcp|permission/i.test(front) && (/\\|^[ \t]*\?|!!/m.test(front) || (found.length === 0 && front.includes('{')))) {
     found.push(said(`${what}: settings Pelican cannot read in full`));
   }
   if (shell) {
