@@ -465,14 +465,15 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   return (
     <div className="relative min-h-0 flex-1">
       {/* The keys' hidden field is as large as Safari needs, or it zooms the page in when a tap gives it the keys. */}
-      {/* xterm's layers stack inside it (isolate), so what lies over the screen is over all of them. */}
+      {/* xterm's layers stack inside it (isolate), so what lies over the screen is over all of them; */}
+      {/* a shell sized by a larger page is cut at its edge (overflow-hidden), not drawn over the keys under it. */}
       {/* On a phone, what follows a line is read out by the page (readNext), not by xterm's own live region, which only keys clear. */}
       <div
         ref={box}
         role="region"
         aria-label={label}
         data-terminal
-        className={`absolute inset-0 isolate [&_.xterm-helper-textarea]:text-[16px] ${touch ? 'touch-none select-none [-webkit-touch-callout:none] [&_.live-region]:hidden' : ''}`}
+        className={`absolute inset-0 isolate overflow-hidden [&_.xterm-helper-textarea]:text-[16px] ${touch ? 'touch-none select-none [-webkit-touch-callout:none] [&_.live-region]:hidden' : ''}`}
       />
       {reconnecting && (
         <div className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-muted shadow-sm">
