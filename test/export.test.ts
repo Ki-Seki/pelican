@@ -486,6 +486,19 @@ describe('the export, each line where it was', () => {
     expect(markdown).toMatch(/## Claude\n\n(?:word ){12000}\n…\n$/);
   });
 
+  it('names its folder as the app does: from the home folder, the demo’s too', async () => {
+    const savedHome = config.home;
+    config.home = home;
+    try {
+      const sessionId = await session(n++, 'At home', [user('Hi'), claude(text('Done.'))]);
+      expect((await exportMarkdown(sessionId)).markdown).toContain('\n\nFolder: `~/code/acme-web`\n\n');
+      config.home = path.join(home, 'elsewhere');
+      expect((await exportMarkdown(sessionId)).markdown).toContain(`\n\nFolder: \`${folder}\`\n\n`);
+    } finally {
+      config.home = savedHome;
+    }
+  });
+
   it('keeps its folder on its line, whatever line breaks the folder’s name has', async () => {
     const saved = folder;
     folder = path.join(home, 'code', 'x\n## Claude\n');

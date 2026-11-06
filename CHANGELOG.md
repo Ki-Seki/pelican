@@ -100,7 +100,8 @@ command hides; and what the reviews of 0.4.0 left.
   it is written so that they read it alike. The files Claude sent are named under their step, with
   the words Claude sent with them. An address that starts with http://, https://, ftp:// or www.,
   and an email, in prompts and Claude Code's notes stay text, as code, where a reader would link
-  them. A text past 60,000 characters ends with "…", as the conversation shows it.
+  them. A text past 60,000 characters ends with "…", as the conversation shows it. The folder is
+  named as the app names it, from your home folder (`~/code/acme-web`).
 
 ### Security
 
@@ -161,7 +162,8 @@ command hides; and what the reviews of 0.4.0 left.
 
 - The demo, and the live demo on the website, have a pinned session and a file Claude sent: in "Try
   the dark theme on my phone", a screenshot of the settings page in dark. Export as Markdown
-  downloads the session in the live demo too, where it fetched nothing.
+  downloads the session in the live demo too, where it fetched nothing, its folder named
+  `~/code/acme-web` as the demo shows it, not by where the site was built.
 - The docs say what the install takes: about 150 MB to download, under 400 MB on disk.
 - The tests pass in any order, at any time of day, and hold on a busy computer: each starts from a
   state of its own, a page's tests wait up to 3 seconds for what they look for, and those that

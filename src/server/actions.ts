@@ -5,6 +5,7 @@ import { promptParts } from '../shared/prompt-parts.js';
 import type { ChatMessage } from '../shared/protocol.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
+import { shortPath } from '../web/lib/format.js';
 import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
@@ -130,8 +131,10 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   const title = info?.customTitle || info?.summary || 'Claude Code session';
   const messages: ChatMessage[] = await loadMessages(sessionId);
   const out: string[] = [`# ${inlineText(title.replace(/\s+/g, ' ').trim())}`, ''];
-  // On its line, as a title is: a line break in it would end the code, and start a speaker's heading.
-  if (info?.cwd) out.push(`Folder: ${inlineCode(info.cwd.replace(/\r\n?|\n/g, ' '))}`, '');
+  // As the app shows it, `~/code/x` in the home folder (the demo's made-up one too, not where it
+  // happens to be kept); on its line, as a title is: a line break in it would end the code, and
+  // start a speaker's heading.
+  if (info?.cwd) out.push(`Folder: ${inlineCode(shortPath(info.cwd, config.home).replace(/\r\n?|\n/g, ' '))}`, '');
   let speaker: string | undefined;
   // Each reply's number, which its footnotes' labels start with: the conversation reads each reply
   // on its own, and the file reads all of them as one document.
