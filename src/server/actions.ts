@@ -112,8 +112,10 @@ const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
 
 /**
  * The conversation as Markdown, with all the conversation shows, as Claude Code's /export has all
- * its screen shows: prompts and replies in full with what was attached, `!` and `/` commands as
- * code with their output, tool calls as one line each, and Claude Code's own lines (a background
+ * its screen shows: prompts and replies with what was attached, as far as the conversation shows
+ * them (one past 60,000 characters it ends with "…", as normalize.ts cuts it for the page), `!`
+ * and `/` commands as code with their output, tool calls as one line each, the files Claude sent
+ * by name with the words it sent with them, and Claude Code's own lines (a background
  * task's note, Interrupted, a failed request, a hook's word, a compaction) in italics. Each reads
  * as the conversation shows it: a prompt, a note and a name as text, none of it Markdown, and a
  * reply as Markdown that keeps to itself (markdown.ts): its headings under the speakers', its HTML

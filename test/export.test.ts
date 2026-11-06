@@ -479,6 +479,13 @@ describe('the export, each line where it was', () => {
     expect(speakers(markdown)).toEqual(['h1 Quoted', 'h2 You', 'h2 Claude']);
   });
 
+  it('has a reply past 60,000 characters as far as the conversation shows it, ending as it does', async () => {
+    const sessionId = await session(n++, 'Long reply', [user('Write it all.'), claude(text(`${'word '.repeat(13_000)}THE END`))]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).not.toContain('THE END');
+    expect(markdown).toMatch(/## Claude\n\n(?:word ){12000}\n…\n$/);
+  });
+
   it('keeps its folder on its line, whatever line breaks the folder’s name has', async () => {
     const saved = folder;
     folder = path.join(home, 'code', 'x\n## Claude\n');
