@@ -17,14 +17,15 @@ A terminal beside the conversation, as Claude Desktop has one.
   the text size. Its colors and font are Pelican's, light or dark, and a program that asks for its
   colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
-  with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, and
-  Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-`
-  and paste, a finger's size each, scrolling sideways on a narrow phone, and a key there sends what
-  you typed first, so tab completes it. A line typed while the connection comes back stays until it
-  can go. A full-screen program such as vim or htop gets every key as you type it, a password prompt
-  hides what you type, a swipe scrolls back and ↓ comes back to the newest output, a pinch sets the
-  size, and a long press opens the screen as text, to select from, quote or copy. A screen reader
-  hears what a line printed.
+  with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
+  spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
+  while you type, the screen takes the room of the header and tabs above it. A row of keys has what
+  a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a finger's size each,
+  scrolling sideways on a narrow phone, and a key there sends what you typed first, so tab completes
+  it. A line typed while the connection comes back stays until it can go. A full-screen program such
+  as vim or htop gets every key as you type it, a password prompt hides what you type, a swipe
+  scrolls back and ↓ comes back to the newest output, a pinch sets the size, and a long press opens
+  the screen as text, to select from, quote or copy. A screen reader hears what a line printed.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
