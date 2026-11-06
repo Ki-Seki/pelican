@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import serializeAddon from '@xterm/addon-serialize';
+import unicode11Addon from '@xterm/addon-unicode11';
 import xtermHeadless, { type Terminal as Screen } from '@xterm/headless';
 import type { RawData, WebSocket } from 'ws';
 
@@ -36,6 +37,7 @@ import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 const { SerializeAddon } = serializeAddon;
+const { Unicode11Addon } = unicode11Addon;
 type Serializer = InstanceType<typeof SerializeAddon>;
 
 /** Times and amounts the terminals keep to; tests shorten them. */
@@ -187,6 +189,11 @@ class Term {
     this.rows = rows;
     this.program = programName(shell);
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
+    // Characters as wide as the pages draw them (TerminalScreen takes the same widths): an emoji
+    // takes two cells there, and the screen a page gets back places what follows it, and the
+    // cursor, by counting cells.
+    this.screen.loadAddon(new Unicode11Addon());
+    this.screen.unicode.activeVersion = '11';
     this.serializer = new SerializeAddon();
     this.screen.loadAddon(this.serializer);
     // The copy answers what programs ask of the terminal (device attributes, the cursor's

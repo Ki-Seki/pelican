@@ -211,8 +211,9 @@ describe('a page that comes back', () => {
     const terminal = await open();
     const all = await atPrompt(terminal.id);
     // Colored lines in bursts, fewer than the scrollback holds: every line is compared, where the
-    // second page came in too.
-    all.type("for i in $(seq 1 1500); do printf '\\033[3%dmline %d\\033[0m\\n' $((i % 7)) $i; [ $((i % 50)) = 0 ] && sleep 0.02; done; echo EN''D\r");
+    // second page came in too. Each has an emoji (two cells wide), then a word put at column 40, as
+    // a full-screen program places what it draws.
+    all.type("for i in $(seq 1 1500); do printf '\\033[3%dmline %d \\360\\237\\232\\200\\033[40Gend\\033[0m\\n' $((i % 7)) $i; [ $((i % 50)) = 0 ] && sleep 0.02; done; echo EN''D\r");
     await all.sees(/line 600\b/, 30_000);
     const late = page(terminal.id);
     await late.readied();
@@ -223,7 +224,10 @@ describe('a page that comes back', () => {
     await until(same, 10_000).catch(() => undefined);
     expect(late.output).not.toMatch(/line 600\b/);
     expect(late.lines()).toEqual(all.lines());
-    expect(late.lines().filter((line) => /^line \d+$/.test(line))).toHaveLength(1500);
+    const drawn = late.lines().filter((line) => /^line \d+ \u{1f680} +end$/u.test(line));
+    expect(drawn).toHaveLength(1500);
+    // The word at column 40 on every line, the emoji counted as two cells (and two UTF-16 units).
+    expect(drawn.every((line) => line.indexOf('end') === 39)).toBe(true);
   }, 90_000);
 
   it('is never cut inside an escape sequence, so what follows reads as it was printed', async () => {
@@ -259,6 +263,9 @@ describe('what a program asks of the terminal', () => {
     await atPrompt(terminal.id);
     phone.type(`printf '\\033[5;9H\\033[6n'; IFS= read -rs -t 3 -d R reply; IFS= read -rs -t 0.5 -d R again; echo; echo "at \${reply#??} \${#again}"\r`);
     await phone.sees(/at 5;9 0\r\n/);
+    // After an emoji, two cells wide on the pages, so in the copy too.
+    phone.type(`printf '\\033[5;1H\\360\\237\\232\\200\\033[6n'; IFS= read -rs -t 3 -d R reply; IFS= read -rs -t 0.5 -d R again; echo; echo "at \${reply#??} \${#again}"\r`);
+    await phone.sees(/at 5;3 0\r\n/);
   }, 20_000);
 });
 
