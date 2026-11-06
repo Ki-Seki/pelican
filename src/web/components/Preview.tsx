@@ -57,7 +57,11 @@ svg text{fill:var(--text);font-family:inherit}
 /** Tells the parent how tall the content is, so the frame fits it (only where scripts run). */
 const RESIZE = `<script>(()=>{const post=()=>parent.postMessage({pelicanPreviewHeight:Math.ceil(document.documentElement.scrollHeight)},"*");new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</script>`;
 
-export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean };
+/**
+ * What a preview shows: an HTML page or fragment, or an SVG; a visual Claude Desktop draws (`widget`),
+ * or a file (`file`: one Claude wrote or sent you), which shows as it is, as a browser shows it.
+ */
+export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean; file?: boolean };
 
 const fullPage = (code: string) => /^(<!doctype|<html)/i.test(code.replace(/^\uFEFF/, '').slice(LEADING.exec(code)?.[0].length ?? 0));
 
@@ -115,7 +119,11 @@ export function documentFor(source: PreviewSource, dark: boolean, still = false)
     const page = `<!doctype html>${preamble}${start.replace(/^<!doctype[^>]*>/i, '')}`;
     return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${resize}</body>`) : `${page}${resize}`;
   }
-  const css = source.widget || source.kind === 'svg' ? `<style>${WIDGET_CSS}</style>` : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
+  // A visual, or an SVG in a reply, in the vocabulary Claude Desktop's visuals use; a file of
+  // Claude's in its own colors and fonts, as a browser shows it, only sized to fit.
+  const css = source.widget || (source.kind === 'svg' && !source.file) ? `<style>${WIDGET_CSS}</style>`
+    : source.kind === 'svg' ? '<style>html,body{margin:0}body{padding:2px}svg{display:block;max-width:100%;height:auto}</style>'
+    : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
   return `<!doctype html><html data-theme="${theme}"><head>${preamble}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${code}${resize}</body></html>`;
 }
 

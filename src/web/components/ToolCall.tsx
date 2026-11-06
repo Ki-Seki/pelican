@@ -320,7 +320,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
   if (kind === 'page' && open && data?.text !== undefined && !data.truncated) {
     return (
       <div className="basis-full">
-        <PreviewCard source={{ kind: /\.svg$/i.test(name) ? 'svg' : 'html', code: data.text, title: name }} label={name} download={{ href: api.sentUrl(sessionId, file.path, true), name }} />
+        <PreviewCard source={{ kind: /\.svg$/i.test(name) ? 'svg' : 'html', code: data.text, title: name, file: true }} label={name} download={{ href: api.sentUrl(sessionId, file.path, true), name }} />
       </div>
     );
   }
@@ -541,7 +541,7 @@ function Detail({ call, cwd, outcome }: { call: ToolCall; cwd?: string; outcome:
   const file = str(call.input.file_path);
   if (call.name === 'Write' && PREVIEWABLE.test(file) && (outcome.kind === 'done' || outcome.kind === 'pending')) {
     const name = file.split('/').pop() ?? file;
-    return <PreviewCard source={{ kind: /\.svg$/i.test(file) ? 'svg' : 'html', code: str(call.input.content), title: name }} label={name} />;
+    return <PreviewCard source={{ kind: /\.svg$/i.test(file) ? 'svg' : 'html', code: str(call.input.content), title: name, file: true }} label={name} />;
   }
   if (edits.length > 0 && !failed) {
     return (
