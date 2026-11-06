@@ -59,7 +59,10 @@ export type TerminalServerMessage =
    * output that follows. Sent again only on a new socket.
    */
   | { type: 'ready'; id: string; cols: number; rows: number; snapshot: string; program: string; exit?: TerminalExit }
-  /** The shell's size changed, from another page: draw it this size. */
+  /**
+   * Draw the shell this size: another page said one, or (right after `ready`) one the screen sent
+   * had yet to take.
+   */
   | { type: 'size'; cols: number; rows: number }
   /** Another program is in front. */
   | { type: 'program'; program: string }

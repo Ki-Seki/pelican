@@ -21,7 +21,7 @@ await build({
     name: 'packages-external',
     setup(pluginBuild) {
       // Every package import, Node's own modules included, but those bundled in.
-      pluginBuild.onResolve({ filter: /^[^./]/ }, (args) => (BUNDLED.test(args.path) ? undefined : { path: args.path, external: true }));
+      pluginBuild.onResolve({ filter: /^[^./]/ }, (args) => (args.kind === 'entry-point' || BUNDLED.test(args.path) ? undefined : { path: args.path, external: true }));
     },
   }],
   sourcemap: true,
