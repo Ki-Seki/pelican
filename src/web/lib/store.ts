@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 import type { ChatMessage, PartialAppend, PartialBlock, RunState, ServerEvent } from '../../shared/protocol';
-import { api } from './api';
+import { api, onReachable } from './api';
 import { socket } from './socket';
 
 export type SessionView = {
@@ -259,5 +259,16 @@ socket.onConnection(() => heard.clear());
 socket.onResync(() => {
   for (const sessionId of listeners.keys()) {
     if ((listeners.get(sessionId)?.size ?? 0) > 0) void loadLatest(sessionId);
+  }
+});
+
+/**
+ * Back in reach after requests failed while the socket stayed up (a proxy's 502, 503 or 504 for
+ * one slow request): a conversation that could not load then loads now, as no resync comes.
+ */
+onReachable((reachable) => {
+  if (!reachable) return;
+  for (const sessionId of listeners.keys()) {
+    if ((listeners.get(sessionId)?.size ?? 0) > 0 && getView(sessionId).error) void loadLatest(sessionId);
   }
 });

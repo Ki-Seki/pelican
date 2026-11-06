@@ -86,6 +86,13 @@ function setReachable(value: boolean): void {
   for (const listener of reachListeners) listener();
 }
 
+/** Calls `listener` each time requests start or stop reaching the server. */
+export function onReachable(listener: (reachable: boolean) => void): () => void {
+  const call = () => listener(reachable);
+  reachListeners.add(call);
+  return () => reachListeners.delete(call);
+}
+
 export function useReachable(): boolean {
   return useSyncExternalStore(
     (listener) => {
