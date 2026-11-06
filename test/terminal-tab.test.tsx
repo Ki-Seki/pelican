@@ -579,6 +579,40 @@ describe('the Terminal tab on a phone', () => {
     expect(keys.value).toBe('');
   });
 
+  it('pastes with the row’s key, what the line held first, and says why when the browser does not let it read the clipboard', async () => {
+    coarse = true;
+    list.terminals = [terminal('t1')];
+    let allowed = true;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: async () => {
+          if (!allowed) throw new DOMException('Read permission denied.', 'NotAllowedError');
+          return 'echo from the clipboard';
+        },
+      },
+    });
+    try {
+      tab();
+      await waitFor(() => expect(shows()).toBe('t1'));
+      fireEvent.input(field(), { target: { value: 'cd /tmp && ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
+      await waitFor(() => expect(pasted).toEqual(['echo from the clipboard']));
+      expect(typed).toEqual(['cd /tmp && ']);
+      expect(screen.queryByRole('status')).toBeNull();
+      // Told no (or not answered), the browser gives nothing: the key says so, not nothing at all.
+      allowed = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
+      expect((await screen.findByRole('status')).textContent).toMatch(/did not let Pelican read the clipboard/);
+      expect(pasted).toEqual(['echo from the clipboard']);
+      // The next key takes the words away.
+      fireEvent.click(screen.getByRole('button', { name: 'Tab' }));
+      expect(screen.queryByRole('status')).toBeNull();
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it('opens the screen as text from a long press, to quote or copy', async () => {
     coarse = true;
     list.terminals = [terminal('t1')];

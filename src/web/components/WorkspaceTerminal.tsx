@@ -541,6 +541,13 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   modeNow.current = mode;
   const composingNow = useRef(false);
   const canPaste = typeof navigator !== 'undefined' && Boolean(navigator.clipboard?.readText);
+  /** The browser did not let the last Paste read the clipboard: said for a few seconds. */
+  const [refused, setRefused] = useState(false);
+  useEffect(() => {
+    if (!refused) return undefined;
+    const timer = setTimeout(() => setRefused(false), 8000);
+    return () => clearTimeout(timer);
+  }, [refused]);
 
   /** Whether it went: while the connection comes back nothing does, and what was typed stays in the field. */
   const send = (text: string) => screen.current?.input(text) ?? false;
@@ -581,11 +588,13 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
     setTyped(true);
   };
   const tap = (k: string) => {
+    setRefused(false);
     if (k === 'ctrl') setCtrl((on) => !on);
     else if (k === 'paste') {
+      // The browser asks first: told no, or not answered, it gives nothing, and the key says why.
       void navigator.clipboard.readText().then((text) => {
         if (text && flush()) screen.current?.paste(text);
-      }, () => undefined);
+      }, () => setRefused(true));
     } else if (ROW_KEYS.has(k)) key(keySequence(k as RowKey, { applicationCursor: modeNow.current.applicationCursor, ctrl: ctrlNow.current }));
     else character(k);
   };
@@ -672,6 +681,11 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const placeholder = mode.direct ? `Keys go to ${program}` : mode.secret ? 'Password' : 'Type a command';
   return (
     <div className={`shrink-0 border-t border-line pt-1.5 ${safe}`}>
+      {refused && (
+        <p role="status" className="px-4 pb-1.5 text-[12.5px] leading-snug text-danger">
+          The browser did not let Pelican read the clipboard. Allow it in the browser’s site settings, or touch and hold the line, then Paste.
+        </p>
+      )}
       {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. */}
       <div className="no-scrollbar flex gap-1 overflow-x-auto px-2" role="toolbar" aria-label="Keys">
         {ROW.filter((k) => k.key !== 'paste' || canPaste).map((k) => (
