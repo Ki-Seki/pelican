@@ -17,14 +17,18 @@
  * a file the command writes with them and then runs or reads as a script (`cat > fix.sh <<'EOF' …
  * EOF`, then `bash fix.sh`, `./fix.sh` or `sh < fix.sh`; found by the last part of its name). In
  * such a script a variable the command sets to plain text stands for that text, and one it does not
- * set, the user's own, for a word of its own.
+ * set, the user's own, for a word of its own. Quoted text with a substitution's start in it (`$(`,
+ * `${`, a backquote) counts as in a word too: arithmetic, a subscript, a prompt or zsh's (e) may
+ * yet run it as one.
  *
  * Where it cannot tell, every such character counts as in a word (inWords gives undefined): a
  * syntax error (a quote never closed, a heredoc whose line never comes, a `)` that closes nothing),
  * which may be one only here; what the shells read otherwise (`<<(`, a `(` where an argument would
  * be, a `{` inside `${ }`, `${ cmd; }`, `$'…\'…'`, quotes inside `$(( ))`, `$[ ]`); a script handed to
  * a shell with text in it this does not know (a substitution, an argument such as `$1`, a variable
- * set to what this does not know, braces or a pattern; what printf, xargs or a filter make); text
+ * set to what this does not know, braces or a pattern; what printf, xargs or a filter make); what
+ * runs a variable's value (zsh's functions and aliases arrays, a prompt such as PS4, zsh's (e), (P)
+ * and (%) flags, bash's @P, print -P); text
  * of the command that may reach a shell's input any other way (through a loop, a function, `exec`,
  * a subshell, a coprocess or a command whose name this does not know); a file the command writes
  * and runs as a script with what this does not know in it (from printf, an unquoted heredoc that
@@ -109,6 +113,12 @@ const BEFORE_COMMAND = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'un
 /** Reserved words that begin a compound command where they come first, and those that end one. */
 const OPENS = new Set(['if', 'while', 'until', 'for', 'select', 'case', '{']);
 const CLOSES = new Set(['}', 'fi', 'done', 'esac']);
+
+/**
+ * Variables whose value a shell runs: zsh's arrays of functions and aliases (`functions[lint]=…`
+ * defines one), and the prompts bash and zsh expand, PS4 among them.
+ */
+const CODE_VARIABLES = /^(?:(?:dis_)?(?:functions|aliases|galiases|saliases)(?:_source)?|PS[0-4]|PROMPT[0-4]?|RPROMPT2?|RPS[12]|SPROMPT|PROMPT_COMMAND)$/;
 
 /** Commands whose `name=(…)` is an array. */
 const DECLARES = new Set(['declare', 'typeset', 'local', 'readonly', 'export', 'integer', 'float']);
@@ -595,25 +605,43 @@ class Reader {
   /** A string in single quotes: all of it as it is. */
   private single(add: (piece: Piece, unquoted: boolean) => void): void {
     this.i += 1;
+    const from = this.i;
     while (this.char() !== "'") {
       if (this.char() === undefined) throw new Lost();
       add(this.p[this.i]!, false);
       this.i += 1;
     }
+    this.mayRun(this.p.slice(from, this.i));
     this.i += 1;
+  }
+
+  /**
+   * Quoted text with a substitution's start in it (`$(`, `${`, a backquote), which the shell may
+   * yet run as one, by a road this does not follow: arithmetic reads a variable's value as an
+   * expression, and a subscript in it (`a[$(…)]`) runs; so do the names read, printf -v and
+   * declare take; zsh's (e), (P) and (%) flags, bash's @P, print -P and PS4 expand it. Such a
+   * character in it counts, as in a word.
+   */
+  private mayRun(pieces: readonly Piece[]): void {
+    if (/\$[({]|`/.test(textOf(pieces))) for (const piece of pieces) this.flag(piece);
   }
 
   /** A string in double quotes, its expansions read as such. */
   private double(add: (piece: Piece, unquoted: boolean) => void): void {
     this.nest(() => {
       this.i += 1;
+      // Its text, the expansions in it aside.
+      const text: Piece[] = [];
       for (;;) {
         const c = this.char();
         const next = this.char(1);
         if (c === undefined) throw new Lost();
         if (c === '"') break;
         if (c === '\\' && next !== undefined && '$`"\\\n'.includes(next)) {
-          if (next !== '\n') add(this.p[this.i + 1]!, false);
+          if (next !== '\n') {
+            add(this.p[this.i + 1]!, false);
+            text.push(this.p[this.i + 1]!);
+          }
           this.i += 2;
         } else if (c === '`') {
           this.backquote(true);
@@ -622,9 +650,11 @@ class Reader {
           this.dollar(add, (made) => add(expansion(made), false), false);
         } else {
           add(this.p[this.i]!, false);
+          text.push(this.p[this.i]!);
           this.i += 1;
         }
       }
+      this.mayRun(text);
       this.i += 1;
     });
   }
@@ -653,6 +683,9 @@ class Reader {
       const from = this.i;
       this.braces(unquoted);
       const inside = textOf(this.p.slice(from, this.i - 1));
+      // zsh's (e), (P) and (%) flags, and bash's @P, run what the value holds as a substitution:
+      // what the value is, and where it came from, this does not follow.
+      if (/^\([^)]*[eP%]/.test(inside) || /@P$/.test(inside)) throw new Lost();
       if (/^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!_-])$/.test(inside)) add({ char: `\${${inside}}`, at: -1, made: 'parameter', name: inside }, false);
       else expanded('parameter');
     } else if (next === '[') {
@@ -682,10 +715,14 @@ class Reader {
    */
   private ansi(add: (piece: Piece, unquoted: boolean) => void): void {
     this.i += 2;
+    const from = this.i;
     for (;;) {
       const c = this.char();
       if (c === undefined) throw new Lost();
-      if (c === "'") break;
+      if (c === "'") {
+        this.mayRun(this.p.slice(from, this.i));
+        break;
+      }
       if (c !== '\\') {
         add(this.p[this.i]!, false);
         this.i += 1;
@@ -1020,6 +1057,8 @@ class Reader {
     }
     // A coprocess reads what the command writes to it, from anywhere.
     if (name === 'coproc') this.shared.across.risky = true;
+    // zsh's print -P expands a prompt, which runs a substitution with prompt_subst set.
+    if (name === 'print' && rest.some((word) => /^-[A-Za-z]*P/.test(word.text))) throw new Lost();
     switch (name) {
       case 'echo': {
         command.kind = 'echo';
@@ -1209,6 +1248,9 @@ class Reader {
   private assigns(word: Word): void {
     const equals = word.text.indexOf('=');
     const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(word.text)![0];
+    // A function or an alias of zsh's, made by setting its arrays, or a prompt, which bash and zsh
+    // expand (PS4 at each command set -x traces): what the value runs, this does not follow.
+    if (CODE_VARIABLES.test(name)) throw new Lost();
     const value = textOf(word.pieces.slice(equals + 1));
     // An element of an array, or what adds to the value: not known.
     this.sets(name, !word.made && !word.open && PLAIN.test(value) && equals === name.length ? value : null);
