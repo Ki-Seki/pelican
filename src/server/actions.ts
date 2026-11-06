@@ -1,10 +1,11 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
+import { revealHidden } from '../shared/hidden.js';
 import { promptParts } from '../shared/prompt-parts.js';
 import type { ChatMessage } from '../shared/protocol.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
-import { buildItems, cleanOutput, type SentFile, type WorkflowNotice } from '../web/lib/turns.js';
+import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
 import { loadMessages, sessionInfo } from './sessions.js';
@@ -56,7 +57,37 @@ const prompt = (text: string) => promptParts(text).map((part) => {
   return quote.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
 });
 
-const toolLine = (name: string, input: Record<string, unknown>) => {
+/**
+ * The files a call sent you that the conversation shows, as their cards do: what Claude Code
+ * delivered with SendUserFile, the page an Artifact call published; none for a call that did not
+ * run, or failed.
+ */
+const shownFiles = ({ name, input, result }: ToolCall): string[] => {
+  if (!result || result.is_error) return [];
+  if (name === 'SendUserFile') return (result.delivered?.files ?? []).map((file) => file.path);
+  return name === 'Artifact' && typeof input.file_path === 'string' && (!input.action || input.action === 'publish') ? [input.file_path] : [];
+};
+
+/** The words Claude sent with the files a call sent, which the conversation shows with them, as a reply reads. */
+const caption = (call: ToolCall): string | undefined => {
+  if (shownFiles(call).length === 0) return undefined;
+  const words = [call.result?.delivered?.caption, call.input.caption, call.input.description].find((value) => typeof value === 'string' && value.trim());
+  return typeof words === 'string' ? words.trim() : undefined;
+};
+
+/**
+ * A tool call as one line: its name and what it is about. A SendUserFile call names the files it
+ * sent (those it asked to send, until they were), by name as their cards show them, a character
+ * that hides or turns text around written out.
+ */
+const toolLine = (call: ToolCall) => {
+  const { name, input } = call;
+  if (name === 'SendUserFile') {
+    const asked = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((file): file is string => typeof file === 'string') : [];
+    const files = call.result && !call.result.is_error && call.result.delivered ? shownFiles(call) : asked;
+    const names = files.map((file) => revealHidden(file.split(/[\\/]/).pop() || file).text.replace(/\r\n?|\n/g, ' '));
+    return `- ${inlineText(name)}${names.length > 0 ? `: ${names.map(inlineCode).join(', ')}` : ''}`;
+  }
   const target = ['file_path', 'command', 'pattern', 'url', 'query', 'description'].map((k) => input[k]).find((v) => typeof v === 'string');
   return `- ${inlineText(name)}${target ? `: ${inlineCode(String(target).split(/\r\n?|\n/)[0]!)}` : ''}`;
 };
@@ -128,8 +159,16 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
       const blocks: string[] = [];
       let tools: string[] = [];
       for (const part of item.parts) {
-        if (part.kind === 'tool') tools.push(toolLine(part.call.name, part.call.input));
-        else if (part.kind === 'text' && part.text.trim()) {
+        if (part.kind === 'tool') {
+          tools.push(toolLine(part.call));
+          // The words Claude sent with files, under its line, as Claude's: a reply.
+          const words = caption(part.call);
+          if (words) {
+            blocks.push(tools.join('\n'));
+            tools = [];
+            blocks.push(reply(words, (replies += 1)));
+          }
+        } else if (part.kind === 'text' && part.text.trim()) {
           if (tools.length > 0) blocks.push(tools.join('\n'));
           tools = [];
           blocks.push(reply(part.text.trim(), (replies += 1)));

@@ -446,3 +446,24 @@ describe('the export, each reply kept to itself', () => {
     }
   }, 30_000);
 });
+
+describe('the export, with the files Claude sent', () => {
+  let n = 100;
+
+  it('names each file Claude sent, and has the words it sent with them as Claude’s, as the conversation shows them', async () => {
+    const shot = path.join(folder, 'screenshots', 'settings-dark.png');
+    const sessionId = await session(n++, 'Sent', [
+      user('Try the dark theme on my phone'),
+      claude(text('Here it is.'), { type: 'tool_use', id: 's1', name: 'SendUserFile', input: { files: ['screenshots/settings-dark.png'], caption: 'The settings page in the **dark** theme' } }),
+      user([{ type: 'tool_result', tool_use_id: 's1', content: 'Sent 1 file' }], { toolUseResult: { attachments: [{ path: shot, size: 1234, isImage: true }], caption: 'The settings page in the **dark** theme' } }),
+      // One that failed, by the name it asked for, a character that turns text around written out as its card writes it.
+      claude({ type: 'tool_use', id: 's2', name: 'SendUserFile', input: { files: ['notes‮txt.sh'], caption: 'Not shown' } }),
+      user([{ type: 'tool_result', tool_use_id: 's2', content: 'Failed', is_error: true }]),
+      claude(text('Done.')),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).toContain(
+      '## Claude\n\nHere it is.\n\n- SendUserFile: `settings-dark.png`\n\nThe settings page in the **dark** theme\n\n- SendUserFile: `notes⟨U+202E⟩txt.sh`\n\nDone.\n',
+    );
+  });
+});
