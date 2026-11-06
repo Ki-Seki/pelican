@@ -118,6 +118,19 @@ describe('pinned sessions in the list', () => {
     expect(titles('Today')).toEqual(['Tidy the docs']);
   });
 
+  it('keep their earlier runs while working, as when idle, grouped by time or by project', async () => {
+    server = server.map((s) => (s.id === 'p3' ? { ...s, status: 'running' } : s));
+    list();
+    await screen.findByText('Pinned');
+    expect(groups().map((g) => g.heading)).toEqual(['Pinned', 'Active', 'Today']);
+    expect(titles('Pinned')).toEqual(['Fix the login test', 'Watch the dev server', 'Check the queue', 'Release notes']);
+    expect(within(pinnedSection()).getByRole('button', { name: '2 earlier' })).toBeTruthy();
+    expect(titles('Today')).toEqual(['Tidy the docs']);
+    act(() => setPrefs({ listGroup: 'project' }));
+    expect(screen.getByRole('button', { name: /^Pinned/ }).textContent).toBe('Pinned6');
+    expect(groups().map((g) => g.heading)).toEqual(['Pinned', 'app', 'docs']);
+  });
+
   it('lead the list grouped by project too, with each row’s project, which the rows under a project leave out', async () => {
     setPrefs({ listGroup: 'project' });
     list();

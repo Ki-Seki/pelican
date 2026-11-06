@@ -12,25 +12,23 @@ export const isActive = (s: SessionSummary): boolean => s.status !== 'idle' || (
 /**
  * Sessions in the same folder with the same title fold into the newest: a scheduled task's
  * runs, or the branches of a session named once, are one row with the earlier ones a tap
- * away. One that is active (working, waiting, or with background tasks) is never folded. One
- * that is pinned is never folded into another either: it leads a row of its own, at the top of
- * the list, and the earlier ones fold into it. Expects the newest first.
+ * away. One that is active (working, waiting, or with background tasks) is never folded, and
+ * takes none of the earlier ones. One that is pinned is never folded into another either: it
+ * leads a row of its own, at the top of the list, and the earlier ones fold into it, whatever
+ * its status. Expects the newest first.
  */
 export function fold(sessions: SessionSummary[]): Entry[] {
   const out: Entry[] = [];
   const byKey = new Map<string, Entry>();
   for (const s of sessions) {
-    if (isActive(s)) {
-      out.push(single(s));
-      continue;
-    }
+    const active = isActive(s);
     const entry = byKey.get(foldKey(s));
-    if (entry && !s.pinned) {
+    if (entry && !active && !s.pinned) {
       entry.earlier.push(s);
       continue;
     }
     const fresh = single(s);
-    byKey.set(foldKey(s), fresh);
+    if (!active || s.pinned) byKey.set(foldKey(s), fresh);
     out.push(fresh);
   }
   return out;
