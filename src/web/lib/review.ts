@@ -2,8 +2,8 @@ import { createContext, useContext } from 'react';
 
 import { setWaiting, useWaiting, waitingOf } from './drafts';
 import type { WaitingItem } from './quote';
+import { escapePhrases, escapeTags } from './harness';
 import { defuseMentions, dropPrivate, fenceFor, plainControls } from './sanitize';
-import { maskSecrets } from './secrets';
 
 /** One line of a unified diff, numbered in the old file, the new one, or both. */
 export type DiffLine =
@@ -84,20 +84,43 @@ const SPACE = String.raw`[\t\v\f\p{Zs}\p{Cf}\p{Default_Ignorable_Code_Point}\u28
 const HEADER_LIKE = new RegExp(String.raw`^${SPACE}*(?=In\b[^\n]*\bat lines? \d|Reply\b[^\n]*:${SPACE}*$|<!-- attach)`, 'gmu');
 const UNSEEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 
-/** A path as a comment names it: on one line, its backticks made quotes, an @ defused; `-` for none. */
-const commentPath = (path: string) => defuseMentions(plainControls(dropPrivate(path).replace(/[\r\n\u2028\u2029]+/g, ' ')).replace(/[`\uFF40]/g, "'")) || '-';
+/**
+ * A path as a comment names it, before Claude Code's tags in it are escaped: on one line, its
+ * backticks made quotes, an @ defused, a phrase of Claude Code's escaped; `-` for none.
+ */
+const commentPath = (path: string) => escapePhrases(defuseMentions(plainControls(dropPrivate(path).replace(/[\r\n\u2028\u2029]+/g, ' ')).replace(/[`\uFF40]/g, "'"))) || '-';
 
 /**
- * Code as a comment quotes it, Desktop's way: line breaks made plain, secrets masked, an @
- * defused, and a line that would read as a comment's header, a reply or an attach block marked
- * as a quote, so it stays code.
+ * Code as a comment quotes it, Desktop's way, before Claude Code's tags in it are escaped: line
+ * breaks made plain, an @ defused, a phrase of Claude Code's escaped, and a line that would read as
+ * a comment's header, a reply or an attach block marked as a quote, so it stays code. Its secrets
+ * are left as they are, as Desktop leaves them: Claude can read the file anyway.
  */
 function snippet(code: string): string {
   const lines = plainControls(dropPrivate(code).replace(/\r(?!\n)/g, '\n').replace(/\r\n/g, '\n')).split('\n').map((line) => {
     const seen = line.replace(UNSEEN, '');
     return seen.search(HEADER_LIKE) === 0 || seen.trim() === '' ? seen : line;
   });
-  return defuseMentions(maskSecrets(lines.join('\n'))).replace(HEADER_LIKE, '> ');
+  return escapePhrases(defuseMentions(lines.join('\n'))).replace(HEADER_LIKE, '> ');
+}
+
+/**
+ * Escapes Claude Code's tags in the comments of one message with Desktop's budget: at most 50,000
+ * checks in all and 4,000 for each text, and 65,536 characters of paths searched for escapes a
+ * backslash could undo. Past a budget, every `<` is escaped.
+ */
+function tagEscaper(): (text: string, code: boolean) => string {
+  let calls = 50_000;
+  let chars = 65_536;
+  return (text, code) => {
+    const fits = code || text.length <= chars;
+    if (!code && fits) chars -= text.length;
+    const budget = { callsLeft: fits ? Math.min(4000, calls) : 0 };
+    const start = budget.callsLeft;
+    const escaped = escapeTags(text, budget, code ? { headsOnly: true } : {});
+    calls -= start - Math.max(0, budget.callsLeft);
+    return escaped;
+  };
 }
 
 /** Blank lines in a note: never more than one in a row, outside its code. */
@@ -112,18 +135,22 @@ const languageOf = (path: string) => /\.([A-Za-z0-9+]{1,10})$/.exec(path)?.[1]?.
  * Comments as Claude Desktop sends them, before `text` (the rest of the message), three line
  * breaks apart: by file, each file's in line order, each "In `path` at line N:" (or "at lines
  * A-B", and " (before changes)" for removed lines), the code fenced in one backtick more than any
- * run in it, then what was said. One blank line between comments. `text` alone, trimmed, without any.
+ * run in it, then what was said. One blank line between comments. `text` alone, trimmed, without
+ * any. In the path and the code, Claude Code's own tags and phrases are escaped, so a file cannot
+ * speak as Claude Code.
  */
 export function commentsMessage(comments: readonly CommentBlock[], text = ''): string {
   const byFile = new Map<string, CommentBlock[]>();
   for (const comment of comments) byFile.set(comment.path, [...(byFile.get(comment.path) ?? []), comment]);
+  const escape = tagEscaper();
   const blocks: string[] = [];
   for (const [path, list] of byFile) {
+    const named = escape(commentPath(path), false);
     for (const comment of [...list].sort((a, b) => a.lines[0] - b.lines[0])) {
       const [first, last] = comment.lines;
-      const out = [`In \`${commentPath(path)}\` at ${first === last ? `line ${first}` : `lines ${first}-${last}`}${comment.removed ? ' (before changes)' : ''}:`];
+      const out = [`In \`${named}\` at ${first === last ? `line ${first}` : `lines ${first}-${last}`}${comment.removed ? ' (before changes)' : ''}:`];
       if (comment.code !== undefined) {
-        const code = snippet(comment.code);
+        const code = escape(snippet(comment.code), true);
         const fence = fenceFor(code);
         out.push(`${fence}${languageOf(path)}`, code, fence);
       }

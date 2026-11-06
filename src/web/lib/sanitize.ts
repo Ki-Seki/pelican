@@ -32,6 +32,9 @@ const WORD_GAP = /^[\s\u0085\u115F\u1160\u3164\uFFA0\u3002\u3001\uFF1F\uFF01]$/u
  */
 const UNSEEN = /^(?![\n\r\t])[\p{Cc}\p{Cf}\p{Co}\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB\uD800-\uDFFF\u2800\uFFFC\u{1D159}\u0890\u0891\u180F\u{13430}-\u{1343F}]$/u;
 
+/** Whether a character (one code point) is one Desktop does not count as seen. */
+export const isUnseen = (char: string): boolean => UNSEEN.test(char);
+
 /** The character (a whole code point) just before `at`. */
 function before(text: string, at: number): string {
   const low = text.charCodeAt(at - 1);
@@ -45,7 +48,7 @@ function startsWord(text: string, at: number): boolean {
   for (let n = at; n > 0;) {
     const char = before(text, n);
     if (WORD_GAP.test(char)) return true;
-    if (!UNSEEN.test(char)) return false;
+    if (!isUnseen(char)) return false;
     n -= char.length;
   }
   return true;
