@@ -27,10 +27,11 @@ import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
  * so a page that comes back gets the screen as it is, scrollback, a full-screen program such as
  * vim and the modes it set included, and goes on from there.
  *
- * Output goes out as binary frames: the first chunk at once (a keystroke's echo), what follows
- * gathered for a few milliseconds. Pages acknowledge what they have drawn; while one is far behind,
- * the PTY is paused, so the program waits as it would for a slow screen, Ctrl+C gets through at
- * once, and memory stays flat however fast the program prints and however slowly a phone reads.
+ * Output goes out as binary frames: the first chunk, and the first after a key (its echo), at
+ * once; what follows gathered for a few milliseconds. Pages acknowledge what they have drawn;
+ * while one is far behind, the PTY is paused, so the program waits as it would for a slow screen,
+ * Ctrl+C gets through at once, and memory stays flat however fast the program prints and however
+ * slowly a phone reads.
  */
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
@@ -172,6 +173,8 @@ class Term {
   /** Bytes the shell printed, and how many of them the copy has taken in. */
   private received = 0;
   private parsed = 0;
+  /** A key came from a page: what the shell prints next (its echo) goes out at once. */
+  private keyed = false;
   /** The PTY is paused (flow control), and looked at again while it is. */
   private paused = false;
   private watching?: NodeJS.Timeout;
@@ -217,7 +220,10 @@ class Term {
     });
     this.pending.push(bytes);
     this.pendingBytes += bytes.length;
-    if (this.pendingBytes >= TERMINAL_LIMITS.frame) {
+    // The first output goes at once, and the first after a key, so typing never waits; what
+    // follows is gathered for a few milliseconds, or up to a frame's size.
+    if (this.pendingBytes >= TERMINAL_LIMITS.frame || this.keyed) {
+      this.keyed = false;
       this.flush();
     } else if (!this.gathering) {
       this.flush();
@@ -398,6 +404,7 @@ class Term {
       if (this.exit || this.closed) return;
       const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
       this.pty.write(bytes);
+      this.keyed = true;
       this.lastActive = Date.now();
       // Enter may start a program that prints nothing for a while.
       if (bytes.includes(13)) this.lookAtProgramSoon();
