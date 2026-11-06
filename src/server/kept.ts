@@ -23,8 +23,10 @@ function queued(work: () => Promise<void>): Promise<void> {
 
 /**
  * Makes a change, keeping a session pinned or archived, never both: archiving unpins it, and a
- * pin brings an archived session back (Undo, after archiving a pinned one). Should the second
- * write fail, the first is taken back, so the session stays as it was.
+ * pin brings an archived session back (Undo, after archiving a pinned one). A session archived and
+ * pinned at once, as only a version without pins leaves one (0.4.0 archived a pinned session and
+ * kept its pin), was archived last: unarchived, it comes back unpinned. Should the second write
+ * fail, the first is taken back, so the session stays as it was.
  */
 export function keep(sessionId: string, change: Change): Promise<void> {
   const pinning = 'pinned' in change;
@@ -35,7 +37,8 @@ export function keep(sessionId: string, change: Change): Promise<void> {
     const was = (pinning ? pinned : archived).has(sessionId);
     const other = (pinning ? archived : pinned).has(sessionId);
     await set(sessionId, on);
-    if (!on || !other) return;
+    const both = !pinning && !on && was && other;
+    if (!other || (!on && !both)) return;
     try {
       await unset(sessionId, false);
     } catch (error) {

@@ -39,6 +39,18 @@ describe('a session’s pin and archive', () => {
     expect((await now())(1)).toEqual({ archived: false, pinned: false });
   });
 
+  it('leave a session unarchived from both at once unpinned, as a version without pins left it archived last', async () => {
+    const { keep, now } = await start();
+    // As 0.4.0 left one: pinned in 0.4.1, then archived there, its pin kept.
+    const { setPinned } = await import('../src/server/pinned');
+    const { setArchived } = await import('../src/server/archive');
+    await setPinned(id(5), true);
+    await setArchived(id(5), true);
+    expect((await now())(5)).toEqual({ archived: true, pinned: true });
+    await keep(id(5), { archived: false });
+    expect((await now())(5)).toEqual({ archived: false, pinned: false });
+  });
+
   it('change one at a time, so two at once still leave one or the other', async () => {
     const { keep, now } = await start();
     await Promise.all([keep(id(2), { archived: true }), keep(id(2), { pinned: true }), keep(id(3), { pinned: true }), keep(id(3), { archived: true })]);
