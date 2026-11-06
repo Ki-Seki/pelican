@@ -60,11 +60,19 @@ export function asText(text: string): string {
   return paragraphs.filter((lines) => lines.length > 0).map((lines) => lines.join('\\\n')).join('\n\n');
 }
 
-// A reply, read line by line as the CommonMark spec's own reader reads it (commonmark.js), then
-// the words of each block. Where readers part ways on a reply (that one, micromark under the
-// conversation's react-markdown, and markdown-it in VS Code's preview), it is written so that they
-// read it alike: indented code fenced, a footnote's or a link's definition as text, a blank line
-// before a list item they would read apart. test/export-markdown.test.ts tries thousands.
+// A reply, read line by line as the CommonMark spec's own reader reads it (commonmark.js), with
+// GitHub's footnotes and tables as the conversation's reader (micromark) has them, then the words
+// of each block. Where readers part ways on a reply (that one, micromark under the conversation's
+// react-markdown, and markdown-it in VS Code's preview), it is written so that they read it alike:
+// indented code fenced, a blank line before a list item they would read apart, a footnote's words
+// where only readers with footnotes take them for its words. test/export-markdown.test.ts tries
+// thousands.
+//
+// A link's definition and a footnote belong to the whole document they are in, and the export is
+// one document of many replies, as the conversation is not: there, each reply is read on its own.
+// So no definition is kept: a link that uses one is written with its address, as the reader reads
+// it, and the definition goes, as it shows nothing. A footnote is kept, as only a footnote reads as
+// one, under a label of the reply's own; a `[^` that calls none of the reply's is written escaped.
 
 /** A list item's marker: its kind, where it stands and how far in the item's lines go on. */
 interface ListData {
@@ -74,25 +82,103 @@ interface ListData {
   padding: number;
 }
 
-/** A line of a paragraph, of code or of HTML: where it goes in the reply written out, what stands before its words, and its words. */
+/** A line of a paragraph, a table, code or HTML: where it goes in the reply written out, what stands before its words, and its words. */
 interface Line {
   at: number;
   prefix: string;
   text: string;
   /** A lazy line, going on a paragraph whose containers it left. */
   lazy?: boolean;
+  /** A line going on a paragraph from 4 columns in or more, where no table's head starts. */
+  indented?: boolean;
+  /** A lazy line written inside the containers it left, whose start may start a block there: see goesOn. */
+  moved?: boolean;
+}
+
+/**
+ * A paragraph: how many of its lines are links' definitions once words are known to follow them,
+ * whether it became a heading, and the blank line that would stand before the item it starts
+ * where that cuts a paragraph short.
+ */
+interface Paragraph {
+  kind: 'paragraph';
+  lines: Line[];
+  taken?: number;
+  heading?: boolean;
+  cut?: string;
+}
+
+/**
+ * A footnote's definition, as GitHub's readers take one: its label in the export, where its marker
+ * and the blank line after it went in the reply written out, the line its words start on, the
+ * paragraph they start, if they do, and where it ended.
+ */
+interface Footnote {
+  kind: 'footnote';
+  label: string;
+  marker: number;
+  blank: number;
+  start: number;
+  first?: Paragraph;
+  end?: number;
+}
+
+/**
+ * A table, as GitHub's readers take one: its head, its delimiter row and its rows. Neither the
+ * spec's reader nor the reply's own blocks know tables, so what follows one is read as GitHub's
+ * readers read it: anything but a row starts a block, as after no paragraph.
+ */
+interface Table {
+  kind: 'table';
+  lines: Line[];
+}
+
+/** An item: its marker, whether it holds nothing yet, and where it ended in the reply written out. */
+interface Item {
+  kind: 'item';
+  data: ListData;
+  empty: boolean;
+  end?: number;
 }
 
 type Block =
   | { kind: 'quote' }
   | { kind: 'list'; data: ListData }
-  | { kind: 'item'; data: ListData; empty: boolean }
-  | { kind: 'paragraph'; lines: Line[] }
+  | Item
+  | Paragraph
+  | Table
   | { kind: 'fence'; char: string; length: number; offset: number }
   | { kind: 'code'; lines: Line[] }
-  | { kind: 'html'; type: number; lines: Line[] };
+  | { kind: 'html'; type: number; lines: Line[] }
+  | Footnote;
+
+/** A link's definition, as written: its address and its title, with what it is between; and the two as a link by reference to it is written with them, once worked out. */
+interface Definition {
+  destination: string;
+  title: string | undefined;
+  written?: string;
+}
+
+/** What a reply's words are read with: its own links' definitions and footnotes. */
+interface Context {
+  /** The reply's number in the export, which its footnotes' labels start with. */
+  id: number;
+  /** Each link's definition by its label as readers match one; the first of a label counts. */
+  definitions: Map<string, Definition>;
+  /** Each footnote's label in the export, by its label as readers match one. */
+  notes: Map<string, string>;
+  /**
+   * How much more than the reply the export may write for it: the addresses written in for links
+   * by reference, and the indentation a footnote's lines take. Past it, a link by reference is its
+   * words, and what is left of the reply text: only a reply made to grow the file gets there.
+   */
+  room: number;
+}
 
 const space = (c: string | undefined) => c === ' ' || c === '\t';
+
+/** A label as readers match it: case and runs of blanks aside (micromark's normalizeIdentifier). */
+const normalize = (label: string) => label.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '').toLowerCase().toUpperCase();
 
 /** Where a line is read from: an offset in it and the column there, tabs every 4 columns, a tab partly taken as spaces. */
 class Cursor {
@@ -171,7 +257,7 @@ class Cursor {
 }
 
 /** The characters a block can start with, but for an indented one. */
-const MAYBE_SPECIAL = /^[#`~*+_=<>0-9-]/;
+const MAYBE_SPECIAL = /^[#`~*+_=<>0-9[-]/;
 // Each tried where the line's next character is (lastIndex), never on a copy of the rest of it.
 const ATX = /#{1,6}(?:[ \t]+|$)/y;
 const FENCE_OPEN = /`{3,}(?!.*`)|~{3,}/y;
@@ -223,20 +309,30 @@ function thematicBreak(cur: Cursor, at: number): boolean {
   return marks >= 3;
 }
 
-/** A GitHub footnote's definition starting here (`[^label]:`): how long its marker is. */
-function footnoteMarker(text: string): number | undefined {
-  if (!text.startsWith('[^')) return undefined;
-  let i = 2;
-  let data = false;
-  for (; i < text.length && i < 1004; i += 1) {
+/**
+ * A GitHub footnote's label from the `[` at `at`, as GitHub's readers take one: `[^`, then no blank
+ * or `[` (but escaped), at most 999 characters, then `]`; where it ends and the label.
+ */
+function footnoteLabel(text: string, at: number, to = text.length): { end: number; label: string } | undefined {
+  if (text[at] !== '[' || text[at + 1] !== '^') return undefined;
+  let size = 0;
+  for (let i = at + 2; i < to; i += 1) {
     const c = text[i]!;
-    if (c === ']') break;
-    if (c === '[' || /\s/.test(c)) return undefined;
-    if (c === '\\' && /[[\\\]]/.test(text[i + 1] ?? '')) i += 1;
-    data = true;
+    if (size > 999 || c === '[' || c === ' ' || c === '\t' || c === '\n' || c === '\r') return undefined;
+    if (c === ']') return size > 0 ? { end: i + 1, label: text.slice(at + 2, i) } : undefined;
+    size += 1;
+    if (c === '\\' && /[[\\\]]/.test(text[i + 1] ?? '')) {
+      i += 1;
+      size += 1;
+    }
   }
-  if (!data || text[i] !== ']' || text[i + 1] !== ':') return undefined;
-  return i + 2;
+  return undefined;
+}
+
+/** A GitHub footnote's definition starting here (`[^label]:`): where its marker ends and its label. */
+function footnoteMarker(text: string, at = 0): { end: number; label: string } | undefined {
+  const label = footnoteLabel(text, at);
+  return label && text[label.end] === ':' ? { end: label.end + 1, label: label.label } : undefined;
 }
 
 /** A list item's marker where the line's next character is, as CommonMark reads one; the cursor then stands where its words start. */
@@ -278,24 +374,73 @@ function listMarker(cur: Cursor, container: string): ListData | undefined {
  */
 const DEEPEST = 48;
 
-/** What starts a line that goes on in these containers: a quote's `>`, an item's indentation. */
+/** What starts a line that goes on in these containers: a quote's `>`, an item's or a footnote's indentation. */
 const inside = (chain: readonly Block[]) => chain.map((block) => (block.kind === 'quote' ? '> '
-  : block.kind === 'item' ? ' '.repeat(block.data.offset + block.data.padding) : '')).join('');
+  : block.kind === 'item' ? ' '.repeat(block.data.offset + block.data.padding) : block.kind === 'footnote' ? '    ' : '')).join('');
 /** A blank line that stays in these containers. */
 const blankIn = (chain: readonly Block[]) => inside(chain).trimEnd();
+
+/** The column a line's character stands at, tabs every 4 columns. */
+function columnAt(line: string, at: number): number {
+  let column = 0;
+  for (let i = 0; i < at; i += 1) column += line[i] === '\t' ? 4 - (column % 4) : 1;
+  return column;
+}
+
+/**
+ * A line's rest from `from`, which stands at `column`, to go on another line: the tabs among the
+ * markers and blanks it starts with as the spaces they stand for there, so its blocks stay as they are.
+ */
+function moved(line: string, from: number, column: number): string {
+  let out = '';
+  let i = from;
+  for (; i < line.length && /[ \t>*+.)0-9-]/.test(line[i]!); i += 1) {
+    const width = line[i] === '\t' ? 4 - (column % 4) : 1;
+    out += line[i] === '\t' ? ' '.repeat(width) : line[i];
+    column += width;
+  }
+  return out + line.slice(i);
+}
+
+/**
+ * The words of a line that went on a paragraph, written where a block could start: as the first
+ * line of one, once links' definitions above it are gone, or inside the containers a lazy line
+ * left. What kept them from starting a block, their indentation or their place, is gone, so they
+ * start with `&#32;`, a space every reader takes as more of the paragraph, where anything at their
+ * start could start one. (A table's delimiter row, which would make a table of one, is escaped
+ * wherever it goes on a paragraph: see inlineParagraph.)
+ */
+const goesOn = (text: string) => (/^[#>*+=_`~<[0-9-]/.test(text) ? `&#32;${text}` : text);
+
+/** A run of `-`, which the spec's reader takes as a heading's underline where GitHub's readers take a rule. */
+const DASHES = /^-+[ \t]*$/;
 
 /**
  * A reply as the conversation shows it, kept to itself. Its headings sit two levels down, under
  * the speakers' (`===` and `---` ones as `###` and `####`), so none passes for one; its HTML is
  * text, as the conversation shows it, so none is a heading or hides what follows; a picture is a
- * link to it, as the conversation shows one, never loaded; and a code block it leaves open is
- * closed at its end. The rest is as written: what the reader takes as code stays code.
+ * link to it, as the conversation shows one, never loaded; a link by reference is written with its
+ * address and a footnote under a label of the reply's own (`id`, its number in the export), so
+ * nothing in it reaches another reply; a table is read as GitHub's readers read one, and what
+ * follows it too, so nothing after it passes for a heading of the speakers'; and a code block it
+ * leaves open is closed at its end. The rest is as written: what the reader takes as code stays
+ * code.
  */
-export function reply(text: string): string {
+export function reply(text: string, id = 1): string {
   const out: Array<string | undefined> = [];
   const open: Block[] = [];
+  const context: Context = { id, definitions: new Map(), notes: new Map(), room: 2 * text.length + 100_000 };
+  /** What is written once all the reply is read: a link's definition or a footnote may come after where it is used. */
+  const later: Array<() => void> = [];
+  const footnotes: Footnote[] = [];
+  /** Where paragraphs that were links' definitions alone, in no container, were. */
+  const gone: number[] = [];
+  /** Items whose first line held links' definitions alone, by where that line is: it is their marker alone now. */
+  const emptied: Array<{ at: number; item: Item }> = [];
   /** A blank line owed before the next line with something on it: after HTML written as text, which that line would otherwise join. */
   let owed: string | undefined;
+  /** Whether the blank line owed is after a table, where the block that ended it may not need one. */
+  let owedTable = false;
   /** Whether the line being read has nothing on it. */
   let empty = false;
   const emit = (line: string | undefined) => {
@@ -304,13 +449,68 @@ export function reply(text: string): string {
     out.push(line);
     return out.length - 1;
   };
+  /**
+   * The block a line starts after a table it ends: whether it keeps the blank line owed there. The
+   * spec's reader, which has no tables, reads the table as a paragraph, which the block would go
+   * on or make a heading of where it cannot cut one short; a block that can (a quote, a heading, a
+   * fence, a rule of `*` or `_`, an item that is not empty, numbered 1 if numbered) needs none, nor
+   * an item of a list the table was in, which all readers take as one; a blank line there would
+   * make the list loose.
+   */
+  const settle = (keep: boolean) => {
+    if (owedTable && !keep) owed = undefined;
+    owedTable = false;
+  };
+
+  /** A paragraph's lines, written once the reply is read: the links' definitions it starts with go. */
+  const paragraph = (block: Paragraph, chain: readonly Block[]) => {
+    const taken = definitions(block.lines, context);
+    const parent = chain.at(-1);
+    later.push(() => {
+      const { lines } = block;
+      const first = lines[0]!;
+      if (taken === lines.length) {
+        // What is left is the markers its first line opened; an item they open is empty now, and
+        // cuts no paragraph short: the blank line that stands before one instead.
+        const kept = first.prefix.trimEnd();
+        const marker = /(?:^|[ >])(?:[-+*]|\d{1,9}[.)])$/.test(kept);
+        out[first.at] = block.cut !== undefined && marker ? `${block.cut}\n${kept}` : kept || undefined;
+        if (!kept) gone.push(first.at);
+        if (marker && parent?.kind === 'item') emptied.push({ at: first.at, item: parent });
+        for (const line of lines.slice(1)) out[line.at] = undefined;
+        return;
+      }
+      const rest = lines.slice(taken);
+      if (taken > 0) {
+        // Its words start where its definitions did, in the containers they started.
+        for (const line of lines.slice(1, taken + 1)) out[line.at] = undefined;
+        rest[0] = { at: first.at, prefix: first.prefix, text: rest[0]!.text, moved: true };
+      }
+      const words = inlineParagraph(rest, context);
+      rest.forEach((line, i) => {
+        out[line.at] = line.prefix + words[i]!;
+      });
+    });
+  };
 
   const finalize = (block: Block, chain: readonly Block[]) => {
     if (block.kind === 'paragraph') {
-      const words = inlineParagraph(block.lines);
-      block.lines.forEach((line, i) => {
-        out[line.at] = line.prefix + words[i]!;
+      paragraph(block, chain);
+    } else if (block.kind === 'table') {
+      later.push(() => {
+        const words = inlineTable(block.lines, context);
+        block.lines.forEach((line, i) => {
+          out[line.at] = line.prefix + words[i]!;
+        });
       });
+      // What ends it but a blank line is a block that GitHub's readers start after it, and the
+      // spec's reader would take for more of the paragraph it reads the table as.
+      if (!empty) {
+        owed = blankIn(chain);
+        owedTable = true;
+      }
+    } else if (block.kind === 'item') {
+      block.end = out.length;
     } else if (block.kind === 'code') {
       // Indented code, fenced: readers differ on what indentation makes code, never on a fence. The
       // first line keeps the markers it started its containers with, and the fence takes them; the
@@ -329,22 +529,76 @@ export function reply(text: string): string {
         out[line.at] = line.prefix + words + (words && next?.text.trim() ? '\\' : '');
       });
       owed = blankIn(chain);
+    } else if (block.kind === 'footnote') {
+      block.end = out.length;
     }
   };
   const closeFrom = (from: number) => {
     while (open.length > from) finalize(open.pop()!, open);
   };
 
+  /**
+   * The reply written out: the words written last, and a footnote whose words are one line, as one
+   * is usually written, on its marker's line again, where a blank line or the reply's end follows
+   * it. Readers without footnotes take that line for a paragraph, which a line right after it
+   * would go on (`2)`) or make a heading of (`-`), where GitHub's readers start another block.
+   */
+  const written = () => {
+    for (const write of later) write();
+    // Of the blank lines a paragraph that is gone stood between, one stays.
+    if (gone.length > 0) {
+      const at = new Set(gone);
+      let before = -1;
+      let between = false;
+      for (let i = 0; i < out.length; i += 1) {
+        between ||= at.has(i);
+        if (out[i] === undefined) continue;
+        if (between && before >= 0 && out[before] === '' && out[i] === '') {
+          out[i] = undefined;
+        } else {
+          before = i;
+        }
+        between = false;
+      }
+    }
+    // An item that is its marker alone now goes on past the blank lines after it, as it did: its
+    // marker and its next line with words, with none between, as an item can start.
+    for (const { at, item } of emptied) {
+      let next = at + 1;
+      while (next < item.end! && (out[next] === undefined || /^[ \t>]*$/.test(out[next]!))) next += 1;
+      if (next < item.end!) for (let i = at + 1; i < next; i += 1) out[i] = undefined;
+    }
+    for (const footnote of footnotes) {
+      const first = footnote.first?.lines[0];
+      if (!first || footnote.first!.heading || footnote.first!.lines.length > 1) continue;
+      const words = out[first.at]?.slice(first.prefix.length);
+      const after = out.slice(first.at + 1, footnote.end);
+      const blank = footnote.end! >= out.length || after.some((line) => line !== undefined) || out[footnote.end!]?.trim() === '';
+      if (!words?.trim() || after.some((line) => line?.trim()) || !blank) continue;
+      out[footnote.marker] = `${out[footnote.marker]} ${words}`;
+      out[footnote.blank] = undefined;
+      out[first.at] = undefined;
+    }
+    const all = out.filter((line): line is string => line !== undefined).join('\n');
+    // Blank lines where definitions ended it are no end of the reply's own.
+    return /\n[ \t]*$/.test(text) ? all : all.replace(/(?:\n[ \t]*)+$/, '');
+  };
+
   const lines = text.split(/\r\n?|\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const raw = lines[index]!;
+  /** A footnote's words from its marker's line, read next as a line of their own. */
+  let carried: string | undefined;
+  // `index`: the next line of the reply; `read`: how many lines were read, footnotes' words among them.
+  for (let index = 0, read = 0; index < lines.length || carried !== undefined; read += 1) {
+    const raw = carried ?? lines[index++]!;
+    carried = undefined;
     empty = raw.trim() === '';
+    owedTable = false;
     const cur = new Cursor(raw);
     let matched = 0;
     let fenceClosed = false;
     for (; matched < open.length; matched += 1) {
       cur.findNextNonspace();
-      if (cur.edge === undefined && !['quote', 'list', 'item'].includes(open[matched]!.kind)) cur.edge = cur.column;
+      if (cur.edge === undefined && !['quote', 'list', 'item', 'footnote'].includes(open[matched]!.kind)) cur.edge = cur.column;
       const result = continues(open[matched]!, cur);
       if (result === 'no') break;
       if (result === 'closed') {
@@ -376,14 +630,26 @@ export function reply(text: string): string {
       open.push(block);
       container = open.length - 1;
     };
-    /** A block of one line, a heading or a rule, done with at once: the line, as it is written out. */
-    const single = (line: string) => {
+    /**
+     * A block of one line, a heading or a rule, done with at once: the line, as it is written out,
+     * or where it goes; `keep`, whether it keeps the blank line owed after a table it ends.
+     */
+    const single = (line: string | undefined, keep: boolean) => {
       closeUnmatched();
       while (open.length > 0 && !holds(open.at(-1)!, { kind: 'paragraph', lines: [] })) finalize(open.pop()!, open);
       const parent = open.at(-1);
       if (parent?.kind === 'item') parent.empty = false;
       container = open.length - 1;
-      emit(line);
+      settle(keep);
+      return emit(line);
+    };
+    /** Too deep, or grown too much, to read on: what was read is written out, and from this line on, text. */
+    const giveUp = () => {
+      const top = open[0];
+      closeFrom(0);
+      if (top?.kind === 'fence') out.push(top.char.repeat(top.length));
+      out.push('', asText([raw, ...lines.slice(index)].join('\n')));
+      return written();
     };
 
     let handled = false;
@@ -395,7 +661,11 @@ export function reply(text: string): string {
      * two read apart, the blank line is written, so that both read it as the spec's reader does.
      */
     let cutShort: string | undefined;
+    /** The same, for a paragraph the line starts in an item it starts. */
+    let owedFirst: string | undefined;
     let started = false;
+    /** Whether a footnote would take more room than the reply has left. */
+    let full = false;
     while (!['fence', 'code', 'html'].includes(kindOf(container)) && open.length <= DEEPEST) {
       cur.findNextNonspace();
       const c = raw[cur.next];
@@ -407,23 +677,64 @@ export function reply(text: string): string {
       const tip = open.length === 0 ? 'document' : open.at(-1)!.kind;
       let match: RegExpExecArray | null;
       if (!cur.indented && c === '>') {
-        if (!started && here === 'paragraph') cutShort = blankIn(open.slice(0, container));
+        if (!started && here === 'paragraph') owedFirst = cutShort = blankIn(open.slice(0, container));
         started = true;
         cur.advanceNextNonspace();
         cur.advance(1, false);
         if (space(raw[cur.offset])) cur.advance(1, true);
         cur.edge = cur.column;
         add({ kind: 'quote' });
+        settle(false);
         continue;
+      }
+      let marker: ReturnType<typeof footnoteMarker>;
+      if (!cur.indented && c === '[' && (marker = footnoteMarker(raw, cur.next))) {
+        // A footnote's definition: its marker, under the reply's label, on a line of its own, a
+        // blank line, then its words on the next line, inside it as all its lines after them are.
+        // GitHub's readers take them for its words alike; readers without footnotes take the marker
+        // for words and all that is in it for code, so none of it is a heading, HTML or a picture
+        // there, whatever it is in the footnote. Its words' line is written inside all it is in,
+        // which the room the reply has left pays for: a footnote in a footnote is 4 columns more.
+        const room = inside(open).length + 4;
+        if (room > context.room) {
+          full = true;
+          break;
+        }
+        context.room -= room;
+        const normalized = normalize(marker.label);
+        let label = context.notes.get(normalized);
+        if (label === undefined) context.notes.set(normalized, (label = `${context.id}-${context.notes.size + 1}`));
+        const footnote: Footnote = { kind: 'footnote', label, marker: -1, blank: -1, start: -1 };
+        add(footnote);
+        settle(true);
+        footnotes.push(footnote);
+        // Readers without footnotes would take it for more of the paragraph it cuts short.
+        if (tip === 'paragraph') emit(blankIn(open.slice(0, -1)));
+        footnote.marker = emit(`${spaces(raw.slice(0, cur.next))}[^${label}]:`);
+        footnote.blank = emit(blankIn(open));
+        let words = marker.end;
+        while (space(raw[words])) words += 1;
+        if (words < raw.length) {
+          carried = inside(open) + moved(raw, words, columnAt(raw, words));
+          footnote.start = read + 1;
+        }
+        handled = true;
+        break;
       }
       if (!cur.indented && c === '#' && (match = matchAt(ATX, raw, cur.next))) {
         const hashes = match[0].trimEnd().length;
-        single(`${spaces(raw.slice(0, cur.next))}${'#'.repeat(Math.min(6, hashes + 2))}${inlineLine(raw.slice(cur.next + hashes))}`);
+        const heading = `${spaces(raw.slice(0, cur.next))}${'#'.repeat(Math.min(6, hashes + 2))}`;
+        const words = raw.slice(cur.next + hashes);
+        const at = single(undefined, false);
+        later.push(() => {
+          out[at] = heading + inlineLine(words, context);
+        });
         handled = true;
         break;
       }
       if (!cur.indented && (c === '`' || c === '~') && (match = matchAt(FENCE_OPEN, raw, cur.next))) {
         add({ kind: 'fence', char: match[0][0]!, length: match[0].length, offset: cur.indent });
+        settle(false);
         // A `|` after the fence, escaped: markdown-it (VS Code's preview) takes a line with one
         // for a table's header when the next looks like its delimiter row, and no fence opens.
         const info = raw.slice(cur.next + match[0].length).replace(/\\*\|/g, (run) => (run.length % 2 === 1 ? `\\${run}` : run));
@@ -441,18 +752,29 @@ export function reply(text: string): string {
         }
       }
       if (!cur.indented && here === 'paragraph' && (c === '=' || c === '-') && (match = matchAt(SETEXT, raw, cur.next))) {
-        closeUnmatched();
-        const paragraph = open.pop() as Extract<Block, { kind: 'paragraph' }>;
-        container = open.length - 1;
-        const words = inlineParagraph(paragraph.lines).map((line) => line.trim()).join(' ');
-        const [first, ...others] = paragraph.lines;
-        out[first!.at] = `${first!.prefix}${match[0][0] === '=' ? '###' : '####'} ${words}`;
-        for (const line of others) out[line.at] = undefined;
-        handled = true;
-        break;
+        const above = open[container] as Paragraph;
+        // Under links' definitions alone, it makes no heading: `===` is words there, `---` a rule.
+        const taken = above.taken ?? definitions(above.lines);
+        if (taken < above.lines.length) {
+          closeUnmatched();
+          open.pop();
+          container = open.length - 1;
+          definitions(above.lines, context);
+          above.heading = true;
+          const [first, ...others] = above.lines;
+          for (const line of others) out[line.at] = undefined;
+          const level = match[0][0] === '=' ? '###' : '####';
+          const rest = above.lines.slice(taken);
+          later.push(() => {
+            out[first!.at] = `${first!.prefix}${level} ${inlineParagraph(rest, context).map((line) => line.trim()).join(' ')}`;
+          });
+          handled = true;
+          break;
+        }
+        above.taken = taken;
       }
       if (!cur.indented && thematicBreak(cur, cur.next)) {
-        single(spaces(raw.slice(0, cur.next)) + raw.slice(cur.next));
+        single(spaces(raw.slice(0, cur.next)) + raw.slice(cur.next), DASHES.test(raw.slice(cur.next)));
         handled = true;
         break;
       }
@@ -461,7 +783,7 @@ export function reply(text: string): string {
         const data = listMarker(cur, here);
         if (data) {
           const empty = cur.offset > cur.last;
-          if (!started && here === 'paragraph') cutShort = blankIn(open.slice(0, container));
+          if (!started && here === 'paragraph') owedFirst = cutShort = blankIn(open.slice(0, container));
           else if (cutShort !== undefined && ((data.ordered && !/^1[.)]/.test(marker)) || empty)) {
             emit(cutShort);
             cutShort = undefined;
@@ -472,6 +794,7 @@ export function reply(text: string): string {
           if (list?.kind !== 'list' || list.data.ordered !== data.ordered || list.data.char !== data.char) add({ kind: 'list', data });
           cur.edge = cur.column;
           add({ kind: 'item', data, empty: true });
+          settle(list?.kind !== 'list' && (empty || (data.ordered && !/^1[.)]/.test(marker))));
           continue;
         }
       }
@@ -479,28 +802,27 @@ export function reply(text: string): string {
         cur.code = cur.column;
         cur.advance(4, true);
         add({ kind: 'code', lines: [] });
+        settle(false);
         break;
       }
       cur.advanceNextNonspace();
       break;
     }
+    if (full || open.length > DEEPEST) return giveUp();
     if (handled) continue;
-    if (open.length > DEEPEST) {
-      // Too deep to read on: what was read is written out, and from this line on, text.
-      const top = open[0];
-      closeFrom(0);
-      if (top?.kind === 'fence') out.push(top.char.repeat(top.length));
-      out.push('', asText(lines.slice(index).join('\n')));
-      return out.filter((line): line is string => line !== undefined).join('\n');
-    }
 
     const tip = open.at(-1);
     if (!closed && !cur.blank && tip?.kind === 'paragraph') {
       // A lazy line: it goes on the paragraph, whatever containers it left. Indented 4 columns or
       // more, markdown-it (VS Code's preview) takes it for code that ends them: a space written as
-      // `&#32;` starts it instead, which every reader takes as more of the paragraph.
+      // `&#32;` starts it instead, which every reader takes as more of the paragraph. In a
+      // footnote, it is written inside the containers up to the footnote, as the footnote's lines
+      // are, where readers without footnotes take it for code with them.
       const deep = cur.column - cur.edge >= 4;
-      tip.lines.push({ at: emit(undefined), prefix: deep ? `${spaces(cut(raw, cur.edge)[0])}&#32;` : spaces(raw.slice(0, lineStart(cur))), text: raw.slice(lineStart(cur)), lazy: true });
+      const note = open.findIndex((block) => block.kind === 'footnote');
+      const prefix = note >= 0 ? inside(open.slice(0, note + 1)) : deep ? `${spaces(cut(raw, cur.edge)[0])}&#32;` : spaces(raw.slice(0, lineStart(cur)));
+      if (note >= 0 && (context.room -= prefix.length) < 0) return giveUp();
+      tip.lines.push({ at: emit(undefined), prefix, text: raw.slice(lineStart(cur)), lazy: true, indented: deep, moved: note >= 0 });
       continue;
     }
     closeUnmatched();
@@ -516,12 +838,36 @@ export function reply(text: string): string {
         finalize(block, open);
       }
     } else if (block?.kind === 'paragraph') {
+      const line: Line = { at: emit(undefined), prefix: spaces(raw.slice(0, lineStart(cur))), text: raw.slice(lineStart(cur)), indented: cur.indent >= 4 };
+      const head = block.lines.at(-1)!;
+      const cells = line.indented ? undefined : delimiterCells(line.text);
+      if (cells !== undefined && !head.indented && headCells(head.text) === cells) {
+        // The paragraph's last line is a table's head, as GitHub's readers take it: the table cuts
+        // the paragraph short. One read lazily is written inside the table's containers, as it is
+        // read: lazy, it would go on nothing once links' definitions alone above it go, and
+        // markdown-it (VS Code's preview) takes a lazy one for a table outside them, the lines
+        // after it in the item for blocks of their own. But under words that stay, one like a
+        // heading's underline (`===`) stays as it is, where it would make a heading of them.
+        block.lines.pop();
+        block.taken = undefined;
+        const chain = open.slice(0, container);
+        const under = definitions(block.lines) < block.lines.length && /^(?:=+|-+)[ \t]*$/.test(head.text);
+        const top = head.lazy && !under ? { at: head.at, prefix: inside(chain), text: head.text } : head;
+        open[container] = { kind: 'table', lines: [top, line] };
+        if (block.lines.length > 0) paragraph(block, chain);
+      } else {
+        block.lines.push(line);
+      }
+    } else if (block?.kind === 'table') {
       block.lines.push({ at: emit(undefined), prefix: spaces(raw.slice(0, lineStart(cur))), text: raw.slice(lineStart(cur)) });
     } else if (!cur.blank) {
       cur.advanceNextNonspace();
-      const paragraph: Block = { kind: 'paragraph', lines: [] };
-      add(paragraph);
-      paragraph.lines.push({ at: emit(undefined), prefix: spaces(raw.slice(0, lineStart(cur))), text: raw.slice(lineStart(cur)) });
+      const created: Paragraph = { kind: 'paragraph', lines: [] };
+      add(created);
+      const parent = open.at(-2);
+      if (parent?.kind === 'footnote' && parent.start === read) parent.first = created;
+      if (parent?.kind === 'item' && owedFirst !== undefined) created.cut = owedFirst;
+      created.lines.push({ at: emit(undefined), prefix: spaces(raw.slice(0, lineStart(cur))), text: raw.slice(lineStart(cur)) });
     } else {
       emit(spaces(raw));
     }
@@ -530,7 +876,7 @@ export function reply(text: string): string {
   const last = open[0];
   closeFrom(0);
   if (last?.kind === 'fence') out.push(last.char.repeat(last.length));
-  return out.filter((line): line is string => line !== undefined).join('\n');
+  return written();
 }
 
 /** A line cut at a column: what comes before it, and after, a tab across it as the spaces it stands for on each side. */
@@ -566,7 +912,7 @@ const lineStart = (cur: Cursor) => cur.offset + (cur.partial ? 1 : 0);
 function holds(parent: Block, child: Block): boolean {
   if (parent.kind === 'list') return child.kind === 'item';
   if (child.kind === 'item') return false;
-  return parent.kind === 'quote' || parent.kind === 'item';
+  return parent.kind === 'quote' || parent.kind === 'item' || parent.kind === 'footnote';
 }
 
 /** Whether an open block goes on with this line, as CommonMark reads it: `closed` when the line is the fence that ends it. */
@@ -589,7 +935,17 @@ function continues(block: Block, cur: Cursor): 'yes' | 'no' | 'closed' {
       if (cur.indent < block.data.offset + block.data.padding) return 'no';
       cur.advance(block.data.offset + block.data.padding, true);
       return 'yes';
+    case 'footnote':
+      // As GitHub's readers have it: a blank line, or one indented 4 columns.
+      if (cur.blank) {
+        cur.advanceNextNonspace();
+        return 'yes';
+      }
+      if (cur.indent < 4) return 'no';
+      cur.advance(4, true);
+      return 'yes';
     case 'paragraph':
+    case 'table':
       return cur.blank ? 'no' : 'yes';
     case 'fence': {
       const close = cur.indent <= 3 && cur.line[cur.next] === block.char ? matchAt(FENCE_CLOSE, cur.line, cur.next) : null;
@@ -608,62 +964,546 @@ function continues(block: Block, cur: Cursor): 'yes' | 'no' | 'closed' {
   }
 }
 
+// Links' definitions, as micromark (the conversation's reader) reads them: at the start of a
+// paragraph, one after another, each to the end of a line.
+
+/** Where a `[…]` label from the `[` at `at` ends, past its `]`, as a reference's or a definition's: undefined if it is none. */
+function labelEnd(text: string, at: number, to = text.length): number | undefined {
+  let size = 0;
+  let seen = false;
+  for (let i = at + 1; i < to; i += 1) {
+    const c = text[i]!;
+    if (c === '[') return undefined;
+    if (c === ']') return seen ? i + 1 : undefined;
+    if (c === '\n') continue;
+    if (++size > 999) return undefined;
+    if (!space(c)) seen = true;
+    if (c === '\\' && /[[\\\]]/.test(text[i + 1] ?? '')) {
+      i += 1;
+      size += 1;
+    }
+  }
+  return undefined;
+}
+
+/** Past the blanks from `at`; `lines` with line endings among them. */
+function blanksFrom(text: string, at: number, lines: boolean): number {
+  let i = at;
+  while (space(text[i]) || (lines && text[i] === '\n')) i += 1;
+  return i;
+}
+
+/**
+ * Where a link's address from `at` ends: in `<…>`, or bare, its parentheses balanced (no deeper
+ * than `deepest`); `far` where it reaches `to` and `to` is not `end`, where the words end.
+ */
+function destinationEnd(text: string, at: number, deepest: number, to = text.length, end = to): number | 'far' | undefined {
+  const far = to < end ? 'far' : undefined;
+  let i = at;
+  if (text[i] === '<') {
+    for (i += 1; i < to; i += 1) {
+      const c = text[i];
+      if (c === '>') return i + 1;
+      if (c === '<' || c === '\n') return undefined;
+      if (c === '\\' && /[<>\\]/.test(text[i + 1] ?? '')) i += 1;
+    }
+    return far;
+  }
+  let depth = 0;
+  for (; i < to; i += 1) {
+    const c = text[i]!;
+    if (depth === 0 && (c === ')' || c === ' ' || c === '\t' || c === '\n')) return i > at ? i : undefined;
+    if (c === '(') {
+      if (depth >= deepest) return undefined;
+      depth += 1;
+    } else if (c === ')') {
+      depth -= 1;
+    } else if (c <= ' ' || c === '\x7f') {
+      return undefined;
+    } else if (c === '\\' && /[()\\]/.test(text[i + 1] ?? '')) {
+      i += 1;
+    }
+  }
+  return far ?? (depth === 0 && i > at ? i : undefined);
+}
+
+/** Where a link's title from its `"`, `'` or `(` at `at` ends, past its closing one. */
+function titleEnd(text: string, at: number, to = text.length): number | undefined {
+  const close = text[at] === '(' ? ')' : text[at];
+  for (let i = at + 1; i < to; i += 1) {
+    if (text[i] === close) return i + 1;
+    if (text[i] === '\\' && (text[i + 1] === close || text[i + 1] === '\\')) i += 1;
+  }
+  return undefined;
+}
+
+/** A link's definition from `at`, the start of a line: where it ends (that line's end), its label and what it defines. */
+function definitionAt(text: string, at: number): { end: number; label: string; definition: Definition } | undefined {
+  const close = text[at] === '[' ? labelEnd(text, at) : undefined;
+  if (close === undefined || text[close] !== ':') return undefined;
+  const start = blanksFrom(text, close + 1, true);
+  const after = destinationEnd(text, start, Infinity);
+  if (typeof after !== 'number') return undefined;
+  const label = normalize(text.slice(at + 1, close - 1));
+  const destination = text.slice(start, after);
+  const title = blanksFrom(text, after, true);
+  if (title > after && /["'(]/.test(text[title] ?? '')) {
+    const end = titleEnd(text, title);
+    const line = end === undefined ? undefined : blanksFrom(text, end, false);
+    if (line !== undefined && (line === text.length || text[line] === '\n')) return { end: line, label, definition: { destination, title: text.slice(title, end) } };
+  }
+  const line = blanksFrom(text, after, false);
+  return line === text.length || text[line] === '\n' ? { end: line, label, definition: { destination, title: undefined } } : undefined;
+}
+
+/**
+ * How many of a paragraph's lines are links' definitions, from its first; with a context, each is
+ * kept there for the reply's words, the first of a label counting.
+ */
+function definitions(lines: readonly Line[], context?: Context): number {
+  if (!lines[0]?.text.startsWith('[')) return 0;
+  const text = lines.map((line) => line.text).join('\n');
+  let taken = 0;
+  let at = 0;
+  for (;;) {
+    const found = definitionAt(text, at);
+    if (!found) return taken;
+    if (context && !context.definitions.has(found.label)) context.definitions.set(found.label, found.definition);
+    for (; at <= found.end && taken < lines.length; taken += 1) at += lines[taken]!.text.length + 1;
+    if (taken >= lines.length) return taken;
+  }
+}
+
 // A reply's words: what the reader takes as code stays as written; elsewhere, HTML is text and a
 // picture a link. Where the reader's code cannot be told for sure (a backquote in a link's
-// address, a table's cell or a bare link, which the reader may take whole), none is taken as
-// code from there on: the HTML in it is text then, which can only show as more.
+// address or a bare link, which the reader may take whole), none is taken as code from there on:
+// the HTML in it is text then, which can only show as more. A table's cells are read apart, as
+// the reader reads them.
 
 const ASCII_PUNCTUATION = /[!-\/:-@[-`{-~]/;
 const AUTOLINK = /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>\x00-\x1f]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/y;
+/**
+ * A `<` some reader may take for HTML: a tag's name and what may go on a tag, a closing tag, a
+ * comment, a declaration or an instruction. Any other is text in all of them, as written.
+ */
+const HTML_START = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s>]|\/>|$)|\/[A-Za-z]|[!?])/y;
 const BARE_START = /https?:\/\/|www\./iy;
-const SIMPLE_PICTURE = /!\[([^[\]\\`\n]{0,1000})\]\(/y;
-/** A line that starts a link's reference definition, which the reader takes whole. */
-const DEFINITION = /^\[(?:[^\]\\]|\\.){0,999}\]:/;
-/** How many links' addresses a paragraph is read for before none of its code is taken for sure: each is read on, up to 2,000 characters. */
-const LOOKS = 20;
+/** A picture's words that are written as the words of a link to it: no brackets, backslashes, backquotes or line breaks. */
+const SIMPLE_WORDS = /^[^[\]\\`\n]{0,1000}$/;
+/** A line that starts a link's reference definition, which the reader takes whole: no `[` or `]` in its label but escaped. */
+const DEFINITION = /^\[(?:[^[\]\\]|\\.){0,999}\]:/;
+/** A line some reader may take for a table's delimiter row, if a `-` is in it: `|`, `:`, `-` and blanks alone. */
+const DELIMITER_LIKE = /^[ \t]*[|:-][ \t|:-]*$/;
 
 /**
  * The words of a paragraph's lines, each line's as it is written out. A line that defines a
  * footnote, as GitHub's extensions have it, starts with its `[` escaped: readers without them take
  * it for a paragraph, and read what it holds otherwise, so it is written as one for all of them.
  */
-function inlineParagraph(lines: readonly Line[]): string[] {
-  const table = lines.some((line) => delimiterRow(line.text));
+function inlineParagraph(lines: readonly Line[], context: Context): string[] {
   // A `>` that starts a line here is text (the line goes on a paragraph); markdown-it (VS Code's
   // preview) still takes one with any indentation for a quote that goes on: escaped, it is text
-  // there too. A paragraph that starts as a link's reference definition is text too: readers part
-  // ways on where one ends and what the lines after it are.
-  const text = lines.map((line, i) => (footnoteMarker(line.text) !== undefined || line.text.startsWith('>') || (i === 0 && DEFINITION.test(line.text))
-    // A lazy line can make no table, but markdown-it takes one that looks like a table's delimiter row for one.
-    || (line.lazy && delimiterRow(line.text)) ? `\\${line.text}` : line.text)).join('\n');
+  // there too. And a line past the first that looks like a table's delimiter row: where it was,
+  // the line above it headed no table (it was indented, or lazy, or some reader takes the row for
+  // none), but where it is written it could.
+  const written = lines.map(({ text, moved }, i) => {
+    const words = moved ? goesOn(text) : text;
+    return footnoteMarker(words) !== undefined || words.startsWith('>') || (i > 0 && DELIMITER_LIKE.test(words) && words.includes('-')) ? `\\${words}` : words;
+  });
   // A lazy line that starts with a tag, which the spec's reader takes as more of the paragraph,
   // micromark (the conversation's reader) may take as HTML of its own: code reaching into it is not sure.
   const breaks: number[] = [];
   let at = 0;
-  for (const line of lines) {
-    if (line.lazy && line.text.startsWith('<')) breaks.push(at);
-    at += line.text.length + 1;
-  }
-  return inline(text, { table, sure: true, breaks }).split('\n');
+  lines.forEach((line, i) => {
+    if (line.lazy && written[i]!.startsWith('<')) breaks.push(at);
+    at += written[i]!.length + 1;
+  });
+  const words = inline(written.join('\n'), { sure: true, breaks, context }).split('\n');
+  // A paragraph that starts, as written, as a link's reference definition does is text: no
+  // reader defines a link where the reply's reader did not, as readers part ways on where one
+  // ends. Its `[` opens no link there (one would be written with its address).
+  if (DEFINITION.test(words[0]!)) words[0] = `\\${words[0]}`;
+  return words;
 }
 
 /** The words of a heading's line. */
-const inlineLine = (text: string) => inline(text, { table: false, sure: true });
+const inlineLine = (text: string, context: Context) => inline(text, { sure: true, context });
 
-/** A table's delimiter row, which makes the paragraph's line above it a table's header: its cells split at `|`, code or not. */
-function delimiterRow(text: string): boolean {
-  if (!text.includes('|')) return false;
-  const cells = text.trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
-  return cells.every((cell) => /^[ \t]*:?-+:?[ \t]*$/.test(cell));
+/**
+ * A line as a table's delimiter row, as micromark (the conversation's reader) takes one: its cells
+ * of `-`, a `:` at either end of one, between `|`s, with a `|` or a `:` in it; how many cells, or
+ * undefined if it is none.
+ */
+function delimiterCells(text: string): number | undefined {
+  let cells = 0;
+  let marked = false;
+  for (let i = 0; ;) {
+    if (text[i] === '|') {
+      marked = true;
+      i += 1;
+      while (space(text[i])) i += 1;
+      if (i >= text.length) break;
+    }
+    if (text[i] === ':') {
+      marked = true;
+      i += 1;
+    }
+    if (text[i] !== '-') return undefined;
+    while (text[i] === '-') i += 1;
+    cells += 1;
+    if (text[i] === ':') {
+      marked = true;
+      i += 1;
+    }
+    while (space(text[i])) i += 1;
+    if (i >= text.length) break;
+    if (text[i] !== '|') return undefined;
+  }
+  return marked ? cells : undefined;
 }
 
 /**
- * A paragraph's or a heading's words, HTML as text and pictures as links, outside what the reader
- * surely takes as code. `table`: the paragraph may be a table, whose cells split code at `|`;
- * `sure`: whether code can be told there at all.
+ * A line as a table's head, as micromark takes one: its cells, at each `|` (but `\|`), the outer
+ * ones aside; how many, or undefined if it can head none (a `|` alone).
  */
-function inline(text: string, { table, sure, breaks = [] }: { table: boolean; sure: boolean; breaks?: readonly number[] }): string {
+function headCells(text: string): number | undefined {
+  let marks = text[0] === '|' ? 0 : 1;
+  let cells = 0;
+  let open = text[0] !== '|';
+  for (let i = 0; i < text.length;) {
+    const c = text[i]!;
+    if (space(c)) {
+      i += 1;
+      continue;
+    }
+    marks += 1;
+    if (open) {
+      open = false;
+      cells += 1;
+    }
+    if (c === '|') {
+      open = true;
+      i += 1;
+      continue;
+    }
+    while (i < text.length && text[i] !== '|' && !space(text[i])) i += text[i] === '\\' && (text[i + 1] === '\\' || text[i + 1] === '|') ? 2 : 1;
+  }
+  return marks > 1 ? cells : undefined;
+}
+
+/**
+ * A table's lines, as written out: each row's cells read apart, as the reader reads them, and its
+ * delimiter row as it is. The spec's reader, which has no tables, reads the table as a paragraph:
+ * a row like a heading's underline (`===`, `--`) would make a heading of it there, and its head,
+ * where it starts that paragraph, like a link's definition would define one; their first
+ * character is escaped. A head on an item's first line starts with a `|`, as GitHub's readers
+ * read it alike: markdown-it (VS Code's preview) tries a table before an item, so with the marker
+ * as much a cell of it as the words after, it takes the whole line for a table's head, and what
+ * follows in the item for blocks of their own, a code block that swallows the turns after it.
+ */
+function inlineTable(lines: readonly Line[], context: Context): string[] {
+  return lines.map((line, i) => {
+    if (i === 1) return line.text;
+    const words = inlineRow(line.moved ? goesOn(line.text) : line.text, context);
+    if (i === 0 && !words.startsWith('|') && /(?:^|[ >])(?:[-+*]|\d{1,9}[.)])[ \t]*$/.test(line.prefix)) return `| ${words}`;
+    return (i === 0 && DEFINITION.test(words)) || (i > 1 && /^(?:=+|-+)[ \t]*$/.test(words)) ? `\\${words}` : words;
+  });
+}
+
+/** A table row's words: each cell's words read apart, as the reader reads them, at each `|` but an escaped one. */
+function inlineRow(text: string, context: Context): string {
+  let out = '';
+  let start = 0;
+  for (let i = 0; i <= text.length; i += 1) {
+    if (text[i] === '\\' && (text[i + 1] === '\\' || text[i + 1] === '|')) {
+      i += 1;
+    } else if (i === text.length || text[i] === '|') {
+      out += inline(text.slice(start, i), { sure: true, context }) + (text[i] ?? '');
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+/** Whether the character at `at` is escaped: an odd run of backslashes before it. */
+function escapedAt(text: string, at: number): boolean {
+  let run = 0;
+  while (at - run - 1 >= 0 && text[at - run - 1] === '\\') run += 1;
+  return run % 2 === 1;
+}
+
+// What a paragraph's words make, read as micromark (the conversation's reader) reads them in the
+// export, where its HTML is text: its links and pictures, those by reference with the reply's
+// definitions, and its footnote calls. Each is read on, from a `]`, up to 2,000 characters, and a
+// paragraph's words for no more than about twice their length: past that, nothing more is read for
+// a link, and a picture is not written as one.
+
+/** A link or a picture read: where its `]` is, where it ends, and the definition one by reference uses. */
+interface Link {
+  picture: boolean;
+  close: number;
+  end: number;
+  definition?: Definition;
+  /** An address in `<…>`: where its `<` and `>` are. */
+  pointed?: [number, number];
+  /** A picture in the words of a link or another picture. */
+  within?: boolean;
+}
+
+interface Reading {
+  /** Each link and picture, by where it opens: a link's `[`, a picture's `!`. */
+  links: Map<number, Link>;
+  /** Each footnote call, by its `[`: where it ends, and its label. */
+  calls: Map<number, { end: number; label: string }>;
+  /**
+   * Each `^` that starts a label (a `[`, or a `[` and blanks, before it) but calls none of the
+   * reply's footnotes: escaped, it calls none in the export either, nor matches, in readers
+   * without footnotes, another reply's footnote they take for a link's definition.
+   */
+  carets: Set<number>;
+  /** Each `<` that starts a link's address in `<…>`, and where its `>` is. */
+  addresses: Map<number, number>;
+}
+
+/** A paragraph's words read: its links, pictures and footnote calls. */
+function readInline(text: string, context: Context): Reading {
+  const reading: Reading = { links: new Map(), calls: new Map(), carets: new Set(), addresses: new Map() };
+  // No `[`: no link, picture or call.
+  if (text.includes('[')) readSpan(text, 0, text.length, context, reading);
+  return reading;
+}
+
+/** Where the `^` a label starts with is, from its `[` at `at`, past blanks, as readers match labels (blanks aside). */
+function caretAt(text: string, at: number, to: number): number | undefined {
+  let i = at + 1;
+  while (i < to && /\s/.test(text[i]!)) i += 1;
+  return i < to && text[i] === '^' ? i : undefined;
+}
+
+/** Whether a link by reference fits in the room the reply has left: its address and title are written in at each. */
+function fits(definition: Definition, context: Context): boolean {
+  const size = (definition.written ??= resolved(definition)).length;
+  if (size > context.room) return false;
+  context.room -= size;
+  return true;
+}
+
+/**
+ * Where an inline link's address and title end, past their `)`, from the `(` at `at`, as micromark
+ * reads them, and where its address is: `far` past 2,000 characters; and how far it was read.
+ */
+function resourceEnd(text: string, at: number, to: number): { found?: { end: number; address: [number, number] }; far?: boolean; read: number } {
+  const limit = Math.min(to, at + 2000);
+  const far = { far: limit < to, read: limit - at };
+  let i = blanksFrom(text, at + 1, true);
+  if (i >= limit) return far;
+  if (text[i] === ')') return { found: { end: i + 1, address: [i, i] }, read: i + 1 - at };
+  const start = i;
+  if (text[i] !== '<' && (text[i]! <= ' ' || text[i] === '\x7f')) return { read: i - at };
+  const after = destinationEnd(text, i, 32, limit, to);
+  if (after === 'far') return far;
+  if (after === undefined) return { read: limit - at };
+  i = blanksFrom(text, after, true);
+  if (i > after && /["'(]/.test(text[i] ?? '')) {
+    const end = titleEnd(text, i, limit);
+    if (end === undefined) return far;
+    i = blanksFrom(text, end, true);
+  }
+  if (i >= limit) return far;
+  return text[i] === ')' ? { found: { end: i + 1, address: [start, after] }, read: i + 1 - at } : { read: i - at };
+}
+
+/** The words from `from` to `to` read. */
+function readSpan(text: string, from: number, to: number, context: Context, reading: Reading): void {
+  // The runs of backquotes of each length, for the run that ends code: the next of the same length.
+  const runs = new Map<number, number[]>();
+  for (let i = from; i < to;) {
+    if (text[i] !== '`') {
+      i += 1;
+      continue;
+    }
+    let length = 1;
+    while (i + length < to && text[i + length] === '`') length += 1;
+    const list = runs.get(length) ?? [];
+    list.push(i);
+    runs.set(length, list);
+    i += length;
+  }
+  const seen = new Map<number, number>();
+  const closer = (at: number, length: number) => {
+    const list = runs.get(length);
+    if (!list) return undefined;
+    let k = seen.get(length) ?? 0;
+    while (k < list.length && list[k]! < at) k += 1;
+    seen.set(length, k);
+    return list[k];
+  };
+  // Where the last `[` or `]` before each place is, escaped ones aside: a label that holds one can be no definition's.
+  const bracket = new Int32Array(to - from + 1).fill(-1);
+  for (let i = from, last = -1, escape = false; i < to; i += 1) {
+    bracket[i - from] = last;
+    if (escape) escape = false;
+    else if (text[i] === '\\') escape = true;
+    else if (text[i] === '[' || text[i] === ']') last = i;
+  }
+  const stack: Array<{ at: number; picture: boolean; active: boolean; balanced: boolean }> = [];
+  /** The links' `[`s that may still open one: a link found makes them all open none. */
+  const active: Array<{ active: boolean }> = [];
+  /** The pictures read, not yet known to be in a link's or a picture's words. */
+  const pictures: Link[] = [];
+  const pictureAt: number[] = [];
+  let budget = 2 * (to - from) + 4000;
+  for (let i = from; i < to;) {
+    const c = text[i]!;
+    if (c === '\\') {
+      i += i + 1 < to && ASCII_PUNCTUATION.test(text[i + 1]!) ? 2 : 1;
+    } else if (c === '`') {
+      let length = 1;
+      while (i + length < to && text[i + length] === '`') length += 1;
+      const end = closer(i + length, length);
+      i = end === undefined ? i + length : end + length;
+    } else if (c === '<') {
+      const link = matchAt(AUTOLINK, text, i);
+      i += link && i + link[0].length <= to ? link[0].length : 1;
+    } else if (c === '!' && text[i + 1] === '[' && i + 1 < to) {
+      const caret = caretAt(text, i + 1, to);
+      if (caret !== undefined) reading.carets.add(caret);
+      stack.push({ at: i, picture: true, active: true, balanced: false });
+      i += 2;
+    } else if (c === '[') {
+      const call = footnoteLabel(text, i, to);
+      if (call && context.notes.has(normalize(call.label))) {
+        reading.calls.set(i, call);
+        i = call.end;
+        continue;
+      }
+      const caret = caretAt(text, i, to);
+      if (caret !== undefined) reading.carets.add(caret);
+      const opener = { at: i, picture: false, active: true, balanced: false };
+      stack.push(opener);
+      active.push(opener);
+      i += 1;
+    } else if (c === ']') {
+      while (stack.length > 0 && stack.at(-1)!.balanced) stack.pop();
+      const opener = stack.at(-1);
+      if (!opener || budget <= 0) {
+        i += 1;
+        continue;
+      }
+      if (!opener.active) {
+        opener.balanced = true;
+        i += 1;
+        continue;
+      }
+      const start = opener.at + (opener.picture ? 2 : 1);
+      // Its words as a label, if they can be one: no bracket in them, and at most 999 characters.
+      const words = bracket[i - from] === opener.at + (opener.picture ? 1 : 0) && i - start <= 1000 ? normalize(text.slice(start, i)) : undefined;
+      const defined = words === undefined ? undefined : context.definitions.get(words);
+      let link: Link | undefined;
+      if (text[i + 1] === '(' && i + 1 < to) {
+        const { found, far, read } = resourceEnd(text, i + 1, to);
+        budget -= read;
+        if (far) budget = 0;
+        else if (found) link = { picture: opener.picture, close: i, end: found.end, ...(text[found.address[0]] === '<' ? { pointed: [found.address[0], found.address[1] - 1] as [number, number] } : {}) };
+        else if (defined) link = { picture: opener.picture, close: i, end: i + 1, definition: defined };
+      } else if (text[i + 1] === '[' && i + 1 < to) {
+        const end = labelEnd(text, i + 1, to);
+        budget -= end === undefined ? 1 : end - i;
+        const full = end === undefined ? undefined : context.definitions.get(normalize(text.slice(i + 2, end - 1)));
+        if (full) link = { picture: opener.picture, close: i, end: end!, definition: full };
+        else if (defined && text[i + 2] === ']') link = { picture: opener.picture, close: i, end: i + 3, definition: defined };
+      } else if (defined) {
+        link = { picture: opener.picture, close: i, end: i + 1, definition: defined };
+      }
+      // Past the room the reply has, a link by reference is read as its words, as with no definition.
+      if (link?.definition && !fits(link.definition, context)) link = undefined;
+      if (link) {
+        stack.pop();
+        reading.links.set(opener.at, link);
+        // The pictures in its words.
+        while (pictureAt.length > 0 && pictureAt.at(-1)! > opener.at) {
+          pictureAt.pop();
+          pictures.pop()!.within = true;
+        }
+        if (link.picture) {
+          pictures.push(link);
+          pictureAt.push(opener.at);
+        }
+        if (link.pointed) reading.addresses.set(link.pointed[0], link.pointed[1]);
+        // No link holds another: the `[`s before it open none.
+        if (!opener.picture) {
+          for (const before of active) before.active = false;
+          active.length = 0;
+        }
+        i = link.end;
+      } else {
+        opener.balanced = true;
+        // `![^label]`: a `!` and a footnote call, when the reply has that footnote; blanks before the `^` aside, as a label's.
+        if (opener.picture && words?.startsWith('^') && context.notes.has(words.slice(1))) reading.calls.set(opener.at + 1, { end: i + 1, label: words.slice(1) });
+        i += 1;
+      }
+    } else {
+      i += 1;
+    }
+  }
+}
+
+/** Characters of a link's address by reference, as written where they are text if it is not read as one. */
+const ADDRESS: Record<string, string> = { ' ': '%20', '\t': '%09', '(': '\\(', ')': '\\)', '<': '%3C', '>': '%3E', '`': '%60', '|': '\\|', '[': '\\[', ']': '\\]', '!': '\\!', '\\': '\\\\' };
+/** Characters of a link's title by reference, as written where they are text if it is not read as one. */
+const TITLE: Record<string, string> = { '\n': '&#10;', '`': '&#96;', '|': '\\|', '<': '&lt;', '[': '\\[', ']': '\\]', '\\': '\\\\' };
+
+/**
+ * A link's address as written after its words: as an address, the same for a reader; as text, if
+ * a reader does not take it for one, nothing in it that is code, HTML, a picture or a table's `|`.
+ */
+function address(written: string): string {
+  const pointed = written.startsWith('<');
+  const body = pointed ? written.slice(1, -1) : written;
+  if (!body) return '<>';
+  let out = '';
+  for (let i = 0; i < body.length; i += 1) {
+    const c = body[i]!;
+    if (c === '\\' && ASCII_PUNCTUATION.test(body[i + 1] ?? '')) {
+      i += 1;
+      out += ADDRESS[body[i]!] ?? `\\${body[i]}`;
+    } else {
+      out += ADDRESS[c] ?? c;
+    }
+  }
+  return out;
+}
+
+/** A link's title as written after its address: the same title, and as text, nothing in it that is code, HTML or a table's `|`. */
+function title(written: string): string {
+  const close = written.at(-1)!;
+  let out = '';
+  for (let i = 1; i < written.length - 1; i += 1) {
+    const c = written[i]!;
+    if (c === '\\' && ASCII_PUNCTUATION.test(written[i + 1] ?? '')) {
+      i += 1;
+      const d = written[i]!;
+      out += d === '`' ? '&#96;' : d === '<' ? '&lt;' : `\\${d}`;
+    } else {
+      out += (close === ')' && (c === '(' || c === ')')) || c === close ? `\\${c}` : TITLE[c] ?? c;
+    }
+  }
+  return `${written[0]}${out}${close}`;
+}
+
+/** What follows a link's words for a link by reference: its address and title, as `(…)`. */
+const resolved = ({ destination, title: written }: Definition) => `${address(destination)}${written ? ` ${title(written)}` : ''}`;
+
+/**
+ * A paragraph's, a heading's or a table cell's words, HTML as text and pictures as links, outside
+ * what the reader surely takes as code; links by reference with their addresses and footnotes with
+ * the reply's labels. `sure`: whether code can be told there at all.
+ */
+function inline(text: string, { sure, breaks = [], context }: { sure: boolean; breaks?: readonly number[]; context: Context }): string {
+  // Nothing in words without these is written otherwise.
+  if (!/[`<[\\]/.test(text)) return text;
   const n = text.length;
+  const reading = readInline(text, context);
   // The runs of backquotes of each length, for finding the run that ends code: the next of the
   // same length, as the reader looks for it (asked for in order, from places further on each time).
   const byLength = new Map<number, number[]>();
@@ -684,20 +1524,34 @@ function inline(text: string, { table, sure, breaks = [] }: { table: boolean; su
     };
   };
   const closer = finder();
-  // Where the last run that starts code and finds nothing to end it stands, code read from the
-  // start. Where a `[` comes before it, markdown-it (VS Code's preview), reading on for a `]`,
-  // forgets the code it found on the way.
-  let unpaired = -1;
+  // Readers take whole what follows a link's words and a footnote call, as written or as it is
+  // written in its place, so a run of backquotes there opens no code and ends none.
+  const whole = new Map<number, number>();
+  for (const link of reading.links.values()) {
+    if (link.end > link.close + 1 && (!link.definition || !text.slice(link.close, link.end).includes('\n'))) whole.set(link.close + 1, link.end);
+  }
+  for (const [at, call] of reading.calls) whole.set(at, call.end);
+  // Each run that starts code and finds nothing to end it, code read from the start: written
+  // escaped, as the reader shows it, so that none misleads markdown-it (VS Code's preview), which
+  // past one, or looking past one for a `]`, may lose the code before or after it. Where code is
+  // not sure, so is this: a run some reader takes to end code then shows a backslash in it.
+  const unpaired = new Set<number>();
   {
     const ahead = finder();
     for (let i = 0; i < n;) {
-      if (text[i] === '\\' && ASCII_PUNCTUATION.test(text[i + 1] ?? '')) {
+      const link = text[i] === '<' ? matchAt(AUTOLINK, text, i) : null;
+      const taken = whole.get(i);
+      if (taken !== undefined) {
+        i = taken;
+      } else if (text[i] === '\\' && ASCII_PUNCTUATION.test(text[i + 1] ?? '')) {
         i += 2;
+      } else if (link) {
+        i += link[0].length;
       } else if (text[i] === '`') {
         let length = 1;
         while (text[i + length] === '`') length += 1;
         const end = ahead(i + length, length);
-        if (end === undefined) unpaired = i;
+        if (end === undefined) unpaired.add(i);
         i = end === undefined ? i + length : end + length;
       } else {
         i += 1;
@@ -713,16 +1567,15 @@ function inline(text: string, { table, sure, breaks = [] }: { table: boolean; su
   for (let i = 0; i < n; i += 1) ticks[i + 1] = ticks[i]! + (text[i] === '`' ? 1 : 0);
   const quoteIn = (from: number, to: number) => ticks[Math.min(to, n)]! - ticks[from]! > 0;
 
-  let looks = 0;
-  /** Where the reader may take some words whole from `from` to `to`: none of the code after it is sure if it holds a backquote. */
-  const takenWhole = (from: number, to: number | undefined) => {
-    if (to !== undefined && (to < 0 || quoteIn(from, to))) sure = false;
-  };
-  /** Another look ahead, at most LOOKS in a paragraph: past them, none of its code is sure. */
-  const look = () => {
-    looks += 1;
-    if (looks > LOOKS) sure = false;
-    return sure;
+  /** How much the looks ahead below may read in all: twice the words. */
+  let looking = 2 * n + 2000;
+  /**
+   * What a look ahead found, where the reader may take some words whole from `from` to `end`:
+   * none of the code after it is sure if they hold a backquote, nor once the looks have read
+   * their fill, which no paragraph's links come near.
+   */
+  const looked = (from: number, { end, read }: { end: number | undefined; read: number }) => {
+    if ((looking -= read) < 0 || (end !== undefined && (end < 0 || quoteIn(from, end)))) sure = false;
   };
 
   const out: string[] = [];
@@ -731,50 +1584,93 @@ function inline(text: string, { table, sure, breaks = [] }: { table: boolean; su
   /** The first of `breaks` past the place read. */
   let breakAt = 0;
   const put = (at: number, words: string, next: number) => {
-    out.push(text.slice(from, at), words);
+    let before = text.slice(from, at);
+    // A `!` just before a link written here would make a picture of it.
+    if (words.startsWith('[') && before.endsWith('!') && !escapedAt(text, at - 1)) before = `${before.slice(0, -1)}\\!`;
+    out.push(before, words);
     from = next;
     return next;
   };
+  /** A link's or a picture's address and title, from its `(` to its `)`, as written in the link: an address in `<…>` that may read as HTML written bare, and HTML in a title as text. */
+  const resource = (link: Link) => {
+    let written = '';
+    for (let i = link.close + 2; i < link.end - 1; i += 1) {
+      const pointed = link.pointed?.[0] === i ? link.pointed[1] : undefined;
+      if (pointed !== undefined) {
+        written += matchAt(HTML_START, text, i) ? address(text.slice(i, pointed + 1)) : text.slice(i, pointed + 1);
+        i = pointed;
+      } else if (text[i] === '\\' && ASCII_PUNCTUATION.test(text[i + 1] ?? '')) {
+        written += text.slice(i, i + 2);
+        i += 1;
+      } else {
+        written += text[i] === '<' && matchAt(HTML_START, text, i) ? '&lt;' : text[i];
+      }
+    }
+    return written;
+  };
+  /** The links by reference whose words are being written, by where their `]` is. */
+  const ends = new Map<number, Link>();
   let i = 0;
   while (i < n) {
     const c = text[i]!;
-    if (c === '\\' && i + 1 < n && ASCII_PUNCTUATION.test(text[i + 1]!)) {
+    const ending = c === ']' ? ends.get(i) : undefined;
+    if (ending) {
+      i = put(i, `](${ending.definition!.written!})`, ending.end);
+    } else if (c === '\\' && i + 1 < n && ASCII_PUNCTUATION.test(text[i + 1]!)) {
       // An escaped `<` as `&lt;`: a bare link just before it would take the backslash into its address.
       i = text[i + 1] === '<' ? put(i, '&lt;', i + 2) : i + 2;
     } else if (c === '`') {
       let length = 1;
       while (text[i + length] === '`') length += 1;
       const end = sure ? closer(i + length, length) : undefined;
-      // Which is code is not sure from here on: where a table's `|`, which ends a cell, would end it;
-      // where it reaches a line a reader may take apart; or past a run of backquotes that ends no
-      // code, after which markdown-it (VS Code's preview), misled by what it noted on the way, loses code.
-      if (end !== undefined && table && /(?:^|[^\\])\|/.test(text.slice(i, end + length))) sure = false;
+      // Which is code is not sure from here on where it reaches a line a reader may take apart.
       while (breaks[breakAt] !== undefined && breaks[breakAt]! <= i) breakAt += 1;
       if (end !== undefined && breaks[breakAt] !== undefined && breaks[breakAt]! < end) sure = false;
-      if (end === undefined) sure = false;
-      i = end !== undefined && sure ? end + length : i + length;
+      if (end !== undefined && sure) i = end + length;
+      else if (unpaired.has(i)) i = put(i, '\\`'.repeat(length), i + length);
+      else i += length;
     } else if (c === '<') {
-      AUTOLINK.lastIndex = i;
-      const link = AUTOLINK.exec(text);
-      if (link) i += link[0].length;
-      else if (/[A-Za-z/!?]/.test(text[i + 1] ?? '')) i = put(i, '&lt;', i + 1);
+      const pointed = reading.addresses.get(i);
+      const link = pointed === undefined ? matchAt(AUTOLINK, text, i) : null;
+      if (pointed !== undefined) i = matchAt(HTML_START, text, i) ? put(i, address(text.slice(i, pointed + 1)), pointed + 1) : pointed + 1;
+      else if (link) i += link[0].length;
+      else if (matchAt(HTML_START, text, i)) i = put(i, '&lt;', i + 1);
       else i += 1;
     } else if (c === '!' && text[i + 1] === '[') {
-      SIMPLE_PICTURE.lastIndex = i;
-      const picture = sure && look() ? SIMPLE_PICTURE.exec(text) : null;
-      const end = picture ? linkEnd(text, i + picture[0].length - 1) : undefined;
-      // One this does not read whole is its words, not a picture.
-      i = picture && end !== undefined && end > 0
-        ? put(i, pictureLink(picture[1]!, text.slice(i + picture[0].length, end - 1), text.slice(i, end)), end)
-        : put(i, '\\!', i + 1);
+      const link = reading.links.get(i);
+      const words = link?.picture ? text.slice(i + 2, link.close) : undefined;
+      // A reference's label on more than one line is kept as written: the address in its place would take a line from the paragraph.
+      const lines = link?.definition && text.slice(link.close, link.end).includes('\n');
+      if (link && words !== undefined && !lines && SIMPLE_WORDS.test(words)) {
+        // In a link's words, as the conversation shows it there: its name, in that link.
+        const written = pictureLink(words, link.definition ? link.definition.written! : resource(link));
+        i = put(i, link.within && written.startsWith('[') ? written.slice(1, written.lastIndexOf('](')) : written, link.end);
+      } else {
+        // One this does not write as a link is its words, a link to it if it is one: never a picture.
+        i = put(i, '\\!', i + 1);
+        if (link?.definition && !lines) ends.set(link.close, link);
+      }
+    } else if (c === '[') {
+      const call = reading.calls.get(i);
+      const link = reading.links.get(i);
+      if (call) {
+        // A footnote call, by the label the reply's footnote has in the export.
+        i = put(i, `[^${context.notes.get(normalize(call.label))}]`, call.end);
+      } else {
+        if (link?.definition && !text.slice(link.close, link.end).includes('\n')) ends.set(link.close, link);
+        else if (!link && sure && text[i + 1] === '^' && !reading.carets.has(i + 1)) looked(i, bracketEnd(text, i));
+        i += 1;
+      }
+    } else if (c === '^' && reading.carets.has(i)) {
+      // A label's `^` that calls none of the reply's footnotes, escaped: it calls none in the export
+      // either, nor matches another reply's footnote where a reader takes that for a link's definition.
+      i = put(i, '\\^', i + 1);
     } else {
-      if (sure && c === '[' && unpaired > i) sure = false;
-      else if (sure && c === ']' && text[i + 1] === '(' && look()) takenWhole(i, linkEnd(text, i + 1));
-      else if (sure && c === ']' && text[i + 1] === '[' && look()) takenWhole(i, bracketEnd(text, i + 1));
-      else if (sure && c === '[' && text[i + 1] === '^' && look()) takenWhole(i, bracketEnd(text, i));
+      if (sure && c === ']' && text[i + 1] === '(') looked(i, linkEnd(text, i + 1));
+      else if (sure && c === ']' && text[i + 1] === '[') looked(i, bracketEnd(text, i + 1));
       else if (sure && (c === 'h' || c === 'H' || c === 'w' || c === 'W')) {
         BARE_START.lastIndex = i;
-        if (BARE_START.test(text)) takenWhole(i, stop[i]);
+        if (BARE_START.test(text)) looked(i, { end: stop[i], read: 0 });
       }
       i += 1;
     }
@@ -783,27 +1679,31 @@ function inline(text: string, { table, sure, breaks = [] }: { table: boolean; su
   return out.join('');
 }
 
-/** Where a `[…]` that starts at `at` ends, past its `]`, for up to 1,000 characters: -1 past them, undefined if it is no label. */
-function bracketEnd(text: string, at: number): number | undefined {
+/**
+ * Where a `[…]` that starts at `at` ends, past its `]`, for up to 1,000 characters: -1 past them,
+ * undefined if it is no label; and how far it was read.
+ */
+function bracketEnd(text: string, at: number): { end: number | undefined; read: number } {
   const limit = Math.min(text.length, at + 1002);
   for (let i = at + 1; i < limit; i += 1) {
     const c = text[i];
     if (c === '\\') i += 1;
-    else if (c === '[') return undefined;
-    else if (c === ']') return i + 1;
+    else if (c === '[') return { end: undefined, read: i - at };
+    else if (c === ']') return { end: i + 1, read: i - at };
   }
-  return limit < text.length ? -1 : undefined;
+  return { end: limit < text.length ? -1 : undefined, read: limit - at };
 }
 
 /**
  * Where an inline link's address and title end, after the `(` at `at`, past their `)`, as
  * CommonMark reads them; -1 when that is more than 2,000 characters on, or not sure; undefined
- * when they are not an address and a title.
+ * when they are not an address and a title; and how far it was read.
  */
-function linkEnd(text: string, at: number): number | undefined {
+function linkEnd(text: string, at: number): { end: number | undefined; read: number } {
   const limit = Math.min(text.length, at + 2000);
-  const cut = limit < text.length ? -1 : undefined;
   let i = at + 1;
+  const found = (end: number | undefined) => ({ end, read: Math.min(i + 1, limit) - at });
+  const cut = () => found(limit < text.length ? -1 : undefined);
   const blanks = () => {
     const from = i;
     let lines = 0;
@@ -813,10 +1713,10 @@ function linkEnd(text: string, at: number): number | undefined {
   blanks();
   if (text[i] === '<') {
     for (i += 1; i < limit && text[i] !== '>'; i += 1) {
-      if (text[i] === '\n' || text[i] === '<') return undefined;
+      if (text[i] === '\n' || text[i] === '<') return found(undefined);
       if (text[i] === '\\') i += 1;
     }
-    if (i >= limit) return cut;
+    if (i >= limit) return cut();
     i += 1;
   } else {
     let depth = 0;
@@ -829,38 +1729,39 @@ function linkEnd(text: string, at: number): number | undefined {
         depth -= 1;
       } else if (c <= ' ' || c === '\x7f') break;
     }
-    if (i >= limit) return cut;
-    if (depth > 32) return -1;
-    if (depth > 0) return undefined;
+    if (i >= limit) return cut();
+    if (depth > 32) return found(-1);
+    if (depth > 0) return found(undefined);
   }
   if (blanks() && /["'(]/.test(text[i] ?? '')) {
     const close = text[i] === '(' ? ')' : text[i];
     for (i += 1; i < limit && text[i] !== close; i += 1) {
       if (text[i] === '\\') i += 1;
-      else if (close === ')' && text[i] === '(') return undefined;
-      else if (text[i] === '\n' && /^\n[ \t]*\n/.test(text.slice(i, i + 200))) return undefined;
+      else if (close === ')' && text[i] === '(') return found(undefined);
+      else if (text[i] === '\n' && /^\n[ \t]*\n/.test(text.slice(i, i + 200))) return found(undefined);
     }
-    if (i >= limit) return cut;
+    if (i >= limit) return cut();
     i += 1;
     blanks();
   }
-  if (text[i] === ')') return i + 1;
-  return i >= limit ? cut : undefined;
+  if (text[i] === ')') return found(i + 1);
+  return i >= limit ? cut() : found(undefined);
 }
 
 /**
  * A picture as the conversation shows one: a link to it named by its words and its site, never
  * loaded, but a picture written into the reply itself (a data: address), which stays.
  */
-function pictureLink(words: string, destination: string, written: string): string {
-  const [address = ''] = destination.trim().replace(/^<([^>]*)>/, '$1').split(/[ \t\n]+/);
-  if (/^data:image\//i.test(address)) return written;
+function pictureLink(words: string, resource: string): string {
+  const [location = ''] = resource.trim().replace(/^<([^>]*)>/, '$1').split(/[ \t\n]+/);
+  // A `^` its words start with, escaped: `[^…]` would call a footnote, another reply's too.
+  const name = words.trim().replace(/</g, '&lt;').replace(/^\^/, '\\^');
+  if (/^data:image\//i.test(location)) return `![${name}](${resource})`;
   let site = '';
   try {
-    if (/^(?:https?:)?\/\//i.test(address)) site = new URL(address, 'https://example.invalid').host;
+    if (/^(?:https?:)?\/\//i.test(location)) site = new URL(location, 'https://example.invalid').host;
   } catch {
     // Not an address: named by its words alone.
   }
-  const name = words.trim().replace(/</g, '&lt;') || 'Image';
-  return `[${site ? `${name} · ${site}` : name}](${destination})`;
+  return `[${site ? `${name || 'Image'} · ${site}` : name || 'Image'}](${resource})`;
 }

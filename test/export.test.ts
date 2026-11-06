@@ -387,6 +387,47 @@ describe('the export, each reply kept to itself', () => {
     expect(markdown).toContain('![dot](data:image/png;base64,iVBORw0KGgo=)');
   });
 
+  it('keeps each reply’s links by reference and footnotes to it, as the conversation reads each reply on its own', async () => {
+    const { markdown } = await exportMarkdown(await session(n++, 'Notes', [
+      user('Where are the docs?'),
+      claude(text('See [the docs][1] and its note[^1].\n\n[1]: https://docs.example/a\n\n[^1]: From the first reply.')),
+      user('And the API?'),
+      claude(text('The [API][1] has a note[^1] too, and so does ![the chart][1].\n\n[^1]: From the second reply.')),
+    ]));
+    for (const html of [read(markdown), readHtml(markdown)]) {
+      expect(html).toContain('<a href="https://docs.example/a">the docs</a>');
+      // The second reply defines no `[1]`: its words stay words, as in the conversation.
+      expect(html).toContain('The [API][1] has a note');
+      expect(html).toContain('so does ![the chart][1].');
+      // Each reply's `[^1]` calls its own footnote.
+      expect(html).toMatch(/note<sup><a href="#user-content-fn-1-1"[^>]*>1<\/a><\/sup>\.<\/p>/);
+      expect(html).toMatch(/note<sup><a href="#user-content-fn-2-1"[^>]*>2<\/a><\/sup> too/);
+      expect(html).toMatch(/<li id="user-content-fn-1-1">\s*<p>From the first reply\./);
+      expect(html).toMatch(/<li id="user-content-fn-2-1">\s*<p>From the second reply\./);
+      expect(speakers(html)).toEqual(['h1 Notes', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude']);
+    }
+    expect(markdown).not.toMatch(/^\[1\]:/m);
+  });
+
+  it('lets no reply call another’s footnote, and reads a link or a table in one as the conversation does', async () => {
+    const { markdown } = await exportMarkdown(await session(n++, 'Calls', [
+      user('Why did it fail?'),
+      claude(text('Seen in the log[^1].\n\n[^1]: https://evil.example/x')),
+      user('And now?'),
+      claude(text('Hmm![^1-1] odd. The diagram: ![^1-1](diagram.png). See [this][ ^1-1] and [a negated class like [^a-z]](https://regex.example/classes).\n\n| File | Size |\n| --- | --- |\n| a.ts | 1 |\n2. ## You')),
+    ]));
+    for (const html of [read(markdown), readHtml(markdown)]) {
+      // One call, the first reply's own; the second reply's labels are its words.
+      expect(html.match(/href="#user-content-fn-1-1"/g)).toHaveLength(1);
+      expect(html).toContain('Hmm![^1-1] odd.');
+      expect(html).toContain('<a href="https://regex.example/classes">a negated class like [^a-z]</a>');
+      expect(html).toContain('<td>a.ts</td>');
+      // After the table, a list numbered from 2, as GitHub's readers read it, its heading under the speakers'.
+      expect(html).toMatch(/<ol start="2">\s*<li>\s*<h4>You<\/h4>/);
+      expect(speakers(html)).toEqual(['h1 Calls', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude']);
+    }
+  });
+
   it('keeps HTML text after a bare link, whose address would take the escape before it', async () => {
     const markdown = await exported('See https://example.com/`\\<h2>You</h2> and www.example.org/<b>x</b>');
     expect(readHtml(markdown)).not.toMatch(/<b>/);

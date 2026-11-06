@@ -85,10 +85,11 @@ const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
  * task's note, Interrupted, a failed request, a hook's word, a compaction) in italics. Each reads
  * as the conversation shows it: a prompt, a note and a name as text, none of it Markdown, and a
  * reply as Markdown that keeps to itself (markdown.ts): its headings under the speakers', its HTML
- * as text and its pictures as links, in any reader. What the conversation
- * leaves out stays out: the notes Claude Code and Pelican give Claude with a prompt (a side chat's
- * note, in a system reminder), the tags around commands and a compaction's summary. The days the
- * conversation is marked off by are left out, as the terminal has none.
+ * as text, its pictures as links, and its links by reference and footnotes its own, in any
+ * reader. What the conversation leaves out stays out: the notes Claude Code and Pelican give
+ * Claude with a prompt (a side chat's note, in a system reminder), the tags around commands and a
+ * compaction's summary. The days the conversation is marked off by are left out, as the terminal
+ * has none.
  */
 export async function exportMarkdown(sessionId: string): Promise<{ title: string; markdown: string }> {
   const info = await sessionInfo(sessionId);
@@ -97,6 +98,9 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   const out: string[] = [`# ${inlineText(title.replace(/\s+/g, ' ').trim())}`, ''];
   if (info?.cwd) out.push(`Folder: ${inlineCode(info.cwd)}`, '');
   let speaker: string | undefined;
+  // Each reply's number, which its footnotes' labels start with: the conversation reads each reply
+  // on its own, and the file reads all of them as one document.
+  let replies = 0;
   const say = (who: 'You' | 'Claude', blocks: string[]) => {
     if (blocks.length === 0) return;
     if (who !== speaker) out.push(`## ${who}`, '');
@@ -128,7 +132,7 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
         else if (part.kind === 'text' && part.text.trim()) {
           if (tools.length > 0) blocks.push(tools.join('\n'));
           tools = [];
-          blocks.push(reply(part.text.trim()));
+          blocks.push(reply(part.text.trim(), (replies += 1)));
         }
       }
       if (tools.length > 0) blocks.push(tools.join('\n'));
