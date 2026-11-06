@@ -287,7 +287,7 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
     return (
       <Sheet open={open} onClose={finish} title={title}>
         <div className="px-3 pb-1">
-          <div className={`max-h-[38vh] overflow-y-auto border-l-2 border-faint/40 pl-3 break-words whitespace-pre-wrap text-muted ${mono ? 'font-mono text-[13px] leading-relaxed' : 'text-[14.5px] leading-relaxed'}`}>{body}</div>
+          {body && <div className={`max-h-[38vh] overflow-y-auto border-l-2 border-faint/40 pl-3 break-words whitespace-pre-wrap text-muted ${mono ? 'font-mono text-[13px] leading-relaxed' : 'text-[14.5px] leading-relaxed'}`}>{body}</div>}
           {notable && (
             <>
               <label htmlFor={`note-${item.id}`} className="mt-4 block text-[12px] text-faint">Your note</label>
@@ -330,7 +330,7 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
         <Icon aria-hidden className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{title}</span>
       </div>
-      <div className={`mt-2 max-h-40 overflow-y-auto border-l-2 border-faint/40 pl-2.5 break-words whitespace-pre-wrap text-muted ${mono ? 'font-mono text-[12.5px] leading-[1.55]' : 'text-[13px] leading-snug'}`}>{body}</div>
+      {body && <div className={`mt-2 max-h-40 overflow-y-auto border-l-2 border-faint/40 pl-2.5 break-words whitespace-pre-wrap text-muted ${mono ? 'font-mono text-[12.5px] leading-[1.55]' : 'text-[13px] leading-snug'}`}>{body}</div>}
       {notable && (
         <textarea
           ref={field}

@@ -121,14 +121,17 @@ function readBody(text: string): PromptPart[] {
       continue;
     }
     const comment = COMMENT.exec(line);
-    const codeEnd = comment ? fenceEnd(lines, i + 1) : -1;
-    if (comment && codeEnd > i + 1) {
+    // Its code, fenced under it; Desktop writes none for a comment without code (a blank line's).
+    const fenced = comment !== null && FENCE.test(lines[i + 1] ?? '');
+    const codeEnd = fenced ? fenceEnd(lines, i + 1) : -1;
+    if (comment && (!fenced || codeEnd > i + 1)) {
       flush();
-      const lang = lines[i + 1]!.replace(/^\s*(?:`{3,}|~{3,})/, '').trim();
+      const lang = fenced ? lines[i + 1]!.replace(/^\s*(?:`{3,}|~{3,})/, '').trim() : '';
+      const noteStart = fenced ? codeEnd + 1 : i + 1;
       // Its note runs until a blank line before the next comment, or the blank lines before your words.
-      let end = codeEnd + 1;
+      let end = noteStart;
       while (end < lines.length) {
-        if (lines[end] === '' && (lines[end + 1] === '' || (COMMENT.test(lines[end + 1] ?? '') && fenceEnd(lines, end + 2) > end + 2))) break;
+        if (lines[end] === '' && (lines[end + 1] === '' || COMMENT.test(lines[end + 1] ?? ''))) break;
         end += 1;
       }
       const start = Number(comment[2]);
@@ -137,9 +140,9 @@ function readBody(text: string): PromptPart[] {
         path: comment[1]!,
         lines: [start, comment[3] ? Number(comment[3]) : start],
         removed: Boolean(comment[4]),
-        code: lines.slice(i + 2, codeEnd).join('\n'),
+        ...(fenced ? { code: lines.slice(i + 2, codeEnd).join('\n') } : {}),
         ...(lang ? { lang } : {}),
-        note: unescape(lines.slice(codeEnd + 1, end).join('\n').trim()),
+        note: unescape(lines.slice(noteStart, end).join('\n').trim()),
       });
       i = end - 1;
       continue;

@@ -318,6 +318,28 @@ describe('both ways: Desktop reads what Pelican writes, and Pelican reads what D
     ]);
   });
 
+  it('reads Desktop’s comments without code (on a blank line, or a diff not loaded), alone or among others', () => {
+    // As Desktop's $c (chunk c2319015e) writes them.
+    expect(readPrompt('In `src/a.ts` at line 3:\nrename this\n\n\nand go')).toEqual([
+      { kind: 'comment', path: 'src/a.ts', lines: [3, 3], removed: false, note: 'rename this' },
+      { kind: 'text', text: 'and go' },
+    ]);
+    expect(readPrompt('In `src/a.ts` at line 3:\none\n\nIn `src/a.ts` at line 9:\n```ts\nx()\n```\ntwo')).toEqual([
+      { kind: 'comment', path: 'src/a.ts', lines: [3, 3], removed: false, note: 'one' },
+      { kind: 'comment', path: 'src/a.ts', lines: [9, 9], removed: false, code: 'x()', lang: 'ts', note: 'two' },
+    ]);
+    const mixed = 'In `src/b.ts` at line 2:\n```ts\ny()\n```\nfirst\n\nIn `src/b.ts` at lines 5-6 (before changes):\nsecond\n\nmore\n\n\nand go';
+    expect(readPrompt(mixed)).toEqual([
+      { kind: 'comment', path: 'src/b.ts', lines: [2, 2], removed: false, code: 'y()', lang: 'ts', note: 'first' },
+      { kind: 'comment', path: 'src/b.ts', lines: [5, 6], removed: true, note: 'second\n\nmore' },
+      { kind: 'text', text: 'and go' },
+    ]);
+    expect(promptGist('In `src/a.ts` at line 3:\nrename this')).toBe('rename this');
+    // Taken back to edit and sent again, it goes as it came, without code.
+    const back = readMessage(mixed);
+    expect(messageWith(back.items, back.text)).toBe(mixed);
+  });
+
   it('still reads Pelican’s older quotes: > lines, and path:line above lines of a file or a comment', () => {
     expect(readPrompt('src/a.ts:7-8\n> one\n>\n> two\n\n> Why?\n\nExplain both.')).toEqual([
       { kind: 'quote', label: 'src/a.ts:7-8', text: 'one\n\ntwo' },

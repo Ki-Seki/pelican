@@ -155,12 +155,12 @@ export const sendNowMessage = (text: string, note: string): string => `${REPLY}\
 /** A file as Desktop mentions one: `@"src/prefs.ts"`, a folder with its slash. */
 export const fileMention = (path: string, folder = false): string => `@"${path.replaceAll('"', '').replace(/[/\\]+$/, '')}${folder ? '/' : ''}"`;
 
-/** A comment, or lines of a file with a note, as a comment on those lines. */
+/** A comment, or lines of a file with a note, as a comment on those lines; one with no code, as Desktop writes it, without any. */
 const commentOf = (item: WaitingItem): CommentBlock => ({
   path: item.path ?? '',
   lines: item.lines ?? [1, 1],
   removed: item.side === 'del',
-  code: item.text,
+  ...(item.text !== '' ? { code: item.text } : {}),
   note: item.note ?? '',
 });
 
