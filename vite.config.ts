@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,8 @@ import zlib from 'node:zlib';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
+
+import { WEB_PACKAGES, webPackages } from './scripts/notices.mjs';
 
 const backend = `http://127.0.0.1:${process.env.PELICAN_PORT ?? '7860'}`;
 
@@ -50,6 +53,33 @@ function precompress(): Plugin {
 }
 
 /**
+ * Notes the packages built into the web app, for scripts/build-server.mjs to write
+ * THIRD_PARTY_NOTICES with: next to the app, not in it, as WEB_PACKAGES. Not for the project
+ * site's demo, which ships no package.
+ */
+function thirdParty(): Plugin {
+  let root = '';
+  let outDir = '';
+  let skip = false;
+  return {
+    name: 'pelican-third-party',
+    apply: 'build',
+    configResolved(config) {
+      root = fileURLToPath(new URL('.', import.meta.url));
+      outDir = path.resolve(config.root, config.build.outDir);
+      skip = config.mode === 'static-demo';
+    },
+    async generateBundle(_options, bundle) {
+      if (skip) return;
+      const folders = webPackages(bundle, (name: string) => realpathSync(path.join(root, 'node_modules', name)));
+      // Beside the app's folder: in dist/ for `npm run build`, where the server's build reads it.
+      const listed = path.resolve(outDir, '..', path.basename(WEB_PACKAGES));
+      await writeFile(listed, `${JSON.stringify(folders, null, 2)}\n`);
+    },
+  };
+}
+
+/**
  * Code in replies is highlighted in the languages of src/web/lib/languages.ts, in place of
  * lowlight's own `common` set, which rehype-highlight bundles even when given others.
  */
@@ -70,7 +100,7 @@ export default defineConfig({
   // reverse proxy mounts it at, without being told which.
   base: './',
   publicDir: '../../public',
-  plugins: [react(), tailwindcss(), highlightLanguages(), precompress()],
+  plugins: [react(), tailwindcss(), highlightLanguages(), precompress(), thirdParty()],
   build: {
     outDir: '../../dist/web',
     emptyOutDir: true,

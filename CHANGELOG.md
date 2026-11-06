@@ -38,7 +38,10 @@ command hides; and what the reviews of 0.4.0 left.
   download: from the package's npm-shrinkwrap.json, npm installed it for all eight platforms, 1.2 GB
   to download and 2.6 GB on disk, and in a project Pelican's own build and test tools too. The
   packages Pelican's server uses are built into it instead, as CI tested them, and the Agent SDK,
-  with the Claude Code it brings, stays pinned to one version.
+  with the Claude Code it brings, stays pinned to one version. The package now ships
+  `THIRD_PARTY_NOTICES`: each package built into the server and the web app, with its version and
+  license in full, and, for web-push, which is under the MPL 2.0, that its source is its npm
+  package. The build writes it from what it puts in the bundles, and fails if one is missing.
 - A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
   this computer" before you tap anything, the same for every type, with its name and size and
   nothing to tap; one past 200 MB says it is larger than Pelican serves, and a text file that large

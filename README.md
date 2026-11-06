@@ -165,4 +165,6 @@ through [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic.
+[MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic. The
+packages built into its server and web app are under their own licenses: `THIRD_PARTY_NOTICES`,
+in the npm package, gives each with its license in full.

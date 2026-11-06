@@ -83,6 +83,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm pack
+      # The notices of the packages built in, which the build wrote, go with it.
+      - run: tar -tzf pelican-cc-*.tgz | grep -qx 'package/THIRD_PARTY_NOTICES'
       # As `npm install -g pelican-cc` installs it from npm, which reads a package's
       # npm-shrinkwrap.json only when the registry says it has one, never from a tarball installed
       # by its path: a registry on the runner hands the package out as npm's does. Its own npm

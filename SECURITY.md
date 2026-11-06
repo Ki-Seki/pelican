@@ -163,6 +163,7 @@ can read your sessions and have Claude run commands as you, so treat access to i
   Claude Code it bundles for your computer, each checked against the registry's integrity hash.
   Beside it npm installs the packages the SDK lists as its peers, which Pelican never loads. The
   package ships no `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
+  `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
