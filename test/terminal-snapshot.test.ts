@@ -81,7 +81,7 @@ function rng(seed: number) {
   return { next, int, pick };
 }
 
-const WIDE = ['中', '文', '日', '本', '語', '한', '글', 'Ａ', '\u{1f680}', '\u{1f600}', '\u{1f44d}', '❤️'];
+const WIDE = ['\u4e2d', '\u6587', '\u65e5', '\u672c', '\u8a9e', '\ud55c', '\uae00', '\uff21', '\u{1f680}', '\u{1f600}', '\u{1f44d}', '\u2764\ufe0f'];
 
 /**
  * Random output: printable text, wide characters, marks (on a letter, and alone), controls, cursor
@@ -315,7 +315,7 @@ describe('a page that comes back', () => {
     // The line erased, all its cells empty, the cursor still past its end.
     expect(await after(80, 24, `\u001b[44m\u001b[10;1H${line}\u001b[2K\u001b[0m`, 'Z')).toEqual([]);
     // In insert mode, and with a wide character last.
-    expect(await after(80, 24, `\u001b[2;20r\u001b[10;1H${'w'.repeat(78)}中\u001b[4h`, 'Z')).toEqual([]);
+    expect(await after(80, 24, `\u001b[2;20r\u001b[10;1H${'w'.repeat(78)}\u4e2d\u001b[4h`, 'Z')).toEqual([]);
     // Moved from there elsewhere.
     expect(await after(80, 24, `\u001b[2;1H${line}\u001b[1;40H`, 'Z')).toEqual([]);
   });
@@ -343,16 +343,16 @@ describe('a page that comes back', () => {
     expect(await after(20, 6, 'text\r\n\u001b[41m\u001b[K\r\n\u001b[K\u001b[0m\u001b[1;1H')).toEqual([]);
     expect(await after(20, 6, `\u001b[44m${'x\u001b[K\r\n'.repeat(9)}\u001b[0m`)).toEqual([]);
     // A mark in a cell of its own, after a sequence, joins nothing before it.
-    expect(await after(20, 6, 'a\u001b[ḿb')).toEqual([]);
+    expect(await after(20, 6, 'a\u001b[m\u0301b')).toEqual([]);
     // The alternate screen's empty cells in the usual colors, though a program prints in others.
     expect(await after(20, 6, '\u001b[?1049h\u001b[Hvim\u001b[44m')).toEqual([]);
   });
 
   it('joins the marks that follow to the character before the cursor, and REP repeats it', async () => {
-    expect(await after(20, 6, 'cafe', '́ ok')).toEqual([]);
-    expect(await after(20, 6, '\u001b[1;32m中', '́̂')).toEqual([]);
-    expect(await after(20, 6, '─', '\u001b[9b')).toEqual([]);
-    expect(await after(20, 6, `a${'́'.repeat(16)}`, '́̂')).toEqual([]);
+    expect(await after(20, 6, 'cafe', '\u0301 ok')).toEqual([]);
+    expect(await after(20, 6, '\u001b[1;32m\u4e2d', '\u0301\u0302')).toEqual([]);
+    expect(await after(20, 6, '\u2500', '\u001b[9b')).toEqual([]);
+    expect(await after(20, 6, `a${'\u0301'.repeat(16)}`, '\u0301\u0302')).toEqual([]);
   });
 
   it('is the screen of a page that saw it all, over random output, and so is what follows', async () => {

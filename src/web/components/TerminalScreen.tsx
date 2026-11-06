@@ -562,7 +562,7 @@ function rowsAsText(el: HTMLElement, t: Terminal): () => void {
     while (list.children.length > t.rows) list.lastChild!.remove();
     while (list.children.length < t.rows) list.appendChild(document.createElement('div')).setAttribute('role', 'listitem');
     for (let y = 0; y < t.rows; y += 1) {
-      const text = buffer.getLine(buffer.viewportY + y)?.translateToString(true) || ' ';
+      const text = buffer.getLine(buffer.viewportY + y)?.translateToString(true) || '\u00a0';
       const row = list.children[y]!;
       if (row.textContent !== text) row.textContent = text;
     }
