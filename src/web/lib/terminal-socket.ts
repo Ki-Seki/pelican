@@ -97,12 +97,18 @@ export class TerminalConnection {
     if (!open || this.now() - this.heard > QUIET_ON_RETURN_MS) this.again();
   }
 
-  /** Keys and pastes, in frames the server takes; dropped while there is no connection. */
-  input(data: string | Uint8Array<ArrayBuffer>): void {
+  /** Whether keys go out now: the socket is open. */
+  get open(): boolean {
+    return this.ws?.readyState === 1;
+  }
+
+  /** Keys and pastes, in frames the server takes; whether they went (not while there is no connection). */
+  input(data: string | Uint8Array<ArrayBuffer>): boolean {
     const ws = this.ws;
-    if (ws?.readyState !== 1) return;
+    if (ws?.readyState !== 1) return false;
     const bytes = typeof data === 'string' ? encoder.encode(data) : data;
     for (let at = 0; at < bytes.length; at += TERMINAL_LIMITS.frame) ws.send(bytes.subarray(at, at + TERMINAL_LIMITS.frame));
+    return true;
   }
 
   /** This page's size, for the shell; a connection made later says it too. */

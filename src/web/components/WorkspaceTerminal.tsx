@@ -430,28 +430,27 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const composingNow = useRef(false);
   const canPaste = typeof navigator !== 'undefined' && Boolean(navigator.clipboard?.readText);
 
-  const send = (text: string) => screen.current?.input(text);
+  /** Whether it went: while the connection comes back nothing does, and what was typed stays in the field. */
+  const send = (text: string) => screen.current?.input(text) ?? false;
   /** What the field holds goes to the shell first, without Enter (and without a control character pasted into it). */
   const flush = () => {
     const f = field.current;
-    if (!f?.value) return;
-    const value = f.value;
+    if (!f?.value) return true;
+    if (!send(cleanPaste(f.value))) return false;
     f.value = '';
     setTyped(false);
-    send(cleanPaste(value));
+    return true;
   };
   const key = (seq: string) => {
-    flush();
-    send(seq);
+    if (flush()) send(seq);
     setCtrl(false);
   };
   const enter = () => {
     const f = field.current;
-    const line = cleanPaste(f?.value ?? '');
+    setCtrl(false);
+    if (!send(`${cleanPaste(f?.value ?? '')}\r`)) return;
     if (f) f.value = '';
     setTyped(false);
-    setCtrl(false);
-    send(`${line}\r`);
   };
   /** A character of the row: into the line being typed, or with Ctrl held, Ctrl and it. */
   const character = (char: string) => {
@@ -462,10 +461,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
       return;
     }
     const f = field.current;
-    if (modeNow.current.direct || !f) {
-      send(char);
-      return;
-    }
+    if (!f || (modeNow.current.direct && !f.value && send(char))) return;
     f.setRangeText(char, f.selectionStart ?? f.value.length, f.selectionEnd ?? f.value.length, 'end');
     setTyped(true);
   };
@@ -473,9 +469,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
     if (k === 'ctrl') setCtrl((on) => !on);
     else if (k === 'paste') {
       void navigator.clipboard.readText().then((text) => {
-        if (!text) return;
-        flush();
-        screen.current?.paste(text);
+        if (text && flush()) screen.current?.paste(text);
       }, () => undefined);
     } else if (ROW_KEYS.has(k)) key(keySequence(k as RowKey, { applicationCursor: modeNow.current.applicationCursor, ctrl: ctrlNow.current }));
     else character(k);
@@ -494,11 +488,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
       setTyped(Boolean(f.value));
       return;
     }
-    if (modeNow.current.direct && f.value) {
-      const value = f.value;
-      f.value = '';
-      send(cleanPaste(value));
-    }
+    if (modeNow.current.direct && f.value && send(cleanPaste(f.value))) f.value = '';
     setTyped(Boolean(f.value));
   };
   // Changing to a full-screen program, what waits in the field goes to the shell first.

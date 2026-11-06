@@ -26,10 +26,10 @@ export type ScreenHandle = {
   /** The size the shell is drawn at here, for a terminal about to start. */
   size: () => { cols: number; rows: number };
   focus: () => void;
-  /** Sends text as if typed, the screen scrolling down to where it goes. */
-  input: (text: string) => void;
-  /** Sends text as a paste: a shell that asked for bracketed pastes takes many lines without running them one by one. */
-  paste: (text: string) => void;
+  /** Sends text as if typed, the screen scrolling down to where it goes; whether it went (not while the connection is down, which then says so at once). */
+  input: (text: string) => boolean;
+  /** Sends text as a paste: a shell that asked for bracketed pastes takes many lines without running them one by one. Whether it went. */
+  paste: (text: string) => boolean;
   /** The output as text: the rows on screen now, and what is above and below them. */
   text: () => ScreenText;
   /** The colors it draws in, for a terminal about to start. */
@@ -110,6 +110,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [selection, setSelection] = useState('');
   const [copied, setCopied] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  /** Where the connection stands, and the timer that says Reconnecting once it has been down a moment. */
+  const stateNow = useRef<Connection>(undefined);
+  const slow = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The latest callbacks, for xterm's listeners, made once.
   const events = useRef({ onProgram, onExit, onConnection, onMode, onLongPress });
   events.current = { onProgram, onExit, onConnection, onMode, onLongPress };
@@ -132,6 +135,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   /** The page being typed in decides the size: another page may have said its own meanwhile. */
   const reclaim = () => {
     if (sizedElsewhere.current) fit();
+  };
+  /** Keys went nowhere, the connection coming back: Reconnecting shows now, not in a moment. */
+  const unsent = () => {
+    if (stateNow.current?.kind !== 'connecting') return;
+    clearTimeout(slow.current);
+    setReconnecting(true);
   };
 
   useLayoutEffect(() => {
@@ -185,7 +194,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
     t.onData((data) => {
       if (el.contains(document.activeElement)) reclaim();
-      connection.current?.input(data);
+      if (!connection.current?.input(data)) unsent();
     });
     t.onBinary((data) => connection.current?.input(Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff)));
     // A paste goes in without the control characters a page may have put on the clipboard.
@@ -268,7 +277,6 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     const t = term.current;
     if (!t || !id) return undefined;
     let shown = true;
-    let slow: ReturnType<typeof setTimeout> | undefined;
     // An ended shell's screen stays to be read, without a cursor waiting for keys nobody takes.
     const ended = (exit: TerminalExit) => {
       t.write('\x1b[?25l');
@@ -309,15 +317,21 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
         signedOut: checkSignedIn,
         state: (state) => {
           if (!shown) return;
+          stateNow.current = state;
           // Its shell gone with Pelican, the screen stays to be read, as an ended one does.
           if (state.kind === 'gone') {
             t.write('\x1b[?25l');
             t.options.disableStdin = true;
           }
-          clearTimeout(slow);
-          // A connection that comes back at once (a slow reader let go) is not worth a word.
-          if (state.kind === 'connecting' && state.again) slow = setTimeout(() => setReconnecting(true), 1200);
-          else setReconnecting(false);
+          // A connection that comes back at once (a slow reader let go) is not worth a word; one
+          // that does not is, from the moment it dropped, however many times it tries meanwhile.
+          if (state.kind === 'connecting' && state.again) {
+            slow.current ??= setTimeout(() => setReconnecting(true), 1200);
+          } else {
+            clearTimeout(slow.current);
+            slow.current = undefined;
+            setReconnecting(false);
+          }
           events.current.onConnection(id, state);
         },
       },
@@ -331,7 +345,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     window.addEventListener('online', comeBack);
     return () => {
       shown = false;
-      clearTimeout(slow);
+      clearTimeout(slow.current);
+      slow.current = undefined;
+      stateNow.current = undefined;
       setReconnecting(false);
       document.removeEventListener('visibilitychange', comeBack);
       window.removeEventListener('online', comeBack);
@@ -357,12 +373,22 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     },
     focus: () => term.current?.focus(),
     input: (text) => {
+      if (!connection.current?.open) {
+        unsent();
+        return false;
+      }
       reclaim();
       term.current?.input(text, true);
+      return true;
     },
     paste: (text) => {
+      if (!connection.current?.open) {
+        unsent();
+        return false;
+      }
       reclaim();
       term.current?.paste(cleanPaste(text));
+      return true;
     },
     text: () => {
       const t = term.current;

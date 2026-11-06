@@ -14,6 +14,8 @@ import type { ScreenHandle, ScreenMode } from '../src/web/components/TerminalScr
 const CWD = '/code/app';
 const typed: string[] = [];
 const pasted: string[] = [];
+/** The screen's connection is down, coming back: what is typed goes nowhere. */
+let offline = false;
 let screenProps: Record<string, any> = {};
 
 vi.mock('../src/web/components/TerminalScreen', () => ({
@@ -22,8 +24,8 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
     useImperativeHandle(ref, () => ({
       size: () => ({ cols: 90, rows: 30 }),
       focus: () => undefined,
-      input: (text: string) => typed.push(text),
-      paste: (text: string) => pasted.push(text),
+      input: (text: string) => !offline && typed.push(text) > 0,
+      paste: (text: string) => !offline && pasted.push(text) > 0,
       text: () => ({ before: 'line one', screen: 'line two', after: '' }),
       colors: () => undefined,
     }));
@@ -89,6 +91,7 @@ beforeEach(() => {
   pasted.length = 0;
   refuse = undefined;
   coarse = false;
+  offline = false;
   sessionStorage.clear();
 });
 afterEach(cleanup);
@@ -285,6 +288,17 @@ describe('the Terminal tab on a phone', () => {
     fireEvent.input(field(), { target: { value: 'echo hi\u001b[201~' } });
     fireEvent.submit(field().form!);
     expect(typed.splice(1)).toEqual(['echo hi[201~\r']);
+    // While the connection comes back, a line sent stays in the field, to send once it is back.
+    offline = true;
+    fireEvent.input(field(), { target: { value: 'echo while away' } });
+    fireEvent.submit(field().form!);
+    fireEvent.click(screen.getByRole('button', { name: 'Tab' }));
+    expect(field().value).toBe('echo while away');
+    expect(typed).toEqual(['ls -la\r']);
+    offline = false;
+    fireEvent.submit(field().form!);
+    expect(typed.splice(1)).toEqual(['echo while away\r']);
+    expect(field().value).toBe('');
     fireEvent.input(field(), { target: { value: 'git sta' } });
     fireEvent.click(screen.getByRole('button', { name: 'Tab' }));
     expect(typed.slice(1)).toEqual(['git sta', '\t']);
