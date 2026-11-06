@@ -714,10 +714,13 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
           else enter();
         }}
       >
+        {/* A search field, as Chrome sets its bar of passwords, cards and addresses over the keyboard */}
+        {/* for any other kind of text field, three of the screen's rows; the phone's keyboard types into */}
+        {/* both alike. A password prompt's is a password field, for nothing to remember it. */}
         <input
           ref={field}
           data-terminal-line
-          type={mode.secret ? 'password' : 'text'}
+          type={mode.secret ? 'password' : 'search'}
           aria-label={mode.direct ? `Keys for ${program}` : 'Command'}
           placeholder={placeholder}
           autoComplete="off"
@@ -734,7 +737,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
             composingNow.current = false;
             take(e.currentTarget);
           }}
-          className="h-10 min-w-0 flex-1 rounded-full bg-chip px-4 font-mono text-[16px] outline-none placeholder:font-sans placeholder:text-faint"
+          className="h-10 min-w-0 flex-1 appearance-none rounded-full bg-chip px-4 font-mono text-[16px] outline-none placeholder:font-sans placeholder:text-faint [&::-webkit-search-cancel-button]:hidden"
         />
         <button
           type="button"

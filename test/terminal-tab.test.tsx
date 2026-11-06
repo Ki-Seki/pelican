@@ -512,7 +512,7 @@ describe('the Terminal tab on a phone', () => {
     tab();
     await waitFor(() => expect(shows()).toBe('t1'));
     mode({ direct: true, applicationCursor: true });
-    const keys = screen.getByRole('textbox', { name: 'Keys for vim' }) as HTMLInputElement;
+    const keys = screen.getByRole('searchbox', { name: 'Keys for vim' }) as HTMLInputElement;
     expect(keys.placeholder).toBe('Keys go to vim');
     fireEvent.input(keys, { target: { value: 'i' } });
     expect(typed).toEqual(['i']);
@@ -535,7 +535,7 @@ describe('the Terminal tab on a phone', () => {
     expect(typed.at(-1)).toBe('hunter2\r');
     expect(field().value).toBe('');
     mode({});
-    expect(field().type).toBe('text');
+    expect(field().type).toBe('search');
   });
 
   it('takes a second space as a space, not as the ". " a phone’s input method puts in its place', async () => {
@@ -577,7 +577,7 @@ describe('the Terminal tab on a phone', () => {
     typed.length = 0;
     // A full-screen program gets the space as a space.
     mode({ direct: true });
-    const keys = screen.getByRole('textbox', { name: 'Keys for vim' }) as HTMLInputElement;
+    const keys = screen.getByRole('searchbox', { name: 'Keys for vim' }) as HTMLInputElement;
     typeIn(keys, 'a ');
     secondSpace(keys);
     expect(typed).toEqual(['a', ' ', ' ']);
