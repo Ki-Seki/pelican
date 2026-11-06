@@ -754,7 +754,11 @@ class Reader {
       const c = this.char();
       if (c === undefined) throw new Lost();
       if (c === "'") {
-        this.mayRun(this.p.slice(from, this.i));
+        // What it stands for may hold a substitution's start its text does not show: an escape
+        // that makes any character (`\x24` for `$`) counts as one.
+        const text = this.p.slice(from, this.i);
+        if (/\\[xuUc0-7]/.test(textOf(text))) for (const piece of text) this.flag(piece);
+        else this.mayRun(text);
         break;
       }
       if (c !== '\\') {
