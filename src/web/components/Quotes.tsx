@@ -33,6 +33,8 @@ const MIN_CHARS = 2;
 export const SETTLE_MS = 250;
 /** Between the selection and the pill or the note box. */
 const GAP = 8;
+/** Between a finger's selection and the docked bar: room for the system's handle, which hangs below the line. */
+const HANDLE_ROOM = 28;
 /** Kept clear of the conversation's edges. */
 const EDGE = 12;
 /** A pill whose selection scrolled this far has gone with it. */
@@ -344,7 +346,8 @@ function Pill({ picked, bounds, sideLabel, onSideChat, onQuote, onGone }: {
 /**
  * Under a finger: the pair as a 44 px bar at the foot of the conversation, just above the message
  * box, clear of the selection's handles and of the menu the system shows at the selection. The
- * conversation's end makes room for it, and the selection is moved up out from under it.
+ * conversation's end makes room for it, and the selection is moved up out from under it, with room
+ * left for its handle.
  */
 function Dock({ picked, frame, sideLabel, onSideChat, onQuote }: { picked: Picked; frame: HTMLElement; sideLabel?: string; onSideChat: () => void; onQuote?: () => void }) {
   const bar = useRef<HTMLDivElement>(null);
@@ -353,7 +356,7 @@ function Dock({ picked, frame, sideLabel, onSideChat, onQuote }: { picked: Picke
     const el = bar.current;
     const scroller = frame.querySelector<HTMLElement>('[data-conversation]');
     if (!lines || !el || !scroller) return;
-    const clear = el.getBoundingClientRect().top - GAP;
+    const clear = el.getBoundingClientRect().top - HANDLE_ROOM;
     if (lines.last.bottom > clear) scroller.scrollTop += lines.last.bottom - clear;
   }, [picked, frame]);
   const item = 'flex h-full items-center gap-2 outline-none active:bg-hover focus-visible:bg-hover';

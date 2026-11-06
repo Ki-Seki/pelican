@@ -133,6 +133,47 @@ describe('following the end of the conversation', () => {
     expect(screen.getByLabelText('Jump to latest')).toBeTruthy();
   });
 
+  it('lets the jump button wait while a finger’s selection has its actions docked where it sits', async () => {
+    const { QuoteTargetContext } = await import('../src/web/components/Quotes');
+    const rect = { x: 10, y: 300, top: 300, left: 10, bottom: 320, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+    // jsdom lays nothing out: a selection is somewhere, all the same.
+    const { getClientRects, getBoundingClientRect } = Range.prototype;
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+    try {
+      const { container } = render(<QuoteTargetContext.Provider value={{ chat: 's' }}><MessageList sessionId="s" view={view()} mode="normal" /></QuoteTargetContext.Provider>);
+      const { el, box, resized } = scroller(container);
+      resized(1000);
+      box.top = 400;
+      fireEvent.scroll(el);
+      resized(1300);
+      expect(screen.getByLabelText('Jump to latest')).toBeTruthy();
+      const words = screen.getByText('Now the toggle itself.').firstChild!;
+      fireEvent.pointerDown(words.parentElement!, { pointerType: 'touch' });
+      const range = document.createRange();
+      range.setStart(words, 4);
+      range.setEnd(words, 10);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      act(() => {
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+      expect(screen.getByRole('toolbar', { name: 'Selected text' })).toBeTruthy();
+      expect(screen.queryByLabelText('Jump to latest')).toBeNull();
+      // The selection let go of, the bar goes and the button is back.
+      getSelection()!.removeAllRanges();
+      act(() => {
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+      expect(screen.queryByRole('toolbar', { name: 'Selected text' })).toBeNull();
+      expect(screen.getByLabelText('Jump to latest')).toBeTruthy();
+    } finally {
+      Object.assign(Range.prototype, { getClientRects, getBoundingClientRect });
+    }
+  });
+
   it('jumps without scrolling smoothly when motion is reduced', () => {
     media['(prefers-reduced-motion: reduce)'] = true;
     const { container } = render(<MessageList sessionId="s" view={view()} mode="normal" />);

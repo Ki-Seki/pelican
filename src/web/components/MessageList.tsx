@@ -889,7 +889,7 @@ export function MessageList({
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
-        <div ref={content} className={`relative mx-auto max-w-3xl px-4 pt-3 ${docked ? 'pb-[4.75rem]' : 'pb-6'}`}>
+        <div ref={content} className={`relative mx-auto max-w-3xl px-4 pt-3 ${docked ? 'pb-20' : 'pb-6'}`}>
           <SelectionActions within={content} dockTo={frame} onDock={setDocked} />
           {view.offset > 0 && (
             <div className="flex justify-center py-3">
@@ -959,11 +959,12 @@ export function MessageList({
           </div>
         </div>
       </div>
-      {showJump && (
+      {/* While a finger's selection has its actions docked here, with the selection just above them, this waits. */}
+      {showJump && !docked && (
         <button
           type="button"
           aria-label="Jump to latest"
-          className={`animate-fade absolute left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1 ${docked ? 'bottom-16' : 'bottom-3'}`}
+          className="animate-fade absolute bottom-3 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
           onClick={() => {
             const el = scroller.current;
             if (!el) return;

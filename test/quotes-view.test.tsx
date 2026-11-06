@@ -293,6 +293,24 @@ describe('text selected under a finger', () => {
     expect(pill()).not.toBeNull();
   });
 
+  it('moves the selection up out from under the bar, with room for its handle below the line', () => {
+    const rectOf = HTMLElement.prototype.getBoundingClientRect;
+    // The bar at the foot of the conversation, its top 10 px under the selection's line (which ends at 60).
+    HTMLElement.prototype.getBoundingClientRect = function barOrNot(this: HTMLElement) {
+      return this.matches('[data-selection-actions]') ? ({ x: 40, y: 70, top: 70, left: 40, bottom: 114, right: 300, width: 260, height: 44, toJSON: () => ({}) } as DOMRect) : rectOf.call(this);
+    };
+    try {
+      render(<Conversation target={target} />);
+      hold(screen.getByTestId('reply'), 53, 75);
+      wait(SETTLE_MS);
+      expect(pill()).not.toBeNull();
+      // Up until 28 px lie between the line and the bar.
+      expect(document.querySelector('[data-conversation]')!.scrollTop).toBe(18);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = rectOf;
+    }
+  });
+
   it('Quote puts the passage in the box as it is, with no note box and no keyboard', () => {
     render(<Conversation target={target} />);
     hold(screen.getByTestId('reply'), 53, 75);
