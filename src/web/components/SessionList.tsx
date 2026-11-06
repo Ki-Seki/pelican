@@ -144,6 +144,15 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/** Whether focus came by the keyboard, as the browser shows it: a pointer's leaves no ring. */
+function keyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
+}
+
 /** How far a row slides to show its button, and how far (of its width) a slide acts on release. */
 const REVEAL = 104;
 const COMMIT = 0.4;
@@ -158,7 +167,9 @@ type RowAction = { label: string; icon: LucideIcon; act: () => void };
  * stays showing. With a mouse or the keyboard the actions are buttons on the row, shown on hover
  * or focus.
  */
-function Swipeable({ name, start, end, compact, selected, children }: {
+function Swipeable({ id, name, start, end, compact, selected, children }: {
+  /** The session's id, which tells its row in the list. */
+  id: string;
   /** The session's title, so each row's buttons say which session they act on. */
   name: string;
   /** Pin or Unpin, under a slide to the right; none for an archived session. */
@@ -262,6 +273,7 @@ function Swipeable({ name, start, end, compact, selected, children }: {
   return (
     <div
       ref={box}
+      data-session={id}
       className="group/row relative touch-pan-y touch-pinch-zoom"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -307,7 +319,7 @@ const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: Ro
     ? { label: 'Unarchive', icon: ArchiveRestore, act: () => onChange(session, { archived: false }) }
     : { label: 'Archive', icon: Archive, act: () => onChange(session, { archived: true }) };
   return (
-    <Swipeable name={session.title} {...(session.archived ? {} : { start: pin })} end={archive} compact={compact} selected={row.selected}>
+    <Swipeable id={session.id} name={session.title} {...(session.archived ? {} : { start: pin })} end={archive} compact={compact} selected={row.selected}>
       <Row session={session} {...row} />
     </Swipeable>
   );
@@ -460,11 +472,27 @@ export function SessionList({
   });
   const openSession = useCallback((id: string) => openRef.current(id), []);
 
+  // A row's own button, or Undo, leaves focus with the session it changed, which the list draws
+  // anew elsewhere or no longer shows: on its row, where it went, or on the row that took its place.
+  const toast = useRef<HTMLDivElement>(null);
+  const refocus = useRef<{ ids: string[]; scroll: boolean }>(undefined);
+  const keepFocus = useCallback((id: string) => {
+    const from = document.activeElement;
+    if (!from || (from.closest('[data-session]')?.getAttribute('data-session') !== id && !toast.current?.contains(from))) return;
+    const ids = [...(scroller.current?.querySelectorAll('[data-session]') ?? [])].map((row) => row.getAttribute('data-session')!);
+    const at = ids.indexOf(id);
+    refocus.current = { ids: at < 0 ? [id] : [id, ...ids.slice(at + 1), ...ids.slice(0, at).reverse()], scroll: keyboardFocus(from) };
+  }, []);
+
   // Pinned or archived at once in the list, then on the server; put back if the server says no.
   const change = useCallback((session: SessionSummary, to: ListChange, undoable = true) => {
+    keepFocus(session.id);
     setDone(undoable ? { session, change: to, at: Date.now() } : undefined);
-    makeChange(queryClient, session, to).catch((err: Error) => setDone({ session, change: to, error: err.message, at: Date.now() }));
-  }, [queryClient]);
+    makeChange(queryClient, session, to).catch((err: Error) => {
+      keepFocus(session.id);
+      setDone({ session, change: to, error: err.message, at: Date.now() });
+    });
+  }, [queryClient, keepFocus]);
   useEffect(() => {
     if (!done) return undefined;
     const timer = setTimeout(() => setDone(undefined), done.error ? 8000 : 5000);
@@ -570,6 +598,22 @@ export function SessionList({
     return { groups: out, more: total > rowLimit };
   }, [groups, isFolded, rowLimit]);
   const showMore = useCallback(() => setPaging({ for: pagesFor, rows: rowLimit + PAGE }), [pagesFor, rowLimit]);
+
+  useLayoutEffect(() => {
+    const kept = refocus.current;
+    if (!kept) return;
+    refocus.current = undefined;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const rows = [...(scroller.current?.querySelectorAll<HTMLElement>('[data-session]') ?? [])];
+    for (const id of kept.ids) {
+      const link = rows.find((row) => row.getAttribute('data-session') === id)?.querySelector<HTMLElement>('a[href]');
+      if (link) {
+        // Followed on the keyboard; with a pointer, the list stays where it is.
+        link.focus({ preventScroll: !kept.scroll });
+        return;
+      }
+    }
+  }, [shown]);
 
   const compact = prefs.listDensity === 'compact';
   // What "All" shows, counted the way it is filtered.
@@ -725,7 +769,7 @@ export function SessionList({
         ))}
       </div>
       {/* Always there, so a screen reader hears what lands in it. */}
-      <div role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
+      <div ref={toast} role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
         {done && (
           <div className="animate-fade pointer-events-auto mb-2 flex min-h-11 max-w-sm items-center gap-2 rounded-2xl bg-fg py-1 pr-1 pl-4 text-[14px] leading-snug text-bg shadow-lg">
             <span className="min-w-0 py-1.5">{done.error ?? changeWords(done.change)}</span>

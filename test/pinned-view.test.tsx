@@ -234,6 +234,44 @@ describe('pinned sessions in the list', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Archived\s*1$/ })).toBeTruthy());
   });
 
+  it('leave focus with the session a row’s button changed: on its row where it went, or on the next one; Undo brings it back', async () => {
+    list();
+    await screen.findByText('Pinned');
+    const link = (title: string) => screen.getByRole('link', { name: new RegExp(`^${title}, `) });
+    const press = (name: string) => {
+      const button = screen.getByRole('button', { name });
+      button.focus();
+      fireEvent.click(button);
+    };
+    press('Pin: Tidy the docs');
+    await waitFor(() => expect(document.activeElement).toBe(link('Tidy the docs')));
+    expect(pinnedSection().contains(document.activeElement)).toBe(true);
+    press('Unpin: Tidy the docs');
+    await waitFor(() => expect(titles('Today')).toEqual(['Tidy the docs']));
+    expect(document.activeElement).toBe(link('Tidy the docs'));
+    // Archived, it leaves the list: the row after it takes focus, and Undo gives it back.
+    press('Archive: Release notes');
+    await waitFor(() => expect(document.activeElement).toBe(link('Add a dark theme')));
+    press('Undo');
+    await waitFor(() => expect(document.activeElement).toBe(link('Release notes')));
+    // One the server refuses comes back, focus still with it.
+    pin.mockRejectedValueOnce(new Error('The disk is full'));
+    press('Unpin: Release notes');
+    await screen.findByText('The disk is full');
+    await waitFor(() => expect(pinnedSection().contains(link('Release notes'))).toBe(true));
+    expect(document.activeElement).toBe(link('Release notes'));
+  });
+
+  it('leave focus where it is when it was not on the row: a slide, or a button pressed elsewhere', async () => {
+    list();
+    await screen.findByText('Pinned');
+    const search = screen.getByRole('textbox', { name: 'Search sessions' });
+    search.focus();
+    fireEvent.click(screen.getByRole('button', { name: 'Pin: Tidy the docs' }));
+    await waitFor(() => expect(titles('Pinned')).toContain('Tidy the docs'));
+    expect(document.activeElement).toBe(search);
+  });
+
   it('offer no pin for an archived session, under Archived: it is brought back first', async () => {
     list();
     await screen.findByText('Pinned');
