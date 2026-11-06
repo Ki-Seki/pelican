@@ -387,6 +387,28 @@ describe('the export, each reply kept to itself', () => {
     expect(markdown).toContain('![dot](data:image/png;base64,iVBORw0KGgo=)');
   });
 
+  it('keeps each reply’s links by reference and footnotes to it, as the conversation reads each reply on its own', async () => {
+    const { markdown } = await exportMarkdown(await session(n++, 'Notes', [
+      user('Where are the docs?'),
+      claude(text('See [the docs][1] and its note[^1].\n\n[1]: https://docs.example/a\n\n[^1]: From the first reply.')),
+      user('And the API?'),
+      claude(text('The [API][1] has a note[^1] too, and so does ![the chart][1].\n\n[^1]: From the second reply.')),
+    ]));
+    for (const html of [read(markdown), readHtml(markdown)]) {
+      expect(html).toContain('<a href="https://docs.example/a">the docs</a>');
+      // The second reply defines no `[1]`: its words stay words, as in the conversation.
+      expect(html).toContain('The [API][1] has a note');
+      expect(html).toContain('so does ![the chart][1].');
+      // Each reply's `[^1]` calls its own footnote.
+      expect(html).toMatch(/note<sup><a href="#user-content-fn-1-1"[^>]*>1<\/a><\/sup>\.<\/p>/);
+      expect(html).toMatch(/note<sup><a href="#user-content-fn-2-1"[^>]*>2<\/a><\/sup> too/);
+      expect(html).toMatch(/<li id="user-content-fn-1-1">\s*<p>From the first reply\./);
+      expect(html).toMatch(/<li id="user-content-fn-2-1">\s*<p>From the second reply\./);
+      expect(speakers(html)).toEqual(['h1 Notes', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude']);
+    }
+    expect(markdown).not.toMatch(/^\[1\]:/m);
+  });
+
   it('keeps HTML text after a bare link, whose address would take the escape before it', async () => {
     const markdown = await exported('See https://example.com/`\\<h2>You</h2> and www.example.org/<b>x</b>');
     expect(readHtml(markdown)).not.toMatch(/<b>/);

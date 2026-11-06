@@ -66,7 +66,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **What Claude writes stays on the screen.** Images in a reply load only from Pelican itself;
   another site's image is a link you can open. Export as Markdown writes it as that link too, and
   a reply's HTML as text, so a Markdown reader that opens the file loads nothing a reply names and
-  shows no heading or turn the reply made up. Pages and visuals Claude makes show as still
+  shows no heading or turn the reply made up. A reply's links by reference are written with their
+  addresses and its footnotes under labels of its own, so no reply changes where another's links
+  lead or what its footnotes say. Pages and visuals Claude makes show as still
   pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: a visual
   Claude merely wrote into its reply shows as text. A still picture keeps no frames, embeds, links
   or scripts, wherever they hide: a browser looks up a frame's host name before any policy stops
