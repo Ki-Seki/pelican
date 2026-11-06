@@ -15,6 +15,7 @@ beforeAll(() => {
 
 const { PromptBody, QuoteTargetContext, SelectionActions, SETTLE_MS, SwipeQuote } = await import('../src/web/components/Quotes');
 const { keyText } = await import('../src/web/lib/keyboard');
+const { setPrefs } = await import('../src/web/lib/prefs');
 /** Quote, with the key that quotes beside it, as this keyboard prints it. */
 const QUOTE = `Quote${keyText('quote')}`;
 const { addWaiting, setWaiting, waitingOf } = await import('../src/web/lib/drafts');
@@ -189,6 +190,25 @@ describe('text selected with a mouse', () => {
     fireEvent.click(within(noteBox()!).getByRole('button', { name: /^Add/ }));
     expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'd a dark theme', from: { what: 'prompt', key: 'u1' } }]);
     expect(waitingOf('chat')[0]!.note).toBeUndefined();
+  });
+
+  it('with the Enter key set to a new line, ↵ starts one in the note, and Add shows no key', () => {
+    setPrefs({ enterToSend: 'never' });
+    try {
+      render(<Conversation target={target} />);
+      drag(screen.getByTestId('reply'), 53, 75);
+      wait(SETTLE_MS);
+      fireEvent.click(within(pill()!).getByRole('button', { name: /^Quote/ }));
+      const note = within(noteBox()!).getByLabelText('Your note');
+      // Not taken: the field gets its new line.
+      expect(fireEvent.keyDown(note, { key: 'Enter' })).toBe(true);
+      expect(noteBox()).not.toBeNull();
+      const add = within(noteBox()!).getByRole('button', { name: 'Add' });
+      expect(add.textContent).toBe('Add');
+      expect(add.getAttribute('aria-keyshortcuts')).toBeNull();
+    } finally {
+      setPrefs({ enterToSend: 'auto' });
+    }
   });
 
   it('⌘↵ sends it now with its note, which it needs; Esc lets it go', () => {

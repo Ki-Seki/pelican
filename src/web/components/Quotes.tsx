@@ -516,7 +516,9 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
   };
 
   const sendKey = keyText('noteSend');
-  const addKey = keyText('noteAdd');
+  // ↵ adds where the Enter key sends; where it makes a new line, only the button does.
+  const enter = { enterSends: enterSends() };
+  const addKey = keyText('noteAdd', undefined, enter);
   return createPortal(
     <div
       ref={box}
@@ -550,7 +552,7 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
               Send now{sendKey && <span aria-hidden className="text-[11.5px] text-faint">{sendKey}</span>}
             </button>
           )}
-          <button type="button" onClick={add} aria-keyshortcuts={ariaKeys('noteAdd')} className="flex h-8 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg">
+          <button type="button" onClick={add} aria-keyshortcuts={ariaKeys('noteAdd', undefined, enter)} className="flex h-8 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg">
             Add{addKey && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{addKey}</span>}
           </button>
         </div>

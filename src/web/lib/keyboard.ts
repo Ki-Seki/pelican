@@ -146,7 +146,8 @@ export const KEYS = {
 
   quote: { label: 'Quote, with the pill showing', group: 'Quotes and comments', scope: 'pill', keys: ['enter'] },
   quoteSelection: { label: 'Quote without a note', group: 'Quotes and comments', scope: 'page', keys: ['mod+shift+l'] },
-  noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ['enter'] },
+  // As in the message box: where the Enter key makes a new line, it does so in a note too.
+  noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ({ enterSends }) => (enterSends ? ['enter'] : []) },
   noteSend: { label: 'Note box: send now', group: 'Quotes and comments', scope: 'note', keys: ['mod+enter'] },
   commentsSend: { label: 'Changes and files: send all comments', group: 'Quotes and comments', scope: 'comments', keys: ['mod+enter'] },
 
@@ -264,11 +265,11 @@ export const chordText = (chord: Chord, apple = isApple): string => chordParts(c
 
 /**
  * The key for this as a menu or a button's title shows it, faintly beside its name; none while
- * nothing takes it yet.
+ * nothing takes it yet, or where the Enter key setting (`context`) gives it none.
  */
-export function keyText(id: KeyId, apple = isApple): string | undefined {
+export function keyText(id: KeyId, apple = isApple, context?: KeyContext): string | undefined {
   if (!keyWorks(id)) return undefined;
-  const first = chordsOf(id)[0];
+  const first = chordsOf(id, context)[0];
   return first ? chordText(first, apple) : undefined;
 }
 
@@ -280,10 +281,12 @@ export const withKey = (label: string, id: KeyId, apple = isApple): string => {
 
 const ARIA_NAMES: Record<string, string> = { enter: 'Enter', escape: 'Escape', ' ': 'Space' };
 
-/** Every key that does this, in the form aria-keyshortcuts takes, for an element that has it. */
-export function ariaKeys(id: KeyId, apple = isApple): string | undefined {
+/** Every key that does this, in the form aria-keyshortcuts takes, for an element that has it; none if none does. */
+export function ariaKeys(id: KeyId, apple = isApple, context?: KeyContext): string | undefined {
   if (!keyWorks(id)) return undefined;
-  const names = [...chordsOf(id), ...(def(id).also ?? [])].map((chord) => {
+  const chords = [...chordsOf(id, context), ...(def(id).also ?? [])];
+  if (chords.length === 0) return undefined;
+  const names = chords.map((chord) => {
     const c = parse(chord);
     const mods = [
       (apple ? c.ctrl : c.ctrl || c.mod) && 'Control',
@@ -343,7 +346,7 @@ export type ShortcutRow = { id: KeyId; label: string; keys: string[][]; range?: 
 export function shortcutList(context: KeyContext, apple = isApple): Array<{ group: KeyGroup; rows: ShortcutRow[] }> {
   return KEY_GROUPS.map((group) => ({
     group,
-    rows: KEY_IDS.filter((id) => def(id).group === group && keyWorks(id)).map((id) => {
+    rows: KEY_IDS.filter((id) => def(id).group === group && keyWorks(id) && chordsOf(id, context).length > 0).map((id) => {
       const chords = chordsOf(id, context);
       // A run of digits (1 to 9) reads as a range.
       const range = chords.length > 2 && chords.every((chord) => /^\d$/.test(chord));

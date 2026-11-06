@@ -82,12 +82,15 @@ describe('the keyboard shortcuts sheet', () => {
     expect(listed).not.toContain('Copy');
   });
 
-  it('says Send and New line as the Enter key setting has them', () => {
+  it('says Send and New line as the Enter key setting has them, and the note box’s Add only where Enter adds', () => {
     // Auto: a touch screen's Enter starts a new line.
     coarse = true;
-    const box = parts()['Message box']!;
-    expect(box).toContain('Send: Ctrl Enter');
-    expect(box).toContain('New line: Enter');
+    const all = parts();
+    expect(all['Message box']).toContain('Send: Ctrl Enter');
+    expect(all['Message box']).toContain('New line: Enter');
+    // Enter starts a new line in a note too: no key adds it.
+    expect(all['Quotes and comments']!.some((row) => row.startsWith('Note box: add'))).toBe(false);
+    expect(all['Quotes and comments']).toContain('Note box: send now: Ctrl Enter');
   });
 
   it('closes with its button, and Esc is the dialog’s own', () => {
