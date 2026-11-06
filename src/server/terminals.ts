@@ -76,7 +76,7 @@ const OUTER = new Set([
   'COLUMNS', 'LINES', 'TERMCAP', 'WINDOWID', 'TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'VTE_VERSION', 'WT_SESSION',
   'WT_PROFILE_ID', 'TERMINAL_EMULATOR', '__CFBundleIdentifier', 'XPC_SERVICE_NAME', 'XPC_FLAGS', 'INVOCATION_ID',
   'JOURNAL_STREAM', 'NOTIFY_SOCKET', 'LISTEN_PID', 'LISTEN_FDS', 'LISTEN_FDNAMES', 'MANAGERPID', 'SYSTEMD_EXEC_PID',
-  'SHLVL', 'OLDPWD', '_',
+  'SHLVL', 'OLDPWD', '_', 'CLAUDE_CODE_SSE_PORT',
 ]);
 const OUTER_PREFIX = /^(ITERM_|KITTY_|WEZTERM_|ALACRITTY_|GHOSTTY_|VSCODE_|KONSOLE_|GNOME_TERMINAL_)/;
 /** Pelican's own settings, npm's when npm started Pelican, and the mark Claude Code leaves on what it runs. */
@@ -95,6 +95,8 @@ export function shellEnvironment(base: NodeJS.ProcessEnv, launch: Record<string,
     if (value === undefined || PELICANS.test(name) || OUTER.has(name) || OUTER_PREFIX.test(name)) continue;
     env[name] = value;
   }
+  // VS Code's terminals hand git a password helper that answers only inside VS Code.
+  if (base.VSCODE_GIT_ASKPASS_MAIN) delete env.GIT_ASKPASS;
   Object.assign(env, launch);
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';

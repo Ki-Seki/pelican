@@ -15,7 +15,7 @@ import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
-import { closeAllTerminals, closeIdleTerminals, terminalState, terminalTiming, testShell } from '../src/server/terminals';
+import { closeAllTerminals, closeIdleTerminals, shellEnvironment, terminalState, terminalTiming, testShell } from '../src/server/terminals';
 import { Page, pause, until } from './terminal-page';
 
 let dir: string;
@@ -296,6 +296,25 @@ describe('flow control', () => {
 });
 
 describe('the shell’s environment', () => {
+  it('leaves out what is Pelican’s, npm’s, Claude Code’s mark and the outer terminal’s, and adds the folder’s launch settings', () => {
+    const outer = {
+      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      PELICAN_AUTH: 'none', PELICAN_STATE_DIR: '/state', npm_config_cache: '/cache', npm_lifecycle_event: 'dev', CLAUDECODE: '1',
+      TERM: 'dumb', TERM_PROGRAM: 'vscode', VSCODE_GIT_ASKPASS_MAIN: '/vscode/askpass-main.js', GIT_ASKPASS: '/vscode/askpass.sh',
+      CLAUDE_CODE_SSE_PORT: '51234', ITERM_SESSION_ID: 'w0t0p0', TMUX: '/tmp/tmux-501/default,1,0', SHLVL: '2',
+      XPC_SERVICE_NAME: 'io.github.ki-seki.pelican', INVOCATION_ID: 'abc', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c',
+    };
+    const launch = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false' };
+    expect(shellEnvironment(outer, launch, '/bin/zsh')).toEqual({
+      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
+      TERM: 'xterm-256color', COLORTERM: 'truecolor', SHELL: '/bin/zsh',
+    });
+    // A git password helper of your own stays; a locale is set where there was none.
+    expect(shellEnvironment({ GIT_ASKPASS: '/usr/libexec/ssh-askpass' }, undefined, '/bin/bash')).toMatchObject({ GIT_ASKPASS: '/usr/libexec/ssh-askpass', LANG: expect.stringMatching(/UTF-8$/) });
+    expect(shellEnvironment({ LC_ALL: 'C' }, undefined, '/bin/bash')).not.toHaveProperty('LANG');
+  });
+
   it('is Pelican’s, without Pelican’s settings, npm’s, Claude Code’s mark and the outer terminal’s', async () => {
     const before = { ...process.env };
     Object.assign(process.env, {
