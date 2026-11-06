@@ -9,7 +9,7 @@ import { ariaKeys, composing, isKey, keyText } from '../lib/keyboard';
 import { fromElement, fromRange, paint, rangeOf, sourceOf } from '../lib/passages';
 import { enterSends } from '../lib/prefs';
 import { useSwipeLeft } from '../lib/press';
-import { type PromptPart, type QuoteFrom, quoteItem, readPrompt, shortLines, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
+import { previewText, type PromptPart, type QuoteFrom, quoteItem, readPrompt, shortLines, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 
 /**
  * Where quotes taken in a conversation go: the message box of its chat (`chat`, the box's draft
@@ -531,7 +531,7 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
       className="animate-fade fixed z-30 rounded-2xl border border-line bg-panel p-3 shadow-xl"
     >
       <div style={{ width: `min(${NOTE_WIDTH - 26}px, calc(100vw - ${2 * EDGE + 26}px))` }}>
-        <blockquote className="line-clamp-2 border-l-2 border-faint/40 pl-2.5 text-[13px] leading-snug break-words whitespace-pre-wrap text-muted">{noting.item.text}</blockquote>
+        <blockquote className="line-clamp-2 border-l-2 border-faint/40 pl-2.5 text-[13px] leading-snug break-words whitespace-pre-wrap text-muted">{previewText(noting.item.text)}</blockquote>
         <textarea
           ref={field}
           rows={2}

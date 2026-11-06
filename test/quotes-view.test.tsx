@@ -273,6 +273,29 @@ describe('text selected with a mouse', () => {
     }
   });
 
+  it('shows two lines of the passage past its blank lines, and adds the whole of it', () => {
+    function Output() {
+      const content = useRef<HTMLDivElement>(null);
+      return (
+        <QuoteTargetContext.Provider value={target}>
+          <div data-conversation>
+            <div ref={content}>
+              <div data-quotable data-quote-from="t1" data-quote-what="step"><pre data-testid="out">{'Running 50 tests using 4 workers\n\n  50 passed (58.2s)'}</pre></div>
+              <SelectionActions within={content} />
+            </div>
+          </div>
+        </QuoteTargetContext.Provider>
+      );
+    }
+    render(<Output />);
+    drag(screen.getByTestId('out'), 0, screen.getByTestId('out').textContent!.length);
+    wait(SETTLE_MS);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(noteBox()!.querySelector('blockquote')!.textContent).toBe('Running 50 tests using 4 workers\n  50 passed (58.2s)');
+    fireEvent.click(within(noteBox()!).getByRole('button', { name: 'Add' }));
+    expect(waitingOf('chat')).toMatchObject([{ kind: 'quote', text: 'Running 50 tests using 4 workers\n\n  50 passed (58.2s)' }]);
+  });
+
   it('a click outside closes the note box only while its note is empty', () => {
     render(<Conversation target={target} />);
     drag(screen.getByTestId('reply'), 53, 75);

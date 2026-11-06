@@ -5,7 +5,7 @@ import { baseName } from '../lib/format';
 import { composing } from '../lib/keyboard';
 import { paint, rangeOf } from '../lib/passages';
 import { enterSends } from '../lib/prefs';
-import { isReply, itemName, itemTitle, passageStart, shortLines, type WaitingItem } from '../lib/quote';
+import { isReply, itemName, itemTitle, passageStart, previewText, shortLines, type WaitingItem } from '../lib/quote';
 import { Sheet } from './Sheet';
 
 /**
@@ -141,7 +141,7 @@ export function QuoteCard({ item, onNote, onRemove }: { item: WaitingItem; onNot
     <>
       <div className="mx-3 mt-2.5 rounded-2xl bg-bg pt-1 pr-0.5 pl-3">
         <div className="flex items-start gap-1">
-          <blockquote className="mt-2 line-clamp-2 min-w-0 flex-1 border-l-2 border-faint/40 pl-2.5 text-[13.5px] leading-snug break-words whitespace-pre-wrap text-muted">{item.text}</blockquote>
+          <blockquote className="mt-2 line-clamp-2 min-w-0 flex-1 border-l-2 border-faint/40 pl-2.5 text-[13.5px] leading-snug break-words whitespace-pre-wrap text-muted">{previewText(item.text)}</blockquote>
           <button type="button" aria-label={`Remove the quote ${passageStart(item)}`} onClick={onRemove} className="grid size-11 shrink-0 place-items-center rounded-full text-faint active:bg-hover">
             <X className="size-4" />
           </button>

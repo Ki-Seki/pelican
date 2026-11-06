@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { promptGist, readPrompt } from '../src/shared/quoted';
 import {
-  attachBlock, attachHeader, fileItem, fileMention, itemName, itemTitle, MAX_QUOTE_LINES, messageWith, olderQuote, preparePassage, quoteItem,
+  attachBlock, attachHeader, fileItem, fileMention, itemName, itemTitle, MAX_QUOTE_LINES, messageWith, olderQuote, preparePassage, previewText, quoteItem,
   quoteLines, readMessage, replyBlocks, sendNowMessage, type WaitingItem,
 } from '../src/web/lib/quote';
 import { capQuote, defuseMentions, fenceFor, quotedLines } from '../src/web/lib/sanitize';
@@ -442,6 +442,12 @@ describe('a waiting item named', () => {
     expect(itemTitle(quote('a();', undefined, { path: 'src/app.ts', lines: [7, 8] }))).toBe('Quote from app.ts:7-8');
     expect(itemTitle(comment('src/styles/theme.css', 12, 'x', 'y'))).toBe('Comment on theme.css:12');
     expect(itemTitle(fileItem('src/prefs.ts'))).toBe('File');
+  });
+
+  it('in a preview of two lines, without its blank lines, which would take one of the two', () => {
+    expect(previewText('Running 50 tests using 4 workers\n\n  50 passed (58.2s)')).toBe('Running 50 tests using 4 workers\n  50 passed (58.2s)');
+    expect(previewText('one\n \n\t\n\ntwo\nthree')).toBe('one\ntwo\nthree');
+    expect(previewText('no blank lines')).toBe('no blank lines');
   });
 
   it('for a screen reader: the passage, and the note when it has one', () => {

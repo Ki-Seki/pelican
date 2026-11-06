@@ -255,6 +255,9 @@ export function itemTitle(item: WaitingItem): string {
 /** A quote's first words, on one line. */
 export const passageStart = (item: WaitingItem): string => item.text.split(LINE_BREAK).map((line) => line.trim()).filter(Boolean).join(' ');
 
+/** A passage as a preview of two lines shows it: its blank lines left out, so they take none of the two. */
+export const previewText = (text: string): string => text.replace(/\n\s*\n/g, '\n');
+
 /** What a waiting item is, in words, for a screen reader and a tooltip. */
 export function itemName(item: WaitingItem): string {
   if (item.kind === 'file') return `${item.folder ? 'Folder' : 'File'} ${item.path ?? item.text}`;

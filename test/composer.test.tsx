@@ -282,6 +282,19 @@ describe('what waits above the message box', () => {
     expect(waitingOf('w6').map((item) => item.text)).toEqual(['All 14 theme tests pass.']);
   });
 
+  it('on a phone, a card’s two lines show the passage past its blank lines; the whole of it waits as it was', async () => {
+    renderComposer('w11');
+    const output = 'Running 50 tests using 4 workers\n\n  50 passed (58.2s)';
+    act(() => {
+      addWaiting('w11', quote(output));
+    });
+    await frame();
+    const card = screen.getByText(/^Running 50 tests/);
+    expect(card.tagName).toBe('BLOCKQUOTE');
+    expect(card.textContent).toBe('Running 50 tests using 4 workers\n  50 passed (58.2s)');
+    expect(waitingOf('w11')[0]!.text).toBe(output);
+  });
+
   it('on a computer, take the keys to the message box as a quote comes, to say what about it', async () => {
     media[COMPUTER] = true;
     const { box } = renderComposer('w7');
