@@ -14,10 +14,12 @@
   Claude says a command does keeps its emoji whole.
 - Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of
   its Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its
-  quotes are quotes, a quote from a file its lines as code. A heading in a reply sits under the
-  speakers' (`##` becomes `####`), so none passes for "You" or "Claude", and a code block a reply
-  leaves open ends with it. Addresses and emails in prompts and Claude Code's notes stay text, as
-  code, where a reader would link them.
+  quotes are quotes, a quote from a file its lines as code. A reply keeps to itself in any reader
+  (GitHub, VS Code's preview): a heading in it sits under the speakers' (`##` becomes `####`), so
+  none passes for "You" or "Claude"; its HTML is text, as the conversation shows it, so none hides
+  the turns after it; a picture is a link that names its site, never loaded when the file is read;
+  and a code block it leaves open ends with it. Addresses and emails in prompts and Claude Code's
+  notes stay text, as code, where a reader would link them.
 - Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
   the message boxes; it sat 2px lower.
 - An Agent call's steps come a page at a time, the newest first, with Show earlier, as a workflow

