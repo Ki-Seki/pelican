@@ -111,8 +111,12 @@ export function capQuote(text: string, max = MAX_QUOTE): string {
 
 /** What ends a word before an @: space, and the few marks Desktop counts with it. */
 const WORD_GAP = /^[\s\u0085\u115F\u1160\u3164\uFFA0\u3002\u3001\uFF1F\uFF01]$/u;
-/** What is not seen, so it neither starts nor ends a word. */
-const UNSEEN = /^[\p{Cf}\p{Co}\p{Default_Ignorable_Code_Point}\u0890\u0891\u180F\u{13430}-\u{1343F}]$/u;
+/**
+ * What is not seen, so it neither starts nor ends a word, as Desktop counts it: controls other than
+ * tab and line breaks, format and private characters, a lone half of a surrogate pair, and the few
+ * that draw nothing (a blank Braille cell, the object mark).
+ */
+const UNSEEN = /^(?![\n\r\t])[\p{Cc}\p{Cf}\p{Co}\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB\uD800-\uDFFF\u2800\uFFFC\u{1D159}\u0890\u0891\u180F\u{13430}-\u{1343F}]$/u;
 
 /** The character (a whole code point) just before `at`. */
 function before(text: string, at: number): string {

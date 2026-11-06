@@ -119,6 +119,17 @@ describe('a quote, prepared as Claude Desktop prepares one', () => {
     expect(defuseMentions('\u200B@x')).toBe('\u200B\uFF20x');
   });
 
+  it('steps back over every character Desktop counts as not seen before an @: controls, a lone surrogate, a blank Braille cell', () => {
+    // Desktop's outputs (its xF, shared-m-2), for each.
+    for (const unseen of ['\u0001', '\u0007', '\u007F', '\u0080', '\u009F', '\u2800', '\uFFFC', '\u{1D159}', '\uD800', '\uDC00', '\uFFF9', '\u00AD', '\u180E', '\uE000', '\u{F0000}', '\u{E0001}', '\u0890', '\u{13430}']) {
+      expect(defuseMentions(`${unseen}@a`)).toBe(`${unseen}\uFF20a`);
+      expect(defuseMentions(`x${unseen}@a`)).toBe(`x${unseen}@a`);
+    }
+    // A tab and line breaks are space, not unseen; an @ after a seen character stays.
+    expect(defuseMentions('\t@a\n@b\r@c')).toBe('\t\uFF20a\n\uFF20b\r\uFF20c');
+    expect(defuseMentions('\uFFFD@a')).toBe('\uFFFD@a');
+  });
+
   it('splits on every line separator, and an empty line becomes "> "', () => {
     expect(quotedLines('one\r\ntwo\rthree\nfour\u2028five\u2029six')).toBe('> one\n> two\n> three\n> four\n> five\n> six');
     expect(quotedLines('para one\n\npara two')).toBe('> para one\n> \n> para two');
