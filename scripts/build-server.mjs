@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 
-import { missing, NOTICES, notices, packagesOf, WEB_PACKAGES } from './notices.mjs';
+import { hasEsbuildRuntime, missing, NOTICES, notices, packageFolder, packagesOf, WEB_PACKAGES } from './notices.mjs';
 
 /**
  * How the server is built; test/package.test.ts builds it so too.
@@ -45,6 +45,19 @@ export const serverPackages = (metafile, outfile, cwd = process.cwd()) => {
   return packagesOf(Object.entries(output.inputs).filter(([, input]) => input.bytesInOutput > 0).map(([file]) => path.resolve(cwd, file)));
 };
 
+/** The files of packages with code in the server, by esbuild's metafile, for the notices of others they carry. */
+export const serverFiles = (metafile, outfile, cwd = process.cwd()) => {
+  const output = metafile.outputs[path.relative(cwd, path.resolve(cwd, outfile))] ?? Object.values(metafile.outputs).find((each) => each.entryPoint);
+  return Object.entries(output.inputs).filter(([, input]) => input.bytesInOutput > 0).map(([file]) => path.resolve(cwd, file)).filter((file) => packageFolder(file));
+};
+
+/**
+ * esbuild, where it wrote its runtime into the server (hasEsbuildRuntime): its code too, under its
+ * license, which neither its metafile nor its source map names. Its folder as the others are, in
+ * the working folder's node_modules.
+ */
+export const serverHelpers = async (outfile, cwd = process.cwd()) => (hasEsbuildRuntime(await readFile(path.resolve(cwd, outfile), 'utf8')) ? [path.join(cwd, 'node_modules', 'esbuild')] : []);
+
 /**
  * The packages a source map names files of: another account of what the bundle holds, which the
  * notices are checked against.
@@ -59,16 +72,17 @@ if (isMain()) {
   const { metafile } = await build({ ...serverBuild, outfile, sourcemap: true, metafile: true, logLevel: 'info' });
   await chmod(outfile, 0o755);
   // THIRD_PARTY_NOTICES, of the packages built into the server and the web app, which Vite built first.
-  const web = JSON.parse(await readFile(WEB_PACKAGES, 'utf8').catch(() => {
+  const { folders: web, files: webIn } = JSON.parse(await readFile(WEB_PACKAGES, 'utf8').catch(() => {
     throw new Error(`${WEB_PACKAGES} is missing: build the web app first (npm run build does)`);
   }));
   const server = serverPackages(metafile, outfile);
+  const helpers = await serverHelpers(outfile);
   const { version } = JSON.parse(await readFile('package.json', 'utf8'));
-  const text = notices({ version, server, web });
-  // Each package built in is in it: by the metafile, by the bundle's source map, by the web app's modules.
-  const left = missing(text, [...new Set([...server, ...(await mappedPackages(`${outfile}.map`)), ...web])]);
+  const text = notices({ version, server, web, helpers, files: [...serverFiles(metafile, outfile), ...webIn] });
+  // Each package built in is in it: by the metafile, by the bundle's source map, by the web app's modules, and esbuild's runtime.
+  const left = missing(text, [...new Set([...server, ...(await mappedPackages(`${outfile}.map`)), ...web, ...helpers])]);
   if (left.length > 0) throw new Error(`${NOTICES} leaves out ${left.join(', ')}`);
   await writeFile(NOTICES, text);
   await rm(WEB_PACKAGES);
-  console.log(`${NOTICES}: ${server.length} packages in the server, ${web.length} in the web app`);
+  console.log(`${NOTICES}: ${server.length + helpers.length} packages in the server, ${web.length} in the web app`);
 }

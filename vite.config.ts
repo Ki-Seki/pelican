@@ -9,7 +9,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
-import { WEB_PACKAGES, webPackages } from './scripts/notices.mjs';
+import { WEB_PACKAGES, webFiles, webPackages } from './scripts/notices.mjs';
 
 const backend = `http://127.0.0.1:${process.env.PELICAN_PORT ?? '7860'}`;
 
@@ -72,9 +72,10 @@ function thirdParty(): Plugin {
     async generateBundle(_options, bundle) {
       if (skip) return;
       const folders = webPackages(bundle, (name: string) => realpathSync(path.join(root, 'node_modules', name)));
-      // Beside the app's folder: in dist/ for `npm run build`, where the server's build reads it.
+      // Beside the app's folder: in dist/ for `npm run build`, where the server's build reads it;
+      // with the files, for the notices of others they carry.
       const listed = path.resolve(outDir, '..', path.basename(WEB_PACKAGES));
-      await writeFile(listed, `${JSON.stringify(folders, null, 2)}\n`);
+      await writeFile(listed, `${JSON.stringify({ folders, files: webFiles(bundle) }, null, 2)}\n`);
     },
   };
 }

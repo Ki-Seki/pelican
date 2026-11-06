@@ -9,7 +9,7 @@ import { build as esbuild } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { mappedPackages, serverBuild, serverPackages } from '../scripts/build-server.mjs';
+import { mappedPackages, serverBuild, serverFiles, serverHelpers, serverPackages } from '../scripts/build-server.mjs';
 import { missing, notices, packageFolder, packagesOf, readPackage } from '../scripts/notices.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -17,6 +17,8 @@ let dir: string;
 let server: string[];
 let mapped: string[];
 let web: string[];
+let helpers: string[];
+let files: string[];
 
 beforeAll(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-notices-'));
@@ -24,8 +26,11 @@ beforeAll(async () => {
   const { metafile } = await esbuild({ ...serverBuild, absWorkingDir: root, outfile, sourcemap: true, metafile: true, logLevel: 'silent' });
   server = serverPackages(metafile, outfile, root);
   mapped = await mappedPackages(`${outfile}.map`);
+  helpers = await serverHelpers(outfile, root);
   await viteBuild({ configFile: path.join(root, 'vite.config.ts'), logLevel: 'silent', build: { outDir: path.join(dir, 'web'), emptyOutDir: true } });
-  web = JSON.parse(await readFile(path.join(dir, '.third-party-web.json'), 'utf8')) as string[];
+  const built = JSON.parse(await readFile(path.join(dir, '.third-party-web.json'), 'utf8')) as { folders: string[]; files: string[] };
+  web = built.folders;
+  files = [...serverFiles(metafile, outfile, root), ...built.files];
 }, 180_000);
 
 afterAll(async () => {
@@ -56,7 +61,33 @@ describe('the packages built in', () => {
 describe('THIRD_PARTY_NOTICES', () => {
   let text: string;
   beforeAll(() => {
-    text = notices({ version: '0.0.0', server, web });
+    text = notices({ version: '0.0.0', server, web, helpers, files });
+  });
+  const sectionOf = (name: string) => {
+    const at = text.indexOf(`\n${name} `);
+    return text.slice(at, text.indexOf('='.repeat(80), at));
+  };
+
+  it('credits esbuild for the helper code it writes into the server, which no source map names', () => {
+    expect(names(helpers)).toEqual(['esbuild']);
+    const esbuild = sectionOf('esbuild');
+    expect(esbuild).toMatch(/Built into: the server \(dist\/server\/index\.js\), as the helper code it writes into what it bundles/);
+    expect(esbuild).toContain('Copyright (c) 2020 Evan Wallace');
+  });
+
+  it('gives what rolldown takes from others, as its runtime is in the web app: its THIRD-PARTY-LICENSE', () => {
+    const rolldown = sectionOf('rolldown');
+    expect(rolldown).toContain('THIRD-PARTY-LICENSE:');
+    expect(rolldown).toContain('[these people](https://github.com/rollup/rollup/graphs/contributors)');
+  });
+
+  it('keeps the notices of others that a file built in carries at its top, which minifying leaves out: vfile’s path-browserify', () => {
+    const vfile = sectionOf('vfile');
+    expect(vfile).toContain('lib/minpath.browser.js:');
+    expect(vfile).toContain('Copyright (c) 2013 James Halliday');
+    expect(vfile).toContain('Copyright Joyent, Inc. and other Node contributors.');
+    // A file's notice that only points to the package's own license is not repeated.
+    expect(sectionOf('react')).not.toContain('Notices of others');
   });
 
   it('names each package built in, with its version, license and the license in full', () => {

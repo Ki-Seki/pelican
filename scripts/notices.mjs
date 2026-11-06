@@ -15,8 +15,11 @@ export const NOTICES = 'THIRD_PARTY_NOTICES';
 /** Where the web app's build leaves the packages built into it, for the server's build to write the notices with. */
 export const WEB_PACKAGES = 'dist/.third-party-web.json';
 
-/** A package's files that hold its license or notices, as npm packages name them. */
-const LICENSE_FILE = /^(?:licen[cs]e|copying|copyright|notice|unlicense)(?:[-_.][\w.-]*)?$/i;
+/**
+ * A package's files that hold its license or notices, as npm packages name them: those of what it
+ * takes from others too (rolldown's THIRD-PARTY-LICENSE, for the runtime it puts in a bundle).
+ */
+const LICENSE_FILE = /^(?:(?:third[-_]party[-_])?(?:licen[cs]es?|notices?)|copying|copyright|unlicense)(?:[-_.][\w.-]*)?$/i;
 
 /** Licenses whose source must be offered with what is built from it, as the MPL asks for its files. */
 const SOURCE_OFFERED = /\b(?:MPL|EPL|LGPL|CDDL)\b/i;
@@ -87,6 +90,30 @@ const wrap = (words, width = 96) => words.split(' ').reduce((lines, word) => {
   return lines;
 }, []).join('\n');
 
+/**
+ * The notices of others that files of a package built in carry at their top, which a minifier
+ * leaves out: a comment with a copyright line that the package's own license does not have, as
+ * vfile's minpath.browser.js has path-browserify's and Node's. Each with the file's path in it.
+ */
+function noticesIn(pkg, files) {
+  const own = [...pkg.files.map((file) => file.text), ...pkg.header].join('\n');
+  const found = [];
+  for (const file of [...new Set(files)].sort()) {
+    let text;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const comment = /^(?:\s*(?:\/\/.*|\/\*[\s\S]*?\*\/)\s*)+/.exec(text.slice(0, 20_000).replace(/^(?:'use strict';|"use strict";)\s*/, ''))?.[0] ?? '';
+    const lines = comment.split('\n').map((line) => line.replace(/^\s*(?:\/\/|\/\*+|\*\/|\*)? ?/, '').trimEnd());
+    if (lines.some((line) => /^copyright\b/i.test(line.trim()) && !own.includes(line.trim()))) {
+      found.push({ name: path.relative(pkg.folder, file), text: lines.join('\n').trim() });
+    }
+  }
+  return found;
+}
+
 /** What a package is, read from its folder. */
 export function readPackage(folder) {
   const manifest = JSON.parse(readFileSync(path.join(folder, 'package.json'), 'utf8'));
@@ -110,8 +137,8 @@ function mitWith(copyright) {
   return mit.replace(/^Copyright .*$/m, copyright);
 }
 
-/** A package's section: what it is, where it is built in, where its source is, and its license in full. */
-function section(pkg, where) {
+/** A package's section: what it is, where it is built in, where its source is, its license in full, and the notices of others its files built in carry. */
+function section(pkg, where, files) {
   const npm = `https://www.npmjs.com/package/${pkg.name}/v/${pkg.version}`;
   const tarball = `https://registry.npmjs.org/${pkg.name}/-/${pkg.name.split('/').pop()}-${pkg.version}.tgz`;
   const lines = [headingOf(pkg).trimEnd(), `Built into: ${where.join(' and ')}`, `Source: its npm package, ${npm} (${tarball})`];
@@ -135,16 +162,23 @@ function section(pkg, where) {
       mitWith(copyright),
     ].join('\n'));
   }
+  const carried = noticesIn(pkg, files);
+  if (carried.length > 0) {
+    texts.push(`Notices of others in its files built in, which minifying leaves out of them:\n\n${carried.map((notice) => `${notice.name}:\n\n${notice.text}`).join('\n\n')}`);
+  }
   return `${lines.join('\n')}\n\n${texts.join('\n\n')}\n`;
 }
 
 /**
  * The text of THIRD_PARTY_NOTICES: the packages built into the server and the web app (their
- * folders), each once, with where it is built in.
+ * folders), each once, with where it is built in; `helpers`, a bundler whose own code it writes
+ * into the server (esbuild's runtime); and `files`, the files built in, for the notices they carry.
+ * @param {{ version: string, server: string[], web: string[], helpers?: string[], files?: string[] }} built
  */
-export function notices({ version, server, web }) {
+export function notices({ version, server, web, helpers = [], files = [] }) {
   const where = new Map();
   for (const folder of server) where.set(folder, [...(where.get(folder) ?? []), 'the server (dist/server/index.js)']);
+  for (const folder of helpers) where.set(folder, [...(where.get(folder) ?? []), 'the server (dist/server/index.js), as the helper code it writes into what it bundles (__toESM, __commonJS and the like)']);
   for (const folder of web) where.set(folder, [...(where.get(folder) ?? []), 'the web app (dist/web)']);
   const packages = [...where.keys()].map(readPackage).sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
   const rule = '='.repeat(80);
@@ -158,12 +192,28 @@ export function notices({ version, server, web }) {
       wrap(`Of them, ${offered.map((pkg) => `${pkg.name} ${pkg.version} (${pkg.license})`).join(', ')} ${offered.length === 1 ? 'is' : 'are'} under a license that asks for its source code to be offered: it is the npm package of that name and version, as its section says.`),
     ] : []),
   ];
-  return `${head.join('\n')}\n\n${packages.map((pkg) => `${rule}\n${section(pkg, where.get(pkg.folder))}`).join('\n')}`;
+  return `${head.join('\n')}\n\n${packages.map((pkg) => `${rule}\n${section(pkg, where.get(pkg.folder), files.filter((file) => packageFolder(file) === pkg.folder))}`).join('\n')}`;
 }
 
 /** The packages (folders) the notices do not name with their version and license: none, when they are complete. */
 export function missing(text, folders) {
   return folders.map(readPackage).filter((pkg) => !text.includes(`\n${headingOf(pkg)}`)).map((pkg) => `${pkg.name} ${pkg.version}`);
+}
+
+/**
+ * Whether a bundle esbuild wrote has its runtime in it, the helpers it writes for what it bundles
+ * (`var __toESM = …`), which neither its metafile nor its source map names.
+ */
+export const hasEsbuildRuntime = (code) => /^var __(?:toESM|commonJS|esm|export|require|copyProps|reExport) = /m.test(code);
+
+/** The files of packages, with code in what a Vite or Rolldown build wrote. */
+export function webFiles(bundle) {
+  const files = [];
+  for (const output of Object.values(bundle)) {
+    if (output.type !== 'chunk') continue;
+    for (const [id, module] of Object.entries(output.modules)) if (module.renderedLength > 0 && !id.startsWith('\0') && packageFolder(id)) files.push(id.replace(/[?#].*$/, ''));
+  }
+  return [...new Set(files)].sort();
 }
 
 /**
