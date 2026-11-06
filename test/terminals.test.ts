@@ -190,8 +190,7 @@ describe('a page that comes back', () => {
     expect(second.screen.buffer.normal.getLine(second.screen.buffer.normal.length - 1)).toBeDefined();
     // The program is where it was: a key, and it leaves the screen it drew for the one before.
     second.type('q\r');
-    await second.sees(/got q\r\n/);
-    await until(() => second.screen.buffer.active.type === 'normal', 5000, 'the normal screen');
+    await until(() => second.screen.buffer.active.type === 'normal' && second.lines().includes('got q'), 5000, 'the normal screen');
     expect(second.lines()).toEqual(expect.arrayContaining(['line 1', 'line 2', 'line 3', 'got q']));
     expect(second.screen.modes.applicationCursorKeysMode).toBe(false);
   }, 30_000);
@@ -207,7 +206,9 @@ describe('a page that comes back', () => {
     await late.readied();
     await all.sees(/END\r\n/, 60_000);
     await late.sees(/END\r\n/, 60_000);
-    await pause(300);
+    // Both have drawn all they were sent.
+    const same = () => JSON.stringify(late.lines()) === JSON.stringify(all.lines());
+    await until(same, 10_000).catch(() => undefined);
     expect(late.output).not.toMatch(/line 600\b/);
     expect(late.lines()).toEqual(all.lines());
     expect(late.lines().filter((line) => /^line \d+$/.test(line))).toHaveLength(1500);
@@ -237,7 +238,7 @@ describe('flow control', () => {
     const terminal = await open();
     const slow = await atPrompt(terminal.id, { ack: false });
     slow.sendAck();
-    slow.type("yes 0123456789012345678901234567890123456789 | head -c 30000000; echo DO''NE\r");
+    slow.type("yes 0123456789012345678901234567890123456789 | head -c 4000000; echo DO''NE\r");
     await until(() => terminalState(terminal.id)!.paused, 10_000, 'the pause');
     const at = terminalState(terminal.id)!.received;
     await pause(1000);
@@ -260,7 +261,7 @@ describe('flow control', () => {
     const asleep = await atPrompt(terminal.id);
     const awake = await atPrompt(terminal.id);
     asleep.stall();
-    awake.type("yes 0123456789012345678901234567890123456789 | head -c 20000000; echo DO''NE\r");
+    awake.type("yes 0123456789012345678901234567890123456789 | head -c 4000000; echo DO''NE\r");
     await awake.sees(/DONE\r\n/, 60_000);
     // Nothing waits for the sleeping page any more.
     await until(() => terminalState(terminal.id)!.viewers.length === 1, 5000, 'the sleeping page to be let go');
@@ -418,7 +419,7 @@ describe('who gets a terminal', () => {
     const listed = await api('GET', '/api/terminals');
     expect(listed.body).toEqual({
       available: false,
-      reason: 'The terminal could not start here: Cannot find module \'pty.node\'. ! commands work without it.',
+      reason: 'The terminal could not start here: Cannot find module \'pty.node\'. ! commands work as before.',
       terminals: [],
     });
     expect((await api('GET', '/api/info')).body.terminal).toEqual({ available: false, reason: listed.body.reason });

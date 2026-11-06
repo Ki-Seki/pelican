@@ -31,45 +31,62 @@ export type PtyOptions = { name: string; cols: number; rows: number; cwd: string
 export type PtySpawn = (file: string, args: string[], options: PtyOptions) => Pty;
 
 const PACKAGE = '@lydell/node-pty';
-const platformPackage = () => `${PACKAGE}-${process.platform}-${process.arch}`;
-const WORKS_WITHOUT = '! commands work without it.';
+const STILL = '! commands work as before.';
 
-/** Where the package is, without running any of it; undefined when it is not installed. */
-function located(): string | undefined {
+/** Where a computer's packages are, and what one says of itself: what ptyMissingOn looks at. */
+export type Installed = {
+  platform: NodeJS.Platform;
+  arch: string;
+  /** The file a package resolves to from `from` (Pelican, else the package itself); throws where there is none. */
+  resolve: (name: string, from?: string) => string;
+  /** The optional dependencies in the package.json next to `index`. */
+  optional: (index: string) => string[];
+};
+
+/** Why no terminal can start on a computer with these packages installed; undefined when one may. */
+export function ptyMissingOn(installed: Installed): string | undefined {
+  if (installed.platform === 'win32') return 'There is no terminal on Windows yet; in WSL there is one.';
+  const omitted = (name: string) => `The terminal needs ${name}, which this install left out, as npm's --omit=optional does. Install Pelican again without that option; ${STILL}`;
+  let index: string;
   try {
-    return createRequire(import.meta.url).resolve(PACKAGE);
+    index = installed.resolve(PACKAGE);
   } catch {
-    return undefined;
+    return omitted(PACKAGE);
   }
-}
-
-/** The platforms the package has a binary for, from its own package.json. */
-function platforms(index: string): string[] {
+  const here = `${installed.platform}-${installed.arch}`;
+  if (!installed.optional(index).includes(`${PACKAGE}-${here}`)) return `There is no terminal for ${here} yet; ${STILL}`;
   try {
-    const manifest = JSON.parse(readFileSync(path.join(path.dirname(index), 'package.json'), 'utf8')) as { optionalDependencies?: Record<string, string> };
-    return Object.keys(manifest.optionalDependencies ?? {}).map((name) => name.slice(PACKAGE.length + 1));
+    installed.resolve(`${PACKAGE}-${here}`, index);
   } catch {
-    return [];
-  }
-}
-
-/**
- * Why no terminal can start here, found without loading anything; undefined when one may (whether
- * the binary loads shows when it is first used).
- */
-export function ptyMissing(): string | undefined {
-  if (process.platform === 'win32') return 'There is no terminal on Windows yet. In WSL there is one.';
-  const index = located();
-  const omitted = (name: string) => `The terminal needs ${name}, which this install left out (npm's --omit=optional does). Install Pelican again without it; ${WORKS_WITHOUT}`;
-  if (!index) return omitted(PACKAGE);
-  const here = `${process.platform}-${process.arch}`;
-  if (!platforms(index).includes(here)) return `There is no terminal for ${here} yet. ${WORKS_WITHOUT}`;
-  try {
-    createRequire(index).resolve(platformPackage());
-  } catch {
-    return omitted(platformPackage());
+    return omitted(`${PACKAGE}-${here}`);
   }
   return undefined;
+}
+
+/** This computer, as far as resolving packages and reading their manifests goes: nothing runs. */
+const thisComputer: Installed = {
+  platform: process.platform,
+  arch: process.arch,
+  resolve: (name, from) => createRequire(from ?? import.meta.url).resolve(name),
+  optional: (index) => {
+    try {
+      const manifest = JSON.parse(readFileSync(path.join(path.dirname(index), 'package.json'), 'utf8')) as { optionalDependencies?: Record<string, string> };
+      return Object.keys(manifest.optionalDependencies ?? {});
+    } catch {
+      return [];
+    }
+  },
+};
+
+let looked: { reason: string | undefined } | undefined;
+
+/**
+ * Why no terminal can start here, found once and without loading anything; undefined when one may
+ * (whether the binary loads shows when it is first used).
+ */
+export function ptyMissing(): string | undefined {
+  looked ??= { reason: ptyMissingOn(thisComputer) };
+  return looked.reason;
 }
 
 /** The first line of what went wrong, without the package's own advice after it. */
@@ -88,18 +105,20 @@ let load = importPty;
 
 /** node-pty's spawn, loaded on first use. Rejects with why there is no terminal here. */
 export function loadPty(): Promise<PtySpawn> {
-  loading ??= (async () => {
-    const missing = ptyMissing();
-    if (missing) throw new Error(missing);
-    try {
-      return await load();
-    } catch (error) {
-      throw new Error(`The terminal could not start here: ${firstLine(error)}. ${WORKS_WITHOUT}`);
-    }
-  })();
-  loading.catch((error: Error) => {
-    failed = error.message;
-  });
+  if (!loading) {
+    loading = (async () => {
+      const missing = ptyMissing();
+      if (missing) throw new Error(missing);
+      try {
+        return await load();
+      } catch (error) {
+        throw new Error(`The terminal could not start here: ${firstLine(error)}. ${STILL}`);
+      }
+    })();
+    loading.catch((error: Error) => {
+      failed = error.message;
+    });
+  }
   return loading;
 }
 
