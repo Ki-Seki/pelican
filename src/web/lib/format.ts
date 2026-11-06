@@ -32,12 +32,17 @@ const startOfDay = (ms: number) => {
   return d.getTime();
 };
 
+/**
+ * The heading a session's time puts it under in the list: Today, Yesterday, then the 7 and the 30
+ * days before today, which is what they are (on 6 November, 23 October is no session of "this
+ * month"), then Older.
+ */
 export function dayGroup(ms: number, now = Date.now()): string {
   const today = startOfDay(now);
   if (ms >= today) return 'Today';
   if (ms >= today - DAY) return 'Yesterday';
-  if (ms >= today - 6 * DAY) return 'This week';
-  if (ms >= today - 30 * DAY) return 'This month';
+  if (ms >= today - 6 * DAY) return 'Previous 7 days';
+  if (ms >= today - 30 * DAY) return 'Previous 30 days';
   return 'Older';
 }
 
