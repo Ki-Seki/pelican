@@ -263,11 +263,13 @@ class Term {
     // cursor, by counting cells. A cell takes at most 16 combining marks, so no output grows one,
     // or the screen a page gets, without bound.
     loadWidths(this.screen, Unicode11Addon);
-    // Output xterm throws on stops neither the copy nor Pelican, where a throw would be fatal.
+    // Output xterm throws on stops neither the copy nor Pelican, where a throw would be fatal, and
+    // none takes it long or grows it without bound. It keeps no links: nothing follows one here,
+    // and the screen a page gets carries none.
     guardOutput(this.screen, (error) => {
       if (!this.thrown) console.warn('[pelican] a terminal\'s screen lost some output xterm could not take:', error instanceof Error ? error.message : error);
       this.thrown = true;
-    });
+    }, { links: 0 });
     // The copy answers what programs ask of the terminal (device attributes, the cursor's
     // position, a mode's state, a color), once, however many pages show it, or none: answers from
     // each page would come twice, or not at all, and after the copy's, where a program that asked
