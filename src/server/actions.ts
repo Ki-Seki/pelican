@@ -77,12 +77,16 @@ const caption = (call: ToolCall): string | undefined => {
   return typeof words === 'string' ? words.trim() : undefined;
 };
 
+/** A file's path as the conversation shows a step's: from the session's folder where it is in it, as it is elsewhere (tools.ts, relPath). */
+const shownPath = (file: string, cwd: string | undefined) => (cwd && file.startsWith(`${cwd}/`) ? file.slice(cwd.length + 1) : file);
+
 /**
  * A tool call as one line: its name and what it is about. A SendUserFile call names the files it
  * sent (those it asked to send, until they were), by name as their cards show them, a character
- * that hides or turns text around written out.
+ * that hides or turns text around written out. A file is named as the conversation names it, from
+ * the session's folder (`cwd`).
  */
-const toolLine = (call: ToolCall) => {
+const toolLine = (call: ToolCall, cwd?: string) => {
   const { name, input } = call;
   if (name === 'SendUserFile') {
     const asked = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((file): file is string => typeof file === 'string') : [];
@@ -90,8 +94,9 @@ const toolLine = (call: ToolCall) => {
     const names = files.map((file) => revealHidden(file.split(/[\\/]/).pop() || file).text.replace(/\r\n?|\n/g, ' '));
     return `- ${inlineText(name)}${names.length > 0 ? `: ${names.map(inlineCode).join(', ')}` : ''}`;
   }
-  const target = ['file_path', 'command', 'pattern', 'url', 'query', 'description'].map((k) => input[k]).find((v) => typeof v === 'string');
-  return `- ${inlineText(name)}${target ? `: ${inlineCode(String(target).split(/\r\n?|\n/)[0]!)}` : ''}`;
+  const key = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description'].find((k) => typeof input[k] === 'string');
+  const target = key === undefined ? undefined : key.endsWith('_path') ? shownPath(input[key] as string, cwd) : (input[key] as string);
+  return `- ${inlineText(name)}${target ? `: ${inlineCode(target.split(/\r\n?|\n/)[0]!)}` : ''}`;
 };
 
 /**
@@ -167,7 +172,7 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
       let tools: string[] = [];
       for (const part of item.parts) {
         if (part.kind === 'tool') {
-          tools.push(toolLine(part.call));
+          tools.push(toolLine(part.call, info?.cwd));
           // The words Claude sent with files, under its line, as Claude's: a reply.
           const words = caption(part.call);
           if (words) {

@@ -96,7 +96,8 @@ describe('Export as Markdown', () => {
       'Why CSS variables?', '',
       '## Claude', '',
       'Let me look.', '',
-      `- Read: \`${folder}/src/theme.css\``, '',
+      // As the conversation names it: from the session's folder.
+      '- Read: `src/theme.css`', '',
       'They switch at once.', '',
       '## You', '',
       '`!git status`', '',
@@ -407,6 +408,20 @@ describe('the export, each reply kept to itself', () => {
       expect(speakers(html)).toEqual(['h1 Notes', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude']);
     }
     expect(markdown).not.toMatch(/^\[1\]:/m);
+  });
+
+  it('names the files a step reads or writes as the conversation does: from the session’s folder, as they are elsewhere', async () => {
+    const { markdown } = await exportMarkdown(await session(n++, 'Files', [
+      user('Tidy up'),
+      claude(
+        { type: 'tool_use', id: 'f1', name: 'Edit', input: { file_path: `${folder}/src/app.ts`, old_string: 'a', new_string: 'b' } },
+        { type: 'tool_use', id: 'f2', name: 'Write', input: { file_path: `${folder}/notes/todo.md`, content: 'x' } },
+        { type: 'tool_use', id: 'f3', name: 'NotebookEdit', input: { notebook_path: `${folder}/lab.ipynb`, new_source: 'x' } },
+        { type: 'tool_use', id: 'f4', name: 'Read', input: { file_path: '/etc/hosts' } },
+        { type: 'tool_use', id: 'f5', name: 'Read', input: { file_path: `${folder}-old/src/app.ts` } },
+      ),
+    ]));
+    expect(markdown).toContain(['- Edit: `src/app.ts`', '- Write: `notes/todo.md`', '- NotebookEdit: `lab.ipynb`', '- Read: `/etc/hosts`', `- Read: \`${folder}-old/src/app.ts\``].join('\n'));
   });
 
   it('lets no reply call another’s footnote, and reads a link or a table in one as the conversation does', async () => {
