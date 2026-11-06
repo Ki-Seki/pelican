@@ -157,6 +157,24 @@ describe('a terminal’s connection', () => {
     expect(FakeSocket.made).toHaveLength(5);
   });
 
+  it('says when it was let go for being signed out, and tries again as after a drop', () => {
+    const signedOut = vi.fn();
+    const connection = new TerminalConnection({
+      url: () => 'ws://pelican/api/terminal?id=t1&cols=80&rows=24',
+      size: () => ({ cols: 80, rows: 24 }),
+      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), state: vi.fn(), signedOut },
+      WebSocket: FakeSocket as unknown as typeof WebSocket,
+    });
+    connection.start();
+    FakeSocket.made.at(-1)!.open();
+    FakeSocket.made.at(-1)!.text(ready);
+    FakeSocket.made.at(-1)!.end(TERMINAL_CLOSE.signedOut);
+    expect(signedOut).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(500);
+    expect(FakeSocket.made).toHaveLength(2);
+    connection.stop();
+  });
+
   it('stops for good when the terminal is gone, closed, refused or on too many pages', () => {
     for (const [code, kind] of [[TERMINAL_CLOSE.gone, 'gone'], [TERMINAL_CLOSE.closed, 'closed'], [TERMINAL_CLOSE.refused, 'refused'], [TERMINAL_CLOSE.tooManyViewers, 'crowded']] as const) {
       FakeSocket.made = [];

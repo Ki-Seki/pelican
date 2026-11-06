@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { ClientEvent, RunState, ServerEvent } from '../shared/protocol.js';
+import { type ClientEvent, type RunState, type ServerEvent, SIGNED_OUT_CLOSE } from '../shared/protocol.js';
 import { TERMINAL_LIMITS } from '../shared/terminal.js';
 import { app } from './app.js';
 import { loadAuth, signedIn } from './auth.js';
@@ -58,6 +58,34 @@ function guardRejections(): void {
   process.on('unhandledRejection', (error) => {
     console.warn('[pelican] unexpected error:', error instanceof Error ? (error.stack ?? error.message) : error);
   });
+}
+
+/**
+ * The sockets of api/ws, each with the sign-in it opened with. A socket lives on after the
+ * request that opened it, so its sign-in is looked at again every second: once it signs nobody in
+ * (a new token or password, which Pelican notices within a second, or a cookie that expired), the
+ * socket closes (SIGNED_OUT_CLOSE). A terminal's socket is checked the same way (terminals.ts),
+ * and before each key it passes on.
+ */
+const SIGN_IN_CHECK_MS = 1000;
+const sockets = new Map<WebSocket, () => boolean>();
+let checkingSignIn: NodeJS.Timeout | undefined;
+
+function keepSignedIn(ws: WebSocket, stillSignedIn: () => boolean): void {
+  sockets.set(ws, stillSignedIn);
+  ws.once('close', () => sockets.delete(ws));
+  if (checkingSignIn) return;
+  checkingSignIn = setInterval(() => {
+    for (const [socket, still] of sockets) {
+      if (still()) continue;
+      sockets.delete(socket);
+      socket.close(SIGNED_OUT_CLOSE, 'Signed out');
+    }
+    if (sockets.size > 0) return;
+    clearInterval(checkingSignIn);
+    checkingSignIn = undefined;
+  }, SIGN_IN_CHECK_MS);
+  checkingSignIn.unref();
 }
 
 /** The path of a request target, without parsing it: a malformed target must not throw. */
@@ -115,8 +143,16 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
         socket.destroy();
         return;
       }
-      if (terminal) terminalSockets.handleUpgrade(req, socket, head, (ws) => attachTerminal(ws, queryOf(req.url)));
-      else wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      const { cookie, authorization } = req.headers;
+      const stillSignedIn = () => signedIn(cookie, authorization);
+      if (terminal) {
+        terminalSockets.handleUpgrade(req, socket, head, (ws) => attachTerminal(ws, queryOf(req.url), stillSignedIn));
+      } else {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          keepSignedIn(ws, stillSignedIn);
+          wss.emit('connection', ws, req);
+        });
+      }
     } catch {
       socket.destroy();
     }

@@ -42,9 +42,12 @@ A terminal beside the conversation, as Claude Desktop has one.
   trusted that brings programs is asked about first, and in one kept to your settings only, git
   runs none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`),
   npm's (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there
-  as in any terminal. At most 10 terminals run at once, each on
-  up to 8 pages; nothing of them is written to disk. The demo has none, and `pelican --no-terminal`
-  (also for `pelican service install`) starts Pelican without them.
+  as in any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is
+  written to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service
+  install`) starts Pelican without them.
+- A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
+  has open too: its terminals and its live updates close within a second, and nothing it sends
+  after reaches a shell. Before, a page that had a connection open kept it.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package.
   It is optional: where it cannot load, such as on Alpine (musl) or after an install with

@@ -275,6 +275,8 @@ type Viewer = {
   joining?: { at: number; held: Buffer[]; bytes: number; until: number; timer: NodeJS.Timeout };
   /** While the shell waits for it: what it owed and had waiting at the last look, and since when neither went down. */
   stuck?: { owed: number; buffered: number; since: number };
+  /** Whether the sign-in its socket opened with still signs anyone in. */
+  signedIn: () => boolean;
   stopBeating: () => void;
 };
 
@@ -533,7 +535,7 @@ class Term {
    * typed in or resized, and this one is told it until its own user types or resizes (a page that
    * connects again by itself, after a phone slept or its network changed, takes nothing away).
    */
-  attach(ws: WebSocket, cols: number, rows: number): void {
+  attach(ws: WebSocket, cols: number, rows: number, signedIn: () => boolean): void {
     if (this.viewers.size >= TERMINAL_LIMITS.viewers) {
       ws.close(TERMINAL_CLOSE.tooManyViewers, 'Open on too many pages');
       return;
@@ -541,7 +543,7 @@ class Term {
     // The pages showing it already have all output so far: the new one comes in here.
     this.flush();
     const joining: NonNullable<Viewer['joining']> = { at: this.received, held: [], bytes: 0, until: Date.now() + terminalTiming.cutMs, timer: undefined as unknown as NodeJS.Timeout };
-    const viewer: Viewer = { ws, unacked: 0, joining, stopBeating: () => undefined };
+    const viewer: Viewer = { ws, unacked: 0, joining, signedIn, stopBeating: () => undefined };
     // Once its time is up, the screen goes, cut wherever the copy is. Timers keep a clock of their
     // own, which may run a millisecond ahead of Date.now(): this one says the time is up.
     joining.timer = setTimeout(() => {
@@ -551,6 +553,7 @@ class Term {
     const alone = this.viewers.size === 0;
     this.viewers.add(viewer);
     this.lastActive = Date.now();
+    checkSignIns();
     if (!this.exit && alone) this.resize(cols, rows, viewer);
     // Called once the copy has taken in all output so far, the new size included.
     this.screen.write('', () => this.cut());
@@ -574,7 +577,25 @@ class Term {
     this.lastActive = Date.now();
   }
 
+  /** Lets go of the pages whose sign-in has gone since their socket opened (TERMINAL_CLOSE.signedOut). */
+  letGoOfSignedOut(): void {
+    for (const viewer of [...this.viewers]) if (!viewer.signedIn()) this.signOut(viewer);
+  }
+
+  private signOut(viewer: Viewer): void {
+    this.leave(viewer);
+    viewer.ws.close(TERMINAL_CLOSE.signedOut, 'Signed out');
+    this.pressure();
+  }
+
   private heard(viewer: Viewer, data: RawData, binary: boolean): void {
+    // A page let go takes nothing more, and one whose sign-in has gone since it opened is let go
+    // here and now, before its key reaches the shell.
+    if (!this.viewers.has(viewer)) return;
+    if (!viewer.signedIn()) {
+      this.signOut(viewer);
+      return;
+    }
     if (binary) {
       if (this.exit || this.closed) return;
       const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
@@ -702,6 +723,25 @@ class Term {
 const terminals = new Map<string, Term>();
 let sweeping: NodeJS.Timeout | undefined;
 
+/**
+ * A page's socket lives on after the request that opened it: every second, while any page shows a
+ * terminal, the pages whose sign-in signs nobody in any more (a new token or password, which
+ * Pelican notices within a second, or a cookie that expired) are let go.
+ */
+const SIGN_IN_CHECK_MS = 1000;
+let checkingSignIns: NodeJS.Timeout | undefined;
+
+function checkSignIns(): void {
+  if (checkingSignIns) return;
+  checkingSignIns = setInterval(() => {
+    for (const term of terminals.values()) term.letGoOfSignedOut();
+    if ([...terminals.values()].some((term) => term.viewers.size > 0)) return;
+    clearInterval(checkingSignIns);
+    checkingSignIns = undefined;
+  }, SIGN_IN_CHECK_MS);
+  checkingSignIns.unref();
+}
+
 /** Why this Pelican runs no terminals at all: the demo, or --no-terminal. */
 function refusal(): string | undefined {
   if (config.demo) return 'This is the demo, so nothing runs here. Start Pelican without --demo for a terminal.';
@@ -776,13 +816,16 @@ export function closeAllTerminals(): void {
   for (const term of [...terminals.values()]) term.close(true);
   clearInterval(sweeping);
   sweeping = undefined;
+  clearInterval(checkingSignIns);
+  checkingSignIns = undefined;
 }
 
 /**
  * A page's socket for a terminal (`api/terminal?id&cols&rows`), once server.ts has checked its
- * host, origin and sign-in as for every socket.
+ * host, origin and sign-in as for every socket; `stillSignedIn` checks that sign-in again, before
+ * each key reaches the shell.
  */
-export function attachTerminal(ws: WebSocket, query: URLSearchParams): void {
+export function attachTerminal(ws: WebSocket, query: URLSearchParams, stillSignedIn: () => boolean = () => true): void {
   // A frame too large or malformed closes this socket; unheard, the error would stop the server.
   ws.on('error', () => ws.terminate());
   if (refusal()) {
@@ -801,7 +844,7 @@ export function attachTerminal(ws: WebSocket, query: URLSearchParams): void {
     ws.close(TERMINAL_CLOSE.gone, 'No such terminal');
     return;
   }
-  term.attach(ws, cols, rows);
+  term.attach(ws, cols, rows, stillSignedIn);
 }
 
 /** For tests: how a terminal's flow control stands. */

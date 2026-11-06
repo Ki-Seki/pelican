@@ -33,6 +33,8 @@ export type ConnectionEvents = {
   program: (program: string) => void;
   exit: (exit: TerminalExit) => void;
   state: (state: Connection) => void;
+  /** The server let go of this page for being signed out: the app asks, and shows the sign-in. */
+  signedOut?: () => void;
 };
 
 export type ConnectionOptions = {
@@ -168,6 +170,8 @@ export class TerminalConnection {
         this.options.events.state(end);
         return;
       }
+      // Signed out since it opened: the app finds out, and connecting again works only once signed in.
+      if (event.code === TERMINAL_CLOSE.signedOut) this.options.events.signedOut?.();
       // Behind: let go for being slow, it gets the screen as it is now at once. Otherwise the link
       // dropped: again after a moment, a longer one each time.
       const delay = event.code === TERMINAL_CLOSE.behind ? 0 : Math.min(500 * 2 ** this.retry, 15_000);

@@ -440,6 +440,14 @@ export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }
   | { type: 'unsubscribe'; sessionId: string };
 
+/**
+ * The close code of a socket (api/ws, or a terminal's) whose browser is no longer signed in: a
+ * new token or password, or a cookie that expired. The server checks every second, with the
+ * sign-in the socket opened with; the page asks whether it is still signed in, and shows the
+ * sign-in when it is not.
+ */
+export const SIGNED_OUT_CLOSE = 4401;
+
 export type ServerInfo = {
   machine: string;
   home: string;

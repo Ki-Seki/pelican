@@ -152,6 +152,20 @@ async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
   return response.json();
 }
 
+/**
+ * Asks whether this browser is still signed in, as a socket closed for its sign-in
+ * (SIGNED_OUT_CLOSE) has it wonder; when it is not, the app shows the sign-in.
+ */
+export function checkSignedIn(): void {
+  if (STATIC_DEMO) return;
+  void reach(apiUrl('auth'), { headers: { ...MARK } })
+    .then((response) => (response.ok ? response.json() as Promise<AuthState> : undefined))
+    .then((state) => {
+      if (state?.required && !state.signedIn) onSignedOut();
+    })
+    .catch(() => undefined);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     if (local && init?.method && init.method !== 'GET') return (await local.answer(path, init)) as T;

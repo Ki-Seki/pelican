@@ -8,8 +8,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **Every browser signs in, also on this computer.** At first start Pelican makes a random access
   token, kept in `~/.config/pelican/token.json` (readable only by you), and prints a link with it,
   the way Jupyter does. Opening that link signs the browser in; `pelican token` prints it again and
-  `pelican token --reset` replaces it, signing every browser out at once (a running Pelican notices
-  within a second). Other accounts and programs on the computer, containers and VMs that can reach
+  `pelican token --reset` replaces it, signing every browser out at once, the connections and
+  terminals it has open included (a running Pelican notices within a second). Other accounts and programs on the computer, containers and VMs that can reach
   `127.0.0.1` included, get nowhere without it. The link is printed only on a terminal, never into
   a log (a service's output file), and is never put on a command line: on macOS `--open` hands it
   to the browser through a file only you can read; elsewhere `--open` opens the sign-in page.
@@ -96,7 +96,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **A terminal is your shell, as you, with the same doors.** A terminal runs your login shell on
   this computer, in the folder a request names (in the app, the session's), and can do there
   whatever you can in a terminal. Its socket opens only as Pelican's other one does: a signed-in
-  browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; and it runs
+  browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; it closes
+  within a second once that browser is signed out, and takes nothing more from it; and it runs
   in a folder as Claude Code does, so a folder nobody trusted that brings programs is asked about
   first, and in one kept to your settings only, git runs none of the repository's filters,
   file-system monitor or hooks folder (the settings Claude Code and `!` commands get there). The

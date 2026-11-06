@@ -122,6 +122,8 @@ export const TERMINAL_LIMITS = {
 export const TERMINAL_CLOSE = {
   /** The address had no terminal id, or a size out of range. */
   badRequest: 4400,
+  /** The browser is no longer signed in (SIGNED_OUT_CLOSE): nothing it sends reaches the shell. */
+  signedOut: 4401,
   /** Terminals are off here: the demo, or Pelican started with --no-terminal. */
   refused: 4403,
   /** No such terminal: it was closed, or Pelican has started again since (Start again). */

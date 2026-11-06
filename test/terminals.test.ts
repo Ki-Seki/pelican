@@ -2,15 +2,17 @@
 // real PTYs, and pages as the web app's would be (terminal-page.ts). The shell is bash without
 // any profile, so nothing of the computer's own shell setup runs.
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-
 import xtermHeadless from '@xterm/headless';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
 
+import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
 import { TERMINAL_CLOSE } from '../src/shared/terminal';
 import { accessToken, cookieName } from '../src/server/auth';
@@ -600,6 +602,44 @@ describe('a terminal left alone', () => {
     expect(await ids()).toEqual([busy.id, shown.id]);
     expect(watching.closed).toBeUndefined();
   }, 30_000);
+});
+
+describe('a page whose sign-in has gone', () => {
+  it('is let go, and nothing it sends after reaches the shell: a new token signs a terminal out too', async () => {
+    const terminal = await open();
+    const old = signedIn();
+    const stale = await atPrompt(terminal.id);
+    const events = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { headers: old });
+    let eventsClosed: number | undefined;
+    events.on('close', (code) => {
+      eventsClosed = code;
+    });
+    await until(() => events.readyState === WebSocket.OPEN, 5000, 'api/ws');
+
+    // `pelican token --reset`, from another process: a new token and secret, written whole.
+    const file = path.join(config.configDir, 'token.json');
+    await writeFile(`${file}.tmp`, JSON.stringify({ version: 1, token: randomBytes(24).toString('base64url'), secret: randomBytes(32).toString('base64') }), { mode: 0o600 });
+    await rename(`${file}.tmp`, file);
+    // Pelican notices within a second: the old token gets nowhere.
+    for (const start = Date.now(); (await api('GET', '/api/terminals', undefined, old)).status !== 401;) {
+      if (Date.now() - start > 5000) throw new Error('the reset went unnoticed');
+      await pause(100);
+    }
+    const marker = path.join(dir, 'typed-after-reset');
+    if (stale.ws.readyState === WebSocket.OPEN) stale.type(`touch ${marker}\r`);
+    await until(() => stale.closed !== undefined && eventsClosed !== undefined, 5000, 'the sockets to close');
+    expect(stale.closed?.code).toBe(TERMINAL_CLOSE.signedOut);
+    expect(eventsClosed).toBe(SIGNED_OUT_CLOSE);
+
+    // Signed in again with the new token, the owner types: the old page saw none of it.
+    const seen = stale.output.length;
+    const owner = await atPrompt(terminal.id);
+    owner.type(`echo "only the owner $((6 * 7))"\r`);
+    await owner.sees(/only the owner 42\r\n/);
+    expect(stale.output.length).toBe(seen);
+    expect(existsSync(marker)).toBe(false);
+    expect(terminalState(terminal.id)!.viewers).toHaveLength(1);
+  }, 20_000);
 });
 
 describe('who gets a terminal', () => {

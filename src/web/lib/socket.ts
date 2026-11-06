@@ -1,5 +1,5 @@
-import type { ClientEvent, ServerEvent } from '../../shared/protocol';
-import { appBase } from './api';
+import { type ClientEvent, type ServerEvent, SIGNED_OUT_CLOSE } from '../../shared/protocol';
+import { appBase, checkSignedIn } from './api';
 import { STATIC_DEMO } from './static-demo';
 
 type Listener = (event: ServerEvent) => void;
@@ -85,9 +85,11 @@ class Socket {
       if (event.type === 'tick') return;
       for (const listener of this.listeners) listener(event);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (this.ws !== ws) return;
       this.setConnected(false);
+      // Signed out since it opened (a new token or password): the app shows the sign-in.
+      if (event.code === SIGNED_OUT_CLOSE) checkSignedIn();
       const delay = Math.min(1000 * 2 ** this.retry, 15_000);
       this.retry += 1;
       this.timer = window.setTimeout(() => this.connect(), delay);

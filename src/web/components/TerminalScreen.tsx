@@ -8,7 +8,7 @@ import { Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
-import { api } from '../lib/api';
+import { api, checkSignedIn } from '../lib/api';
 import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { asksForSecret, bufferText, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText } from '../lib/terminal-input';
@@ -301,6 +301,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
         }),
         program: (program) => events.current.onProgram(id, program),
         exit: (exit) => ended(exit),
+        signedOut: checkSignedIn,
         state: (state) => {
           if (!shown) return;
           // Its shell gone with Pelican, the screen stays to be read, as an ended one does.
