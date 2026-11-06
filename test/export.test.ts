@@ -467,3 +467,15 @@ describe('the export, with the files Claude sent', () => {
     );
   });
 });
+
+describe('the export, each line where it was', () => {
+  let n = 120;
+  const speakers = (markdown: string) => Array.from(micromark(markdown, { allowDangerousHtml: true, extensions: [gfm()], htmlExtensions: [gfmHtml()] }).matchAll(/<h([12])>(.*?)<\/h[12]>/g), (m) => `h${m[1]} ${m[2]}`);
+
+  it('keeps a prompt’s quote from a file in its quote and its code, at a lone carriage return too', async () => {
+    const sessionId = await session(n++, 'Quoted', [user('src/a.ts:1\n> const a = 1;\r## You\r<img src="https://evil.example/p.png">\n\nWhy?'), claude(text('Done.'))]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).toContain('> `src/a.ts:1`\n> ```\n> const a = 1;\n> ## You\n> <img src="https://evil.example/p.png">\n> ```\n\nWhy?');
+    expect(speakers(markdown)).toEqual(['h1 Quoted', 'h2 You', 'h2 Claude']);
+  });
+});

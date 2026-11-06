@@ -54,7 +54,8 @@ export async function remove(sessionId: string): Promise<void> {
 const prompt = (text: string) => promptParts(text).map((part) => {
   if (part.kind === 'text') return asText(part.text);
   const quote = part.from ? [inlineCode(part.from), ...(part.text ? [codeBlock(part.text)] : [])].join('\n') : asText(part.text);
-  return quote.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
+  // Every line in the quote, at each line ending a reader takes, a lone carriage return too.
+  return quote.split(/\r\n?|\n/).map((line) => (line ? `> ${line}` : '>')).join('\n');
 });
 
 /**
