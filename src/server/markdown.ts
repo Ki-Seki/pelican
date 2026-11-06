@@ -1884,7 +1884,8 @@ function linkEnd(text: string, at: number): { end: number | undefined; read: num
  * loaded, but a picture written into the reply itself (a data: address), which stays.
  */
 function pictureLink(words: string, resource: string): string {
-  const [location = ''] = resource.trim().replace(/^<([^>]*)>/, '$1').split(/[ \t\n]+/);
+  // Before an address readers pass spaces, tabs and a line ending only: a no-break space is in it.
+  const [location = ''] = resource.replace(/^[ \t\n]+/, '').replace(/^<([^>]*)>/, '$1').split(/[ \t\n]+/);
   // A `^` its words start with, escaped: `[^…]` would call a footnote, another reply's too.
   const name = words.trim().replace(/</g, '&lt;').replace(/^\^/, '\\^');
   if (/^data:image\//i.test(location)) return `![${name}](${resource})`;

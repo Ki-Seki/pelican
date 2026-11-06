@@ -384,6 +384,12 @@ describe('a reply in the export', () => {
     expect(links).toEqual(['https://api.example.com/v2', 'https://status.example.com']);
   });
 
+  it('keeps a picture written into the reply a picture only where its address is a data: one, as readers take the address', () => {
+    // They pass spaces, tabs and a line ending before it, not a no-break space: that one is in it, and it loads.
+    expect(reply('![x]( data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)')).toBe('[x]( data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)');
+    expect(trouble(reply('![x]( data:image/png;base64,AA)'))).toEqual([]);
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;
