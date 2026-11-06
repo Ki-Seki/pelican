@@ -121,8 +121,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [selection, setSelection] = useState('');
   const [copied, setCopied] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
-  /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output. */
+  /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output, stopping a swipe's glide. */
   const [scrolledBack, setScrolledBack] = useState(false);
+  const stopGlide = useRef<() => void>(() => undefined);
   /** After a line sent from the phone's field: where its output starts, read out once the shell is quiet. */
   const reading = useRef<{ from: IMarker; quiet?: ReturnType<typeof setTimeout>; latest: ReturnType<typeof setTimeout> } | undefined>(undefined);
   /** Where the connection stands, and the timer that says Reconnecting once it has been down a moment. */
@@ -286,7 +287,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     resized.observe(el);
     fit();
 
-    const detachTouch = touch ? touchGestures(el, t, fit, () => events.current.onLongPress()) : () => undefined;
+    const gestures = touch ? touchGestures(el, t, fit, () => events.current.onLongPress()) : undefined;
+    stopGlide.current = () => gestures?.stop();
     // Ctrl and the wheel, which a trackpad's pinch is too, sets the size on a computer: a step a
     // notch, or a little way of pinching.
     let zoom = 0;
@@ -302,7 +304,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     });
 
     return () => {
-      detachTouch();
+      gestures?.detach();
       stopCleaning();
       resized.disconnect();
       themed.disconnect();
@@ -484,7 +486,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
         <button
           type="button"
           aria-label="Jump to latest"
-          onClick={() => term.current?.scrollToBottom()}
+          onClick={() => {
+            stopGlide.current();
+            term.current?.scrollToBottom();
+          }}
           className="animate-fade absolute right-3 bottom-2 z-10 grid size-9 place-items-center rounded-full border border-line bg-panel shadow-md after:absolute after:-inset-1"
         >
           <ArrowDown className="size-4" />
@@ -544,9 +549,10 @@ const saveFontSize = (t: Terminal) => setPrefs({ terminalFontSize: t.options.fon
  * A finger on the screen: a swipe scrolls back through the output (in a full-screen program, it
  * sends the arrows, as a wheel does there), with a little glide after it; a long press opens the
  * screen as text; two fingers set the size. A tap is left to xterm: it gives the screen the keys
- * (never the phone's keyboard), and a program that asked for the mouse gets it.
+ * (never the phone's keyboard), and a program that asked for the mouse gets it. `stop` ends a
+ * glide, as ↓ does on its way to the newest output.
  */
-function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress: () => void): () => void {
+function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress: () => void): { detach: () => void; stop: () => void } {
   const fingers = new Map<number, { x: number; y: number }>();
   let lastY = 0;
   let lastT = 0;
@@ -645,13 +651,16 @@ function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress:
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', up);
   el.addEventListener('contextmenu', menu);
-  return () => {
-    clearTimeout(press);
-    cancelAnimationFrame(glide);
-    el.removeEventListener('pointerdown', down);
-    el.removeEventListener('pointermove', move);
-    el.removeEventListener('pointerup', up);
-    el.removeEventListener('pointercancel', up);
-    el.removeEventListener('contextmenu', menu);
+  return {
+    detach: () => {
+      clearTimeout(press);
+      cancelAnimationFrame(glide);
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      el.removeEventListener('contextmenu', menu);
+    },
+    stop: () => cancelAnimationFrame(glide),
   };
 }
