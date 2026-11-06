@@ -239,6 +239,7 @@ export function SelectionActions({ within, dockTo, onDock }: {
       {noting && (
         <NoteBox
           key={noting.item.id}
+          chat={target.chat}
           noting={noting}
           bounds={dockTo ?? within}
           canSend={Boolean(target.sendNow)}
@@ -398,7 +399,9 @@ const NOTE_WIDTH = 400;
  * one); ⌘↵ sends it now with its note, a steer while Claude works; Esc lets it go. A click outside
  * closes it only while the note is empty: words written are not thrown away by a stray click.
  */
-function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
+function NoteBox({ chat, noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
+  /** The chat whose box the quote goes to: its message box leaves the keys to this one. */
+  chat: string;
   noting: Noting;
   bounds: RefObject<HTMLElement | null>;
   canSend: boolean;
@@ -524,7 +527,7 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
       ref={box}
       role="dialog"
       aria-label="Quote with a note"
-      data-note-box
+      data-note-box={chat}
       onKeyDown={onKeyDown}
       // Placed once it is drawn; never hidden, so its note field can take the keys at once.
       style={place ? { left: place.left, top: place.top } : { left: 0, top: 0, opacity: 0 }}

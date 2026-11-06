@@ -245,6 +245,37 @@ describe('the side chat', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('Message Claude'));
   });
 
+  it('opened from the session menu while a note is half written in the conversation, has the keys; the note keeps its words', async () => {
+    computer(1280);
+    server.after = [{ uuid: 'a1', role: 'assistant', blocks: [{ type: 'text', text: 'The cache key is per user, so one user never reads another’s build.' }], timestamp: Date.now() - 50_000 }];
+    session();
+    await loaded();
+    const rect = { x: 10, y: 40, top: 40, left: 10, bottom: 60, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+    const words = 'one user never reads';
+    const text = (await screen.findByText(words, { exact: false })).firstChild!;
+    const range = document.createRange();
+    range.setStart(text, text.textContent!.indexOf(words));
+    range.setEnd(text, text.textContent!.indexOf(words) + words.length);
+    fireEvent.pointerDown(text.parentElement!, { pointerType: 'mouse' });
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(text.parentElement!, { pointerType: 'mouse' });
+    const pill = await screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+    fireEvent.click(within(pill).getByRole('button', { name: /^Quote/ }));
+    const note = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note') as HTMLTextAreaElement;
+    fireEvent.change(note, { target: { value: 'Is that on purpose?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Side question')));
+    expect(note.value).toBe('Is that on purpose?');
+    // Dropped, so no note waits for the tests after this one.
+    fireEvent.keyDown(note, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Quote with a note' })).toBeNull());
+  });
+
   it('beside the conversation, closes with Cmd/Ctrl+\\ pressed in it, as Changes and files does; pressed in the conversation, it stays', async () => {
     computer(1280);
     session();
