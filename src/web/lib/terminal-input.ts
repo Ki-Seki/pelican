@@ -119,6 +119,15 @@ export function colorQuery(ident: number, data: string): { asks: boolean; sets?:
   return asks ? { asks, ...(sets.length > 0 ? { sets: sets.join('') } : {}) } : { asks };
 }
 
+/** What a deletion took out of a field's text, `before` it and `after`: one stretch, at most. */
+export function takenOut(before: string, after: string): string {
+  const length = before.length - after.length;
+  if (length <= 0) return '';
+  let start = 0;
+  while (start < after.length && before[start] === after[start]) start += 1;
+  return before.slice(start, start + length);
+}
+
 /**
  * Pasted text as a terminal takes it: without the control characters (C0 but tab, newline and
  * carriage return; DEL; C1) a web page can put on the clipboard as you copy from it. In a paste

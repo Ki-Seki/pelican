@@ -533,6 +533,52 @@ describe('the Terminal tab on a phone', () => {
     expect(field().type).toBe('text');
   });
 
+  it('takes a second space as a space, not as the ". " a phone’s input method puts in its place', async () => {
+    coarse = true;
+    list.terminals = [terminal('t1', { program: 'vim' })];
+    tab();
+    await waitFor(() => expect(shows()).toBe('t1'));
+    /** An edit of the input method's, as the browser makes it unless the page cancels it. */
+    const edit = (f: HTMLInputElement, inputType: string, data: string | null) => {
+      const before = new InputEvent('beforeinput', { inputType, data, cancelable: true, bubbles: true });
+      if (!f.dispatchEvent(before)) return;
+      const at = f.selectionStart ?? f.value.length;
+      if (inputType === 'deleteContentBackward') f.setRangeText('', at - 1, at, 'end');
+      else f.setRangeText(data ?? '', at, at, 'end');
+      fireEvent.input(f, { inputType, data });
+    };
+    /** Gboard's double-space shortcut: the space before the caret taken back, ". " put in. */
+    const secondSpace = (f: HTMLInputElement) => {
+      // An empty field has nothing to take back, and no edit for it.
+      if (f.value) edit(f, 'deleteContentBackward', null);
+      edit(f, 'insertText', '. ');
+    };
+    const typeIn = (f: HTMLInputElement, text: string) => {
+      for (const char of text) edit(f, 'insertText', char);
+    };
+    fireEvent.input(field(), { target: { value: 'echo a ' } });
+    secondSpace(field());
+    expect(field().value).toBe('echo a  ');
+    // What the row put in between the spaces stays, though the input method took it for a space.
+    fireEvent.input(field(), { target: { value: 'ls -la ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pipe' }));
+    secondSpace(field());
+    expect(field().value).toBe('ls -la | ');
+    // A period and a space typed as two keys stay as they are.
+    fireEvent.input(field(), { target: { value: 'end' } });
+    typeIn(field(), '. ');
+    expect(field().value).toBe('end. ');
+    fireEvent.submit(field().form!);
+    typed.length = 0;
+    // A full-screen program gets the space as a space.
+    mode({ direct: true });
+    const keys = screen.getByRole('textbox', { name: 'Keys for vim' }) as HTMLInputElement;
+    typeIn(keys, 'a ');
+    secondSpace(keys);
+    expect(typed).toEqual(['a', ' ', ' ']);
+    expect(keys.value).toBe('');
+  });
+
   it('opens the screen as text from a long press, to quote or copy', async () => {
     coarse = true;
     list.terminals = [terminal('t1')];

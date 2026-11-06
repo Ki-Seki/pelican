@@ -9,7 +9,7 @@ import { baseName } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
 import { terminalQuote } from '../lib/quote';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
-import { cleanPaste, controlCharacter, keySequence, type RowKey } from '../lib/terminal-input';
+import { cleanPaste, controlCharacter, keySequence, type RowKey, takenOut } from '../lib/terminal-input';
 import type { Connection } from '../lib/terminal-socket';
 import { isShell, takeTerminalAsks, takeTerminalFocus, useTerminalAsks, useTerminalFocusWanted, within } from '../lib/terminals';
 import { Sheet } from './Sheet';
@@ -611,6 +611,35 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
     if (mode.direct) flush();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode.direct]);
+  // An input method's double-space shortcut (Gboard's, SwiftKey's, Samsung's, an iPhone's): a space
+  // typed right after one takes that one back and puts ". " in its place. It turned `a  b` into
+  // `a. b`, a `|` from the row between two spaces into a period, and sent vim " . ", whose "."
+  // repeats the last change. A terminal takes keys as typed: the second space comes as a space, and
+  // what the input method took back stays.
+  useEffect(() => {
+    const f = field.current;
+    if (!f) return undefined;
+    let deleting: { value: string; at: number } | undefined;
+    const onBeforeInput = (event: Event) => {
+      const e = event as InputEvent;
+      if (e.inputType === 'deleteContentBackward') {
+        deleting = { value: f.value, at: e.timeStamp };
+        return;
+      }
+      // The two come at once, as one edit of the input method's.
+      const before = deleting && e.timeStamp - deleting.at < 50 ? deleting.value : undefined;
+      deleting = undefined;
+      if (e.inputType !== 'insertText' || e.data !== '. ' || e.isComposing || !e.cancelable) return;
+      e.preventDefault();
+      const back = before === undefined ? '' : takenOut(before, f.value);
+      if (back) f.setRangeText(back, f.selectionStart ?? f.value.length, f.selectionEnd ?? f.value.length, 'end');
+      character(' ');
+    };
+    f.addEventListener('beforeinput', onBeforeInput);
+    return () => f.removeEventListener('beforeinput', onBeforeInput);
+    // Made once: what it calls reads the field, the mode and Ctrl through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (composing(e.nativeEvent)) return;

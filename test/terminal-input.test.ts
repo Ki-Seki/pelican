@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { terminalClientMessage, utf8Pieces } from '../src/shared/terminal';
 import {
-  asksForSecret, bufferText, type BufferLike, colorQuery, controlCharacter, keySequence, lineBeforeCursor, themeColors, viewportText,
+  asksForSecret, bufferText, type BufferLike, colorQuery, controlCharacter, keySequence, lineBeforeCursor, takenOut, themeColors, viewportText,
 } from '../src/web/lib/terminal-input';
 
 describe('the key row', () => {
@@ -29,6 +29,15 @@ describe('the key row', () => {
     expect(controlCharacter('?')).toBe('\u007f');
     expect(controlCharacter('1')).toBeUndefined();
     expect(controlCharacter('ab')).toBeUndefined();
+  });
+
+  it('tells what an input method took back from the line, to put it back after its double-space shortcut', () => {
+    expect(takenOut('echo a ', 'echo a')).toBe(' ');
+    expect(takenOut('ls -la |', 'ls -la ')).toBe('|');
+    expect(takenOut('a|b', 'ab')).toBe('|');
+    expect(takenOut('ab  ', 'ab ')).toBe(' ');
+    expect(takenOut('abc', 'abc')).toBe('');
+    expect(takenOut('ab', 'abc')).toBe('');
   });
 });
 
