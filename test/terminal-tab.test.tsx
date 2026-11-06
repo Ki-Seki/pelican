@@ -41,9 +41,10 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
 let list: TerminalList;
 /** A list fetch that answers when the test says, with the list as it was when asked. */
 let slow: (() => Promise<TerminalList>) | undefined;
-/** Terminals whose shell has a job running in the background, as the computer says; and whether it can say. */
+/** Terminals whose shell has a job running in the background, as the computer says; whether it can say, and whether it answers. */
 const jobs = new Set<string>();
 let unreachable = false;
+let silent = false;
 const opened: Array<Record<string, unknown>> = [];
 const closed: string[] = [];
 let refuse: ((body: Record<string, unknown>) => Error | undefined) | undefined;
@@ -57,6 +58,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       terminals: async () => (slow ? slow() : structuredClone(list)),
       terminal: async (id: string) => {
         if (unreachable) throw new TypeError('Failed to fetch');
+        if (silent) return new Promise(() => undefined);
         const found = list.terminals.find((t) => t.id === id);
         if (!found) throw new actual.ApiError('No such terminal', 404);
         return { terminal: structuredClone(found), running: jobs.has(id) || !['zsh', 'bash'].includes(found.program) };
@@ -105,6 +107,7 @@ beforeEach(() => {
   slow = undefined;
   jobs.clear();
   unreachable = false;
+  silent = false;
   opened.length = 0;
   closed.length = 0;
   typed.length = 0;
@@ -206,6 +209,22 @@ describe('the Terminal tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'End' }));
     await waitFor(() => expect(closed).toEqual(['t2', 't1']));
     expect(screen.queryByText(/still running/)).toBeNull();
+  });
+
+  it('asks when the computer gives no answer within 3 seconds', async () => {
+    list.terminals = [terminal('t1')];
+    tab();
+    await waitFor(() => expect(shows()).toBe('t1'));
+    silent = true;
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'End' }));
+      await act(async () => vi.advanceTimersByTime(3000));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await screen.findByText(/A program is still running in it/)).toBeTruthy();
+    expect(closed).toEqual([]);
   });
 
   it('asks about the tab it was asked on, not one picked while the computer answers', async () => {

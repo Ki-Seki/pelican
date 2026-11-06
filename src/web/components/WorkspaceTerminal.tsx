@@ -293,11 +293,17 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   /**
    * Whether a program runs in a terminal now, as the computer says, a job in the background too,
    * which no tab shows: null once the terminal is gone, and true when it cannot be told (the
-   * connection is down), as one may.
+   * connection is down, or no answer comes within 3 seconds), as one may.
    */
-  const runsNow = (terminal: TerminalInfo): Promise<{ terminal: TerminalInfo; running: boolean } | null> => api.terminal(terminal.id).catch(
-    (error: unknown) => (error instanceof ApiError && error.status === 404 ? null : { terminal, running: true }),
-  );
+  const runsNow = (terminal: TerminalInfo): Promise<{ terminal: TerminalInfo; running: boolean } | null> => {
+    const untold = { terminal, running: true };
+    return Promise.race([
+      api.terminal(terminal.id).catch((error: unknown) => (error instanceof ApiError && error.status === 404 ? null : untold)),
+      new Promise<typeof untold>((resolve) => {
+        setTimeout(() => resolve(untold), 3000);
+      }),
+    ]);
+  };
   const checking = useRef(false);
   /** End on the tab: asked first while a program runs there, in front (at once) or in the background (once the computer says). */
   const askEnd = async (terminal: TerminalInfo) => {
