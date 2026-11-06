@@ -271,6 +271,11 @@ describe('the Terminal tab on a phone', () => {
     mode({ secret: true });
     expect(field().type).toBe('password');
     expect(field().placeholder).toBe('Password');
+    // Sent on the key, not by submitting a form a browser would offer to remember.
+    fireEvent.input(field(), { target: { value: 'hunter2' } });
+    expect(fireEvent.keyDown(field(), { key: 'Enter' })).toBe(false);
+    expect(typed.at(-1)).toBe('hunter2\r');
+    expect(field().value).toBe('');
     mode({});
     expect(field().type).toBe('text');
   });

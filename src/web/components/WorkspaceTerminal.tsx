@@ -464,9 +464,13 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
       e.stopPropagation();
       key(seq);
     };
-    const { applicationCursor, direct } = modeNow.current;
-    // Enter is the form's to send: a phone's keyboard submits it, also where it names no key.
-    if (e.key === 'Escape') special('\x1b');
+    const { applicationCursor, direct, secret } = modeNow.current;
+    // Enter is the form's to send: a phone's keyboard submits it, also where it names no key. A
+    // password goes on the key itself, so no browser takes the field for a sign-in to save.
+    if (e.key === 'Enter' && secret) {
+      e.preventDefault();
+      enter();
+    } else if (e.key === 'Escape') special('\x1b');
     else if (e.key === 'Tab') special('\t');
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') special(keySequence(e.key === 'ArrowUp' ? 'up' : 'down', { applicationCursor }));
     else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && (direct || !f.value)) special(keySequence(e.key === 'ArrowLeft' ? 'left' : 'right', { applicationCursor }));
