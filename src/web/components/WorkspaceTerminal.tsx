@@ -338,6 +338,16 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
               End
             </button>
           )}
+          {/* The screen as text, for a keyboard and a screen reader, as a long press opens it on a phone: seen only once it has the focus. */}
+          {shown && (
+            <button
+              type="button"
+              onClick={longPress}
+              className="sr-only h-8 shrink-0 rounded-full px-3 text-[13px] whitespace-nowrap text-muted hover:bg-hover hover:text-fg focus-visible:not-sr-only"
+            >
+              Screen as text
+            </button>
+          )}
         </div>
       )}
       {problem && (
@@ -448,6 +458,9 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const enter = () => {
     const f = field.current;
     setCtrl(false);
+    // What the line prints is read out to a screen reader once the shell is quiet: nobody types
+    // into the screen here, which is what xterm reads out after.
+    screen.current?.readNext();
     if (!send(`${cleanPaste(f?.value ?? '')}\r`)) return;
     if (f) f.value = '';
     setTyped(false);

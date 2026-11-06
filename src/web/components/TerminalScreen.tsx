@@ -3,11 +3,12 @@ import '@xterm/xterm/css/xterm.css';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { type ITheme, Terminal } from '@xterm/xterm';
+import { type IMarker, type ITheme, Terminal } from '@xterm/xterm';
 import { ArrowDown, Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
+import { announce } from '../lib/announce';
 import { api, checkSignedIn } from '../lib/api';
 import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
@@ -35,7 +36,16 @@ export type ScreenHandle = {
   text: () => ScreenText;
   /** The colors it draws in, for a terminal about to start. */
   colors: () => TerminalColors | undefined;
+  /** What the shell prints next, once it goes quiet, is read out to a screen reader (a line sent from the phone's field). */
+  readNext: () => void;
 };
+
+/** What a screen reader hears of the output after a line: its first lines, and how many more there are. */
+function spoken(text: string): string {
+  const lines = text.split('\n');
+  const said = lines.slice(0, 20).join('\n');
+  return lines.length > 20 ? `${said}\nand ${lines.length - 20} more lines` : said;
+}
 
 /** The font size, the terminal's one setting, set with a pinch (or Ctrl and the wheel); its bounds. */
 const FONT = { min: 8, max: 24 };
@@ -113,6 +123,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [reconnecting, setReconnecting] = useState(false);
   /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output. */
   const [scrolledBack, setScrolledBack] = useState(false);
+  /** After a line sent from the phone's field: where its output starts, read out once the shell is quiet. */
+  const reading = useRef<{ from: IMarker; quiet?: ReturnType<typeof setTimeout>; latest: ReturnType<typeof setTimeout> } | undefined>(undefined);
   /** Where the connection stands, and the timer that says Reconnecting once it has been down a moment. */
   const stateNow = useRef<Connection>(undefined);
   const slow = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -139,6 +151,21 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const reclaim = () => {
     if (sizedElsewhere.current) fit();
   };
+  /** Reads out what the shell printed after the line, once it went quiet (or after a few seconds). */
+  const readOut = () => {
+    const r = reading.current;
+    const t = term.current;
+    reading.current = undefined;
+    if (!r) return;
+    clearTimeout(r.quiet);
+    clearTimeout(r.latest);
+    const buffer = t?.buffer.active;
+    if (buffer && buffer.type === 'normal' && !r.from.isDisposed) {
+      const text = bufferText(buffer, r.from.line + 1, buffer.baseY + buffer.cursorY + 1);
+      if (text.trim()) announce(spoken(text));
+    }
+    r.from.dispose();
+  };
   /** Keys went nowhere, the connection coming back: Reconnecting shows now, not in a moment. */
   const unsent = () => {
     if (stateNow.current?.kind !== 'connecting') return;
@@ -157,6 +184,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       cursorBlink: false,
       // A phone types in the line field, so the screen never has the keys: its cursor still shows as one.
       cursorInactiveStyle: touch ? 'block' : 'outline',
+      // The rows, as text a screen reader reads, and on a computer what follows a key said aloud.
+      screenReaderMode: true,
       minimumContrastRatio: 4.5,
       theme: pageTheme(),
       // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key.
@@ -225,6 +254,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     };
     t.onWriteParsed(lookSoon);
     t.buffer.onBufferChange(lookSoon);
+    t.onWriteParsed(() => {
+      const r = reading.current;
+      if (!r) return;
+      clearTimeout(r.quiet);
+      r.quiet = setTimeout(readOut, 400);
+    });
     // Scrolled back, or output piling up under a screen scrolled back.
     const back = () => {
       const buffer = t.buffer.active;
@@ -274,6 +309,11 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       scheme.removeEventListener('change', recolor);
       cancelAnimationFrame(sizing);
       cancelAnimationFrame(looking);
+      if (reading.current) {
+        clearTimeout(reading.current.quiet);
+        clearTimeout(reading.current.latest);
+        reading.current = undefined;
+      }
       connection.current?.stop();
       connection.current = undefined;
       term.current = undefined;
@@ -409,18 +449,30 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       return { before: bufferText(buffer, 0, buffer.viewportY), screen: viewportText(buffer, t.rows), after: bufferText(buffer, buffer.viewportY + t.rows) };
     },
     colors: () => (term.current ? themeColors(term.current.options.theme) : undefined),
+    readNext: () => {
+      const t = term.current;
+      if (reading.current) {
+        clearTimeout(reading.current.quiet);
+        clearTimeout(reading.current.latest);
+        reading.current.from.dispose();
+        reading.current = undefined;
+      }
+      const from = t?.registerMarker(0);
+      if (from) reading.current = { from, latest: setTimeout(readOut, 5000) };
+    },
   }), []);
 
   return (
     <div className="relative min-h-0 flex-1">
       {/* The keys' hidden field is as large as Safari needs, or it zooms the page in when a tap gives it the keys. */}
       {/* xterm's layers stack inside it (isolate), so what lies over the screen is over all of them. */}
+      {/* On a phone, what follows a line is read out by the page (readNext), not by xterm's own live region, which only keys clear. */}
       <div
         ref={box}
         role="region"
         aria-label={label}
         data-terminal
-        className={`absolute inset-0 isolate [&_.xterm-helper-textarea]:text-[16px] ${touch ? 'touch-none select-none [-webkit-touch-callout:none]' : ''}`}
+        className={`absolute inset-0 isolate [&_.xterm-helper-textarea]:text-[16px] ${touch ? 'touch-none select-none [-webkit-touch-callout:none] [&_.live-region]:hidden' : ''}`}
       />
       {reconnecting && (
         <div className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-muted shadow-sm">

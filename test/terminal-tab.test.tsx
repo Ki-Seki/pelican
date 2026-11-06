@@ -28,6 +28,7 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
       paste: (text: string) => !offline && pasted.push(text) > 0,
       text: () => ({ before: 'line one', screen: 'line two', after: '' }),
       colors: () => undefined,
+      readNext: () => undefined,
     }));
     return <div data-terminal data-shows={props.id ?? ''} />;
   }),
@@ -258,6 +259,17 @@ describe('the Terminal tab', () => {
     tab();
     await waitFor(() => expect(opened).toEqual([{ cwd: `${CWD}/web`, cols: 90, rows: 30 }, { cwd: CWD, cols: 90, rows: 30, command: 'npm test' }]));
     await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh · web', 'zsh']));
+  });
+
+  it('opens the screen as text from a button a keyboard or a screen reader reaches, seen only once it has the focus', async () => {
+    list.terminals = [terminal('t1')];
+    tab();
+    await waitFor(() => expect(shows()).toBe('t1'));
+    const button = screen.getByRole('button', { name: 'Screen as text' });
+    expect(button.className).toMatch(/\bsr-only\b/);
+    fireEvent.click(button);
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet.textContent).toContain('line two');
   });
 
   it('quotes what was selected, as the terminal’s', async () => {
