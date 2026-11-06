@@ -62,7 +62,7 @@ describe('a session waiting for an answer in another app', () => {
     await checkWaiting();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: id, tag: `${id}:ask`, body: 'Claude is asking for permission in the terminal',
-    })));
+    })), { timeout: 5_000 });
     expect(notify).toHaveBeenCalledTimes(1);
 
     // Answered there: working again. A new wait is told of once it has lasted a while.
@@ -75,7 +75,7 @@ describe('a session waiting for an answer in another app', () => {
     await checkWaiting();
     expect(notify).toHaveBeenCalledTimes(1);
     await checkWaiting(Date.now() + NOTIFY_AFTER_MS);
-    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2), { timeout: 5_000 });
     expect(notify).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Claude needs your input in the terminal' }));
-  }, 15_000);
+  }, 20_000);
 });

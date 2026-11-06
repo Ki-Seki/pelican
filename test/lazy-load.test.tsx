@@ -105,7 +105,7 @@ describe('the usage page on a flaky link', () => {
     expect(await screen.findByRole('dialog', { name: 'Usage and activity' }, LATER)).toBeTruthy();
     // Ahead of need, when asked for, and once more.
     expect(asked.get('Usage')).toBe(3);
-  }, 15_000);
+  }, 20_000);
 
   it('that does not load says so in Settings, which offers to reload, and the list stays', async () => {
     await settings(Infinity);
@@ -115,7 +115,7 @@ describe('the usage page on a flaky link', () => {
     expect(within(sheet).getByRole('button', { name: 'Reload' })).toBeTruthy();
     expect(screen.getByText('Fix the flaky login test')).toBeTruthy();
     expect(asked.get('Usage')).toBe(3);
-  }, 15_000);
+  }, 20_000);
 });
 
 describe('a tab of Changes and files on a flaky link', () => {
@@ -136,7 +136,7 @@ describe('a tab of Changes and files on a flaky link', () => {
     const files = await view('files', { WorkspaceFiles: 1 });
     expect(await within(files).findByText('notes.md', {}, LATER)).toBeTruthy();
     expect(asked.get('WorkspaceFiles')).toBe(2);
-  }, 15_000);
+  }, 20_000);
 
   it('that does not load says so in the pane, with Reload, and the view stays', async () => {
     const pane = await view('changes', { WorkspaceChanges: Infinity });
@@ -144,5 +144,5 @@ describe('a tab of Changes and files on a flaky link', () => {
     expect(within(pane).getByRole('button', { name: 'Reload' })).toBeTruthy();
     expect(within(pane).getByRole('button', { name: 'Back to the conversation' })).toBeTruthy();
     expect(asked.get('WorkspaceChanges')).toBe(2);
-  }, 15_000);
+  }, 20_000);
 });

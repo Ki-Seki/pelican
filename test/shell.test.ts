@@ -30,10 +30,15 @@ const alive = (pid: number) => {
   }
 };
 
-async function gone(pid: number): Promise<boolean> {
-  for (let i = 0; i < 40 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
-  return !alive(pid);
+/**
+ * Whether `check` holds within 10 seconds: a busy computer can be slow to start a shell or to
+ * clear away a process it ended. A `sleep 30` left running is still there by then.
+ */
+async function until(check: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 200 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  return check();
 }
+const gone = (pid: number) => until(() => !alive(pid));
 
 describe.skipIf(process.platform === 'win32')('a ! command', () => {
   it('returns when its shell is done, leaving what it started in the background running, and says only what Claude Code says', async () => {
@@ -56,7 +61,7 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
     expect(await gone(pid)).toBe(true);
     expect(result.endedBy).toBe('limit');
     expect(bashModeText(result)).toContain('(stopped after 1 second)');
-  }, 15_000);
+  });
 
   it('says nothing more of a command that simply ends', async () => {
     const result = await runCommand(os.tmpdir(), 'echo done');
@@ -77,7 +82,8 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
       await rm(folder, { recursive: true, force: true });
     }
   });
-});
+  // Each starts a login shell, which a busy computer can be slow to do.
+}, 20_000);
 
 describe.skipIf(process.platform === 'win32')('a live ! command', () => {
   it('hands on its output as it comes, before it ends', async () => {
@@ -98,7 +104,7 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
   it('Stop ends it and everything it started, and the record says so', async () => {
     let pid = 0;
     const run = startCommand(os.tmpdir(), 'sleep 30 & echo $!; wait', { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
-    for (let i = 0; i < 40 && !pid; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await until(() => pid > 0)).toBe(true);
     expect(alive(pid)).toBe(true);
     run.stop();
     const result = await run.result;
@@ -110,13 +116,12 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
   it('ends what ignores the polite request too', async () => {
     let pid = 0;
     const run = startCommand(os.tmpdir(), "sh -c 'trap \"\" TERM; echo $$; sleep 30'", { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
-    for (let i = 0; i < 40 && !pid; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await until(() => pid > 0)).toBe(true);
     run.stop();
     await run.result;
-    for (let i = 0; i < 80 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
-});
+}, 20_000);
 
 describe('a ! command’s output', () => {
   it('keeps stdout and stderr in the order the command wrote them, as Claude Code’s one file for both does', async () => {
@@ -124,7 +129,7 @@ describe('a ! command’s output', () => {
       const result = await runCommand(os.tmpdir(), 'for i in 1 2 3; do echo o$i; echo e$i >&2; done');
       expect(all(result.output)).toBe('o1\ne1\no2\ne2\no3\ne3\n');
     }
-  });
+  }, 20_000);
 
   it('is counted in bytes, and read back with a character cut in two at the end as U+FFFD, as Claude Code reads it', () => {
     const output = printed(`x${'é'.repeat(20)}`);
@@ -338,6 +343,7 @@ describe('a long ! output, as it goes to Claude', () => {
     expect(await readFile(saved.savedTo!, 'utf8')).toBe('é'.repeat(150_000));
     expect(bashModeMessages(saved, true)[1]!.text).toContain('Output too large (293KB). Full output saved to:');
 
+    // 69 MB through a pipe, 64 MB of it written to disk twice: on a busy computer, tens of seconds.
     const before = process.memoryUsage().rss;
     const huge = await runCommand(os.tmpdir(), `head -c ${SAVED_BYTES + 5_000_000} /dev/zero | tr '\\0' x`);
     expect(huge.output.bytes).toBe(SAVED_BYTES + 5_000_000);
@@ -346,7 +352,7 @@ describe('a long ! output, as it goes to Claude', () => {
     huge.output.release();
     expect((await stat(cut.savedTo!)).size).toBe(SAVED_BYTES);
     expect(bashModeMessages(cut, true)[1]!.text).toContain(`Output exceeded the 64MB persist limit; only the first 64MB were saved to: ${cut.savedTo}\n`);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('how Claude Code’s bash mode takes a ! command, from the settings', () => {

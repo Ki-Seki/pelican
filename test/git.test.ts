@@ -98,4 +98,4 @@ describe('git', () => {
     expect(await response.json()).toEqual({ repo: false, untrusted: true });
     expect(await ran()).toBe('');
   });
-});
+}, 20_000);

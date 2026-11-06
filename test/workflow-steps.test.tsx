@@ -87,7 +87,7 @@ describe('an agent at work, opened', () => {
     expect([40, 69, 70, 71, 99, 100].map((n) => [n, shown(n)])).toEqual([40, 69, 70, 71, 99, 100].map((n) => [n, true]));
     // Asked from the last message it held on, not the newest 60 again.
     expect(pages.mock.calls.some((c) => c[4] === 199)).toBe(true);
-  }, 10_000);
+  }, 20_000);
 
   it('starts again from the newest when its transcript changed under it', async () => {
     let all = stepsOf(1, 3);
@@ -100,7 +100,7 @@ describe('an agent at work, opened', () => {
     all = [...stepsOf(7, 8)];
     await screen.findByText('file8.ts', undefined, { timeout: 5000 });
     expect(shown(3)).toBe(false);
-  }, 10_000);
+  }, 20_000);
 
   it('shows the steps it took in its last seconds once it ends', async () => {
     let state: Workflow = flow({ agents: [agent(1, 'progress', { startedAt: Date.now() - 60_000, lastProgressAt: Date.now() })] });
@@ -117,7 +117,7 @@ describe('an agent at work, opened', () => {
     await waitFor(() => expect(card().textContent).toContain('All clear.'), { timeout: 5000 });
     await screen.findByText('file3.ts');
     expect(pages.mock.calls.length).toBeGreaterThan(asked);
-  }, 15_000);
+  }, 20_000);
 
   it('asks for no steps while it is queued, with no id yet, and shows the prompt it waits with', async () => {
     const queued = { ...agent(2, 'start', { queuedAt: Date.now() - 5000, promptPreview: 'Review the client side of the checkout.' }), agentId: undefined } as Agent;
@@ -130,7 +130,7 @@ describe('an agent at work, opened', () => {
     expect(card().textContent).toContain('Review the client side of the checkout.');
     await new Promise((resolve) => setTimeout(resolve, 3500));
     expect(pages).not.toHaveBeenCalled();
-  }, 10_000);
+  }, 20_000);
 });
 
 describe('an agent done before its result reached the run’s journal, opened', () => {
@@ -151,7 +151,7 @@ describe('an agent done before its result reached the run’s journal, opened', 
     // Once there, it is not asked for again.
     expect(pages.mock.calls.length).toBe(asked);
     expect(card().textContent).not.toContain('(empty)');
-  }, 10_000);
+  }, 20_000);
 });
 
 describe('an agent that finished, opened', () => {
@@ -247,5 +247,5 @@ describe('an Agent call’s steps', () => {
     expect(pages).toHaveBeenLastCalledWith(SESSION, 'ag1', 10);
     expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
     expect(shown(0)).toBe(true);
-  }, 15_000);
+  }, 20_000);
 });

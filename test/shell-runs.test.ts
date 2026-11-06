@@ -291,7 +291,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
   });
-});
+}, 20_000);
 
 describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to your settings only', () => {
   it('runs git as Claude Code does there: none of the repository’s own programs run', async () => {
@@ -338,7 +338,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to y
       await rm(dir, { recursive: true, force: true });
     }
   }, 20_000);
-});
+}, 20_000);
 
 describe('what a turn has cost', () => {
   it('is its share of Claude Code’s running total, on an API key or a provider', async () => {

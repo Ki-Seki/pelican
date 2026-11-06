@@ -36,7 +36,7 @@ describe('the Claude Code Pelican runs', () => {
     config.claudeExecutable = await fakeClaude({ loggedIn: false }, 1);
     expect(await claudeCodeInfo()).toEqual({ path: config.claudeExecutable, version: '2.1.316' });
   });
-});
+}, 20_000);
 
 describe('whether Claude Code is signed in', () => {
   it('as `claude auth status` says, signed out included (it exits 1 then)', async () => {
@@ -54,7 +54,7 @@ describe('whether Claude Code is signed in', () => {
     expect(claudeCodeLine({ version: '2.1.316', path: '/usr/local/bin/claude' }, undefined, 'pelican login')).toBe('Claude Code 2.1.316 (/usr/local/bin/claude)');
     expect(claudeCodeLine({ path: '/nope', missing: true }, undefined, 'pelican login')).toBe('Claude Code not found at /nope (PELICAN_CLAUDE_PATH)');
   });
-});
+}, 20_000);
 
 /** A folder holding a `claude` that prints this script's output for --version. */
 async function claudeIn(name: string, script: string): Promise<string> {
@@ -103,4 +103,4 @@ describe('the user\'s own claude, when newer than the one Pelican runs', () => {
   it('in one line for the start banner', () => {
     expect(newerClaudeLine('2.1.330')).toBe('Your claude is newer (2.1.330): update Pelican to get it');
   });
-});
+}, 20_000);

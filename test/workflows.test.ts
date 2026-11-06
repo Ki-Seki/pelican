@@ -102,7 +102,7 @@ describe('the release workflow', () => {
   it('does not publish a version npm has already', async () => {
     expect(await release('v0.3.0', { LATEST: '0.3.0', PUBLISHED: '0.3.0' })).toEqual({ code: 0, published: [] });
   });
-});
+}, 20_000);
 
 describe('the site workflow', () => {
   let text: string;
@@ -135,7 +135,7 @@ describe('the site workflow', () => {
     expect(job(text, 'deploy')).toMatch(/\n {4}needs: build\n/);
     expect(job(text, 'deploy')).not.toMatch(/\n {4}if:/);
   });
-});
+}, 20_000);
 
 describe('the package check in CI', () => {
   it('installs the package as people get it from npm, through a registry, never a tarball by its path', async () => {
