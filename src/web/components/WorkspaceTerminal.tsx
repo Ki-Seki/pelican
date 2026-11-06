@@ -258,7 +258,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
                   aria-selected={selected}
                   title={t.cwd}
                   onClick={() => show(t.id)}
-                  className={`h-8 max-w-[11rem] shrink-0 truncate rounded-full px-3 font-mono text-[12.5px] ${selected ? 'bg-chip' : 'hover:bg-hover'} ${over ? 'text-faint' : selected ? 'text-fg' : 'text-muted hover:text-fg'}`}
+                  className={`h-8 max-w-[11rem] shrink-0 truncate rounded-full px-3 font-mono text-[12.5px] pointer-coarse:h-9 ${selected ? 'bg-chip' : 'hover:bg-hover'} ${over ? 'text-faint' : selected ? 'text-fg' : 'text-muted hover:text-fg'}`}
                 >
                   {label(t)}
                 </button>
