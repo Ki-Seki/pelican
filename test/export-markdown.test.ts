@@ -179,7 +179,7 @@ describe('a reply in the export', () => {
     // An item micromark reads as words where the spec's reader reads a list: a blank line, and both read a list.
     expect(reply('para\n- 2) ## You')).toBe('para\n\n- 2) #### You');
     // A `|` after a fence, which markdown-it takes for a table's.
-    expect(reply('```js|x\nlet a = 1;\n```')).toBe('```js\\|x\nlet a = 1;\n```');
+    expect(reply('```js|x\nlet a = 1;\n```')).toBe('```js&#124;x\nlet a = 1;\n```');
     // What a link's definition leaves, which readers would end apart: a line every reader takes for words; a footnote,
     // under its label in the export; a lazy line like a table's delimiter row.
     expect(reply('[x]: /u\n10. ## You')).toBe('&#32;10. ## You');
@@ -337,6 +337,16 @@ describe('a reply in the export', () => {
     }
     // A bare link, GitHub's reader takes on past one.
     expect(reply('https://a.example/\u0001`x <img src="https://evil.example/b.png"> `')).toBe('https://a.example/\u0001`x &lt;img src="https://evil.example/b.png"> `');
+  });
+
+  it('writes no fence or heading that markdown-it (VS Code’s preview), which tries a table first, takes for a table’s head', () => {
+    // It takes a line with a `|` in it, escaped or not, when the next looks like a delimiter row: a fence's as `&#124;`.
+    expect(reply('```bash |\n| - |\n## You\n```')).toBe('```bash &#124;\n| - |\n## You\n```');
+    expect(reply('```js\\|x \\\\|y\nlet a = 1;\n```')).toBe('```js&#124;x \\\\&#124;y\nlet a = 1;\n```');
+    // Under a heading with one, a delimiter row is words, written escaped, and a rule of dashes has spaces in it.
+    expect(reply('## Plan | Status\n| - | - |\n`x | <img src="https://evil.example/p.png"> | y`')).toBe('#### Plan | Status\n\\| - | - |\n`x | <img src="https://evil.example/p.png"> | y`');
+    expect(reply('## a \\| b\n---\n`<img src="https://evil.example/p.png"> | y`')).toBe('#### a \\| b\n- - -\n`<img src="https://evil.example/p.png"> | y`');
+    expect(reply('Plan | Status\n===\n:-')).toBe('### Plan | Status\n\\:-');
   });
 
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {

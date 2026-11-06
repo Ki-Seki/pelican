@@ -460,6 +460,8 @@ export function reply(said: string, id = 1): string {
   let owedTable = false;
   /** Whether the line being read has nothing on it. */
   let empty = false;
+  /** Whether the line just read was a heading with a `|` in it, which markdown-it may take for a table's head. */
+  let pipeHeading = false;
   const emit = (line: string | undefined) => {
     if (owed !== undefined && !empty) out.push(owed);
     owed = undefined;
@@ -609,6 +611,8 @@ export function reply(said: string, id = 1): string {
     const raw = carried ?? lines[index++]!;
     carried = undefined;
     empty = blank(raw);
+    const afterPipeHeading = pipeHeading;
+    pipeHeading = false;
     owedTable = false;
     const cur = new Cursor(raw);
     let matched = 0;
@@ -742,6 +746,7 @@ export function reply(said: string, id = 1): string {
         const hashes = match[0].trimEnd().length;
         const heading = `${spaces(raw.slice(0, cur.next))}${'#'.repeat(Math.min(6, hashes + 2))}`;
         const words = raw.slice(cur.next + hashes);
+        pipeHeading = words.includes('|');
         const at = single(undefined, false);
         later.push(() => {
           out[at] = heading + inlineLine(words, context);
@@ -752,9 +757,10 @@ export function reply(said: string, id = 1): string {
       if (!cur.indented && (c === '`' || c === '~') && (match = matchAt(FENCE_OPEN, raw, cur.next))) {
         add({ kind: 'fence', char: match[0][0]!, length: match[0].length, offset: cur.indent });
         settle(false);
-        // A `|` after the fence, escaped: markdown-it (VS Code's preview) takes a line with one
-        // for a table's header when the next looks like its delimiter row, and no fence opens.
-        const info = raw.slice(cur.next + match[0].length).replace(/\\*\|/g, (run) => (run.length % 2 === 1 ? `\\${run}` : run));
+        // A `|` after the fence as `&#124;`, which reads as one: markdown-it (VS Code's preview)
+        // takes a line with a `|` in it, escaped or not, for a table's head when the next looks
+        // like its delimiter row, and no fence opens. An escaped one loses its backslash.
+        const info = raw.slice(cur.next + match[0].length).replace(/\\*\|/g, (run) => `${run.slice(0, (run.length - 1) & ~1)}&#124;`);
         emit(spaces(raw.slice(0, cur.next)) + match[0] + info);
         handled = true;
         break;
@@ -778,6 +784,7 @@ export function reply(said: string, id = 1): string {
           container = open.length - 1;
           definitions(above.lines, context);
           above.heading = true;
+          pipeHeading = above.lines.some((line) => line.text.includes('|'));
           const [first, ...others] = above.lines;
           for (const line of others) out[line.at] = undefined;
           const level = match[0][0] === '=' ? '###' : '####';
@@ -791,7 +798,10 @@ export function reply(said: string, id = 1): string {
         above.taken = taken;
       }
       if (!cur.indented && thematicBreak(cur, cur.next)) {
-        single(spaces(raw.slice(0, cur.next)) + raw.slice(cur.next), DASHES.test(raw.slice(cur.next)));
+        // Right under a heading with a `|`, markdown-it would take a rule of dashes for a table's
+        // delimiter row: with spaces between them, it is a rule to every reader.
+        const rule = raw.slice(cur.next);
+        single(spaces(raw.slice(0, cur.next)) + (afterPipeHeading && /^-+[ \t]*$/.test(rule) ? rule.trimEnd().split('').join(' ') : rule), DASHES.test(rule));
         handled = true;
         break;
       }
@@ -1133,12 +1143,13 @@ const DELIMITER_LIKE = /^[ \t]*[|:-][ \t|:-]*$/;
 function inlineParagraph(lines: readonly Line[], context: Context): string[] {
   // A `>` that starts a line here is text (the line goes on a paragraph); markdown-it (VS Code's
   // preview) still takes one with any indentation for a quote that goes on: escaped, it is text
-  // there too. And a line past the first that looks like a table's delimiter row: where it was,
-  // the line above it headed no table (it was indented, or lazy, or some reader takes the row for
-  // none), but where it is written it could.
-  const written = lines.map(({ text, moved }, i) => {
+  // there too. And a line that looks like a table's delimiter row: past the first, the line above
+  // it headed no table where it was (it was indented, or lazy, or some reader takes the row for
+  // none), but where it is written it could; the first, markdown-it takes for one under a heading
+  // with a `|`, which it tries as a table's head first.
+  const written = lines.map(({ text, moved }) => {
     const words = moved ? goesOn(text) : text;
-    return footnoteMarker(words) !== undefined || words.startsWith('>') || (i > 0 && DELIMITER_LIKE.test(words) && words.includes('-')) ? `\\${words}` : words;
+    return footnoteMarker(words) !== undefined || words.startsWith('>') || (DELIMITER_LIKE.test(words) && words.includes('-')) ? `\\${words}` : words;
   });
   // A lazy line that starts with a tag, which the spec's reader takes as more of the paragraph,
   // micromark (the conversation's reader) may take as HTML of its own: code reaching into it is not sure.
