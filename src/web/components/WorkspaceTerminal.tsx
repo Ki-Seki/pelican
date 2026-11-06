@@ -167,13 +167,23 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     setConnection(undefined);
   }, [cwd]);
 
+  /**
+   * The list as the page knows it, changed here. A list fetched before the change, still on its
+   * way, would undo it when it came (a terminal just started shown as no longer running, one just
+   * ended back): it is let go first, and the next fetch has the change.
+   */
+  const changeList = useCallback((change: (old: TerminalList | undefined) => TerminalList | undefined) => {
+    void queryClient.cancelQueries({ queryKey: ['terminals'] });
+    queryClient.setQueryData<TerminalList>(['terminals'], change);
+  }, [queryClient]);
+
   /** The list as the page knows it, one terminal changed (or, with undefined, taken out). */
   const patch = useCallback((id: string, change: (terminal: TerminalInfo) => TerminalInfo | undefined) => {
-    queryClient.setQueryData<TerminalList>(['terminals'], (old) => old && {
+    changeList((old) => old && {
       ...old,
       terminals: old.terminals.flatMap((t) => (t.id === id ? [change(t)].filter((n): n is TerminalInfo => Boolean(n)) : [t])),
     });
-  }, [queryClient]);
+  }, [changeList]);
 
   /** A new terminal in `folder`, typing `command` there once its shell is ready; asks about the folder's trust first when it needs it. */
   const open = useCallback(async (folder: string, command?: string, focus = false) => {
@@ -190,7 +200,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
           const size = screen.current?.size() ?? { cols: 80, rows: 24 };
           const colors = screen.current?.colors();
           const terminal = await api.openTerminal({ cwd: folder, ...size, ...(command ? { command } : {}), ...(trust ? { trust } : {}), ...(colors ? { colors } : {}) });
-          queryClient.setQueryData<TerminalList>(['terminals'], (old) => ({
+          changeList((old) => ({
             available: true,
             ...old,
             terminals: [...(old?.terminals ?? []).filter((t) => t.id !== terminal.id), terminal],
@@ -214,7 +224,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
       opening.current = false;
       setStarting(false);
     }
-  }, [queryClient, show, askTrust, touch]);
+  }, [changeList, show, askTrust, touch]);
 
   // Open in terminal and Run in terminal, asked for elsewhere; else the folder's first terminal,
   // once what is running here is known for sure.

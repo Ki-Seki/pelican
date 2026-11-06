@@ -39,6 +39,8 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
 }));
 
 let list: TerminalList;
+/** A list fetch that answers when the test says, with the list as it was when asked. */
+let slow: (() => Promise<TerminalList>) | undefined;
 const opened: Array<Record<string, unknown>> = [];
 const closed: string[] = [];
 let refuse: ((body: Record<string, unknown>) => Error | undefined) | undefined;
@@ -49,7 +51,7 @@ vi.mock('../src/web/lib/api', async (original) => {
     ...actual,
     api: {
       ...actual.api,
-      terminals: async () => structuredClone(list),
+      terminals: async () => (slow ? slow() : structuredClone(list)),
       openTerminal: async (body: Record<string, unknown>) => {
         opened.push(body);
         const error = refuse?.(body);
@@ -91,6 +93,7 @@ const terminal = (id: string, extra: Partial<TerminalInfo> = {}): TerminalInfo =
 
 beforeEach(() => {
   list = { available: true, terminals: [] };
+  slow = undefined;
   opened.length = 0;
   closed.length = 0;
   typed.length = 0;
@@ -287,6 +290,53 @@ describe('the Terminal tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'End' }));
     await waitFor(() => expect(closed).toEqual(['t3']));
     await waitFor(() => expect(tabs()).toEqual(['zsh']));
+  });
+
+  it('shows a terminal it just started as running, though a list fetched before it started answers after', async () => {
+    list.terminals = [terminal('t1')];
+    const { client } = tab();
+    await waitFor(() => expect(tabs()).toEqual(['zsh']));
+    // A refetch starts (the 10 s poll, or the window focused), with the list as it is now…
+    let answer!: () => void;
+    slow = () => {
+      const before = structuredClone(list);
+      return new Promise<TerminalList>((resolve) => {
+        answer = () => resolve(before);
+      });
+    };
+    void client.refetchQueries({ queryKey: ['terminals'] });
+    await act(async () => undefined);
+    slow = undefined;
+    // …and + starts a terminal meanwhile.
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal' }));
+    await waitFor(() => expect(shows()).toBe('t11'));
+    // The refetch answers now, with the list from before the terminal started.
+    await act(async () => answer());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(tabs()).toEqual(['zsh', 'zsh']);
+    expect(shows()).toBe('t11');
+    expect(screen.queryByText('This terminal is no longer running')).toBeNull();
+  });
+
+  it('keeps a terminal it ended out, though a list fetched before it ended answers after', async () => {
+    list.terminals = [terminal('t1'), terminal('t2')];
+    const { client } = tab();
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh']));
+    let answer!: () => void;
+    slow = () => {
+      const before = structuredClone(list);
+      return new Promise<TerminalList>((resolve) => {
+        answer = () => resolve(before);
+      });
+    };
+    void client.refetchQueries({ queryKey: ['terminals'] });
+    await act(async () => undefined);
+    slow = undefined;
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    await waitFor(() => expect(closed).toEqual(['t2']));
+    await act(async () => answer());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(tabs()).toEqual(['zsh']);
   });
 
   it('opens a terminal asked for elsewhere: in a folder (Open in terminal), running a command (Run in terminal)', async () => {
