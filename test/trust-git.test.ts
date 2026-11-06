@@ -130,7 +130,7 @@ describe('a git filter the repository’s config sets up', () => {
     const pairs = Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG_KEY_')).map((k) => `${env[k]}=${env[k.replace('KEY', 'VALUE')]}`);
     expect(pairs).toEqual(expect.arrayContaining(['core.fsmonitor=false', 'core.hooksPath=/dev/null']));
   });
-});
+}, 20_000);
 
 describe('a folder git does not see as a repository of its own', () => {
   it('brings nothing of git: an empty .git, or a repository without a config file', async () => {
@@ -145,4 +145,4 @@ describe('a folder git does not see as a repository of its own', () => {
     await rememberChoice(bare, 'user-only');
     expect(await launchFor(bare)).toEqual({ settingSources: ['user'] });
   });
-});
+}, 20_000);

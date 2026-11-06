@@ -229,9 +229,10 @@ async function walkable(sessions, answer) {
 
 /**
  * The Pinned group, grouped by time and then by project: it comes first and holds the pinned
- * sessions. Then a pinned row's Unpin: shown by a finger's slide to the right on a phone, which
- * stops short of acting, and beside Archive on hover on a computer, where it is not pressed; and
- * there, every row's buttons, which cut none of its words (see walkRowButtons).
+ * sessions. Then a pinned row's Unpin, beside Archive: on a phone under a finger's short slide to
+ * the left, which stops short of acting, Archive at the edge (a slide to the right, Safari's Back,
+ * shows nothing and opens nothing); on a computer on hover, where it is not pressed; and there,
+ * every row's buttons, which cut none of its words (see walkRowButtons).
  */
 async function walkPinned(page, sessions, size, where) {
   const pinned = sessions.filter((s) => s.pinned && !s.archived && s.title).map((s) => s.title);
@@ -269,11 +270,28 @@ async function walkPinned(page, sessions, size, where) {
     const cdp = await page.context().newCDPSession(page);
     const y = box.y + box.height / 2;
     const touch = (type, x) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
-    await touch('touchStart', box.x + 30);
-    for (const dx of [20, 45, 70, 90]) await touch('touchMove', box.x + 30 + dx);
-    await touch('touchEnd', box.x + 120);
+    const swipe = async (x, dx) => {
+      await touch('touchStart', x);
+      for (const part of [0.2, 0.45, 0.7, 0.9, 1]) await touch('touchMove', x + dx * part);
+      await touch('touchEnd', x + dx);
+      await page.waitForTimeout(300);
+    };
+    // What a slide shows under a row: its buttons, named as a screen reader names them.
+    const under = page.locator('button[data-row-action]:not([aria-label])');
+    await swipe(box.x + 60, 120);
+    if (await under.count()) missing('a slide to the right on a pinned row shows buttons');
+    if (new URL(page.url()).searchParams.has('s')) missing('a slide to the right on a pinned row opens it');
+    await swipe(box.x + box.width - 60, -120);
     const unpin = page.getByRole('button', { name: 'Unpin', exact: true });
-    if (!(await unpin.waitFor({ timeout: 2000 }).then(() => true, () => false))) missing('a slide to the right on a pinned row shows no Unpin');
+    const archive = page.getByRole('button', { name: 'Archive', exact: true });
+    if (!(await unpin.waitFor({ timeout: 2000 }).then(() => true, () => false))) missing('a short slide to the left on a pinned row shows no Unpin');
+    else {
+      const [left, right] = [await unpin.boundingBox(), await archive.boundingBox().catch(() => null)];
+      if (!left || !right || left.x + left.width > right.x + 1 || right.x + right.width < box.x + box.width - 1) {
+        missing('a short slide to the left on a pinned row shows Unpin, but not beside Archive at the row’s edge');
+      }
+    }
+    if (new URL(page.url()).searchParams.has('s')) missing('a short slide to the left on a pinned row opens it');
     // A tap elsewhere closes the row again.
     await page.mouse.click(5, 5);
     await cdp.detach();

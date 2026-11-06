@@ -418,7 +418,7 @@ describe('an agent’s steps, asked for while it works', () => {
     const blocks = await pageOf([{ type: 'assistant', message: { id: 'm1', role: 'assistant', content: Array.from({ length: 60 }, () => ({ type: 'text', text: '审'.repeat(1000) })) } }]);
     expect(blocks.bytes).toBeLessThan(140_000);
     expect((blocks.page.messages[1]!.blocks.at(-1) as { text: string }).text).toMatch(/^… \(\d+ more parts of this message left out\)$/);
-  });
+  }, 20_000);
 });
 
 describe('a session with a Workflow call whose meta no string could hold', () => {

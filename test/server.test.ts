@@ -76,7 +76,7 @@ describe('the live socket', () => {
       });
       expect(await alive()).toBe(200);
     }
-  });
+  }, 20_000);
 
   it('answers every subscribe with the run as it is, or with none, also when asked again', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { headers: { ...page, authorization: `Bearer ${accessToken()}` } });

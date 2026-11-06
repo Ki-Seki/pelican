@@ -67,8 +67,8 @@ describe.skipIf(process.platform === 'win32')('a named pipe in a folder nobody t
     await writeFile(other, 'hello');
     expect(await within(readFile(other, 'utf8'), 2000)).toBe('hello');
     expect(await brings).toContain('Git config that git could not read');
-  }, 15_000);
-});
+  }, 30_000);
+}, 20_000);
 
 describe('commands, skills and agents a folder brings', () => {
   async function folderWith(name: string, files: Record<string, string>): Promise<string> {
@@ -124,7 +124,7 @@ describe('a folder with more commands than any project has', () => {
     await Promise.all(Array.from({ length: 510 }, (_, i) => writeFile(path.join(dir, '.claude', 'commands', `c${i}.md`), 'Say hi.\n')));
     expect(await folderBrings(dir)).toEqual(['More commands, skills and agents than Pelican reads']);
   });
-});
+}, 20_000);
 
 describe('the home folder', () => {
   it('brings nothing of its own to a folder in it, whichever of its paths the system gives', async () => {

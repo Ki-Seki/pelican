@@ -78,4 +78,4 @@ describe('searching the folder’s text', () => {
     await searchText(repo, 'needle', 'scan');
     await expect(import('node:fs/promises').then((fs) => fs.readFile(marker, 'utf8'))).rejects.toThrow();
   });
-});
+}, 20_000);

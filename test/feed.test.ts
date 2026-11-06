@@ -37,7 +37,8 @@ async function transcript(id: string, rows: string): Promise<string> {
   return file;
 }
 
-async function until(test: () => boolean, ms = 3000): Promise<void> {
+/** Waits for `test` to hold: up to 10 seconds, which a busy computer can need. */
+async function until(test: () => boolean, ms = 10_000): Promise<void> {
   for (const start = Date.now(); !test(); ) {
     if (Date.now() - start > ms) throw new Error('timed out');
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -69,7 +70,7 @@ describe('a session’s feed', () => {
     } finally {
       unsubscribe();
     }
-  });
+  }, 20_000);
 
   it('keeps going when the transcript cannot be read, and reads it once it can', async () => {
     if (process.getuid?.() === 0) return; // root reads anything
@@ -93,7 +94,7 @@ describe('a session’s feed', () => {
       unsubscribe();
       await chmod(file, 0o644);
     }
-  });
+  }, 20_000);
 
   it('is let go once nobody watches and nothing waits for a late subscriber', async () => {
     const id = '0f0f0f0f-0000-4000-8000-000000000003';

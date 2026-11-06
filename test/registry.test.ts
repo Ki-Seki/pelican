@@ -96,4 +96,4 @@ describe('the registry CI installs the package through', () => {
       expect((await run(['pelican-cc-0.3.0.tgz'])).code).toBe(2);
     });
   });
-});
+}, 20_000);

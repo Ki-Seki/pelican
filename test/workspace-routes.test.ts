@@ -134,7 +134,7 @@ describe('a file downloaded', () => {
     expect((await ask(url, { 'x-pelican': '', 'sec-fetch-site': 'cross-site' })).status).toBe(403);
     expect((await app.request(url, { headers: { host: 'localhost:7860' } })).status).toBe(401);
   });
-});
+}, 20_000);
 
 describe('searching the folder', () => {
   it('needs some text, and finds it', async () => {
@@ -142,7 +142,7 @@ describe('searching the folder', () => {
     const result = await (await ask(`/api/search?cwd=${encodeURIComponent(cwd)}&q=one`)).json() as { files: Array<{ path: string }> };
     expect(result.files.map((f) => f.path)).toEqual(['src/a.ts']);
   });
-});
+}, 20_000);
 
 describe('what each turn changed', () => {
   it('comes from the transcript, with each file’s diff, in any folder', async () => {

@@ -159,64 +159,90 @@ function keyboardFocus(el: Element): boolean {
   }
 }
 
-/** How far a row slides to show its button, and how far (of its width) a slide acts on release. */
-const REVEAL = 104;
-const COMMIT = 0.4;
+/**
+ * Under a finger: how wide a row's buttons are, two side by side or Unarchive alone; how close to
+ * the screen's edge a slide may start (nearer, it is the browser's Back or Forward); how far a
+ * finger goes before the row follows it; and how far the row must slide, of its width and past its
+ * buttons, to archive when let go.
+ */
+const BUTTON = 88;
+const ALONE = 104;
+const EDGE = 24;
+const SLOP = 12;
+const FULL = 0.6;
+const FULL_PAST = 64;
 
 /** What a row can do without opening its session: Pin (Unpin), or Archive (Unarchive). */
 type RowAction = { label: string; icon: LucideIcon; act: () => void };
 
 /**
- * A row with its actions, reached without opening the session: Pin, shown from the left, and
- * Archive, from the right (Unpin and Unarchive once done). Under a finger the row slides, as in
- * Mail: right for Pin, left for Archive; far enough, it acts when let go; less far, the button
- * stays showing. With a mouse or the keyboard the actions are buttons on the row, shown on hover
- * or focus.
+ * A row with its actions, reached without opening the session: Pin and Archive (Unpin and
+ * Unarchive once done). Under a finger the row slides left only, as in Mail: a short slide shows
+ * Pin and Archive side by side, Archive at the edge, and leaves them to a tap; a full one archives
+ * when let go. A slide to the right is Safari's Back, so the row takes none, nor one that starts
+ * at the screen's edge. With a mouse or the keyboard the actions are buttons on the row, shown on
+ * hover or focus.
  */
-function Swipeable({ id, name, start, end, compact, selected, children }: {
+function Swipeable({ id, name, pin, archive, compact, selected, children }: {
   /** The session's id, which tells its row in the list. */
   id: string;
   /** The session's title, so each row's buttons say which session they act on. */
   name: string;
-  /** Pin or Unpin, under a slide to the right; none for an archived session. */
-  start?: RowAction;
-  /** Archive or Unarchive, under a slide to the left. */
-  end: RowAction;
+  /** Pin or Unpin; none for an archived session. */
+  pin?: RowAction;
+  /** Archive or Unarchive: what a full slide does. */
+  archive: RowAction;
   compact: boolean;
   selected: boolean;
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; x: number; y: number; from: number; dx: number; sideways?: boolean } | null>(null);
+  const drag = useRef<{ id: number; x: number; y: number; width: number; from: number; dx: number; sideways?: boolean } | null>(null);
   const swallowClicksUntil = useRef(0);
+  // How far the row is slid, never right of its place; and whether far enough to archive when let go.
   const [offset, setOffset] = useState(0);
+  const [full, setFull] = useState(false);
   const [dragging, setDragging] = useState(false);
-  // Only a row with something to show on its left slides right.
-  const bounded = (x: number) => (start ? x : Math.min(0, x));
-  const shown = offset > 0 ? start : offset < 0 ? end : undefined;
+  // What lies under the row stays while the row slides back over it.
+  const [under, setUnder] = useState(false);
+  if (offset < 0 && !under) setUnder(true);
+  useEffect(() => {
+    if (offset < 0 || !under) return undefined;
+    const timer = window.setTimeout(() => setUnder(false), reducedMotion() ? 0 : 220);
+    return () => window.clearTimeout(timer);
+  }, [offset, under]);
+  const open = pin ? 2 * BUTTON : ALONE;
+  const fullAt = (width: number) => Math.max(width * FULL, open + FULL_PAST);
+  const slide = (to: number, isFull = false) => {
+    setOffset(to);
+    setFull(isFull);
+  };
 
   // A row left open closes at the next touch anywhere else, as rows in Mail do.
   useEffect(() => {
     if (offset === 0 || dragging) return undefined;
     const close = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOffset(0);
+      if (!box.current?.contains(e.target as Node)) slide(0);
     };
     document.addEventListener('pointerdown', close, true);
     return () => document.removeEventListener('pointerdown', close, true);
   }, [offset, dragging]);
 
-  const act = (action: RowAction, toward: 1 | -1) => {
-    setOffset(toward * (box.current?.offsetWidth ?? 0));
-    // The row slides out of sight, then leaves its place in the list; if the change fails it comes back closed.
+  // Archive: the row slides out of sight, then leaves its place in the list. Pin: the row closes,
+  // then moves. If the change fails the row comes back closed.
+  const act = (action: RowAction) => {
+    if (action === archive) slide(-(box.current?.offsetWidth ?? 0), true);
+    else slide(0);
     window.setTimeout(() => {
       action.act();
-      setOffset(0);
+      slide(0);
     }, reducedMotion() ? 0 : 180);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType !== 'touch' || !e.isPrimary) return;
-    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: offset, dx: 0 };
+    if (e.clientX < EDGE || e.clientX > window.innerWidth - EDGE) return;
+    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, width: box.current?.offsetWidth ?? 1, from: offset, dx: 0 };
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
@@ -224,10 +250,10 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
     if (d.sideways === undefined) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      // Mostly up or down: that is the list scrolling, and the browser has it already. Nor does a
-      // closed row with nothing on its left take a slide to the right.
-      d.sideways = Math.abs(dx) > Math.abs(dy) && (dx < 0 || Boolean(start) || d.from !== 0);
+      if (Math.abs(dx) <= SLOP && Math.abs(dy) <= SLOP) return;
+      // Sideways is at least twice as far across as up or down, and to the left, or back from
+      // where the row was left open. Anything else is the list scrolling, which the browser has.
+      d.sideways = Math.abs(dx) >= 2 * Math.abs(dy) && (dx < 0 || d.from < 0);
       if (!d.sideways) {
         drag.current = null;
         return;
@@ -236,7 +262,8 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
       setDragging(true);
     }
     d.dx = dx;
-    setOffset(bounded(d.from + dx));
+    const at = Math.min(0, d.from + dx);
+    slide(at, -at > fullAt(d.width));
   };
   const onPointerEnd = (e: React.PointerEvent, cancelled: boolean) => {
     const d = drag.current;
@@ -246,22 +273,37 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
     setDragging(false);
     // Some browsers follow a slide with a click on the row: it was not a tap.
     swallowClicksUntil.current = Date.now() + 400;
-    const at = bounded(d.from + d.dx);
-    const width = box.current?.offsetWidth ?? 1;
-    if (cancelled) setOffset(d.from);
-    else if (at > width * COMMIT && start) act(start, 1);
-    else if (-at > width * COMMIT) act(end, -1);
-    else setOffset(Math.abs(at) > REVEAL / 2 ? Math.sign(at) * REVEAL : 0);
+    const at = Math.min(0, d.from + d.dx);
+    if (cancelled) slide(d.from);
+    else if (-at > fullAt(d.width)) act(archive);
+    else slide(-at > open / 2 ? -open : 0);
   };
   const onClickCapture = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-row-action]')) return;
     if (Date.now() < swallowClicksUntil.current || offset !== 0) {
-      // A tap on a row showing its button closes it, rather than opening the session.
+      // A tap on a row showing its buttons closes it, rather than opening the session.
       e.preventDefault();
       e.stopPropagation();
-      setOffset(0);
+      slide(0);
     }
   };
+
+  // Under the row, Archive at the edge and Pin beside it, as Mail has them. Archive keeps up with
+  // the finger; past the point where letting go archives, it takes all the room, Pin giving way.
+  const pinWidth = pin && !full ? BUTTON : 0;
+  const archiveWidth = Math.max(pin ? BUTTON : ALONE, -offset - pinWidth);
+  const revealed = (action: RowAction, width: number, tone: string, follows: boolean) => (
+    <button
+      type="button"
+      data-row-action
+      onClick={() => act(action)}
+      className={`flex h-full shrink-0 items-center justify-center gap-1.5 overflow-hidden text-[14px] font-medium whitespace-nowrap ${tone} ${follows ? '' : 'transition-[width] duration-200 motion-reduce:transition-none'}`}
+      style={{ width }}
+    >
+      <action.icon className="size-4 shrink-0" />
+      {action.label}
+    </button>
+  );
 
   const button = (action: RowAction) => (
     <button
@@ -287,24 +329,17 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
       onPointerCancel={(e) => onPointerEnd(e, true)}
       onClickCapture={onClickCapture}
     >
-      {shown && (
-        <div className={`absolute inset-0 flex overflow-hidden rounded-xl bg-fg ${offset > 0 ? 'justify-start' : 'justify-end'}`}>
-          <button
-            type="button"
-            data-row-action
-            onClick={() => act(shown, offset > 0 ? 1 : -1)}
-            className="flex h-full shrink-0 items-center justify-center gap-1.5 text-[14px] font-medium text-bg"
-            style={{ width: Math.max(REVEAL, Math.abs(offset)) }}
-          >
-            <shown.icon className="size-4 shrink-0" />
-            {shown.label}
-          </button>
+      {under && (
+        // Behind the row's rounded corners, the color of the button they meet.
+        <div className={`absolute inset-0 flex justify-end overflow-hidden rounded-xl ${pinWidth ? 'bg-chip' : 'bg-fg'}`}>
+          {pin && revealed(pin, pinWidth, 'bg-chip text-fg', false)}
+          {revealed(archive, archiveWidth, 'bg-fg text-bg', dragging)}
         </div>
       )}
       <div
         // How far a compact row's words keep from its right edge while its buttons show: the
         // buttons, 6px in, 32px each and 2px apart, and 6px more.
-        className={`relative rounded-xl bg-bg ${start ? '[--row-actions:78px]' : '[--row-actions:44px]'} ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
+        className={`relative rounded-xl bg-bg ${pin ? '[--row-actions:78px]' : '[--row-actions:44px]'} ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
@@ -318,8 +353,8 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
             ? 'top-1/2 -translate-y-1/2'
             : `top-1.5 h-[25px] rounded-r-full bg-linear-to-l from-75% to-transparent pl-6 ${selected ? 'from-chip' : 'from-bg group-hover/row:from-hover'}`}`}
         >
-          {start && button(start)}
-          {button(end)}
+          {pin && button(pin)}
+          {button(archive)}
         </div>
       </div>
     </div>
@@ -335,7 +370,7 @@ const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: Ro
     ? { label: 'Unarchive', icon: ArchiveRestore, act: () => onChange(session, { archived: false }) }
     : { label: 'Archive', icon: Archive, act: () => onChange(session, { archived: true }) };
   return (
-    <Swipeable id={session.id} name={session.title} {...(session.archived ? {} : { start: pin })} end={archive} compact={compact} selected={row.selected}>
+    <Swipeable id={session.id} name={session.title} {...(session.archived ? {} : { pin })} archive={archive} compact={compact} selected={row.selected}>
       <Row session={session} {...row} />
     </Swipeable>
   );

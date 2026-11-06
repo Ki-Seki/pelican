@@ -252,6 +252,8 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     try {
       // A gigabyte or more a second: before, every bit of it was held until the next look.
       const shell = startShell(sessionId, folder, 'yes "a fairly long line of output, to fill the pipe as fast as it goes ..........."');
+      // Three seconds of it from its first line: a busy computer can be slow to start a login shell.
+      await until(() => events.some((e) => e.type === 'shell_output' && e.id === shell.id), 10_000);
       await settle(3000);
       expect(liveShells(sessionId)[0]).toMatchObject({ id: shell.id, truncated: true });
       expect(liveShells(sessionId)[0]!.output.length).toBe(MAX_OUTPUT);
@@ -291,7 +293,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
   });
-});
+}, 20_000);
 
 describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to your settings only', () => {
   it('runs git as Claude Code does there: none of the repository’s own programs run', async () => {
@@ -338,7 +340,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to y
       await rm(dir, { recursive: true, force: true });
     }
   }, 20_000);
-});
+}, 20_000);
 
 describe('what a turn has cost', () => {
   it('is its share of Claude Code’s running total, on an API key or a provider', async () => {

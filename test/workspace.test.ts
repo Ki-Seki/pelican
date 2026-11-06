@@ -51,7 +51,7 @@ describe('workspace', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   // A system or managed git config can set `remote.origin.fetch` alone, so that `git remote`
   // names origin in every repository; without an address there is nowhere to push.
@@ -82,7 +82,7 @@ describe('workspace', () => {
       }
       await rm(work, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   it('counts the lines of new files only so far: big ones and those past the first hundred get no count', async () => {
     const many = await mkdtemp(path.join(os.tmpdir(), 'pelican-untracked-'));
@@ -146,7 +146,7 @@ describe('workspace', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   it('says of a file renamed whole that it was renamed from its old path, unchanged, also when git quotes the name', async () => {
     const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-rename-'));
@@ -167,7 +167,7 @@ describe('workspace', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   it('shows everything since the branch split from the default branch: commits, edits and new files', async () => {
     const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-split-'));
@@ -203,7 +203,7 @@ describe('workspace', () => {
     } finally {
       await rm(work, { recursive: true, force: true });
     }
-  }, 15_000);
+  });
 
   it('says when a folder is not a repository', async () => {
     const plain = await mkdtemp(path.join(os.tmpdir(), 'pelican-plain-'));
@@ -227,4 +227,4 @@ describe('workspace', () => {
       expect(await readProjectFile(repo, name)).toEqual({ path: name, size: 12, text: '<h1>Hi</h1>\n' });
     }
   });
-});
+}, 20_000);

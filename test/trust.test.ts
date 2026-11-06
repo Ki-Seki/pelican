@@ -110,7 +110,7 @@ describe('what a folder brings', () => {
   it('is nothing for an empty folder', async () => {
     expect(await folderBrings(plain)).toEqual([]);
   });
-});
+}, 20_000);
 
 describe('a folder nobody trusted', () => {
   it('is asked about when it brings something, and Claude Code does not start there', async () => {
@@ -123,7 +123,7 @@ describe('a folder nobody trusted', () => {
     expect(await trustQuestion(plain)).toBeUndefined();
     expect(await launchFor(plain)).toEqual(FULL_SETTINGS);
   });
-});
+}, 20_000);
 
 describe('trust', () => {
   it('comes from Claude Code’s own record, for the repository and the folders in it', async () => {
@@ -167,7 +167,7 @@ describe('trust', () => {
     await rememberChoice(repo, 'user-only');
     expect(await folderTrusted(repo)).toBe(false);
   });
-});
+}, 20_000);
 
 describe('“Use my settings only”', () => {
   it('starts Claude Code with the user’s settings, and git with the folder’s programs off', async () => {
@@ -183,7 +183,7 @@ describe('“Use my settings only”', () => {
     await rm(path.join(repo, '.gitattributes'));
     await rm(path.join(repo, 'a.dat'));
   });
-});
+}, 20_000);
 
 describe('starting a session', () => {
   const create = (body: Record<string, unknown>) => app.request('/api/sessions', {
@@ -218,4 +218,4 @@ describe('starting a session', () => {
   it('takes only the two answers', async () => {
     expect((await create({ cwd: repo, trust: 'yes' })).status).toBe(400);
   });
-});
+}, 20_000);

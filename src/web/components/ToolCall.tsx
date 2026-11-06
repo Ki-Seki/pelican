@@ -443,7 +443,10 @@ function SentFiles({ call }: { call: ToolCall }) {
 
 /**
  * What a subagent did, from its own transcript: its tool calls, opened on request. A page at a
- * time, the newest first, as a workflow agent's: a long one is tens of megabytes.
+ * time, the newest first, as a workflow agent's: a long one is tens of megabytes. A page with no
+ * step in it (a long answer at the end, a step too large to share a page) is read past, at first
+ * and at each Show earlier, so the count is always of steps shown: its last ones, all of them, or
+ * none, once its start says so.
  */
 function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
   const sessionId = useSessionId();
@@ -457,34 +460,58 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
   // Earlier pages, asked for one at a time, up to where the newest begins; let go if it was read again.
   const [earlier, setEarlier] = useState<{ messages: ChatMessage[]; offset: number; joins: number }>();
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState<Error>();
+  // How many steps to show at least: one at first, then one more than shown at each Show earlier.
+  const [wanted, setWanted] = useState(1);
+  const asking = useRef(false);
   const before = earlier && data && earlier.joins === data.offset ? earlier : undefined;
   const offset = before?.offset ?? data?.offset ?? 0;
   const older = async () => {
-    if (loading || !data || offset === 0) return;
+    if (asking.current || !data || offset === 0) return;
+    asking.current = true;
     setLoading(true);
     try {
       const page = await api.subagent(sessionId!, agentId, offset);
       setEarlier((had) => ({ messages: [...page.messages, ...(had && had.joins === data.offset ? had.messages : [])], offset: page.offset, joins: data.offset }));
+    } catch (err) {
+      setFailed(err as Error);
     } finally {
+      asking.current = false;
       setLoading(false);
     }
   };
   const messages = useMemo(() => [...(before?.messages ?? []), ...(data?.messages ?? [])], [before, data]);
   const steps = useMemo(() => buildItems(messages).flatMap((item) => (item.kind === 'assistant' ? item.parts : [])).filter((part) => part.kind === 'tool'), [messages]);
+  // Fewer steps than wanted, and more before them: the page before. Each ends nearer the start.
+  const short = open && Boolean(data) && steps.length < wanted && offset > 0 && !failed;
+  useEffect(() => {
+    if (short && !loading) void older();
+  }, [short, loading, offset]);
   if (!sessionId) return null;
+  // Nothing to count yet, with more to read: no number until there is one.
+  const counted = open && data && !(steps.length === 0 && offset > 0);
   return (
     <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px]">
       <div className="flex min-h-7 items-center gap-3">
         <button type="button" className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left text-faint hover:text-fg" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
           <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-          {open && data ? `${offset > 0 ? 'Last ' : ''}${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : 'Steps it took'}
+          {counted ? `${offset > 0 ? 'Last ' : ''}${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : 'Steps it took'}
           {open && (isLoading || loading) && <Loader2 className="size-3.5 shrink-0 animate-spin" />}
         </button>
-        {open && offset > 0 && (
-          <button type="button" onClick={() => void older()} className="relative shrink-0 text-[12px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg">Show earlier</button>
+        {open && offset > 0 && (steps.length > 0 || failed) && (
+          <button
+            type="button"
+            onClick={() => {
+              setFailed(undefined);
+              setWanted(steps.length + 1);
+            }}
+            className="relative shrink-0 text-[12px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg"
+          >
+            Show earlier
+          </button>
         )}
       </div>
-      {open && error && <div className="py-1 text-[12px] text-danger">{(error as Error).message}</div>}
+      {open && (error || failed) && <div className="py-1 text-[12px] text-danger">{((error ?? failed) as Error).message}</div>}
       {open && data && steps.length === 0 && offset === 0 && <div className="py-1 text-[12px] text-faint">No steps were recorded.</div>}
       {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} /> : null))}
     </div>
