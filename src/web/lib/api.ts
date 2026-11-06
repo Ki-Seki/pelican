@@ -31,7 +31,7 @@ import type {
 import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
-import type { NewTerminal, TerminalInfo, TerminalList } from '../../shared/terminal';
+import type { NewTerminal, TerminalInfo, TerminalList, TerminalRunning } from '../../shared/terminal';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
 import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
 
@@ -317,6 +317,8 @@ export const api = {
   terminals: () => request<TerminalList>('terminals'),
   /** A new terminal: the user's shell in a folder, at this size, with a command to run there or none. */
   openTerminal: (body: NewTerminal) => send<{ terminal: TerminalInfo }>('POST', 'terminals', body).then((r) => r.terminal),
+  /** A terminal, and whether a program runs in it now, a job in the background too. */
+  terminal: (id: string) => request<TerminalRunning>(`terminals/${encodeURIComponent(id)}`),
   /** Ends a terminal: its shell is hung up, as closing a window does. */
   closeTerminal: (id: string) => send<{ ok: boolean }>('DELETE', `terminals/${encodeURIComponent(id)}`),
   /** The address of a terminal's socket, at a size (relative to the page, as api/ws). */

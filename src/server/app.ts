@@ -38,7 +38,7 @@ import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, readProjectFile } from './workspace.js';
 import { searchText } from './search.js';
-import { closeTerminal, listTerminals, openTerminal, terminalAvailability, terminalsReady, terminalsRefused, TooManyTerminals } from './terminals.js';
+import { closeTerminal, listTerminals, openTerminal, terminalAvailability, terminalRunning, terminalsReady, terminalsRefused, TooManyTerminals } from './terminals.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
@@ -807,6 +807,12 @@ app.post('/api/terminals', async (c) => {
     if (error instanceof TooManyTerminals) return c.json({ error: error.message }, 429);
     throw error;
   }
+});
+
+/** A terminal, and whether a program runs in it now (a job in the background too): End asks first while one does. */
+app.get('/api/terminals/:id', async (c) => {
+  const found = await terminalRunning(c.req.param('id'));
+  return found ? c.json(found) : c.json({ error: 'No such terminal' }, 404);
 });
 
 /** Closes a terminal: its shell is hung up (SIGHUP), as closing a window does, and its pages are told. */

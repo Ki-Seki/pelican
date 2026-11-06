@@ -680,6 +680,35 @@ describe('the shell’s environment', () => {
   });
 });
 
+describe('what runs in a terminal', () => {
+  it('is said for End to ask first: a program in front, or a job in the background, but not the shell at its prompt', async () => {
+    const terminal = await open();
+    const shown = await atPrompt(terminal.id);
+    const running = async () => (await api('GET', `/api/terminals/${terminal.id}`)).body as { terminal: TerminalInfo; running: boolean };
+    expect(await running()).toEqual({ terminal: expect.objectContaining({ id: terminal.id, program: 'bash' }), running: false });
+    // A job in the background: the shell is in front, and a process of its own runs.
+    shown.type('sleep 300 &\r');
+    await shown.sees(/\[1\] \d+/);
+    await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
+    expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'bash' }), running: true });
+    shown.type('kill %1; wait\r');
+    await shown.sees(/Terminated/);
+    for (const start = Date.now(); (await running()).running && Date.now() - start < 10_000;) await pause(100);
+    expect((await running()).running).toBe(false);
+    // A program in front.
+    shown.type('sleep 300\r');
+    await pause(600);
+    expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'sleep' }), running: true });
+    shown.type('\u0003');
+    // Ended, nothing runs; gone, there is no such terminal.
+    shown.type('exit\r');
+    await until(() => shown.messages.some((m) => m.type === 'exit'));
+    expect((await running()).running).toBe(false);
+    await api('DELETE', `/api/terminals/${terminal.id}`);
+    expect((await api('GET', `/api/terminals/${terminal.id}`)).status).toBe(404);
+  }, 30_000);
+});
+
 describe('a terminal left alone', () => {
   it('is closed after 12 hours unused with nothing running; one running a job, or shown, stays', async () => {
     const quiet = await open();

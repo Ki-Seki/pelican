@@ -70,6 +70,9 @@ function lostSince(kept: Kept, running: TerminalInfo[], endedHere: Set<string>):
   return [...lost.values()];
 }
 
+/** What End asks with: the program in front still runs, or, the shell in front, one in the background. */
+const stillRunning = (terminal: TerminalInfo) => (isShell(terminal.program) ? 'A program is still running in it.' : 'It is still running.');
+
 /** How a shell's end reads under its last screen. */
 function endedWords(exit: TerminalExit): string {
   if (exit.signal) return `The shell ended (${exit.signal})`;
@@ -288,14 +291,36 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     void forget(terminal);
   };
   /**
+   * Whether a program runs in a terminal now, as the computer says, a job in the background too,
+   * which no tab shows: null once the terminal is gone, and true when it cannot be told (the
+   * connection is down), as one may.
+   */
+  const runsNow = (terminal: TerminalInfo): Promise<{ terminal: TerminalInfo; running: boolean } | null> => api.terminal(terminal.id).catch(
+    (error: unknown) => (error instanceof ApiError && error.status === 404 ? null : { terminal, running: true }),
+  );
+  const checking = useRef(false);
+  /** End on the tab: asked first while a program runs there, in front (at once) or in the background (once the computer says). */
+  const askEnd = async (terminal: TerminalInfo) => {
+    if (!shownRuns) return end(terminal);
+    if (!isShell(terminal.program)) return setConfirmEnd(true);
+    if (checking.current) return undefined;
+    checking.current = true;
+    const now = await runsNow(terminal).finally(() => {
+      checking.current = false;
+    });
+    // Another tab picked meanwhile: that one is not asked about.
+    if (latest.current.shown?.id !== terminal.id) return undefined;
+    return now?.running ? setConfirmEnd(true) : end(terminal);
+  };
+  /**
    * End on a terminal of another folder, in the list shown when as many run as may: asked first
    * while a program runs there, as the tab's own End does, by what runs there now (the list may be
    * seconds old).
    */
   const askEndElsewhere = async (terminal: TerminalInfo) => {
-    const now = await api.terminals().then((fresh) => fresh.terminals.find((t) => t.id === terminal.id), () => terminal);
-    if (!now || isShell(now.program) || now.exit) void endElsewhere(terminal);
-    else setConfirmElsewhere(now);
+    const now = await runsNow(terminal);
+    if (!now?.running) void endElsewhere(terminal);
+    else setConfirmElsewhere(now.terminal);
   };
   /** A terminal of another folder, ended from that list; then one can start here. */
   const endElsewhere = async (terminal: TerminalInfo) => {
@@ -334,7 +359,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     <div className="flex min-h-0 flex-1 flex-col">
       {confirmEnd && shown ? (
         <div className="flex h-10 shrink-0 items-center gap-2 pr-2 pl-4 text-[13px]">
-          <span className="min-w-0 flex-1 truncate">End <span className="font-mono">{shown.program}</span>? It is still running.</span>
+          <span className="min-w-0 flex-1 truncate">End <span className="font-mono">{shown.program}</span>? {stillRunning(shown)}</span>
           {/* A finger's 44px: 40 on a touch screen, and a little more around. */}
           <button type="button" onClick={() => end(shown)} className="relative h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">End</button>
           <button type="button" onClick={() => setConfirmEnd(false)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
@@ -380,7 +405,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
             <button
               type="button"
               title="Hang up this terminal’s shell, as closing a window does"
-              onClick={() => (shownRuns && !isShell(shown.program) ? setConfirmEnd(true) : end(shown))}
+              onClick={() => void askEnd(shown)}
               className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-10"
             >
               End
@@ -408,7 +433,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
         <ul aria-label="Terminals in other folders" className="mx-4 mb-2 shrink-0 border-y border-line">
           {elsewhere.map((t) => (confirmElsewhere?.id === t.id ? (
             <li key={t.id} className="flex h-10 items-center gap-2 text-[12.5px]">
-              <span title={t.cwd} className="min-w-0 flex-1 truncate">End <span className="font-mono">{confirmElsewhere.program} · {baseName(t.cwd)}</span>? It is still running.</span>
+              <span title={t.cwd} className="min-w-0 flex-1 truncate">End <span className="font-mono">{confirmElsewhere.program} · {baseName(t.cwd)}</span>? {stillRunning(confirmElsewhere)}</span>
               <button type="button" onClick={() => void endElsewhere(t)} className="relative h-8 shrink-0 rounded-full bg-danger px-3.5 font-medium text-bg after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">End</button>
               <button type="button" onClick={() => setConfirmElsewhere(undefined)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
             </li>

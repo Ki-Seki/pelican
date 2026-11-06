@@ -41,6 +41,9 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
 let list: TerminalList;
 /** A list fetch that answers when the test says, with the list as it was when asked. */
 let slow: (() => Promise<TerminalList>) | undefined;
+/** Terminals whose shell has a job running in the background, as the computer says; and whether it can say. */
+const jobs = new Set<string>();
+let unreachable = false;
 const opened: Array<Record<string, unknown>> = [];
 const closed: string[] = [];
 let refuse: ((body: Record<string, unknown>) => Error | undefined) | undefined;
@@ -52,6 +55,12 @@ vi.mock('../src/web/lib/api', async (original) => {
     api: {
       ...actual.api,
       terminals: async () => (slow ? slow() : structuredClone(list)),
+      terminal: async (id: string) => {
+        if (unreachable) throw new TypeError('Failed to fetch');
+        const found = list.terminals.find((t) => t.id === id);
+        if (!found) throw new actual.ApiError('No such terminal', 404);
+        return { terminal: structuredClone(found), running: jobs.has(id) || !['zsh', 'bash'].includes(found.program) };
+      },
       openTerminal: async (body: Record<string, unknown>) => {
         opened.push(body);
         const error = refuse?.(body);
@@ -94,6 +103,8 @@ const terminal = (id: string, extra: Partial<TerminalInfo> = {}): TerminalInfo =
 beforeEach(() => {
   list = { available: true, terminals: [] };
   slow = undefined;
+  jobs.clear();
+  unreachable = false;
   opened.length = 0;
   closed.length = 0;
   typed.length = 0;
@@ -172,6 +183,42 @@ describe('the Terminal tab', () => {
     expect(opened).toEqual([]);
     fireEvent.click(screen.getAllByRole('button', { name: 'New terminal' }).at(-1)!);
     await waitFor(() => expect(tabs()).toEqual(['zsh']));
+  });
+
+  it('asks first before ending a shell with a job in the background, which only the computer can tell, and when it cannot tell', async () => {
+    list.terminals = [terminal('t1'), terminal('t2')];
+    jobs.add('t2');
+    tab();
+    await waitFor(() => expect(shows()).toBe('t2'));
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    expect(await screen.findByText(/A program is still running in it/)).toBeTruthy();
+    expect(closed).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    // With no connection to ask over, it asks, as a program may run there.
+    unreachable = true;
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    expect(await screen.findByText(/A program is still running in it/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    await waitFor(() => expect(closed).toEqual(['t2']));
+    // The job gone, the shell at its prompt ends at once.
+    unreachable = false;
+    await waitFor(() => expect(shows()).toBe('t1'));
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    await waitFor(() => expect(closed).toEqual(['t2', 't1']));
+    expect(screen.queryByText(/still running/)).toBeNull();
+  });
+
+  it('asks about the tab it was asked on, not one picked while the computer answers', async () => {
+    list.terminals = [terminal('t1'), terminal('t2')];
+    jobs.add('t2');
+    tab();
+    await waitFor(() => expect(shows()).toBe('t2'));
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    fireEvent.click(screen.getAllByRole('tab')[0]!);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(shows()).toBe('t1');
+    expect(screen.queryByText(/still running/)).toBeNull();
+    expect(closed).toEqual([]);
   });
 
   it('says how a shell ended, and that one Pelican ended with, with Start again', async () => {
@@ -289,6 +336,22 @@ describe('the Terminal tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'End zsh in other-3' }));
     fireEvent.click(await screen.findByRole('button', { name: 'End' }));
     await waitFor(() => expect(closed).toEqual(['t3']));
+    await waitFor(() => expect(tabs()).toEqual(['zsh']));
+  });
+
+  it('asks first before ending a terminal elsewhere whose shell runs a job in the background', async () => {
+    list.terminals = Array.from({ length: 10 }, (_, n) => terminal(`t${n + 1}`, { cwd: `/code/other-${n + 1}` }));
+    refuse = () => (list.terminals.length >= 10 ? new ApiError('At most 10 terminals run at once. Close one to open another.', 429) : undefined);
+    jobs.add('t3');
+    tab();
+    expect(await screen.findByText(/At most 10 terminals/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'End zsh in other-3' }));
+    expect(await screen.findByText(/A program is still running in it/)).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Terminals in other folders' }).textContent).toContain('End zsh · other-3? A program is still running in it.');
+    expect(closed).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    await waitFor(() => expect(closed).toEqual(['t3']));
+    // One with nothing running ends at once.
     await waitFor(() => expect(tabs()).toEqual(['zsh']));
   });
 

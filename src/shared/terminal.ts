@@ -4,6 +4,7 @@
 //   GET    /api/terminals?cwd   → TerminalList (the folder's terminals; all of them without cwd)
 //   POST   /api/terminals       NewTerminal → 201 { terminal: TerminalInfo }
 //                               403 off or the demo · 409 { needsTrust, brings } · 429 too many · 503 no PTY here
+//   GET    /api/terminals/:id   → TerminalRunning, or 404: End asks first while a program runs
 //   DELETE /api/terminals/:id   → { ok: true }: the shell is hung up (SIGHUP), as closing a window does
 //   WS     api/terminal?id=…&cols=…&rows=…   (relative to the page, as api/ws)
 //     → `ready` first, then the shell's output as binary frames, and size, program, exit and tick
@@ -36,6 +37,13 @@ export type TerminalInfo = {
   /** Set once its shell has ended; the screen stays until the terminal is closed. */
   exit?: TerminalExit;
 };
+
+/**
+ * GET /api/terminals/:id: a terminal, and whether a program runs in it now: another than its shell
+ * in front, or a process of the shell's own, such as a job in the background (true when the
+ * computer cannot say).
+ */
+export type TerminalRunning = { terminal: TerminalInfo; running: boolean };
 
 /** Whether this Pelican runs terminals and, when it does not, why, in a sentence to show as it is. */
 export type TerminalAvailability = { available: boolean; reason?: string };

@@ -10,7 +10,7 @@ import type { RawData, WebSocket } from 'ws';
 
 import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
-  type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage, utf8Pieces,
+  type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalRunning, type TerminalServerMessage, utf8Pieces,
 } from '../shared/terminal.js';
 import { guardOutput } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
@@ -219,7 +219,9 @@ class Term {
   readonly id = randomUUID();
   readonly createdAt = Date.now();
   readonly viewers = new Set<Viewer>();
+  /** The program in front, and the shell's own name, as a tab shows them. */
   program: string;
+  readonly shell: string;
   exit?: TerminalExit;
   /** When it was last shown, typed into or printed something. */
   lastActive = Date.now();
@@ -259,7 +261,8 @@ class Term {
     this.cols = cols;
     this.rows = rows;
     this.colors = colors;
-    this.program = programName(shell);
+    this.shell = programName(shell);
+    this.program = this.shell;
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
     // Characters as wide as the pages draw them (TerminalScreen takes the same widths): an emoji
     // takes two cells there, and the screen a page gets back places what follows it, and the
@@ -788,6 +791,22 @@ async function unused(): Promise<Term | undefined> {
   if (!parents) return undefined;
   const busy = new Set(parents.values());
   return idle.find((t) => !t.used && !t.closed && t.viewers.size === 0 && !busy.has(t.pid));
+}
+
+/**
+ * A terminal, with whether a program runs in it now, for End to ask first while one does: another
+ * than its shell in front, or a process of the shell's own (a job in the background, or one
+ * stopped), as a terminal left alone stays while one runs. When ps cannot say, one does.
+ * Undefined: no such terminal.
+ */
+export async function terminalRunning(id: string): Promise<TerminalRunning | undefined> {
+  const term = terminals.get(id);
+  if (!term) return undefined;
+  term.lookAtProgram();
+  if (term.exit || term.program !== term.shell) return { terminal: term.info(), running: !term.exit };
+  const parents = await processParents();
+  if (term.closed) return undefined;
+  return { terminal: term.info(), running: !parents || [...parents.values()].includes(term.pid) };
 }
 
 /** Closes a terminal, hanging its shell up; false when there is no such terminal. */
