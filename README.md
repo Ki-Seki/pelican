@@ -82,7 +82,7 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   changes sit side by side.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: a chart and a page Claude made, rendered in place; an edit waiting for approval with its diff; a session another app is running">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: the list with a pinned session; a chart Claude drew, in place, and a page it wrote, run; an edit waiting for approval, and what changed; a screenshot Claude sent; a session Claude Desktop is running">
 </p>
 
 ## Compared with
