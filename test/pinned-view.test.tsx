@@ -134,6 +134,25 @@ describe('pinned sessions in the list', () => {
     expect(titles('Pinned')).toEqual([]);
   });
 
+  it('folded under their heading grouped by project, still show grouped by time or under a chip, where nothing unfolds them', async () => {
+    setPrefs({ listGroup: 'project' });
+    list();
+    await screen.findByRole('button', { name: /^Pinned/ });
+    fireEvent.click(screen.getByRole('button', { name: /^Pinned/ }));
+    expect(titles('Pinned')).toEqual([]);
+    // A chip groups the list by time, under plain headings.
+    fireEvent.click(screen.getByRole('button', { name: 'docs' }));
+    expect(titles('Pinned')).toEqual(['Release notes']);
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(titles('Pinned')).toEqual([]);
+    act(() => setPrefs({ listGroup: 'time' }));
+    expect(titles('Pinned')).toEqual(['Fix the login test', 'Watch the dev server', 'Check the queue', 'Release notes']);
+    // Back where its heading is, it is folded as it was left.
+    act(() => setPrefs({ listGroup: 'project' }));
+    expect(titles('Pinned')).toEqual([]);
+    expect(screen.getByRole('button', { name: /^Pinned/ }).getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('keep to the project filter: a pinned session of another project stays under its own', async () => {
     list();
     await screen.findByText('Pinned');

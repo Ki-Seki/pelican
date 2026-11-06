@@ -544,6 +544,11 @@ export function SessionList({
     return out;
   }, [sessions, query, project, prefs.listGroup, prefs.showTemporary, prefs.showSideChats]);
 
+  const byProject = prefs.listGroup === 'project' && !project;
+  // A group folds only where its heading can unfold it, grouped by project: Pinned, folded there,
+  // still shows its sessions grouped by time or under a chip.
+  const isFolded = useCallback((key: string) => byProject && collapsed.has(key), [byProject, collapsed]);
+
   // A long list is drawn in pages; search and the filters above still go through every session.
   const pagesFor = `${query}\u0000${project ?? ''}\u0000${prefs.listGroup}`;
   const [paging, setPaging] = useState({ for: pagesFor, rows: PAGE });
@@ -553,7 +558,7 @@ export function SessionList({
     const out: Group[] = [];
     for (const group of groups) {
       if (left <= 0) break;
-      if (collapsed.has(group.key)) {
+      if (isFolded(group.key)) {
         out.push(group);
         continue;
       }
@@ -561,12 +566,11 @@ export function SessionList({
       left -= entries.length;
       out.push(entries.length === group.entries.length ? group : { ...group, entries });
     }
-    const total = groups.reduce((sum, g) => sum + (collapsed.has(g.key) ? 0 : g.entries.length), 0);
+    const total = groups.reduce((sum, g) => sum + (isFolded(g.key) ? 0 : g.entries.length), 0);
     return { groups: out, more: total > rowLimit };
-  }, [groups, collapsed, rowLimit]);
+  }, [groups, isFolded, rowLimit]);
   const showMore = useCallback(() => setPaging({ for: pagesFor, rows: rowLimit + PAGE }), [pagesFor, rowLimit]);
 
-  const byProject = prefs.listGroup === 'project' && !project;
   const compact = prefs.listDensity === 'compact';
   // What "All" shows, counted the way it is filtered.
   const visibleCount = (sessions ?? []).filter((s) => !s.archived && (s.pinned || (!(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)))).length;
@@ -651,7 +655,7 @@ export function SessionList({
         {/* Out of reach, the line under the header says so (App). */}
         {error && !isUnreachable(error) && <div className="px-4 py-8 text-[13px] text-danger">{(error as Error).message}</div>}
         {shown.groups.map((group) => {
-          const folded = collapsed.has(group.key);
+          const folded = isFolded(group.key);
           return (
             <section key={group.key}>
               {byProject ? (
