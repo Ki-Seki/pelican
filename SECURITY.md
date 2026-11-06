@@ -80,39 +80,47 @@ can read your sessions and have Claude run commands as you, so treat access to i
   shows, so run a page only as you would open it in your browser. Uploaded files are served with
   no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,
-  helper commands and environment variables in its Claude Code settings, servers in its
-  `.mcp.json`, slash commands, skills and agents that run a shell or tools without asking, filters
-  in its git config. Claude Code asks before it runs them in a terminal, but never in a session
-  started through its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has
-  trusted that brings any of these, Pelican lists them, read from the folder's files as Claude
-  Code reads them (a settings file saved with a byte-order mark or as UTF-16 too, and one it cannot
-  read as JSON named as such; a skill's frontmatter broken into lines at a carriage return too; the
-  git config through `git config`, which starts nothing, with the files it includes), each whole,
-  its lines kept, a hook's arguments too (as much of a file and of a folder as any project brings:
-  past that, the sheet says there is more than it shows), with what hides or turns text around
-  written out as ⟨U+…⟩ and warned of, as an approval shows it, and offers **Trust and start** or
-  **Use my settings only**. In a command a space other than a plain one is written out too, unless
-  Pelican finds it in quotes, a heredoc's body or a comment, as bash, zsh, dash and macOS's bash 3.2
-  read the command and a script it hands a new shell in the ways Pelican follows (`bash -c`, `ssh`,
-  a heredoc or a pipe into `sh`, a file it writes and runs or that a shell reads as it starts, and
-  the like); quoted text with a substitution's start in it counts as in a word. A command that uses
-  what can run text later in its own shell is one Pelican cannot tell, however the text is made
-  (split across quotes, by a variable or an escape): `eval`, `source`, `trap`, an alias in any form,
-  `read`, `declare`, `let`, `unset`, zsh's `set -A` and its `functions` array, bash's `BASH_ALIASES`,
-  a parameter flag such as zsh's `(e)` or bash's `@P`, a command whose name Pelican does not know,
-  arithmetic on a variable the command sets to anything but a number, and the like. Where Pelican
-  cannot tell, every such space is written out. A string that a program runs in a shell of its own
-  (python's `os.system`, `make`) is not followed. With your settings only, Claude Code loads just
-  your user settings, and git runs none of the repository's filters, its file-system monitor or its
-  hooks folder; a folder whose git config git cannot read in full does not start that way.
-  A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
-  written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
-  Claude Code has worked there before, unless you chose your settings only for it. Listing a
-  folder's slash commands or MCP servers starts Claude Code with hooks off and, in a folder nobody
-  trusted, from your home folder with your settings only; git does not run there at all. In a
-  trusted folder, git runs for the Changes panel with hooks, the file-system monitor, external
-  diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of a work
-  tree outside the folder.
+  helper commands and environment variables in its Claude Code settings, servers in its `.mcp.json`,
+  slash commands, skills and agents that run a shell or tools without asking, filters in its git
+  config. Claude Code asks before it runs them in a terminal, but never in a session started through
+  its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has trusted that
+  brings any of these, Pelican lists them, read from the folder's files as Claude Code reads them (a
+  settings file saved with a byte-order mark or as UTF-16 too, and one it cannot read as JSON named
+  as such; a skill's frontmatter broken into lines at a carriage return too; the git config through
+  `git config`, which starts nothing, with the files it includes), each whole, its lines kept, a
+  hook's arguments too (as much of a file and of a folder as any project brings, what it warns of
+  and its own notes first, so no number of harmless items leaves one out, and what the repository's
+  git config runs whatever the rest brings: past that, the sheet names above the list, in red, the
+  files it shows part of, and the folder is asked about all the same), with what hides or turns text
+  around written out as ⟨U+…⟩ and warned of, as an approval shows it, and offers **Trust and start**
+  or **Use my settings only**. In a command a space other than a plain one is written out too,
+  unless Pelican finds it in quotes, a heredoc's body or a comment, as bash, zsh, dash and macOS's
+  bash 3.2 read the command and a script it hands a new shell in the ways Pelican follows (`bash
+  -c`, `ssh`, a heredoc or a pipe into `sh`, a file it writes and runs by its path or, made a
+  program, by its name, a git hook it writes or a file a shell reads as it starts, and the like);
+  quoted text with a substitution's start in it counts as in a word. A command that uses what can
+  run text later in its own shell is one Pelican cannot tell, however the text is made (split across
+  quotes, by a variable or an escape): `eval`, `source`, `trap`, an alias in any form, `read`,
+  `declare`, `let`, `unset`, zsh's `set -A` and its `functions` array, bash's `BASH_ALIASES`, a
+  parameter flag such as zsh's `(e)` and `$~x` or bash's `@P`, `setopt`, `test` with an operator a
+  variable may give, a command whose name Pelican does not know, arithmetic on a variable the
+  command sets to anything but a number, and the like, a command's name counting in any case (a Mac
+  runs `READ` as /usr/bin/read); so is a script or a program run by a path that is not plain text,
+  or from a folder the command writes into but for a file it wrote there. Where Pelican cannot tell,
+  every such space is written out, and it cannot tell a command longer than 64 KB, or one whose
+  reading would take more than a fixed budget of steps and memory: no command, nor a tool's input or
+  a trust sheet's items, which share one, takes more time or memory than that to read. A string that
+  a program runs in a shell of its own (python's `os.system`, `make`) is not followed. With your
+  settings only, Claude Code loads just your user settings, and git runs none of the repository's
+  filters, its file-system monitor or its hooks folder; a folder whose git config git cannot read in
+  full does not start that way. A folder is trusted when Claude Code's own record says so (its trust
+  dialog, read and never written), when you trusted it in Pelican, when Pelican made it (a scratch
+  folder), or when Claude Code has worked there before, unless you chose your settings only for it.
+  Listing a folder's slash commands or MCP servers starts Claude Code with hooks off and, in a
+  folder nobody trusted, from your home folder with your settings only; git does not run there at
+  all. In a trusted folder, git runs for the Changes panel with hooks, the file-system monitor,
+  external diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of
+  a work tree outside the folder.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'

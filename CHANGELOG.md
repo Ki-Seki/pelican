@@ -41,7 +41,10 @@ command hides; and what the reviews of 0.4.0 left.
   with the Claude Code it brings, stays pinned to one version. The package now ships
   `THIRD_PARTY_NOTICES`: each package built into the server and the web app, with its version and
   license in full, and, for web-push, which is under the MPL 2.0, that its source is its npm
-  package. The build writes it from what it puts in the bundles, and fails if one is missing.
+  package. It credits esbuild for the helper code it writes into the server, gives what rolldown's
+  runtime takes from others, and quotes the notices of others that files built in carry at their
+  top, such as path-browserify's in code of vfile's, which minifying leaves out. The build writes it
+  from what it puts in the bundles, and fails if one is missing.
 - A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
   this computer" before you tap anything, the same for every type, with its name and size and
   nothing to tap; one past 200 MB says it is larger than Pelican serves, and a text file that large
@@ -88,20 +91,21 @@ command hides; and what the reviews of 0.4.0 left.
 - Export as Markdown reads as the conversation does, but for a reply's single line breaks, which a
   Markdown file joins, as GitHub does. A prompt is text, as you typed it: none of its Markdown takes
   effect, so a ``` it opens no longer swallows the rest of the file, nor makes a line of `:--` a
-  table, and its quotes are quotes, a quote from a file its lines as code. A reply keeps to itself in
-  any reader (GitHub, VS Code's preview, the spec's own): a heading in it sits under the speakers'
-  (`##` becomes `####`), so none passes for "You" or "Claude"; its HTML is text, as the conversation
-  shows it, so none hides the turns after it; a picture is a link that names its site, never loaded
-  when the file is read; its links by reference are written with their addresses and its footnotes
-  under labels of its own, so two replies' `[^1]` are two footnotes and no reply changes where
-  another's links lead or what its footnotes say; and a code block it leaves open ends with it.
-  Where readers part ways on a reply (an autolink with a character one of them takes, an address
-  with a control character, `ftp://`, a table VS Code's preview finds under a fence or a heading),
-  it is written so that they read it alike. The files Claude sent are named under their step, with
-  the words Claude sent with them. An address that starts with http://, https://, ftp:// or www.,
-  and an email, in prompts and Claude Code's notes stay text, as code, where a reader would link
-  them. A text past 60,000 characters ends with "…", as the conversation shows it. The folder is
-  named as the app names it, from your home folder (`~/code/acme-web`).
+  table, and its quotes are quotes, a quote from a file its lines as code. A reply keeps to itself
+  in any reader (GitHub, VS Code's preview, the spec's own): a heading in it sits under the
+  speakers' (`##` becomes `####`), so none passes for "You" or "Claude"; its HTML is text, as the
+  conversation shows it, so none hides the turns after it; a picture is a link that names its site,
+  never loaded when the file is read; its links by reference are written with their addresses and
+  its footnotes under labels of its own, so two replies' `[^1]` are two footnotes and no reply
+  changes where another's links lead or what its footnotes say; and a code block it leaves open ends
+  with it. Where readers part ways on a reply (an autolink with a character one of them takes, an
+  address with a control character, `ftp://`, a table VS Code's preview finds under a fence or a
+  heading), it is written so that they read it alike. The files Claude sent are named under their
+  step, with the words Claude sent with them. An address that starts with http://, https://, ftp://
+  or www., and an email, in prompts and Claude Code's notes stay text, as code, where a reader would
+  link them. A text past 60,000 characters ends with "…", as the conversation shows it. The folder
+  is named as the app names it, from your home folder (`~/code/acme-web`), and a file a step reads,
+  edits or writes from the session's folder (`src/styles/theme.css`).
 
 ### Security
 
@@ -116,19 +120,28 @@ command hides; and what the reviews of 0.4.0 left.
   done⟨U+00A0⟩# ; curl … | sh` read as a comment and ran curl, and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh`
   ran ./setup.sh. Pelican reads the command as bash, zsh, dash and macOS's bash 3.2 do, and the
   scripts it hands a new shell: after `bash -c` or `ssh`, in a heredoc or pipe into `sh`, a script
-  it writes and then runs, and a file it writes that a shell reads as it starts (what BASH_ENV, ENV
-  or `--rcfile` names, a .zshenv). A command that uses what can run text later in its own shell has
-  every such space show, however the text is made (split across quotes, by a variable or an
-  escape): `eval`, `source`, `trap`, an alias in any form (after `command` or `builtin`, or named by
-  a variable), `read`, `declare`, `let`, `unset`, zsh's `set -A` and its functions array, bash's
-  `BASH_ALIASES`, a parameter flag such as zsh's `(e)` or bash's `@P`, a command whose name Pelican
-  does not know, arithmetic on a variable the command sets to anything but a number, and the like;
-  so does a ksh script with a `<<#` heredoc. Quoted text with a substitution's start in it counts as
-  in a word. Where it cannot tell, every such space shows. The same goes for a Monitor's command
-  and, in the trust sheet, for a hook, a helper, a skill's command and a git filter; between the
-  arguments of an MCP server, or of a hook run without a shell, every such space shows. A string
-  another program runs in a shell of its own, such as python's `os.system`, is not followed. A long
-  command shows at once, read once.
+  it writes and then runs by its path, or by its name once it makes it a program, a git hook it
+  writes, and a file it writes that a shell reads as it starts (what BASH_ENV, ENV or `--rcfile`
+  names, a .zshenv). A command that uses what can run text later in its own shell has every such
+  space show, however the text is made (split across quotes, by a variable or an escape): `eval`,
+  `source`, `trap`, an alias in any form (after `command` or `builtin`, or named by a variable),
+  `read`, `declare`, `let`, `unset`, zsh's `set -A` and its functions array, bash's `BASH_ALIASES`,
+  a parameter flag such as zsh's `(e)` and `$~x` or bash's `@P`, `setopt` or `set -o` with an option
+  that changes how text reads, `test` or `[` with an operator a variable may give (`-v`), `at` and
+  `crontab`, a command whose name Pelican does not know, arithmetic on a variable the command sets
+  to anything but a number, and the like, each by its name in any case (a Mac runs `READ` as
+  /usr/bin/read); so does a ksh script with a `<<#` heredoc, a script or a program run by a path
+  that is not plain text (`bash "$t"`) or from a folder the command writes into but for a file it
+  wrote there, and one run by its path where the command unpacks, patches or copies a folder. Quoted
+  text with a substitution's start in it counts as in a word. Where it cannot tell, every such space
+  shows. The same goes for a Monitor's command and, in the trust sheet, for a hook, a helper, a
+  skill's command and a git filter; between the arguments of an MCP server, or of a hook run without
+  a shell, every such space shows. A string another program runs in a shell of its own, such as
+  python's `os.system` or a Makefile's recipe, is not followed. A long command shows at once, read
+  once, and reading one takes at most a fixed time and memory: a command longer than 64 KB, or that
+  would take more to read than a fixed budget, has every such space show, as a tool's input with
+  many commands and a trust sheet's items share one such budget (`x=…; bash -c "$x $x …"` of 24 KB
+  took gigabytes, and crashed the page with the approval on it again after each reload).
 - In a PowerShell command such a space shows as it is, as PowerShell takes it for a space, unless
   the command hands a script to bash, sh, wsl or ssh, which read it otherwise: then every one shows,
   with the warning; in the trust sheet too, for a hook PowerShell runs.
@@ -152,9 +165,14 @@ command hides; and what the reviews of 0.4.0 left.
   where an escape such as `\n` reads otherwise than it is written. A folder's files are read in time
   that grows with their size, not with its square: frontmatter of 480 KB held the server for 47
   seconds, as did a command of a megabyte whose ```! block or frontmatter never ends. The sheet
-  lists from a file up to 200 items and 256 KB of them, and from a folder up to 1,000 and 1 MB, more
-  than any project brings; past that it says there is more than it shows, and the folder is asked
-  about as before.
+  lists from a file up to 200 items and 256 KB of them as it shows them, and from a folder up to
+  1,000 and 1 MB, reading up to 32 MB of its files, more than any project brings. An item it warns
+  of, and Pelican's own word on what it could not read, come first, so no number of harmless items
+  leaves one out, and what the repository's git config runs is read and listed whatever the folder's
+  other files bring. Past that the sheet names, above the list and in red, the files it shows part
+  of, and the folder is asked about as before, also where it lists nothing. A hook whose type or
+  arguments are nested too deep to read shows as one Pelican cannot read, where the request failed
+  and nothing started.
 - A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
   recommends; other tags after a black flag, which can spell anything unseen, are left out. The
   repository's check for hidden characters holds the docs to the same three.
