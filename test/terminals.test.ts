@@ -2,6 +2,7 @@
 // real PTYs, and pages as the web app's would be (terminal-page.ts). The shell is bash without
 // any profile, so nothing of the computer's own shell setup runs.
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -229,6 +230,24 @@ describe('a page that comes back', () => {
     expect(second.lines()[y]).toBe('ARED');
     const red = second.screen.buffer.active.getLine(y)!.getCell(1)!;
     expect(red.isFgPalette() && red.getFgColor()).toBe(1);
+  }, 20_000);
+});
+
+describe('what a program asks of the terminal', () => {
+  it('is answered once, from the server’s copy, with no page showing it or several', async () => {
+    // Nobody looks: a program that asks still gets its answer (fish asks as it starts).
+    const answered = path.join(dir, 'answered');
+    const ask = (to: string) => `printf '\\033[c'; IFS= read -rs -t 3 -d c reply; IFS= read -rs -t 0.5 -d c again; echo "\${reply#?} \${#again}" > ${to}`;
+    await open(work(), { command: ask(answered) });
+    await until(() => existsSync(answered) && readFileSync(answered, 'utf8').endsWith('\n'), 10_000, 'the answer');
+    expect(readFileSync(answered, 'utf8')).toBe('[?1;2 0\n');
+
+    // Two pages: still one answer, and where the cursor is, as the pages show it.
+    const terminal = await open();
+    const phone = await atPrompt(terminal.id);
+    await atPrompt(terminal.id);
+    phone.type(`printf '\\033[5;9H\\033[6n'; IFS= read -rs -t 3 -d R reply; IFS= read -rs -t 0.5 -d R again; echo; echo "at \${reply#??} \${#again}"\r`);
+    await phone.sees(/at 5;9 0\r\n/);
   }, 20_000);
 });
 

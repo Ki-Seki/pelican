@@ -187,6 +187,12 @@ class Term {
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
     this.serializer = new SerializeAddon();
     this.screen.loadAddon(this.serializer);
+    // The copy answers what programs ask of the terminal (device attributes, the cursor's
+    // position, a mode's state), once, however many pages show it, or none: answers from each page
+    // would come twice, or not at all.
+    this.screen.onData((answer) => {
+      if (!this.exit && !this.closed) this.pty.write(answer);
+    });
     pty.onData((text) => this.output(text));
     pty.onExit(({ exitCode, signal }) => this.ended(exitCode, signal));
   }

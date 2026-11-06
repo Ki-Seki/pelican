@@ -8,6 +8,12 @@
 //   WS     api/terminal?id=…&cols=…&rows=…   (relative to the page, as api/ws)
 //     → `ready` first, then the shell's output as binary frames, and size, program, exit and tick
 //     ← keystrokes and pastes as binary frames (at most TERMINAL_LIMITS.frame bytes each), resize, ack
+//
+// The server answers what programs ask of the terminal itself, from its copy of the screen: device
+// attributes (CSI c, CSI > c), status and the cursor's position (CSI n, CSI ? n), a mode's state
+// (CSI $ p, CSI ? $ p) and a setting's (DCS $ q). A page must not answer them too, or a program gets
+// an answer from each page: with xterm.js, a handler that swallows each of them
+// (`terminal.parser.registerCsiHandler({ final: 'c' }, () => true)` and so on) keeps its own quiet.
 
 /** How a terminal's shell ended: its exit code, or the signal that ended it (`SIGHUP`). */
 export type TerminalExit = { code: number | null; signal: string | null };
