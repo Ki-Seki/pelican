@@ -32,6 +32,44 @@ const shownBefore = (cwd: string) => {
   }
 };
 
+/**
+ * What this tab of the browser knows of a folder's terminals, kept while the view closes and
+ * opens again: those the last list had, and those gone since that were not ended here.
+ */
+type Kept = { known: TerminalInfo[]; lost: TerminalInfo[] };
+const keptKey = (cwd: string) => `pelican:terminal-tabs:${cwd}`;
+const isInfo = (t: unknown): t is TerminalInfo => {
+  const info = t as Partial<TerminalInfo> | null;
+  return Boolean(info && typeof info.id === 'string' && typeof info.cwd === 'string' && typeof info.program === 'string' && typeof info.createdAt === 'number');
+};
+const keptBefore = (cwd: string): Kept => {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(keptKey(cwd)) ?? 'null') as Partial<Kept> | null;
+    return { known: (kept?.known ?? []).filter(isInfo), lost: (kept?.lost ?? []).filter(isInfo) };
+  } catch {
+    return { known: [], lost: [] };
+  }
+};
+const keep = (cwd: string, kept: Kept) => {
+  try {
+    sessionStorage.setItem(keptKey(cwd), JSON.stringify(kept));
+  } catch {
+    // Private mode: it is kept while the view shows.
+  }
+};
+
+/**
+ * The terminals this page knew that are no longer running, and were not ended here: Pelican
+ * stopped since (terminals end with it), or they were closed elsewhere. Their tabs stay, saying
+ * so, with Start again, until dealt with.
+ */
+function lostSince(kept: Kept, running: TerminalInfo[], endedHere: Set<string>): TerminalInfo[] {
+  const runs = new Set(running.map((t) => t.id));
+  const lost = new Map<string, TerminalInfo>();
+  for (const t of [...kept.lost, ...kept.known]) if (!runs.has(t.id) && !endedHere.has(t.id) && !lost.has(t.id)) lost.set(t.id, t);
+  return [...lost.values()];
+}
+
 /** How a shell's end reads under its last screen. */
 function endedWords(exit: TerminalExit): string {
   if (exit.signal) return `The shell ended (${exit.signal})`;
@@ -80,13 +118,24 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   // tablet that also has a trackpad says one or the other as it is used.
   const [touch] = useState(() => window.matchMedia('(pointer: coarse)').matches);
   const list = useQuery({ queryKey: ['terminals'], queryFn: api.terminals, enabled: !hidden, refetchInterval: hidden ? false : 10_000, staleTime: 2_000 });
-  // Terminals this page saw end with Pelican: their tabs stay, with Start again, until dealt with.
-  const [lost, setLost] = useState<TerminalInfo[]>([]);
-  const tabs = useMemo(() => {
-    const running = (list.data?.terminals ?? []).filter((t) => within(t.cwd, cwd));
-    const gone = lost.filter((t) => within(t.cwd, cwd) && !running.some((r) => r.id === t.id));
-    return [...running, ...gone].sort((a, b) => a.createdAt - b.createdAt);
-  }, [list.data, lost, cwd]);
+  // The folder's terminals as this tab of the browser knows them, and those gone since that were
+  // not ended here (endedHere): their tabs stay, with Start again, also when the list comes back
+  // before a terminal's socket says so, and while the view closes and opens again.
+  const [kept, setKept] = useState(() => keptBefore(cwd));
+  const endedHere = useRef(new Set<string>());
+  // A list fetched since the view opened tells what is running for sure; one from before may be old.
+  const fresh = Boolean(list.isFetchedAfterMount && list.data?.available);
+  const running = useMemo(() => (list.data?.available ? list.data.terminals.filter((t) => within(t.cwd, cwd)) : []), [list.data, cwd]);
+  const lost = useMemo(() => lostSince(fresh ? kept : { known: [], lost: kept.lost }, running, endedHere.current), [fresh, kept, running]);
+  const tabs = useMemo(() => [...running, ...lost].sort((a, b) => a.createdAt - b.createdAt), [running, lost]);
+  useEffect(() => {
+    if (!fresh) return;
+    setKept((before) => {
+      const next = { known: running, lost: lostSince(before, running, endedHere.current) };
+      return JSON.stringify(next) === JSON.stringify(before) ? before : next;
+    });
+  }, [fresh, running]);
+  useEffect(() => keep(cwd, kept), [cwd, kept]);
   const [picked, setPicked] = useState(() => shownBefore(cwd));
   const shown = tabs.find((t) => t.id === picked) ?? tabs.at(-1);
   const shownLost = Boolean(shown && lost.some((t) => t.id === shown.id));
@@ -187,9 +236,10 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     if (state.kind === 'gone') {
       // Pelican stopped since, and the shell with it, or another page ended it: the tab stays, to start again.
       const was = latest.current.tabs.find((t) => t.id === id);
-      if (was) setLost((list) => [...list.filter((t) => t.id !== id), was]);
+      if (was) setKept((before) => ({ ...before, lost: [...before.lost.filter((t) => t.id !== id), was] }));
       patch(id, () => undefined);
     } else if (state.kind === 'closed') {
+      endedHere.current.add(id);
       patch(id, () => undefined);
       if (latest.current.tabs.length <= 1) setByHand(true);
     }
@@ -205,7 +255,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   /** Takes a terminal away: its shell hung up, unless it has ended already. */
   const forget = async (terminal: TerminalInfo) => {
     const wasLost = lost.some((t) => t.id === terminal.id);
-    setLost((list) => list.filter((t) => t.id !== terminal.id));
+    endedHere.current.add(terminal.id);
+    setKept((before) => ({ known: before.known.filter((t) => t.id !== terminal.id), lost: before.lost.filter((t) => t.id !== terminal.id) }));
     patch(terminal.id, () => undefined);
     if (wasLost) return;
     await api.closeTerminal(terminal.id).catch((error: unknown) => {
@@ -231,8 +282,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   if (list.error && !list.data) return <Centered><span className="text-danger">{(list.error as Error).message}</span></Centered>;
   if (list.data && !list.data.available) return <Centered><p className="max-w-xs"><Reason text={list.data.reason ?? 'There is no terminal here.'} /></p></Centered>;
 
-  const running = Boolean(shown && !shown.exit && !shownLost);
-  const ended = shown && !running;
+  const shownRuns = Boolean(shown && !shown.exit && !shownLost);
+  const ended = shown && !shownRuns;
   const crowded = connection?.kind === 'crowded';
   const label = (t: TerminalInfo) => (t.cwd === cwd ? t.program : `${t.program} · ${baseName(t.cwd)}`);
   const safe = lowest === 'phone' ? 'pb-safe' : lowest === 'pane' ? 'pb-[max(0.375rem,env(safe-area-inset-bottom))]' : 'pb-1.5';
@@ -281,7 +332,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
             <button
               type="button"
               title="Hang up this terminal’s shell, as closing a window does"
-              onClick={() => (running && !isShell(shown.program) ? setConfirmEnd(true) : end(shown))}
+              onClick={() => (shownRuns && !isShell(shown.program) ? setConfirmEnd(true) : end(shown))}
               className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-10"
             >
               End

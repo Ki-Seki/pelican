@@ -94,12 +94,13 @@ afterEach(cleanup);
 function tab(props: Partial<Parameters<typeof WorkspaceTerminal>[0]> = {}) {
   const onQuote = vi.fn();
   const askTrust = vi.fn(async () => undefined as 'trusted' | 'user-only' | undefined);
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
       <WorkspaceTerminal cwd={CWD} hidden={false} askTrust={askTrust} onQuote={onQuote} {...props} />
     </QueryClientProvider>,
   );
-  return { onQuote, askTrust };
+  return { onQuote, askTrust, client, view };
 }
 const tabs = () => screen.queryAllByRole('tab').map((t) => t.textContent);
 const shows = () => document.querySelector('[data-terminal]')?.getAttribute('data-shows');
@@ -174,6 +175,54 @@ describe('the Terminal tab', () => {
     await waitFor(() => expect(opened).toHaveLength(2));
     // A terminal gone with Pelican has nothing to hang up.
     expect(closed).toEqual(['t1']);
+  });
+
+  it('keeps a terminal Pelican ended as a tab with Start again when the list says so before its socket does', async () => {
+    list.terminals = [terminal('t1')];
+    const { client } = tab();
+    await waitFor(() => expect(shows()).toBe('t1'));
+    // Pelican started again: the page comes back to the front and asks for the list (on focus, or
+    // its poll) before the terminal's socket hears it is gone; that socket is stopped with it.
+    list.terminals = [];
+    await act(() => client.invalidateQueries({ queryKey: ['terminals'] }));
+    expect(await screen.findByText('This terminal is no longer running')).toBeTruthy();
+    expect(tabs()).toEqual(['zsh']);
+    // Nothing starts by itself in its place, and the old screen stays (the screen shows none).
+    expect(opened).toEqual([]);
+    expect(shows()).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+    await waitFor(() => expect(opened).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText('This terminal is no longer running')).toBeNull());
+    expect(closed).toEqual([]);
+  });
+
+  it('keeps a terminal’s tab saying it is no longer running while the view closes and opens again, and after Pelican stopped meanwhile', async () => {
+    list.terminals = [terminal('t1'), terminal('t2')];
+    const first = tab();
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh']));
+    act(() => screenProps.onConnection('t2', { kind: 'gone' }));
+    expect(await screen.findByText('This terminal is no longer running')).toBeTruthy();
+    // The view closes (on a phone, Back), and opens again: the tab still says so.
+    first.view.unmount();
+    list.terminals = [terminal('t1')];
+    tab();
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh']));
+    expect(screen.getByText('This terminal is no longer running')).toBeTruthy();
+    cleanup();
+    // Pelican stops while the view is closed: when it opens again, its terminals' tabs say so, and
+    // nothing starts by itself.
+    list.terminals = [];
+    tab();
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh']));
+    expect(screen.getByText('This terminal is no longer running')).toBeTruthy();
+    expect(opened).toEqual([]);
+    // Ended here, one goes, and the last leaves New terminal, not a new shell by itself.
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    fireEvent.click(screen.getByRole('button', { name: 'End' }));
+    await waitFor(() => expect(tabs()).toEqual([]));
+    expect(opened).toEqual([]);
+    expect(closed).toEqual([]);
+    expect(screen.getAllByRole('button', { name: 'New terminal' }).length).toBeGreaterThan(0);
   });
 
   it('asks about a folder nobody trusted, and starts nothing by itself when the answer is no', async () => {
