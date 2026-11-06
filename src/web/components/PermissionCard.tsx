@@ -187,8 +187,8 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target, { prose: summary.prose }) : undefined;
   const workflow = request.toolName === 'Workflow';
-  // Files Claude would send you: each by its path, and its caption.
-  const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption)) : undefined } : undefined;
+  // Files Claude would send you: each by its path, and its caption, which is words.
+  const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption), { prose: true }) : undefined } : undefined;
   const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
   // saves. Words keep the joiners and selectors their scripts write with; a name or a rule shows
