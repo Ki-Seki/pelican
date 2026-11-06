@@ -178,6 +178,8 @@ type Across = {
   /** Names given to a function or an alias, and the names of commands that are fed. */
   functions: Set<string>;
   fed: Set<string>;
+  /** Names given to an alias: where one is a command's name, what it stands for is not known here, and may run its arguments. */
+  aliases: Set<string>;
   /** What the command sets a variable to: its text, or null where it is not known here. */
   values: Map<string, string | null>;
   /** The files the command writes, by the last part of their names: what goes in (as each reading has it), or null where it is not known here. */
@@ -1037,6 +1039,13 @@ class Reader {
       throw new Lost();
     }
     const name = this.nameOf(first);
+    if (first.plain && this.shared.across.aliases.has(first.text)) {
+      // An alias the command made, which may stand for eval or trap (`alias run=eval`, then `run '…'`):
+      // its arguments read as eval would read them.
+      command.kind = 'runs';
+      this.handOff(words.slice(k + 1));
+      return;
+    }
     if (name === undefined) {
       // A command whose name is not known here, which may be eval or a shell: its arguments read as eval would read them.
       command.kind = 'runs';
@@ -1089,12 +1098,16 @@ class Reader {
         return;
       }
       case 'alias':
-        // In zsh, and in bash where it expands them, an alias's value is read as part of the command it stands in.
+        // In zsh, and in bash where it expands them, an alias's value is read as part of the command
+        // it stands in. zsh's global and suffix aliases stand in anywhere on a line (`alias -g Y='| sh'`).
+        if (rest.some((word) => /^-[A-Za-z]*[gs]/.test(word.text))) throw new Lost();
         for (const word of rest) {
           const equals = word.pieces.findIndex((piece) => piece.char === '=');
           if (equals <= 0) continue;
           const value = word.pieces.slice(equals + 1);
-          this.shared.across.functions.add(textOf(word.pieces.slice(0, equals)));
+          const named = textOf(word.pieces.slice(0, equals));
+          this.shared.across.functions.add(named);
+          this.shared.across.aliases.add(named);
           this.handOff([{ ...word, pieces: value, text: textOf(value) }]);
         }
         return;
@@ -1513,7 +1526,7 @@ function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: n
 export function inWords(command: string, asked: (char: string) => boolean): Set<number> | undefined {
   const found = new Set<number>();
   const pieces = [...command.matchAll(/[\s\S]/gu)].map((match) => ({ char: match[0], at: match.index }));
-  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), values: new Map(), files: new Map(), runs: new Set() };
+  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), aliases: new Set(), values: new Map(), files: new Map(), runs: new Set() };
   try {
     for (const dialect of ['modern', 'bash32'] as const) {
       const shared: Shared = { asked, found, scripts: [pieces], pipelines: [], dialect, depth: 0, across };

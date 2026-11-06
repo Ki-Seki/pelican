@@ -45,6 +45,11 @@ const CASES: Array<[string, string, string]> = [
   ['a subscript printf -v evaluates', `x='a[$(w done${N}# ; p PWNED)]'; printf -v "$x" %s 1`, 'zsh'],
   ['arithmetic on a subscript', `n='a[$(w done${N}# ; p PWNED)]'; w $(( n + 1 ))`, 'sh'],
   ['PS4 under set -x', `PS4='$(w done${N}# ; p PWNED)'; set -x; :`, 'sh'],
+  // An alias the command made, used as a command: what it stands for may run its arguments.
+  ['an alias that stands for eval', `alias run=eval\nrun 'w done${N}# ; p PWNED'`, 'bash'],
+  ['an alias for eval, used in eval', `alias run=eval; eval "run 'w done${N}# ; p PWNED'"`, 'zsh'],
+  ['an alias that stands for trap', `alias later=trap\nlater 'w done${N}# ; p PWNED' EXIT`, 'sh'],
+  ["zsh's global alias", `alias -g Y='| sh'; eval "echo 'w done${N}# ; p PWNED' Y"`, 'zsh'],
 ];
 
 describe('quoted text a shell runs later', () => {
