@@ -54,6 +54,9 @@ vi.mock('../src/web/lib/api', async (original) => {
       sessions: async () => [...server].sort((a, b) => b.lastActivity - a.lastActivity),
       pin: (id: string, pinned: boolean) => pin(id, pinned),
       archive: (id: string, archived: boolean) => archive(id, archived),
+      mcp: async () => ({ servers: [], live: false }),
+      sessionUsage: async () => null,
+      models: async () => ({ models: [], signedIn: true }),
     },
   };
 });
@@ -69,9 +72,12 @@ beforeAll(() => {
   // What a phone's layout would give: rows this wide, and a finger's pointer kept by the row.
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 360 });
   HTMLElement.prototype.setPointerCapture = () => {};
+  HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open'); };
 });
 
 const { SessionList } = await import('../src/web/components/SessionList');
+const { SessionMenu } = await import('../src/web/components/SessionMenu');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
 beforeEach(() => {
@@ -246,3 +252,41 @@ describe('a finger on a row', () => {
   });
 });
 
+describe('the session menu', () => {
+  const menu = (shown: SessionSummary) => {
+    const client = new QueryClient();
+    client.setQueryData(['sessions'], server);
+    return render(
+      <QueryClientProvider client={client}>
+        <SessionMenu open onClose={() => {}} sessionId={shown.id} session={shown} onRenamed={() => {}} onForked={() => {}} onDeleted={() => {}} />
+      </QueryClientProvider>,
+    );
+  };
+
+  it('pins and unpins the session, next to Archive', async () => {
+    const tidy = server.find((s) => s.id === 't1')!;
+    const { unmount } = menu(tidy);
+    const options = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(options.indexOf('Pin')).toBe(options.indexOf('Archive') - 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
+    unmount();
+    menu(server.find((s) => s.id === 't1')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin' }));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', false));
+  });
+
+  it('says why when the server says no', async () => {
+    pin.mockRejectedValueOnce(new Error('The disk is full'));
+    menu(server.find((s) => s.id === 't1')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    expect(await screen.findByText('The disk is full')).toBeTruthy();
+  });
+
+  it('offers no pin for an archived session, only Unarchive', () => {
+    menu(server.find((s) => s.id === 'o1')!);
+    expect(screen.getByRole('button', { name: 'Unarchive' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Pin' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Unpin' })).toBeNull();
+  });
+});
