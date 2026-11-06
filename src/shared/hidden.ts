@@ -13,3 +13,10 @@ export function revealHidden(text: string): { text: string; hidden: boolean } {
   });
   return { text: shown, hidden };
 }
+
+/**
+ * An emoji as the conversation shows it, with the invisible characters that are part of it: a
+ * keycap, a flag of two letters or of a region's tags, or a picture with its text or emoji style,
+ * its skin tone, and the joiners that make several pictures one.
+ */
+export const EMOJI = /[#*0-9]\ufe0f?\u20e3|\p{RI}\p{RI}|\u{1f3f4}[\u{e0061}-\u{e007a}]{2}[\u{e0030}-\u{e0039}\u{e0061}-\u{e007a}]{1,4}\u{e007f}|\p{ExtPict}(?:\p{EMod}|[\ufe0e\ufe0f])?(?:\u200d\p{ExtPict}(?:\p{EMod}|\ufe0f)?)*/u;

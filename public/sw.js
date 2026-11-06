@@ -6,6 +6,12 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 /** Allow and Deny, where the device shows buttons on a notification. */
 const canAnswer = () => typeof Notification !== 'undefined' && (Notification.maxActions ?? 0) >= 2;
 
+/**
+ * Android's pop-up shows a notification's title and one line of its text beside the buttons, the
+ * rest only once it is expanded: there a command gets them only when it fits that line.
+ */
+const onAndroid = () => /Android/.test(self.navigator?.userAgent ?? '') || self.navigator?.userAgentData?.platform === 'Android';
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -14,7 +20,8 @@ self.addEventListener('push', (event) => {
     data = { title: 'Claude Code', body: event.data ? event.data.text() : '' };
   }
   // A request Claude waits on can be answered from here: yes or no to a tool it wants to use.
-  const answer = typeof data.request === 'string' && typeof data.sessionId === 'string' && canAnswer();
+  const answer = typeof data.request === 'string' && typeof data.sessionId === 'string' && canAnswer()
+    && (data.fitsOneLine === true || !onAndroid());
   event.waitUntil(
     self.registration.showNotification(data.title || 'Claude Code', {
       body: data.body || '',

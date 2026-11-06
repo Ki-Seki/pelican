@@ -211,9 +211,25 @@ async function walkWorkspace(page, base, session, where, step, later = []) {
 }
 
 /**
+ * The newest session with a folder that Claude changed files in: Show, in its Changes, offers a
+ * turn. A newer one can have changed nothing, as /diff would say of it; failing any, the newest.
+ */
+async function sessionToWalk(page, base, sessions) {
+  const folders = sessions.filter((s) => !s.sideChatOf && s.cwd);
+  for (const session of folders) {
+    const view = await openWorkspace(page, `${base}?s=${encodeURIComponent(session.id)}&w=changes`);
+    const show = view?.getByRole('button', { name: /^Show:/ });
+    if (!show || !(await show.waitFor({ timeout: 5000 }).then(() => true, () => false))) continue;
+    await show.click();
+    const turn = page.getByRole('dialog', { name: 'Show' }).getByRole('button', { name: /^T\d+ · / }).first();
+    if (await turn.waitFor({ timeout: 3000 }).then(() => true, () => false)) return session;
+  }
+  return folders[0];
+}
+
+/**
  * The list, its sheets, a new session in another folder, and every session with its sheets; then
- * Changes and files, walked through in the newest session that has a folder (a turn, in the
- * newest that has one).
+ * Changes and files, walked through in the newest session that has a folder and changed files.
  */
 async function driveApp(browser, base, sessions) {
   // The list folds side chats away under their session.
@@ -222,6 +238,7 @@ async function driveApp(browser, base, sessions) {
   // and theme open every session, the others today's, which hold all a conversation can show.
   const today = sessions.filter((s) => Date.now() - (s.lastActivity ?? 0) < 24 * 60 * 60_000);
   let all = true;
+  let walked;
   for (const [size, options] of Object.entries(SIZES)) {
     for (const scheme of ['light', 'dark']) {
       const context = await browser.newContext({ ...options, colorScheme: scheme });
@@ -245,8 +262,9 @@ async function driveApp(browser, base, sessions) {
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
         for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
       }
-      const [walked, ...later] = sessions.filter((s) => !s.sideChatOf && s.cwd);
-      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; }, later.slice(0, 3));
+      at = 'Changes and files';
+      walked ??= await sessionToWalk(page, base, sessions);
+      if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; });
       all = false;
       await context.close();
     }

@@ -2,6 +2,10 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { exportMarkdown } from '../src/server/actions';
@@ -38,6 +42,9 @@ async function session(n: number, title: string, rows: Array<Record<string, unkn
 const user = (content: unknown, extra: Record<string, unknown> = {}) => ({ type: 'user', message: { role: 'user', content }, ...extra });
 const claude = (...content: unknown[]) => ({ type: 'assistant', message: { id: `msg_${crypto.randomUUID().slice(0, 8)}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content } });
 const text = (value: string) => ({ type: 'text', text: value });
+const picture = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+/** The export as a Markdown reader takes it, the way the app reads Markdown. */
+const read = (markdown: string) => renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [remarkGfm] }, markdown));
 
 beforeAll(async () => {
   // As Claude Code names a project's folder: by the real path (on macOS the temp folder is a link).
@@ -57,7 +64,7 @@ afterAll(async () => {
 });
 
 describe('Export as Markdown', () => {
-  it('says what the conversation shows, and leaves out what it leaves out: a side chat’s note, Claude Code’s tags and its own lines', async () => {
+  it('says what the conversation shows, and leaves out what it leaves out: a side chat’s note, Claude Code’s tags and a compaction’s summary', async () => {
     const upload = path.join(home, 'state', 'uploads', '0a0a0a0a-0000-4000-8000-000000000001', 'chart.png');
     const sessionId = await session(1, 'Side chat', [
       user(sideChatPrompt('Why CSS variables?')),
@@ -92,19 +99,105 @@ describe('Export as Markdown', () => {
       '## You', '',
       '`!git status`', '',
       '```\nOn branch main\n```', '',
-      '/compact keep the tests', '',
+      '`/compact keep the tests`', '',
+      '```\nCompacted\n```', '',
       '*Context compacted*', '',
       '## You', '',
       'Fix the chart', '',
       'Attached: chart.png', '',
       '## Claude', '',
       'Fixed: the axis starts at zero.', '',
+      '*Interrupted*', '',
       '## You', '',
       'Run `npm test` too', '',
       '## Claude', '',
       'Done.', '',
     ].join('\n'));
-    expect(markdown).not.toMatch(/system-reminder|side chat about|bash-|command-|Caveat|Compacted |continued from|uploads|scaled|interrupted/);
+    expect(markdown).not.toMatch(/system-reminder|side chat about|bash-|command-|Caveat|Compacted |continued from|uploads|scaled|interrupted by/);
+  });
+
+  it('has what the conversation shows of Claude Code’s own: a / command’s output, a background task, Interrupted, a failed request, a hook’s word', async () => {
+    const sessionId = await session(3, 'Notes', [
+      user('<command-name>/cost</command-name>\n<command-message>cost</command-message>\n<command-args></command-args>'),
+      user('<local-command-stdout>Total cost: $0.12\nTotal duration (API): 1m 2s</local-command-stdout>'),
+      user('<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command "npm run build" completed (exit code 0)</summary>\n</task-notification>'),
+      claude(text('The build finished.')),
+      user('Lint it'),
+      claude({ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm run lint' } }),
+      user([{ type: 'tool_result', tool_use_id: 't2', content: '2 problems' }]),
+      { type: 'attachment', attachment: { type: 'hook_system_message', hookName: 'PostToolUse', content: 'Fix *all* of `src/_x.ts`\n<b>then</b> run [it] again' } },
+      claude(text('Fixing both.')),
+      user('[Request interrupted by user]'),
+      user('Go on'),
+      { type: 'assistant', isApiErrorMessage: true, message: { id: 'msg_err', type: 'message', role: 'assistant', model: '<synthetic>', content: [text('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')] } },
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown.slice(markdown.indexOf('## You'))).toBe([
+      '## You', '',
+      '`/cost`', '',
+      '```\nTotal cost: $0.12\nTotal duration (API): 1m 2s\n```', '',
+      '*Background command "npm run build" completed (exit code 0)*', '',
+      '## Claude', '',
+      'The build finished.', '',
+      '## You', '',
+      'Lint it', '',
+      '## Claude', '',
+      '- Bash: `npm run lint`', '',
+      '*PostToolUse says: Fix \\*all\\* of \\`src/\\_x.ts\\`*\n*PostToolUse says: \\<b\\>then\\</b\\> run \\[it\\] again*', '',
+      '## Claude', '',
+      'Fixing both.', '',
+      '*Interrupted*', '',
+      '## You', '',
+      'Go on', '',
+      '*Anthropic\u2019s API is overloaded. Try again in a moment.*', '',
+    ].join('\n'));
+    // A hook's words are its own: none of them reads as Markdown.
+    const html = read(markdown);
+    expect(html).toContain('<em>PostToolUse says: Fix *all* of `src/_x.ts`</em>');
+    expect(html).toContain('<em>PostToolUse says: &lt;b&gt;then&lt;/b&gt; run [it] again</em>');
+  });
+
+  it('names what a prompt carried besides its words: a picture sent alone is there too', async () => {
+    const sessionId = await session(4, 'Pictures', [
+      user([picture]),
+      claude(text('A bar chart.')),
+      user([text('And these two'), picture, picture]),
+      claude(text('Both line charts.')),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown.slice(markdown.indexOf('## You'))).toBe([
+      '## You', '',
+      'Attached: a picture', '',
+      '## Claude', '',
+      'A bar chart.', '',
+      '## You', '',
+      'And these two', '',
+      'Attached: 2 pictures', '',
+      '## Claude', '',
+      'Both line charts.', '',
+    ].join('\n'));
+  });
+
+  it('keeps a command of several lines whole, in a block of code, so none of it reads as Markdown', async () => {
+    const sessionId = await session(5, 'Loop', [
+      user('<bash-input>for i in 1 2; do\n# a comment\necho $i\n\ndone</bash-input>'),
+      user('<bash-stdout>1\n2</bash-stdout><bash-stderr></bash-stderr>'),
+      user('<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>keep the tests\n# and the docs</command-args>'),
+      claude({ type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'echo `date`\nls' } }),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).toContain([
+      '## You', '',
+      '```\n!for i in 1 2; do\n# a comment\necho $i\n\ndone\n```', '',
+      '```\n1\n2\n```', '',
+      '```\n/compact keep the tests\n# and the docs\n```', '',
+      '## Claude', '',
+      '- Bash: `` echo `date` ``', '',
+    ].join('\n'));
+    // As a Markdown reader takes it: the title and one heading, and each command and its output as code.
+    const html = read(markdown);
+    expect(html.match(/<h\d/g)).toEqual(['<h1', '<h2', '<h2']);
+    expect(html.match(/<pre>/g)).toHaveLength(3);
   });
 
   it('keeps a command and its output as code, whatever backticks they hold', async () => {

@@ -1,8 +1,9 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage } from '../shared/protocol.js';
+import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
-import { buildItems, cleanOutput } from '../web/lib/turns.js';
+import { buildItems, cleanOutput, type SentFile, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { loadMessages, sessionInfo } from './sessions.js';
 import { refreshTranscriptIndex } from './transcripts.js';
@@ -43,21 +44,43 @@ export async function remove(sessionId: string): Promise<void> {
   await refreshTranscriptIndex();
 }
 
-const toolLine = (name: string, input: Record<string, unknown>) => {
-  const target = ['file_path', 'command', 'pattern', 'url', 'query', 'description'].map((k) => input[k]).find((v) => typeof v === 'string');
-  return `- ${name}${target ? `: \`${String(target).split('\n')[0]}\`` : ''}`;
-};
-
 /** Backticks around code, more of them than any run inside it, so nothing in it ends the code. */
 const fence = (code: string, fewest: number) => '`'.repeat(Math.max(fewest, ...Array.from(code.matchAll(/`+/g), (run) => run[0].length + 1)));
 const inlineCode = (code: string) => (code.includes('`') ? `${fence(code, 1)} ${code} ${fence(code, 1)}` : `\`${code}\``);
 const codeBlock = (code: string) => `${fence(code, 3)}\n${code}\n${fence(code, 3)}`;
+/** A command as typed: inline, or a block of its own when it has more lines, which would end inline code. */
+const asCode = (code: string) => (/[\r\n]/.test(code) ? codeBlock(code) : inlineCode(code));
+
+const toolLine = (name: string, input: Record<string, unknown>) => {
+  const target = ['file_path', 'command', 'pattern', 'url', 'query', 'description'].map((k) => input[k]).find((v) => typeof v === 'string');
+  return `- ${name}${target ? `: ${inlineCode(String(target).split(/\r\n?|\n/)[0]!)}` : ''}`;
+};
 
 /**
- * The conversation as Markdown, as the conversation shows it: prompts and replies in full, a `!`
- * command with its output, tool calls as one line each. What the conversation leaves out stays
- * out: the notes Claude Code and Pelican give Claude with a prompt (a side chat's note, in a
- * system reminder), the tags around commands, Claude Code's own lines, and a compaction's summary.
+ * A line of Claude Code's own, such as Interrupted, a failed request or a hook's word, in italics
+ * as it is written: nothing in it is taken as Markdown.
+ */
+const note = (text: string) => text.split(/\r\n?|\n/).map((line) => line.trim()).filter(Boolean)
+  .map((line) => `*${line.replace(/[\\`*_[\]<>&~|]/g, '\\$&')}*`).join('\n');
+
+/** What a prompt carried besides its words: pictures, which have no names, and files by name. */
+const attached = (pictures: number, files: SentFile[]) => {
+  const all = [...(pictures === 1 ? ['a picture'] : pictures > 1 ? [`${pictures} pictures`] : []), ...files.map((file) => file.name)];
+  return all.length > 0 ? [`Attached: ${all.join(', ')}`] : [];
+};
+
+/** A workflow's end, in the words of its line in the conversation. */
+const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
+  `Workflow ${name ? `${name} ` : ''}${status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'stopped'}${durationMs !== undefined ? ` · ${durationText(durationMs)}` : ''}`;
+
+/**
+ * The conversation as Markdown, with all the conversation shows, as Claude Code's /export has all
+ * its screen shows: prompts and replies in full with what was attached, `!` and `/` commands as
+ * code with their output, tool calls as one line each, and Claude Code's own lines (a background
+ * task's note, Interrupted, a failed request, a hook's word, a compaction) in italics. What the
+ * conversation leaves out stays out: the notes Claude Code and Pelican give Claude with a prompt (a
+ * side chat's note, in a system reminder), the tags around commands and a compaction's summary.
+ * The days the conversation is marked off by are left out, as the terminal has none.
  */
 export async function exportMarkdown(sessionId: string): Promise<{ title: string; markdown: string }> {
   const info = await sessionInfo(sessionId);
@@ -75,11 +98,18 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   // What the conversation view shows, read the same way.
   for (const item of buildItems(messages)) {
     if (item.kind === 'user') {
-      const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
-      say('You', [...(text ? [text] : []), ...(item.files.length > 0 ? [`Attached: ${item.files.map((file) => file.name).join(', ')}`] : [])]);
+      const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())] : item.text ? [item.text] : [];
+      say('You', [...words, ...attached(item.images.length, item.files)]);
     } else if (item.kind === 'shell') {
       const output = [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd();
-      say('You', [inlineCode(`!${item.command}`), ...(output ? [codeBlock(output)] : [])]);
+      say('You', [asCode(`!${item.command}`), ...(output ? [codeBlock(output)] : [])]);
+    } else if (item.kind === 'notice' && item.tone === 'output') {
+      // A `/` command's output, under the command.
+      out.push(codeBlock(item.text), '');
+    } else if (item.kind === 'notice') {
+      const line = note(item.workflow ? workflowEnded(item.workflow) : item.text);
+      if (line) out.push(line, '');
+      speaker = undefined;
     } else if (item.kind === 'assistant') {
       const blocks: string[] = [];
       let tools: string[] = [];
@@ -94,11 +124,9 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
       if (tools.length > 0) blocks.push(tools.join('\n'));
       say('Claude', blocks);
     } else if (item.kind === 'compact') {
-      out.push('*Context compacted*', '');
+      out.push(note('Context compacted'), '');
       speaker = undefined;
     }
-    // Claude Code's notes (a command's output, an interruption, a failed request) and the days
-    // are neither side of the conversation.
   }
   return { title, markdown: `${out.join('\n').trim()}\n` };
 }

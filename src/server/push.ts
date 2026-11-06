@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import webpush from 'web-push';
 
+import { EMOJI } from '../shared/hidden.js';
 import type { PermissionRequest } from '../shared/protocol.js';
 import { cookieName } from './auth.js';
 import { config } from './config.js';
@@ -68,7 +69,38 @@ export type PushPayload = {
   tag: string;
   /** A request the notification can answer: Allow and Deny, where the device shows buttons. */
   request?: string;
+  /** The command fits the one line of it Android's pop-up shows beside the buttons: Android offers them only then. */
+  fitsOneLine?: true;
 };
+
+/** Characters a lock screen leaves out, outside an emoji: controls, line breaks, invisible and direction-changing ones. */
+const UNSHOWN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]+/u;
+const EMOJI_OR_UNSHOWN = new RegExp(`(${EMOJI.source})|${UNSHOWN.source}`, 'gu');
+const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+/**
+ * Text for a lock screen: one line, without control, invisible or direction-changing characters
+ * (an emoji keeps those it is made of), and short. It ends at `max` characters as they show, cut
+ * between them, never inside one (an emoji, a letter and its accents), and sooner where they take
+ * more than 4 bytes each on average, and so as many code points: one character can hold any
+ * number of them, and a push carries 4 KB. A character too long for that is left out, with the
+ * rest of the text.
+ */
+export function oneLine(text: string, max = 120): string {
+  const flat = text.replace(EMOJI_OR_UNSHOWN, (_, emoji?: string) => emoji ?? ' ').replace(/\s+/g, ' ').trim();
+  const most = 4 * max;
+  let characters = 0;
+  let bytes = 0;
+  // Where a cut leaves room for the ellipsis, one character of 3 bytes.
+  let cut = 0;
+  for (const { segment, index } of graphemes.segment(flat)) {
+    characters += 1;
+    bytes += Buffer.byteLength(segment);
+    if (characters > max || bytes > most) return `${flat.slice(0, cut)}…`;
+    if (characters < max && bytes + 3 <= most) cut = index + segment.length;
+  }
+  return flat;
+}
 
 /**
  * Text every notification shows as it is, in any system font: printable ASCII, one space between
@@ -95,16 +127,20 @@ const WIDTHS: ReadonlyArray<readonly [number, string]> = [
   [11, '@'],
 ];
 const tenths = new Map(WIDTHS.flatMap(([width, chars]) => [...chars].map((char) => [char, width] as const)));
-const widthOf = (text: string) => [...text].reduce((sum, char) => sum + tenths.get(char)!, 0);
+/** How wide text may be drawn; a character the table does not have is wider than any line. */
+const widthOf = (text: string) => [...text].reduce((sum, char) => sum + (tenths.get(char) ?? Infinity), 0);
 
 /**
- * The narrowest notification body, in tenths of an em, and the lines of it every notification
- * shows: a macOS banner beside the site's icon has about 220 px of 13 px text (17 em) on two
- * lines, and 16.5 em leaves a margin. Windows' toasts and GNOME's banners are wider, and Android
- * shows more lines once a notification is expanded.
+ * Where a notification's text is narrowest: how wide a line is, in tenths of an em, and how many
+ * lines show. A macOS banner beside the site's icon has about 220 px of 13 px text (17 em) on two
+ * lines, and 16.5 em leaves a margin; Windows' toasts and GNOME's banners are wider. Android's
+ * pop-up shows the title and one line of the text beside the buttons, the rest only once it is
+ * expanded: on a phone 360 dp wide, next to the site's icon, about 175 to 200 dp of 14 sp text
+ * (12.5 to 14 em), and 12 em leaves a margin.
  */
-const LINE = 165;
-const LINES = 2;
+export type Layout = { width: number; lines: number };
+export const BANNER: Layout = { width: 165, lines: 2 };
+export const ANDROID_POP_UP: Layout = { width: 120, lines: 1 };
 
 /**
  * Whether a line may break at the space between two words on every device. Unicode's line
@@ -118,11 +154,11 @@ const breaksBetween = (before: string, after: string) => {
 };
 
 /**
- * Whether plain text shows whole in any notification: within two lines at the narrowest, wrapped
- * only where every device may break a line, which takes the most lines, and with no word wider
- * than a line, since devices cut those in different places.
+ * Whether plain text shows whole in a layout: within its lines, wrapped only where every device may
+ * break a line, which takes the most lines, and with no word wider than a line, since devices cut
+ * those in different places.
  */
-function fitsTwoLines(text: string): boolean {
+export function fits(text: string, { width: line, lines: most }: Layout): boolean {
   const words = text.split(' ');
   const space = tenths.get(' ')!;
   // The widths of what no device breaks: words, joined across a space no line breaks at.
@@ -134,15 +170,15 @@ function fitsTwoLines(text: string): boolean {
   let lines = 0;
   let room = 0;
   for (const width of pieces) {
-    if (width > LINE) return false;
+    if (width > line) return false;
     if (lines > 0 && space + width <= room) {
       room -= space + width;
     } else {
       lines += 1;
-      room = LINE - width;
+      room = line - width;
     }
   }
-  return lines <= LINES;
+  return lines <= most;
 }
 
 /** What a Bash or PowerShell request may hold besides its command, none of which changes what runs. */
@@ -157,7 +193,7 @@ const BESIDES_COMMAND = new Set(['description', 'timeout', 'run_in_background'])
 function shownWhole(request: PermissionRequest): string | undefined {
   if (request.toolName !== 'Bash' && request.toolName !== 'PowerShell') return undefined;
   const { command, ...rest } = request.input;
-  if (typeof command !== 'string' || !PLAIN.test(command) || !fitsTwoLines(command)) return undefined;
+  if (typeof command !== 'string' || !PLAIN.test(command) || !fits(command, BANNER)) return undefined;
   const more = Object.entries(rest).some(([key, value]) => !BESIDES_COMMAND.has(key) && value !== undefined && value !== null && value !== false);
   return more ? undefined : command;
 }
@@ -165,20 +201,32 @@ function shownWhole(request: PermissionRequest): string | undefined {
 /**
  * What a notification for a request may answer, Allow and Deny, and the body it then has: a
  * command Claude wants to run, shown whole, since only then does the notification show all that
- * Allow approves. Anything else opens the session: an edit, an MCP tool or another tool whose
- * input it does not show, a command too long or with other characters, a question or a plan, and
- * a request Claude Code says must not be allowed by a stray tap. Not even Deny is offered there:
- * it would answer, unseen, a request the page shows in full, and one rule for when a notification
- * answers stays clear.
+ * Allow approves; on Android only one that fits the one line its pop-up shows beside the buttons
+ * (`fitsOneLine`, which the service worker checks there). Anything else opens the session: an
+ * edit, an MCP tool or another tool whose input it does not show, a command too long or with other
+ * characters, a question or a plan, and a request Claude Code says must not be allowed by a stray
+ * tap. Not even Deny is offered there: it would answer, unseen, a request the page shows in full,
+ * and one rule for when a notification answers stays clear.
  */
-export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request'>> {
+export function answerable(request: PermissionRequest): Partial<Pick<PushPayload, 'body' | 'request' | 'fitsOneLine'>> {
   const command = request.elicitation || request.defaultToNo ? undefined : shownWhole(request);
-  return command === undefined ? {} : { body: command, request: request.id };
+  if (command === undefined) return {};
+  return { body: command, request: request.id, ...(fits(command, ANDROID_POP_UP) ? { fitsOneLine: true } : {}) };
 }
+
+/**
+ * What a push carries: push services take 4,096 bytes (RFC 8030), and its encryption (aes128gcm,
+ * RFC 8188) takes 103 of them, a header of 86, a padding byte and a tag of 16. A push over it is
+ * refused, and nobody hears that Claude waits.
+ */
+const PUSH_BYTES = 4096 - 103;
 
 /** Sends a notification to every subscribed device; drops subscriptions the push service rejects. */
 export async function notify(payload: PushPayload): Promise<void> {
   if (!keys || subscriptions.length === 0) return;
+  // Whoever sends it, its words are a lock screen's: at most 480 bytes of title and 720 of text, far
+  // within a push. The title is the session's, which can hold what hides text or turns it around.
+  const shown = { ...payload, title: oneLine(payload.title) || 'Claude Code', body: oneLine(payload.body, 180) };
   // Devices signed out by a new token or password get nothing more, and are forgotten.
   const signer = cookieName();
   const gone = subscriptions.filter((s) => s.signer !== signer).map((s) => s.endpoint);
@@ -187,7 +235,9 @@ export async function notify(payload: PushPayload): Promise<void> {
     const id = encodeURIComponent(payload.sessionId);
     const url = config.sessionUrl ? config.sessionUrl.replaceAll('{id}', id)
       : subscription.openUrl ? `${subscription.openUrl}${id}` : undefined;
-    const body = JSON.stringify({ ...payload, url });
+    const linked = JSON.stringify({ ...shown, url });
+    // A link too long to go with it (an address of kilobytes) is left out, not the notification.
+    const body = Buffer.byteLength(linked) <= PUSH_BYTES ? linked : JSON.stringify(shown);
     try {
       await webpush.sendNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, body, { TTL: 3600, urgency: 'high' });
     } catch (error) {
