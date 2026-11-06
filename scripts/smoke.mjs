@@ -231,6 +231,18 @@ async function walkable(sessions, answer) {
  * The list, its sheets, a new session in another folder, and every session with its sheets; then
  * Changes and files, walked through in `walked` (see walkable).
  */
+/**
+ * The list's first screen comes in one script: left to itself, Rolldown moves what the list shares
+ * with a part loaded inside a lazily loaded one into a chunk of its own (`api`), which the page
+ * then preloads and the list waits for too (vite.config.ts keeps them together).
+ */
+async function checkFirstScreen(base, where) {
+  const page = await (await fetch(base)).text();
+  const scripts = page.match(/<script\b[^>]*\bsrc=/g)?.length ?? 0;
+  const preloaded = page.match(/<link\b[^>]*\brel="modulepreload"/g)?.length ?? 0;
+  if (scripts !== 1 || preloaded > 0) problems.push(`${where}: the first screen loads ${scripts + preloaded} scripts, not one`);
+}
+
 async function driveApp(browser, base, sessions, walked) {
   // The list folds side chats away under their session.
   const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
@@ -517,6 +529,7 @@ try {
     const server = await serveFolder(site);
     stop = async () => server.stop();
     await checkSite(browser, server.base);
+    await checkFirstScreen(`${server.base}demo/`, 'site, demo');
     const sessions = await savedSessions(site);
     const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
@@ -526,6 +539,7 @@ try {
     stop = demo.stop;
     const { sessions } = await (await fetch(`${demo.base}api/sessions`, { headers: MARK })).json();
     if (!sessions?.length) problems.push('the demo has no sessions');
+    await checkFirstScreen(demo.base, 'app');
     const asked = (request) => fetch(`${demo.base}api/${request}`, { headers: MARK }).then((r) => r.json());
     await driveApp(browser, demo.base, sessions ?? [], await walkable(sessions ?? [], asked));
     await checkDocked(browser, demo.base, sessions ?? []);
