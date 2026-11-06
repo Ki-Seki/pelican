@@ -204,7 +204,8 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
   onNote: (note: string) => void;
   onShow: () => void;
   onRemove: () => void;
-  onClose: () => void;
+  /** `outside`: a click elsewhere closed it, which takes the keys where it was. */
+  onClose: (how: 'done' | 'outside') => void;
 }) {
   const [note, setNote] = useState(item.note ?? '');
   const before = useRef(item.note ?? '');
@@ -215,23 +216,24 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
   const show = canShow ? showLabel(item) : undefined;
   const notable = item.kind !== 'file';
   /** Closes it, then does `then`: at once on a computer, once a phone's sheet has gone. */
-  const leave = (then?: () => void) => {
+  const leave = (then?: () => void, how: 'done' | 'outside' = 'done') => {
     // A comment is what it says: emptied, it keeps what it said before.
     if (item.kind === 'comment' && !note.trim()) onNote(before.current);
     if (!touch) {
-      onClose();
+      onClose(how);
       then?.();
       return;
     }
     setOpen(false);
     setTimeout(() => {
-      onClose();
+      onClose(how);
       then?.();
     }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : SHEET_OUT_MS);
   };
   const finish = () => leave();
-  const latest = useRef(finish);
-  latest.current = finish;
+  const away = () => leave(undefined, 'outside');
+  const latest = useRef(away);
+  latest.current = away;
 
   // Where it is from stays marked in the conversation while it is open.
   useEffect(() => {

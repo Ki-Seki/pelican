@@ -895,7 +895,12 @@ export function Composer({
           onNote={(note) => updateWaiting(draftKey, opened.id, { note })}
           onShow={() => showItem(opened)}
           onRemove={() => remove(opened, false)}
-          onClose={() => setEditing(undefined)}
+          onClose={(how) => {
+            const chip = editing?.chip;
+            setEditing(undefined);
+            // Closed from inside on a computer, the keys go back to its chip, or to the box once that has gone.
+            if (how === 'done' && !touch) requestAnimationFrame(() => ((chip?.isConnected ? chip.querySelector('button') : null) ?? area.current)?.focus({ preventScroll: true }));
+          }}
         />
       )}
       {!side && (

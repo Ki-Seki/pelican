@@ -188,6 +188,41 @@ describe('what waits above the message box', () => {
     expect(screen.getByRole('button', { name: 'Quote “It follows the system until you pick one.”' })).toBeTruthy();
   });
 
+  it('closed from inside on a computer, give the keys back to the chip they were opened from, or to the box once it has gone', async () => {
+    media[COMPUTER] = true;
+    const { box } = renderComposer('w10');
+    act(() => {
+      addWaiting('w10', quote('first one', 'a note'));
+      addWaiting('w10', quote('second one'));
+    });
+    const chip = () => screen.getByRole('button', { name: /^Your note on “first one”/ });
+    const note = () => screen.getByLabelText('Your note');
+    for (const close of [
+      () => fireEvent.keyDown(note(), { key: 'Escape' }),
+      () => fireEvent.keyDown(note(), { key: 'Enter', metaKey: true }),
+      () => fireEvent.click(screen.getByRole('button', { name: 'Done' })),
+    ]) {
+      fireEvent.click(chip());
+      expect(document.activeElement).toBe(note());
+      close();
+      await frame();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(chip());
+    }
+    // A click elsewhere takes the keys where it was.
+    fireEvent.click(chip());
+    box.focus();
+    fireEvent.pointerDown(box);
+    await frame();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(box);
+    // Removed from its editor, the next chip has them.
+    fireEvent.click(chip());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await frame();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Quote “second one”' }));
+  });
+
   it('a comment keeps what it said when its note is emptied', () => {
     media[COMPUTER] = true;
     renderComposer('w4');
