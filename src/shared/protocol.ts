@@ -9,6 +9,12 @@ export type { PermissionMode } from './modes';
  *  (Desktop, the terminal) is working on it, or wrote to it just now. */
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'live';
 
+/**
+ * Where a command is in an item of what a folder brings (its trust sheet): from, to, and whether a
+ * shell runs it or it is a program and its arguments, joined by spaces.
+ */
+export type CommandAt = [from: number, to: number, runs: 'shell' | 'argv'];
+
 export type SessionSummary = {
   id: string;
   title: string;

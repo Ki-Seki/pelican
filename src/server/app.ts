@@ -152,7 +152,7 @@ app.use('/api/*', compress({ threshold: 1024 }));
 
 app.onError((error, c) => {
   // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
-  if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings }, 409);
+  if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings, commands: error.commands }, 409);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });
@@ -288,7 +288,7 @@ app.post('/api/sessions', async (c) => {
   else if (body.trust) await rememberChoice(cwd, body.trust);
   else {
     const question = await trustQuestion(cwd);
-    if (question) return c.json({ error: 'Trust this folder before Claude Code starts in it.', needsTrust: true, brings: question.brings }, 409);
+    if (question) return c.json({ error: 'Trust this folder before Claude Code starts in it.', needsTrust: true, brings: question.brings, commands: question.commands }, 409);
   }
   const uuid = uuidOf(body.uuid);
   const sessionId = await sendMessage({ cwd }, {

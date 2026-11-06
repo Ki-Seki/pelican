@@ -195,9 +195,14 @@ describe('starting a session', () => {
   it('in a folder nobody trusted asks first, and starts nothing', async () => {
     const response = await create({ cwd: repo });
     expect(response.status).toBe(409);
-    const body = await response.json() as { needsTrust: boolean; brings: string[] };
+    const body = await response.json() as { needsTrust: boolean; brings: string[]; commands: unknown[] };
     expect(body.needsTrust).toBe(true);
     expect(body.brings).toContain('MCP server db: npx -y db-mcp');
+    // Where each item's command is: the server's program and its arguments, a hook a shell runs.
+    expect(body.commands).toHaveLength(body.brings.length);
+    expect(body.commands[body.brings.indexOf('MCP server db: npx -y db-mcp')]).toEqual([[15, 28, 'argv']]);
+    const hook = body.brings.findIndex((item) => item.startsWith('SessionStart hook: '));
+    expect(body.commands[hook]).toEqual([[19, body.brings[hook]!.length, 'shell']]);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(await readFile(launched, 'utf8').catch(() => '')).toBe('');
   });

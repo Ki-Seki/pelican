@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { listSessions } from '@anthropic-ai/claude-agent-sdk';
 
+import type { CommandAt } from '../shared/protocol.js';
 import { config } from './config.js';
 import { openRegular } from './open.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
@@ -32,10 +33,24 @@ export const FULL_SETTINGS: Launch = { settingSources: ['user', 'project', 'loca
 
 /** Starting Claude Code would run what the folder brings, and nobody has said it may. */
 export class NeedsTrust extends Error {
-  constructor(readonly folder: string, readonly brings: string[]) {
+  constructor(readonly folder: string, readonly brings: string[], readonly commands: CommandAt[][] = []) {
     super('Trust this folder before Claude Code starts in it.');
   }
 }
+
+/** An item of what a folder brings: its text, and where in it a command is (CommandAt). */
+type Item = { text: string; commands: CommandAt[] };
+
+/** What a folder brings, each item whole, and the commands in each, item by item. */
+export type Brings = { brings: string[]; commands: CommandAt[][] };
+
+const said = (text: string): Item => ({ text, commands: [] });
+
+/** `label`, then a command a shell runs or a program and its arguments, then `after`. */
+const runs = (label: string, command: string, how: CommandAt[2], after = ''): Item => ({
+  text: `${label}${command}${after}`,
+  commands: [[label.length, label.length + command.length, how]],
+});
 
 const exists = (file: string) => stat(file).then(() => true, () => false);
 const real = (folder: string) => realpath(folder).catch(() => path.resolve(folder));
@@ -251,45 +266,55 @@ const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v 
 /** Settings that run a command of the folder's choosing, as Claude Code's trust dialog lists them. */
 const HELPERS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh', 'otelHeadersHelper', 'proxyAuthHelper'];
 
-function fromSettings(settings: unknown): string[] {
+function fromSettings(settings: unknown): Item[] {
   if (!isObject(settings)) return [];
-  const found: string[] = [];
+  const found: Item[] = [];
   if (isObject(settings.hooks)) {
     for (const [event, groups] of Object.entries(settings.hooks)) {
       for (const group of Array.isArray(groups) ? groups : []) {
         for (const hook of isObject(group) && Array.isArray(group.hooks) ? group.hooks : []) {
           if (!isObject(hook)) continue;
-          const what = typeof hook.command === 'string' ? hook.command : typeof hook.url === 'string' ? hook.url : String(hook.type ?? 'hook');
-          found.push(`${event} hook: ${what}`);
+          if (typeof hook.command !== 'string') {
+            found.push(said(`${event} hook: ${typeof hook.url === 'string' ? hook.url : String(hook.type ?? 'hook')}`));
+          } else if (Array.isArray(hook.args)) {
+            // Its exec form: the program, run with these arguments and no shell.
+            found.push(runs(`${event} hook: `, [hook.command, ...hook.args.map(String)].join(' '), 'argv'));
+          } else {
+            // Run by a shell, or by PowerShell, which takes every space for one.
+            found.push(hook.shell === 'powershell' ? said(`${event} hook: ${hook.command}`) : runs(`${event} hook: `, hook.command, 'shell'));
+          }
         }
       }
     }
   }
-  for (const name of HELPERS) if (typeof settings[name] === 'string') found.push(`${name}: ${settings[name] as string}`);
-  if (isObject(settings.env) && Object.keys(settings.env).length > 0) found.push(`Environment variables: ${Object.keys(settings.env).join(', ')}`);
+  for (const name of HELPERS) if (typeof settings[name] === 'string') found.push(runs(`${name}: `, settings[name] as string, 'shell'));
+  if (isObject(settings.env) && Object.keys(settings.env).length > 0) found.push(said(`Environment variables: ${Object.keys(settings.env).join(', ')}`));
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
-  if (strings(permissions.allow).length > 0) found.push(`Allowed without asking: ${strings(permissions.allow).join(', ')}`);
-  if (strings(permissions.additionalDirectories).length > 0) found.push(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`);
+  if (strings(permissions.allow).length > 0) found.push(said(`Allowed without asking: ${strings(permissions.allow).join(', ')}`));
+  if (strings(permissions.additionalDirectories).length > 0) found.push(said(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`));
   if (typeof permissions.defaultMode === 'string' && !['default', 'plan', 'dontAsk'].includes(permissions.defaultMode)) {
-    found.push(`Permission mode: ${permissions.defaultMode}`);
+    found.push(said(`Permission mode: ${permissions.defaultMode}`));
   }
   const plugins = isObject(settings.enabledPlugins) ? Object.entries(settings.enabledPlugins).filter(([, on]) => on).map(([name]) => name) : [];
-  if (plugins.length > 0) found.push(`Plugins: ${plugins.join(', ')}`);
+  if (plugins.length > 0) found.push(said(`Plugins: ${plugins.join(', ')}`));
   if (isObject(settings.extraKnownMarketplaces) && Object.keys(settings.extraKnownMarketplaces).length > 0) {
-    found.push(`Plugin marketplaces: ${Object.keys(settings.extraKnownMarketplaces).join(', ')}`);
+    found.push(said(`Plugin marketplaces: ${Object.keys(settings.extraKnownMarketplaces).join(', ')}`));
   }
-  if (typeof settings.autoMemoryDirectory === 'string') found.push(`Memory folder: ${settings.autoMemoryDirectory}`);
+  if (typeof settings.autoMemoryDirectory === 'string') found.push(said(`Memory folder: ${settings.autoMemoryDirectory}`));
   return found;
 }
 
-function fromMcp(file: unknown): string[] {
+function fromMcp(file: unknown): Item[] {
   if (!isObject(file) || !isObject(file.mcpServers)) return [];
   return Object.entries(file.mcpServers).map(([name, server]) => {
-    if (!isObject(server)) return `MCP server ${name}`;
+    if (!isObject(server)) return said(`MCP server ${name}`);
+    // A server's program starts with its arguments and no shell; its headers helper runs in one.
     const command = typeof server.command === 'string' ? [server.command, ...strings(server.args)].join(' ') : undefined;
     const target = command ?? (typeof server.url === 'string' ? server.url : undefined);
-    const helper = typeof server.headersHelper === 'string' ? ` (headersHelper: ${server.headersHelper})` : '';
-    return `MCP server ${name}${target ? `: ${target}` : ''}${helper}`;
+    const item = target === undefined ? said(`MCP server ${name}`) : command === undefined ? said(`MCP server ${name}: ${target}`) : runs(`MCP server ${name}: `, command, 'argv');
+    if (typeof server.headersHelper !== 'string') return item;
+    const helper = runs(`${item.text} (headersHelper: `, server.headersHelper, 'shell', ')');
+    return { text: helper.text, commands: [...item.commands, ...helper.commands] };
   });
 }
 
@@ -301,8 +326,8 @@ const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|pe
  * hooks, MCP servers, a permission mode; and for a command or a skill, the shell it runs as it
  * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them.
  */
-function fromMarkdown(what: string, text: string, shell: boolean): string[] {
-  const found: string[] = [];
+function fromMarkdown(what: string, text: string, shell: boolean): Item[] {
+  const found: Item[] = [];
   // Found as Claude Code finds it: the closing --- may end a line rather than stand on its own.
   const front = /^\uFEFF?---\s*\n([\s\S]*?)---\s*\n?/.exec(text.replace(/\r\n/g, '\n'))?.[1];
   const lines = front?.split(/\r?\n/) ?? [];
@@ -318,16 +343,18 @@ function fromMarkdown(what: string, text: string, shell: boolean): string[] {
     for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) if (lines[j]!.trim()) value.push(lines[j]!.trim());
     const mode = value.join(' ').replace(/^["']|["']$/g, '');
     if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
-    found.push(`${what}: ${line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`}`);
+    // Hooks and MCP servers hold commands in YAML: shown as written, every space but a plain one written out.
+    const shown = line.includes('{') ? line.trim() : `${power[1]}: ${value.filter(Boolean).join(' ')}`;
+    found.push(/^(?:hooks|mcp)/i.test(power[1]!) ? runs(`${what}: `, shown, 'argv') : said(`${what}: ${shown}`));
   });
   // YAML says the same thing in more ways than a line scan reads (escapes, ? keys, tags, flow maps):
   // frontmatter that uses them and names a power anywhere is asked about.
   if (front && found.length === 0 && /allowed|hook|mcp|permission/i.test(front) && /\\|^[ \t]*\?|!!|\{/m.test(front)) {
-    found.push(`${what}: settings Pelican cannot read in full`);
+    found.push(said(`${what}: settings Pelican cannot read in full`));
   }
   if (shell) {
-    for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(`${what} runs: ${block[1]!.trim()}`);
-    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(`${what} runs: ${inline[1]!}`);
+    for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(runs(`${what} runs: `, block[1]!.trim(), 'shell'));
+    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(runs(`${what} runs: `, inline[1]!, 'shell'));
   }
   return found;
 }
@@ -364,8 +391,8 @@ async function markdownIn(root: string, budget: Budget): Promise<string[]> {
 }
 
 /** What a folder's own commands, skills and agents bring (see fromMarkdown). */
-async function fromClaudeFolder(dir: string, from: string, budget: Budget): Promise<string[]> {
-  const found: string[] = [];
+async function fromClaudeFolder(dir: string, from: string, budget: Budget): Promise<Item[]> {
+  const found: Item[] = [];
   for (const [kind, what] of MARKDOWN) {
     const root = path.join(dir, '.claude', kind);
     for (const file of await markdownIn(root, budget)) {
@@ -374,7 +401,7 @@ async function fromClaudeFolder(dir: string, from: string, budget: Budget): Prom
       if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
       const { text, odd } = await readText(file);
       if (odd || text === undefined) {
-        found.push(`Cannot be read: ${path.relative(from, file)}`);
+        found.push(said(`Cannot be read: ${path.relative(from, file)}`));
         continue;
       }
       const name = path.relative(root, skill ? path.dirname(file) : file.slice(0, -'.md'.length)) || path.basename(root);
@@ -516,31 +543,31 @@ function gitRuns(): Promise<boolean> {
 const UNREAD_GIT = 'Git config that git could not read';
 
 /** Programs the repository's git config makes git start on its own, even for `git status`. */
-function gitPrograms(repo: GitConfig): string[] {
-  const found: string[] = [];
+function gitPrograms(repo: GitConfig): Item[] {
+  const found: Item[] = [];
   for (const entry of repo.entries) {
     const { section, subsection, key } = nameParts(entry.name);
     if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key) && entry.value) {
-      found.push(`Git filter ${subsection ?? ''}: ${entry.value}`);
+      found.push(runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell'));
     } else if (section === 'core' && key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
-      found.push(`Git fsmonitor: ${entry.value}`);
+      found.push(runs('Git fsmonitor: ', entry.value, 'shell'));
     } else if (section === 'core' && key === 'hookspath' && entry.value) {
-      found.push(`Git hooks folder: ${entry.value}`);
+      found.push(said(`Git hooks folder: ${entry.value}`));
     }
   }
   // An included file can change (another branch, a pull), and with it what git runs.
-  for (const include of repo.includes) found.push(`Git config includes: ${include}`);
-  if (repo.unread) found.push(UNREAD_GIT);
+  for (const include of repo.includes) found.push(said(`Git config includes: ${include}`));
+  if (repo.unread) found.push(said(UNREAD_GIT));
   return found;
 }
 
 /** What git would run of the repository's own config, also when git could not read it all. */
-async function gitBrings(top: string): Promise<string[]> {
+async function gitBrings(top: string): Promise<Item[]> {
   try {
     const repo = await repositoryConfig(top);
     return repo ? gitPrograms(repo) : [];
   } catch {
-    return [UNREAD_GIT];
+    return [said(UNREAD_GIT)];
   }
 }
 
@@ -550,15 +577,15 @@ async function gitBrings(top: string): Promise<string[]> {
  * the project's from there), never those of the home folder, which are the user's own (by either
  * of its paths: the folder's is a real one); and what the repository's git config runs.
  */
-export async function folderBrings(folder: string): Promise<string[]> {
+export async function whatFolderBrings(folder: string): Promise<Brings> {
   const dir = await real(folder);
   const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
-  const found: string[] = [];
+  const found: Item[] = [];
   // A file of the folder's that is not a regular file is not read, and is asked about instead.
   const json = async (file: string): Promise<unknown> => {
     const { value, odd } = await readJsonFile(file);
-    if (odd) found.push(`Cannot be read: ${path.relative(dir, file)}`);
+    if (odd) found.push(said(`Cannot be read: ${path.relative(dir, file)}`));
     return value;
   };
   const budget = budgetFor();
@@ -568,11 +595,22 @@ export async function folderBrings(folder: string): Promise<string[]> {
     found.push(...(await fromClaudeFolder(d, dir, budget)));
     if (d === top || path.dirname(d) === d) break;
   }
-  if (spent(budget)) found.push('More commands, skills and agents than Pelican reads');
+  if (spent(budget)) found.push(said('More commands, skills and agents than Pelican reads'));
   if (top) found.push(...(await gitBrings(top)));
   // Every item, each whole: the part of a command that matters can come after any amount of
-  // padding, or after any number of harmless items (the sheet scrolls).
-  return [...new Set(found)];
+  // padding, or after any number of harmless items (the sheet scrolls). Once each: an item said
+  // twice with its commands in other places has every space but a plain one written out.
+  const items = new Map<string, CommandAt[]>();
+  for (const { text, commands } of found) {
+    const known = items.get(text);
+    items.set(text, known === undefined || JSON.stringify(known) === JSON.stringify(commands) ? commands : [[0, text.length, 'argv']]);
+  }
+  return { brings: [...items.keys()], commands: [...items.values()] };
+}
+
+/** What the folder brings (whatFolderBrings), item by item. */
+export async function folderBrings(folder: string): Promise<string[]> {
+  return (await whatFolderBrings(folder)).brings;
 }
 
 /**
@@ -609,10 +647,10 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
  * For a new session: what the folder would run when nobody has trusted it, so the user can be
  * asked first; undefined when there is nothing to ask (trusted, or it brings nothing).
  */
-export async function trustQuestion(folder: string): Promise<{ folder: string; brings: string[] } | undefined> {
+export async function trustQuestion(folder: string): Promise<({ folder: string } & Brings) | undefined> {
   if (await folderTrusted(folder)) return undefined;
-  const brings = await folderBrings(folder);
-  return brings.length > 0 ? { folder: await real(folder), brings } : undefined;
+  const { brings, commands } = await whatFolderBrings(folder);
+  return brings.length > 0 ? { folder: await real(folder), brings, commands } : undefined;
 }
 
 /**
@@ -626,9 +664,9 @@ export async function launchFor(folder: string): Promise<Launch> {
     const env = await gitOff(dir);
     return { settingSources: ['user'], ...(Object.keys(env).length > 0 ? { env } : {}) };
   }
-  const brings = await folderBrings(dir);
+  const { brings, commands } = await whatFolderBrings(dir);
   if (brings.length === 0) return FULL_SETTINGS;
-  throw new NeedsTrust(dir, brings);
+  throw new NeedsTrust(dir, brings, commands);
 }
 
 /** For tests: forget what was read. */

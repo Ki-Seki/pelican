@@ -83,10 +83,13 @@ can read your sessions and have Claude run commands as you, so treat access to i
   in its git config. Claude Code asks before it runs them in a terminal, but never in a session
   started through its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has
   trusted that brings any of these, Pelican lists them, read from the folder's files (the git
-  config through `git config`, which starts nothing, with the files it includes), and offers
-  **Trust and start** or **Use my settings only**. With your settings only, Claude Code loads just
-  your user settings, and git runs none of the repository's filters, its file-system monitor or
-  its hooks folder; a folder whose git config git cannot read in full does not start that way.
+  config through `git config`, which starts nothing, with the files it includes), each whole, a
+  hook's arguments too, and with any character that can make it read otherwise than it runs
+  written out as ⟨U+…⟩ and warned of, as an approval shows it (in a command, also a space other
+  than a plain one where its shell takes it as part of a word), and offers **Trust and start** or
+  **Use my settings only**. With your settings only, Claude Code loads just your user settings,
+  and git runs none of the repository's filters, its file-system monitor or its hooks folder; a
+  folder whose git config git cannot read in full does not start that way.
   A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
   written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
   Claude Code has worked there before, unless you chose your settings only for it. Listing a

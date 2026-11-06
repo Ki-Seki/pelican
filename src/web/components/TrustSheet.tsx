@@ -1,12 +1,39 @@
 import { ShieldCheck, TriangleAlert, User } from 'lucide-react';
 
 import { revealHidden } from '../../shared/hidden';
+import type { CommandAt } from '../../shared/protocol';
 import type { TrustChoice } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { Sheet, SheetOption } from './Sheet';
 
-/** A send that waits for an answer: the folder Claude Code would start in has programs of its own. */
-export type TrustAsk = { brings: string[]; answer: (choice: TrustChoice) => void; cancel: () => void };
+/**
+ * A send that waits for an answer: the folder Claude Code would start in has programs of its own,
+ * and where in each item a command is.
+ */
+export type TrustAsk = { brings: string[]; commands?: CommandAt[][]; answer: (choice: TrustChoice) => void; cancel: () => void };
+
+/**
+ * An item with what it may hide written out: its commands as they run (a space other than a plain
+ * one where a shell reads it as part of a word, or every one between a program's arguments), the
+ * rest as names. Commands out of order or out of the item: every such space written out.
+ */
+function revealItem(item: string, commands: CommandAt[] = []): { text: string; hidden: boolean } {
+  let text = '';
+  let hidden = false;
+  let at = 0;
+  const add = (shown: { text: string; hidden: boolean }) => {
+    text += shown.text;
+    hidden ||= shown.hidden;
+  };
+  for (const [from, to, runs] of commands) {
+    if (from < at || to < from || to > item.length) return revealHidden(item, { runs: 'argv' });
+    add(revealHidden(item.slice(at, from)));
+    add(revealHidden(item.slice(from, to), { runs }));
+    at = to;
+  }
+  add(revealHidden(item.slice(at)));
+  return { text, hidden };
+}
 
 /**
  * Asked before Claude Code first starts in a folder nobody has trusted, as the CLI's trust dialog
@@ -19,7 +46,7 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
     onDone();
     ask?.answer(choice);
   };
-  const items = (ask?.brings ?? []).map((item) => revealHidden(item));
+  const items = (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i]));
   return (
     <Sheet
       open={Boolean(ask)}

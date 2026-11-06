@@ -1,7 +1,7 @@
 import { CircleHelp, ClipboardList, ExternalLink, Loader2, Plug, ShieldQuestion, TriangleAlert } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import { revealHidden } from '../../shared/hidden';
+import { revealHidden, revealInput } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { workflowOf } from '../../shared/workflows';
@@ -184,12 +184,15 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const edit = request.toolName === 'Edit'
     ? { before: str(input.old_string), after: str(input.new_string) }
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
-  const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
+  // A Bash command as the shell reads it: a space other than a plain one is written out where the
+  // shell takes it as part of a word. PowerShell takes every such space for a space, as it reads.
+  const command = request.toolName === 'Bash' ? revealHidden(str(input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target, { prose: summary.prose }) : undefined;
   const workflow = request.toolName === 'Workflow';
   // Files Claude would send you: each by its path, and its caption, which is words.
   const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption), { prose: true }) : undefined } : undefined;
-  const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
+  // A tool's input: a command (Monitor's) as its shell reads it, the rest as names.
+  const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealInput(input) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
   // saves. Words keep the joiners and selectors their scripts write with; a name or a rule shows
   // every one outside an emoji (src/shared/hidden.ts).
