@@ -33,3 +33,26 @@ describe('an approval', () => {
     expect(screen.getAllByText('npm test')).toHaveLength(1);
   });
 });
+
+describe('an approval to send a file', () => {
+  const request = (input: Record<string, unknown>): PermissionRequest => ({
+    id: 'p1', sessionId: 's1', toolName: 'SendUserFile', createdAt: Date.now(), input, reason: 'Path is outside allowed working directories',
+  });
+
+  it('says what Claude wants to send you, by each file’s path, with its caption, not as raw input', () => {
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: ['/tmp/notes.txt', '/Users/ada/work/report.md'], caption: 'Notes from outside the folder', status: 'proactive' })} />);
+    expect(screen.getByText('Claude wants to send you 2 files')).toBeTruthy();
+    expect(screen.getByText('/tmp/notes.txt')).toBeTruthy();
+    expect(screen.getByText('report.md')).toBeTruthy();
+    expect(screen.getByText('Notes from outside the folder')).toBeTruthy();
+    expect(screen.getByText('Path is outside allowed working directories')).toBeTruthy();
+    expect(screen.queryByText(/"status"/)).toBeNull();
+  });
+
+  it('takes one file named on its own, and warns of characters that hide in a path', () => {
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: '/tmp/re\u202Etxt.md' })} />);
+    expect(screen.getByText('Claude wants to send you a file')).toBeTruthy();
+    expect(screen.getByText('/tmp/re⟨U+202E⟩txt.md')).toBeTruthy();
+    expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
+  });
+});

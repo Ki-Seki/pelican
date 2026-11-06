@@ -900,6 +900,9 @@ describe('notifications', () => {
     expect(askedFor({ ...base, toolName: 'WebFetch', input: { url: 'https://docs.example.com/a?b' } }, '/w')).toBe('Fetch docs.example.com');
     expect(askedFor({ ...base, toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which database?' }] } }, '/w')).toBe('Which database?');
     expect(askedFor({ ...base, toolName: 'mcp__github__create_issue', input: {} }, '/w')).toBe('Use github · create_issue');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: ['/w/reports/week-45.pdf'], status: 'normal' } }, '/w')).toBe('Send reports/week-45.pdf');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: '/tmp/notes.txt', status: 'proactive' } }, '/w')).toBe('Send /tmp/notes.txt');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: ['a.png', 'b.png'], status: 'normal' } }, '/w')).toBe('Send 2 files');
     expect(oneLine('echo "\u202e\u2066hidden\u2069"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
     expect(oneLine('a\u2028b\u2029c\u061cd\u2060e\u00adf', 30)).toBe('a b c d e f');
     expect(oneLine('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`);

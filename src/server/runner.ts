@@ -207,6 +207,11 @@ export function askedFor(request: PermissionRequest, cwd: string): string {
       return `Edit ${file(input.notebook_path)}`;
     case 'Write':
       return `Write ${file(input.file_path)}`;
+    case 'SendUserFile': {
+      // The file by its name, or how many: a lock screen has room for little more.
+      const files = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
+      return files.length === 1 ? `Send ${file(files[0])}` : files.length > 1 ? `Send ${files.length} files` : 'Send a file';
+    }
     case 'WebFetch': {
       try {
         return `Fetch ${new URL(str(input.url)).host}`;
