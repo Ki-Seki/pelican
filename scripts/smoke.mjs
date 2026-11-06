@@ -230,7 +230,8 @@ async function walkable(sessions, answer) {
 /**
  * The Pinned group, grouped by time and then by project: it comes first and holds the pinned
  * sessions. Then a pinned row's Unpin: shown by a finger's slide to the right on a phone, which
- * stops short of acting, and beside Archive on hover on a computer, where it is not pressed.
+ * stops short of acting, and beside Archive on hover on a computer, where it is not pressed; and
+ * there, every row's buttons, which cut none of its words (see walkRowButtons).
  */
 async function walkPinned(page, sessions, size, where) {
   const pinned = sessions.filter((s) => s.pinned && !s.archived && s.title).map((s) => s.title);
@@ -280,9 +281,94 @@ async function walkPinned(page, sessions, size, where) {
     await row.hover();
     const unpin = page.getByRole('button', { name: /^Unpin: / }).first();
     await page.waitForTimeout(250);
-    if (!(await unpin.isVisible()) || await unpin.evaluate((el) => getComputedStyle(el).opacity) !== '1') missing('pointing at a pinned row shows no Unpin');
+    if (!(await unpin.isVisible()) || !(await unpin.evaluate(shownOnScreen))) missing('pointing at a pinned row shows no Unpin');
+    await walkRowButtons(page, where);
   }
   await page.waitForTimeout(250);
+}
+
+/** Whether an element shows: none of it or what holds it is hidden or see-through. Runs in the page. */
+function shownOnScreen(el) {
+  for (let at = el; at; at = at.parentElement) {
+    const style = getComputedStyle(at);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+  }
+  return true;
+}
+
+/**
+ * The words of a row, pointed at, that its buttons cut: words under a button, or under its icon
+ * where the button is clear, unless they lie wholly under the row-coloured backdrop the buttons
+ * stand on, which fades them out from before the first button. Runs in the page, on a row's link.
+ */
+function wordsCut(link) {
+  const shown = (el) => {
+    for (let at = el; at; at = at.parentElement) {
+      const style = getComputedStyle(at);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    }
+    return true;
+  };
+  const row = link.closest('.group\\/row');
+  const buttons = [...row.querySelectorAll('button[data-row-action][aria-label]')].filter((button) => button.closest('.group\\/row') === row && shown(button));
+  if (buttons.length === 0) return ['(no button shows)'];
+  const clear = (color) => color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color);
+  const backdrop = buttons[0].parentElement;
+  const fades = getComputedStyle(backdrop).backgroundImage.includes('gradient');
+  const under = backdrop.getBoundingClientRect();
+  const first = Math.min(...buttons.map((button) => button.getBoundingClientRect().left));
+  const covers = buttons.map((button) => (clear(getComputedStyle(button).backgroundColor) ? button.querySelector('svg') ?? button : button).getBoundingClientRect());
+  if (fades) covers.push(under);
+  const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+  const cut = [];
+  const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent.trim() || !shown(node.parentElement)) continue;
+    // Words a box cuts off (truncate, line-clamp) show only inside it.
+    let clip = { left: -Infinity, right: Infinity, top: -Infinity, bottom: Infinity };
+    for (let at = node.parentElement; at && at !== row; at = at.parentElement) {
+      if (getComputedStyle(at).overflow === 'visible') continue;
+      const box = at.getBoundingClientRect();
+      clip = { left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), top: Math.max(clip.top, box.top), bottom: Math.min(clip.bottom, box.bottom) };
+    }
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const box of range.getClientRects()) {
+      const line = { left: Math.max(box.left, clip.left), right: Math.min(box.right, clip.right), top: Math.max(box.top, clip.top), bottom: Math.min(box.bottom, clip.bottom) };
+      if (line.right <= line.left || line.bottom <= line.top || !covers.some((cover) => meet(line, cover))) continue;
+      const faded = fades && under.top <= line.top + 1 && under.bottom >= line.bottom - 1 && under.left <= first - 16;
+      if (!faded) cut.push(node.textContent.trim().slice(0, 40));
+    }
+  }
+  return cut;
+}
+
+/**
+ * On a computer, every row pointed at, compact and detailed, as wide as the window lets the list
+ * be and on a tablet's width: its buttons show, and cut none of its words in two.
+ */
+async function walkRowButtons(page, where) {
+  const viewport = page.viewportSize();
+  for (const width of [viewport.width, 768]) {
+    await page.setViewportSize({ width, height: viewport.height });
+    for (const density of ['Compact', 'Detailed']) {
+      await page.getByRole('button', { name: 'List options', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: density, exact: true }).click();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      const rows = page.locator('a[href^="?s="]');
+      const count = Math.min(await rows.count(), 12);
+      for (let i = 0; i < count; i += 1) {
+        const row = rows.nth(i);
+        if (!(await row.isVisible())) continue;
+        await row.hover();
+        await page.waitForTimeout(120);
+        const title = (await row.getAttribute('aria-label'))?.split(', ')[0];
+        for (const words of await row.evaluate(wordsCut)) problems.push(`${where}, ${width}px, ${density.toLowerCase()}: pointed at, "${title}" has "${words}" cut by its buttons`);
+      }
+    }
+  }
+  await page.setViewportSize(viewport);
 }
 
 /**

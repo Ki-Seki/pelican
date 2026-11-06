@@ -123,6 +123,12 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
   );
 });
 
+/**
+ * A compact row's project and time, which give way to its buttons where they show, on a computer:
+ * the title then ends before them, never under them.
+ */
+const GIVES_WAY = 'pointer-fine:group-hover/row:hidden pointer-fine:group-has-[[data-row-action]:focus-visible]/row:hidden';
+
 const CompactRow = memo(function CompactRow({ session, selected, unread, showProject, onOpen }: RowProps) {
   return (
     <a
@@ -131,13 +137,13 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       title={statusLabel(session.status, session.runningIn, session.tasks) || undefined}
-      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
+      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 pointer-fine:group-hover/row:pr-(--row-actions) pointer-fine:group-has-[[data-row-action]:focus-visible]/row:pr-(--row-actions) ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
     >
       {selected && <OpenMark />}
       {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} tasks={session.tasks} />}
       <span className={`min-w-0 flex-1 truncate text-[14.5px] ${unread ? 'font-semibold' : ''}`}>{session.title}</span>
-      {showProject && <span className="max-w-[35%] shrink-0 truncate text-[12px] text-faint">{session.scratch ? 'Scratch' : session.project}</span>}
-      <span className="w-8 shrink-0 text-right text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
+      {showProject && <span className={`max-w-[35%] shrink-0 truncate text-[12px] text-faint ${GIVES_WAY}`}>{session.scratch ? 'Scratch' : session.project}</span>}
+      <span className={`w-8 shrink-0 text-right text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
     </a>
   );
 });
@@ -264,7 +270,7 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
       aria-label={`${action.label}: ${name}`}
       title={action.label}
       onClick={action.act}
-      className={`grid size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 group-has-focus-visible/actions:opacity-100 hover:text-fg ${selected ? 'bg-chip' : 'bg-hover'}`}
+      className="pointer-events-auto grid size-8 place-items-center rounded-full text-muted hover:text-fg"
     >
       <action.icon className="size-4" />
     </button>
@@ -296,12 +302,22 @@ function Swipeable({ id, name, start, end, compact, selected, children }: {
         </div>
       )}
       <div
-        className={`relative rounded-xl bg-bg ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
+        // How far a compact row's words keep from its right edge while its buttons show: the
+        // buttons, 6px in, 32px each and 2px apart, and 6px more.
+        className={`relative rounded-xl bg-bg ${start ? '[--row-actions:78px]' : '[--row-actions:44px]'} ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
-        {/* Shown together, on hover or when the keyboard reaches either. */}
-        <div className={`group/actions absolute right-1.5 hidden gap-0.5 pointer-fine:flex ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'}`}>
+        {/*
+          Shown together, on hover or when the keyboard reaches either. Over a detailed row's title
+          they stand on the row's own color, as tall as the title's first line, which fades out the
+          words they cover rather than cutting one off mid-letter.
+        */}
+        <div
+          className={`pointer-events-none absolute right-1.5 hidden items-start gap-0.5 opacity-0 group-hover/row:opacity-100 has-focus-visible:opacity-100 pointer-fine:flex ${compact
+            ? 'top-1/2 -translate-y-1/2'
+            : `top-1.5 h-[25px] rounded-r-full bg-linear-to-l from-75% to-transparent pl-6 ${selected ? 'from-chip' : 'from-bg group-hover/row:from-hover'}`}`}
+        >
           {start && button(start)}
           {button(end)}
         </div>
