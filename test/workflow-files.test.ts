@@ -236,7 +236,8 @@ describe('an Agent call’s steps', () => {
     expect(last.messages.at(-1)!.blocks[0]).toMatchObject({ type: 'tool_result', tool_use_id: 't75' });
     const before = (await subagentPage(id, 'ag1', { before: last.offset, limit: 60 }))!;
     expect(before).toMatchObject({ total: 151, offset: 31 });
-    expect(await subagentPage(id, 'other', {})).toBeUndefined();
+    // One the session kept no transcript of has no steps, as before; a name of another shape, none at all.
+    expect(await subagentPage(id, 'other', {})).toEqual({ messages: [], total: 0, offset: 0 });
     expect(await subagentPage(id, '../agent-ag1', {})).toBeUndefined();
   });
 
@@ -272,7 +273,8 @@ describe('an Agent call’s steps', () => {
     await writeFile(path.join(outside, 'agent.jsonl'), agentRows('ag3', 60_000).replace('Review the server.', 'SECRET'));
     await mkdir(path.join(folder(id), 'subagents'), { recursive: true });
     await symlink(path.join(outside, 'agent.jsonl'), path.join(folder(id), 'subagents', 'agent-ag3.jsonl'));
-    expect((await ask(`/api/sessions/${id}/agents/ag3`)).status).toBe(404);
+    const linked = await ask(`/api/sessions/${id}/agents/ag3`);
+    expect(await linked.json()).toEqual({ messages: [], total: 0, offset: 0 });
     expect((await ask(`/api/sessions/not-a-session/agents/ag3`)).status).toBe(404);
     expect((await ask(`/api/sessions/${id}/agents/ag3?before=-1`)).status).toBe(404);
     expect((await ask(`/api/sessions/${id}/agents/ag3`, { authorization: '' })).status).toBe(401);

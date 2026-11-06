@@ -896,14 +896,15 @@ function pageOf(all: ChatMessage[], { before, after, limit = 60 }: { before?: nu
 /**
  * A page of an Agent call's subagent's own transcript, `subagents/agent-<id>.jsonl` in the
  * session's folder, as a workflow agent's is paged: its last `limit` messages before `before`, so
- * a phone never gets the whole of a long one (they come to tens of megabytes). Undefined when the
- * session has no such agent.
+ * a phone never gets the whole of a long one (they come to tens of megabytes). None when the
+ * session kept no such transcript; undefined when there is no such session.
  */
 export async function subagentPage(sessionId: string, agentId: string, { before, limit }: { before?: number; limit?: number }): Promise<MessagesPage | undefined> {
   if (!AGENT_ID.test(agentId)) return undefined;
   const where = await sessionDir(sessionId);
-  const file = where && await inside(where.dir, path.join(where.dir, 'subagents', `agent-${agentId}.jsonl`));
-  if (!file) return undefined;
+  if (!where) return undefined;
+  const file = await inside(where.dir, path.join(where.dir, 'subagents', `agent-${agentId}.jsonl`));
+  if (!file) return { messages: [], total: 0, offset: 0 };
   return pageOf(await readHistory(file, { sidechain: true }), { ...(before !== undefined ? { before } : {}), ...(limit !== undefined ? { limit } : {}) });
 }
 
