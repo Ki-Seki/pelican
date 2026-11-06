@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
+import { refreshTranscriptIndex } from '../src/server/transcripts';
 import {
   claudeCodeTrusts, FULL_SETTINGS, folderBrings, folderTrusted, forgetTrust, launchFor, NeedsTrust, pelicanChoice, rememberChoice, trustQuestion,
 } from '../src/server/trust';
@@ -77,6 +78,8 @@ async function claudeWorkedIn(dir: string): Promise<void> {
   await mkdir(project, { recursive: true });
   const line = { type: 'user', uuid: randomUUID(), sessionId: id, cwd: dir, timestamp: new Date().toISOString(), message: { role: 'user', content: 'hello' } };
   await writeFile(path.join(project, `${id}.jsonl`), `${JSON.stringify(line)}\n`);
+  // Found at once, though a test before looked for transcripts less than a second ago.
+  await refreshTranscriptIndex();
 }
 
 /** The stand-in Claude's whole note: it writes line by line, and git= comes last. */

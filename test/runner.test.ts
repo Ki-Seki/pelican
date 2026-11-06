@@ -194,12 +194,30 @@ function ask(claude: FakeClaude, toolName: string, input: Record<string, unknown
   return { answer, controller };
 }
 
-beforeEach(() => {
+/**
+ * Reads the model list again, as Claude Code gives it now, whatever a test before left: the list
+ * is kept ten minutes, so it is read at a moment past that, and past any moment it was read at.
+ */
+let modelsReadAt = 0;
+async function readModels() {
+  modelsReadAt = Math.max(modelsReadAt, Date.now()) + 11 * 60_000;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(modelsReadAt);
+  try {
+    await listModels();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+beforeEach(async () => {
   notices.length = 0;
   nextModels = [];
   nextAccount = {};
   FakeClaude.closeDelay = 0;
   FakeClaude.controlDelay = 0;
+  // No model known yet and no plan, whichever test ran before.
+  await readModels();
 });
 afterEach(async () => {
   closeAll();
@@ -536,7 +554,7 @@ describe('settings', () => {
       { value: 'default', displayName: 'Default', description: '', resolvedModel: 'claude-opus-5-5' },
       { value: 'sonnet', displayName: 'Sonnet', description: '', resolvedModel: 'claude-sonnet-5-5' },
     ];
-    await listModels();
+    await readModels();
     const { claude, state } = await start('Go', { model: 'default', effort: 'high', fast: false });
     claude.say(init({ model: 'claude-opus-5-5', effort: 'high', fast_mode_state: 'off' }));
     await settle();
@@ -567,11 +585,7 @@ describe('a turn’s cost', () => {
     nextAccount = { email: 'me@example.com', subscriptionType: 'max' };
     nextModels = [{ value: 'default', displayName: 'Default', description: '' }];
     config.claudeExecutable = undefined;
-    // The model list is cached; read it afresh with this account.
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 11 * 60_000);
-    await listModels();
-    vi.useRealTimers();
+    await readModels();
     const { run, claude, state } = await start();
     claude.say(result({ total_cost_usd: 0.5 }));
     await vi.waitFor(() => expect(run.busy).toBe(false));

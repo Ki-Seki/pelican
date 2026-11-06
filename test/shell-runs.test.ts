@@ -125,8 +125,27 @@ async function until(check: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+/**
+ * Reads the model list again, as Claude Code gives it now, whatever a test before left: the list
+ * is kept ten minutes, so it is read at a moment past that, and past any moment it was read at.
+ */
+let modelsReadAt = 0;
+async function readModels() {
+  modelsReadAt = Math.max(modelsReadAt, Date.now()) + 11 * 60_000;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(modelsReadAt);
+  try {
+    await listModels();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const settingsFile = path.join(scratch, 'claude', 'settings.json');
-beforeEach(() => {
+beforeEach(async () => {
+  // No plan known, whichever test ran before.
+  FakeClaude.account = {};
+  await readModels();
   claudes.length = 0;
 });
 afterEach(async () => {
@@ -332,17 +351,8 @@ describe('what a turn has cost', () => {
 
   it('is not said where a subscription pays', async () => {
     FakeClaude.account = { email: 'me@example.com', subscriptionType: 'max' };
-    try {
-      // The model list is kept a while; read it afresh with this account.
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(Date.now() + 11 * 60_000);
-      await listModels();
-      vi.useRealTimers();
-      const { sessionId } = await idleSession();
-      expect(getRun(sessionId)!.state().lastTurn).not.toHaveProperty('costUsd');
-    } finally {
-      FakeClaude.account = {};
-      vi.useRealTimers();
-    }
+    await readModels();
+    const { sessionId } = await idleSession();
+    expect(getRun(sessionId)!.state().lastTurn).not.toHaveProperty('costUsd');
   });
 });
