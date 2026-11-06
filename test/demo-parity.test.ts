@@ -58,6 +58,16 @@ describe('the demo shows what runs on and what waits', () => {
   });
 });
 
+describe('the demo’s list', () => {
+  it('has one session pinned, in the demo’s own state folder: the list shows its Pinned group', async () => {
+    const RELEASE_NOTES = 'd1e4c7f3-4444-4d4e-bf60-000000000004';
+    const { pinnedIds } = await import('../src/server/pinned');
+    expect([...await pinnedIds()]).toEqual([RELEASE_NOTES]);
+    expect(path.relative(config.home, config.stateDir)).toBe('state');
+    expect(JSON.parse(await readFile(path.join(config.stateDir, 'pinned.json'), 'utf8'))).toEqual({ ids: [RELEASE_NOTES] });
+  });
+});
+
 const SLOW = 'b7e2a9c1-2222-4b2c-9d4e-000000000002';
 const SIDE = 'a3f1c2d4-1111-4a1b-8c3d-0000000000a1';
 const transcriptOf = (project: string, id: string) => path.join(config.claudeHome, 'projects', path.join(config.home, 'code', project).replace(/[^a-zA-Z0-9]/g, '-'), `${id}.jsonl`);

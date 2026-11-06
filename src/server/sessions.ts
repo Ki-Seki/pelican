@@ -6,9 +6,9 @@ import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { shortTitle } from '../shared/titles.js';
-import { archivedIds } from './archive.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
+import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { toChatMessage } from './normalize.js';
@@ -38,7 +38,7 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
 async function summarize(
-  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, archived: Set<string>, fresh?: Seen,
+  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, { archived, pinned }: Kept, fresh?: Seen,
 ): Promise<SessionSummary> {
   const file = fresh?.file ?? await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file, fresh) : undefined;
@@ -80,7 +80,8 @@ async function summarize(
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(working > 0 ? { tasks: working } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
-    ...(archived.has(info.sessionId) ? { archived: true } : {}),
+    // Never both (kept.ts); should the files say both (written by hand), archived wins.
+    ...(archived.has(info.sessionId) ? { archived: true } : pinned.has(info.sessionId) ? { pinned: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
     ...(other && !other.busy ? { openIn: other.app ?? 'another app' } : {}),
   };
@@ -159,8 +160,8 @@ function sessionInfos(): Promise<SDKSessionInfo[]> {
 /** Every session on this machine, newest activity first. */
 export async function listSummaries(status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary[]> {
   const infos = await sessionInfos();
-  const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, archived, files.get(info.sessionId))));
+  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, ours, files.get(info.sessionId))));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -184,7 +185,9 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 
 export async function sessionSummary(sessionId: string, status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status, tasks, await liveProcesses(), await archivedIds()) : undefined;
+  if (!info) return undefined;
+  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
+  return summarize(info, status, tasks, live, ours);
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

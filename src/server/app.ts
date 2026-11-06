@@ -16,7 +16,7 @@ import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode
 import { revealHidden } from '../shared/hidden.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
-import { setArchived } from './archive.js';
+import { forget, keep } from './kept.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
 import { demoRunState, demoTaskOutput } from './demo.js';
@@ -514,12 +514,28 @@ app.post('/api/sessions/:id/side', async (c) => {
   return c.json({ sessionId });
 });
 
-/** Put a session away from the list, or bring it back; nothing else changes. */
+/**
+ * Put a session away from the list, or bring it back; nothing else changes, except that an
+ * archived session is no longer pinned.
+ */
 app.post('/api/sessions/:id/archive', async (c) => {
   const id = uuidOf(c.req.param('id'));
   const body = await c.req.json<{ archived?: unknown }>().catch(() => ({}) as { archived?: unknown });
   if (!id || typeof body.archived !== 'boolean') return c.json({ error: 'Say archived: true or false' }, 400);
-  await setArchived(id, body.archived);
+  await keep(id, { archived: body.archived });
+  sessionsChanged();
+  return c.json({ ok: true });
+});
+
+/**
+ * Keep a session at the top of the list, or let it go back to its place. A pin brings an
+ * archived session back (an Undo of archiving a pinned one), since a session is never both.
+ */
+app.post('/api/sessions/:id/pin', async (c) => {
+  const id = uuidOf(c.req.param('id'));
+  const body = await c.req.json<{ pinned?: unknown }>().catch(() => ({}) as { pinned?: unknown });
+  if (!id || typeof body.pinned !== 'boolean') return c.json({ error: 'Say pinned: true or false' }, 400);
+  await keep(id, { pinned: body.pinned });
   sessionsChanged();
   return c.json({ ok: true });
 });
@@ -529,6 +545,8 @@ app.delete('/api/sessions/:id', async (c) => {
   if (getRun(id)?.busy) return c.json({ error: 'Stop Claude in this session before deleting it.' }, 409);
   getRun(id)?.close();
   await remove(id);
+  // The transcript is gone: whether its pin or archive could be let go too is no reason to say it failed.
+  await forget(id).catch(() => undefined);
   return c.json({ ok: true });
 });
 

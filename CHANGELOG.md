@@ -39,6 +39,18 @@
   reach" line, which keeps trying, instead of the error.
 - A conversation shows its day above its first message too, and above the first prompt of each new
   day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
+- Pinned sessions, as in Claude Desktop. Pin one with a swipe right on its row on a phone (left is
+  still Archive), with the pin beside Archive when you point at a row on a computer, or with Pin in
+  the session menu; in the list, Undo shows for five seconds. Pinned sessions lead the list under
+  Pinned, grouped by time or by project, and under their project's filter, each with its status
+  (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on the computer
+  for all your browsers: a session pinned in Claude Desktop is not pinned here, and Desktop's pins
+  are left alone. Archiving a session unpins it.
+- On a computer, a row's buttons cut none of its words: the words under them fade out, and in a
+  compact row the project and time make room for them. From the keyboard, Pin, Unpin and Archive
+  leave focus on the session's row where it went, or on the next row when it leaves the list, and
+  Undo brings focus back to it; Archive used to drop it to the page.
+- The demo, and the live demo on the website, have a pinned session.
 
 ## 0.4.0
 

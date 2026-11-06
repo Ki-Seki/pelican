@@ -186,6 +186,65 @@ describe('archive', () => {
   });
 });
 
+describe('pin', () => {
+  const id = '6d1c8a52-3f0e-4b7a-9c21-5e8f0a4b2d17';
+  const json = { 'content-type': 'application/json' };
+  const pin = (body: unknown, sessionId = id, headers: Record<string, string> = {}, signedIn = true) =>
+    ask(`/api/sessions/${sessionId}/pin`, { method: 'POST', body: JSON.stringify(body), headers: { ...json, ...headers } }, signedIn);
+
+  it('keeps a session at the top and lets it go, in Pelican’s own pins', async () => {
+    const { pinnedIds } = await import('../src/server/pinned');
+    expect((await pin({ pinned: 'yes' })).status).toBe(400);
+    expect((await pin({})).status).toBe(400);
+    expect((await pin({ pinned: true }, 'not-a-session')).status).toBe(400);
+    expect((await pin({ pinned: true })).status).toBe(200);
+    expect((await pinnedIds()).has(id)).toBe(true);
+    expect((await pin({ pinned: false })).status).toBe(200);
+    expect((await pinnedIds()).has(id)).toBe(false);
+  });
+
+  it('stands behind the same gates as archive: signed in, from Pelican’s page, never in the demo', async () => {
+    const { pinnedIds } = await import('../src/server/pinned');
+    expect((await pin({ pinned: true }, id, {}, false)).status).toBe(401);
+    expect((await pin({ pinned: true }, id, { 'x-pelican': '' })).status).toBe(403);
+    expect((await pin({ pinned: true }, id, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await pin({ pinned: true }, id, { origin: 'https://evil.example' })).status).toBe(403);
+    config.demo = true;
+    expect((await pin({ pinned: true })).status).toBe(403);
+    expect((await pinnedIds()).has(id)).toBe(false);
+  });
+
+  it('is never together with archived: archiving unpins, and a pin brings an archived session back', async () => {
+    const { pinnedIds } = await import('../src/server/pinned');
+    const { archivedIds } = await import('../src/server/archive');
+    const archive = (archived: boolean) => ask(`/api/sessions/${id}/archive`, { method: 'POST', body: JSON.stringify({ archived }), headers: json });
+    await pin({ pinned: true });
+    expect((await archive(true)).status).toBe(200);
+    expect([(await archivedIds()).has(id), (await pinnedIds()).has(id)]).toEqual([true, false]);
+    expect((await pin({ pinned: true })).status).toBe(200);
+    expect([(await archivedIds()).has(id), (await pinnedIds()).has(id)]).toEqual([false, true]);
+    // Unpinning or unarchiving leaves the other as it is.
+    expect((await archive(false)).status).toBe(200);
+    expect((await pinnedIds()).has(id)).toBe(true);
+    await archive(true);
+    expect((await pin({ pinned: false })).status).toBe(200);
+    expect((await archivedIds()).has(id)).toBe(true);
+    await archive(false);
+  });
+
+  it('goes with a session that is deleted', async () => {
+    const { pinnedIds } = await import('../src/server/pinned');
+    const gone = '0d0d0d0d-0000-4000-8000-000000000001';
+    const project = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-w-gone');
+    await mkdir(project, { recursive: true });
+    const row = { type: 'user', uuid: 'u1', parentUuid: null, sessionId: gone, cwd: '/w/gone', timestamp: new Date().toISOString(), message: { role: 'user', content: 'Tidy up' } };
+    await writeFile(path.join(project, `${gone}.jsonl`), `${JSON.stringify(row)}\n`);
+    expect((await pin({ pinned: true }, gone)).status).toBe(200);
+    expect((await ask(`/api/sessions/${gone}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await pinnedIds()).has(gone)).toBe(false);
+  });
+});
+
 describe('the page', () => {
   it('may be framed only by itself, and loads images only from itself', async () => {
     const response = await ask('/', {}, false);

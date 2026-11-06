@@ -1,11 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, MessagesSquare, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, MessagesSquare, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 
 import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
 import { cacheShare, costShown, costWords, tokenTotal } from '../../shared/usage';
+import { announce } from '../lib/announce';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
+import { changeWords, type ListChange, makeChange, showChange } from '../lib/list-changes';
 import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
 import { DEMO_NOTE } from '../lib/static-demo';
 import { compactNumber, percent, span, times } from '../lib/usage';
@@ -157,6 +159,7 @@ export function SessionMenu({
   onDeleted: () => void;
 }) {
   const prefs = usePrefs();
+  const queryClient = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -179,6 +182,14 @@ export function SessionMenu({
     work()
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
+  };
+
+  // At once, as in the list, and put back if the server says no.
+  const pin = (pinned: boolean) => {
+    if (!session) return;
+    const to: ListChange = { pinned };
+    setError(undefined);
+    makeChange(queryClient, session, to).then(() => announce(changeWords(to)), (err: Error) => setError(err.message));
   };
 
   const copy = (what: string, text: string) => {
@@ -271,12 +282,19 @@ export function SessionMenu({
         />
       )}
       <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" onSelect={exportMarkdown} />
+      {/* An archived session is brought back first; then it can be pinned. */}
+      {session && !session.archived && (
+        session.pinned
+          ? <SheetOption icon={<PinOff className="size-4" />} label="Unpin" onSelect={() => pin(false)} />
+          : <SheetOption icon={<Pin className="size-4" />} label="Pin" onSelect={() => pin(true)} />
+      )}
       {session?.archived ? (
         <SheetOption
           icon={<ArchiveRestore className="size-4" />}
           label="Unarchive"
           onSelect={() => act(async () => {
             await api.archive(sessionId, false);
+            if (session) showChange(queryClient, session, { archived: false });
             onRenamed();
           })}
         />
@@ -284,8 +302,10 @@ export function SessionMenu({
         <SheetOption
           icon={<Archive className="size-4" />}
           label="Archive"
+          // The list it goes back to shows the session archived, and no longer pinned, at once.
           onSelect={() => act(async () => {
             await api.archive(sessionId, true);
+            if (session) showChange(queryClient, session, { archived: true });
             onDeleted();
           })}
         />

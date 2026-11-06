@@ -75,6 +75,35 @@ describe('the session list', () => {
     expect(summaries.filter((s) => s.tasks !== undefined).map((s) => s.id)).toEqual([id(2)]);
   });
 
+  it('says which sessions are pinned, from Pelican’s own pins: never one archived, nor one Claude Desktop starred', async () => {
+    const { setPinned } = await import('../src/server/pinned');
+    const { setArchived } = await import('../src/server/archive');
+    for (const n of [7, 8, 9]) await writeFile(path.join(project, `${id(n)}.jsonl`), rows(id(n), `task ${n}`));
+    // Desktop keeps its own pins, as stars, in its own folder: Pelican does not read them.
+    const savedHome = config.home;
+    config.home = dir;
+    const desktop = path.join(dir, 'Library', 'Application Support', 'Claude', 'claude-code-sessions', 'account', 'org');
+    await mkdir(desktop, { recursive: true });
+    await writeFile(path.join(desktop, `local_${id(9)}.json`), JSON.stringify({ sessionId: `local_${id(9)}`, cliSessionId: id(9), isStarred: true }));
+    await setPinned(id(7), true);
+    // Both, as only a file written by hand says: archived wins.
+    await setPinned(id(8), true);
+    await setArchived(id(8), true);
+    try {
+      const summaries = await listSummaries(() => undefined);
+      expect(summaries.filter((s) => s.pinned).map((s) => s.id)).toEqual([id(7)]);
+      expect(summaries.find((s) => s.id === id(8))).toMatchObject({ archived: true });
+      expect(summaries.find((s) => s.id === id(8))?.pinned).toBeUndefined();
+      expect(summaries.find((s) => s.id === id(9))?.pinned).toBeUndefined();
+    } finally {
+      config.home = savedHome;
+      await setPinned(id(7), false);
+      await setPinned(id(8), false);
+      await setArchived(id(8), false);
+      for (const n of [7, 8, 9]) await rm(path.join(project, `${id(n)}.jsonl`));
+    }
+  });
+
   it('finds a session it has not listed yet without reading them all', async () => {
     await writeFile(path.join(project, `${id(5)}.jsonl`), rows(id(5), 'task 5'));
     vi.mocked(listSessions).mockClear();
