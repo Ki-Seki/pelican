@@ -849,7 +849,7 @@ app.get('/api/sessions/:id/sent', async (c) => {
 });
 
 /** Larger than this, a file Claude sent is not served, as one of the folder's is not. */
-export const SENT_MAX_BYTES = 200 * 1024 * 1024;
+const SENT_MAX_BYTES = 200 * 1024 * 1024;
 
 /**
  * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;

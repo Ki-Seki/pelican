@@ -222,8 +222,9 @@ export async function sentFiles(sessionId: string): Promise<Set<string>> {
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
     for (const block of message.blocks) {
-      const result = block.type === 'tool_use' ? ran.get(block.id) : undefined;
-      if (!result || block.type !== 'tool_use') continue;
+      if (block.type !== 'tool_use') continue;
+      const result = ran.get(block.id);
+      if (!result) continue;
       if (block.name === 'SendUserFile') {
         for (const file of result.delivered?.files ?? []) paths.add(file.path);
       } else if (block.name === 'Artifact' && typeof block.input.file_path === 'string') {

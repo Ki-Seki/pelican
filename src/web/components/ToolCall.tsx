@@ -192,9 +192,11 @@ function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; fil
   });
   const failure = error ? <div className="px-3 pb-2 text-[12px] text-danger">{(error as Error).message}</div> : null;
 
-  if (kind === 'picture' && open && !broken) {
+  // On the site, a picture too large to come as data has nothing to show it from.
+  const noData = kind === 'picture' && STATIC_DEMO && Boolean(data) && !data?.image;
+  if (kind === 'picture' && open && !broken && !noData && !error) {
     const src = STATIC_DEMO ? data?.image : api.sentUrl(sessionId, file.path);
-    if (!src) return failure ?? <div className={`${CARD} ${LINE} w-fit max-w-full`}><Badge name={name} /><Label name={name} size={file.size} /><Loader2 className="mr-2 size-3.5 animate-spin text-faint" /></div>;
+    if (!src) return <div className={`${CARD} ${LINE} w-fit max-w-full`}><Badge name={name} /><Label name={name} size={file.size} /><Loader2 className="mr-2 size-3.5 animate-spin text-faint" /></div>;
     return (
       <div className="basis-full">
         <div className="group relative w-fit max-w-full">
@@ -235,7 +237,7 @@ function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; fil
     );
   }
   // Text, and a picture or a page while it is closed (or cannot be shown): a card that opens it.
-  const unshowable = broken || (kind === 'page' && data?.truncated);
+  const unshowable = broken || noData || (kind === 'page' && data?.truncated);
   return (
     <div className={`${CARD} overflow-hidden ${open && kind === 'text' ? 'basis-full' : 'w-fit max-w-full'}`}>
       <div className={LINE}>
@@ -247,7 +249,7 @@ function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; fil
         <Save sessionId={sessionId} file={file.path} />
       </div>
       {open && failure}
-      {broken && <div className="px-3 pb-2 text-[12px] text-faint">This picture can’t be shown here</div>}
+      {(broken || noData) && <div className="px-3 pb-2 text-[12px] text-faint">This picture can’t be shown here</div>}
       {kind === 'page' && data?.truncated && <div className="px-3 pb-2 text-[12px] text-faint">Too large to preview here</div>}
       {open && kind === 'text' && data && (
         <div className="border-t border-line bg-bg">
@@ -273,7 +275,7 @@ function SentFiles({ call }: { call: ToolCall }) {
     // What shows in place takes a line of its own; cards sit side by side, as in Claude Desktop.
     <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} className="my-1.5 flex flex-wrap items-start gap-1.5">
       {caption && <div className="basis-full text-[13.5px] text-muted">{caption}</div>}
-      {files.map((file) => <SentFile key={file.path} sessionId={sessionId} file={file} open={open} />)}
+      {files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} />)}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>
