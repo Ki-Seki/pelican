@@ -1133,6 +1133,8 @@ const AUTOLINK_SOME = new RegExp(`<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\x00-\\x20
 const HTML_START = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[\s>]|\/>|$)|\/[A-Za-z]|[!?])/y;
 /** Where a bare link starts, for some reader: GitHub's and markdown-it (VS Code's preview) take `ftp://` too. */
 const BARE_START = /(?:https?|ftp):\/\/|www\./iy;
+/** Where one starts for micromark (the conversation's reader). */
+const MICROMARK_BARE = /https?:\/\/|www\./iy;
 /** A picture's words that are written as the words of a link to it: no brackets, backslashes, backquotes or line breaks. */
 const SIMPLE_WORDS = /^[^[\]\\`\n]{0,1000}$/;
 /**
@@ -1627,6 +1629,52 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
 
   /** How much the looks ahead below may read in all: twice the words. */
   let looking = 2 * n + 2000;
+
+  /**
+   * Where a bare link that starts at `at` ends, as micromark (the conversation's reader) reads
+   * one, when HTML comes right after it: a `<` that is written `&lt;`, which the link would run on
+   * through, as it runs on through a `&`. Undefined for any other: one that ends elsewhere, or that
+   * could not be written in `<…>` as it is (with a backquote, a `&`, a backslash or a `>` in it),
+   * or in a link's words, where micromark makes none.
+   */
+  let edge: Int32Array | undefined;
+  let opens: Int32Array | undefined;
+  let trimming = 2 * n + 100;
+  const tags = text.includes('<');
+  const bareBeforeTag = (at: number): number | undefined => {
+    if (!tags) return undefined;
+    MICROMARK_BARE.lastIndex = at;
+    const start = MICROMARK_BARE.exec(text);
+    if (!start) return undefined;
+    const previous = text[at - 1];
+    if (previous !== undefined && (/^w/i.test(start[0]) ? !/[\s(*_[\]~]/.test(previous) : /[A-Za-z]/.test(previous))) return undefined;
+    if (!edge) {
+      // The next blank or `<` from each place, and the `(`s, `)`s and `[`s less `]`s before it.
+      edge = new Int32Array(n + 1);
+      edge[n] = n;
+      for (let k = n - 1; k >= 0; k -= 1) edge[k] = text[k] === '<' || /\s/.test(text[k]!) ? k : edge[k + 1]!;
+      opens = new Int32Array(3 * (n + 1));
+      for (let k = 0; k < n; k += 1) {
+        opens[3 * (k + 1)] = opens[3 * k]! + (text[k] === '(' ? 1 : 0);
+        opens[3 * (k + 1) + 1] = opens[3 * k + 1]! + (text[k] === ')' ? 1 : 0);
+        opens[3 * (k + 1) + 2] = opens[3 * k + 2]! + (text[k] === '[' ? 1 : text[k] === ']' ? -1 : 0);
+      }
+    }
+    const tag = edge[at]!;
+    if (text[tag] !== '<' || reading.addresses.has(tag) || matchAt(AUTOLINK, text, tag) || !(matchAt(HTML_START, text, tag) || matchAt(AUTOLINK_SOME, text, tag))) return undefined;
+    if (opens![3 * at + 2]! > 0) return undefined;
+    // What GitHub's rules leave out at its end: these, a `)` it did not open, a `&name;`.
+    let end = tag;
+    while (end > at && trimming-- > 0) {
+      const last = text[end - 1]!;
+      if (/[!"'*,.:?\]_~]/.test(last)) end -= 1;
+      else if (last === ')' && opens![3 * (end - 1) + 1]! - opens![3 * at + 1]! >= opens![3 * (end - 1)]! - opens![3 * at]!) end -= 1;
+      else if (last === ';') end -= /&[A-Za-z]+;$/.exec(text.slice(Math.max(at, end - 40), end))?.[0].length ?? 1;
+      else break;
+    }
+    if (trimming <= 0 || end <= at + start[0].length) return undefined;
+    return /[`&\\>\x00-\x20\x7f]/.test(text.slice(at, end)) ? undefined : end;
+  };
   /**
    * What a look ahead found, where the reader may take some words whole from `from` to `end`:
    * none of the code after it is sure if they hold a backquote, nor once the looks have read
@@ -1740,6 +1788,12 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
       if (sure && c === ']' && text[i + 1] === '(') looked(i, linkEnd(text, i + 1));
       else if (sure && c === ']' && text[i + 1] === '[') looked(i, bracketEnd(text, i + 1));
       else if (sure && (c === 'h' || c === 'H' || c === 'w' || c === 'W' || c === 'f' || c === 'F')) {
+        const end = bareBeforeTag(i);
+        if (end !== undefined) {
+          // Written in `<…>`, it ends where the conversation ends it, as no `&lt;` would.
+          i = put(i, `<${c === 'w' || c === 'W' ? 'http://' : ''}${text.slice(i, end)}>`, end);
+          continue;
+        }
         BARE_START.lastIndex = i;
         if (BARE_START.test(text)) looked(i, { end: stop[i], read: 0 });
       }

@@ -367,6 +367,23 @@ describe('a reply in the export', () => {
     expect(checked).toEqual([true, false]);
   });
 
+  it('keeps a bare link the link it is where HTML comes right after it, as a <br> in a table’s cell does', () => {
+    // Written as text, the tag's `&lt;` would go on the link, and the next link with it: in `<…>`, it ends where it did.
+    expect(reply('| Service | Links |\n| --- | --- |\n| API | https://api.example.com/v2<br>https://status.example.com |')).toBe(
+      '| Service | Links |\n| --- | --- |\n| API | <https://api.example.com/v2>&lt;br>https://status.example.com |',
+    );
+    expect(reply('Docs: www.example.com/start</a>')).toBe('Docs: <http://www.example.com/start>&lt;/a>');
+    // Less what GitHub's rules leave out at its end, a `)` it opened kept.
+    expect(reply('See https://a.example/x.<br> and https://en.wikipedia.org/wiki/Foo_(bar)<br>')).toBe('See <https://a.example/x>.&lt;br> and <https://en.wikipedia.org/wiki/Foo_(bar)>&lt;br>');
+    // One that is no link, in a link's words or after a letter, stays as it was.
+    expect(reply('[see https://a.example<br>](u) xhttps://a.example<br>')).toBe('[see https://a.example&lt;br>](u) xhttps://a.example&lt;br>');
+    const links: string[] = [];
+    walk(tree(reply('| API | Links |\n| --- | --- |\n| v2 | https://api.example.com/v2<br>https://status.example.com |')), (node) => {
+      if (node.type === 'link') links.push(node.url!);
+    });
+    expect(links).toEqual(['https://api.example.com/v2', 'https://status.example.com']);
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;
@@ -412,6 +429,8 @@ describe('a reply in the export', () => {
       ['pictures', '!['.repeat(megabyte / 2)],
       ['tags', '<a b=c '.repeat(megabyte / 7)],
       ['bare links', '(http://'.repeat(megabyte / 8)],
+      ['bare links before tags', 'http://a.example<b>'.repeat(megabyte / 19)],
+      ['bare links, then dots and a tag', `${'http://a'.repeat(megabyte / 16)}${'.'.repeat(megabyte / 2)}<b>`],
       ['quoted lines', `> a\n${'    > b\n'.repeat(50_000)}`],
       ['footnotes', '[^a]: x\n'.repeat(megabyte / 8)],
       ['links by reference', `${'[a][r] '.repeat(megabyte / 7)}\n\n[r]: /u`],
