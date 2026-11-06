@@ -549,6 +549,23 @@ describe('marks on a character', () => {
   }, 30_000);
 });
 
+describe('output xterm throws on', () => {
+  it('stops neither Pelican nor its pages: erasing above from the last cell of a screen just opened', async () => {
+    const terminal = await open();
+    const shown = await atPrompt(terminal.id);
+    // The cursor on the last cell, nothing scrolled off yet, then ED 1; what follows, at the top.
+    shown.type(`printf '\\033[24;80H\\033[1J'; sleep 0.2; printf '\\033[HAF''TER\\033[2;1H'\r`);
+    await shown.sees(/AFTER/);
+    await until(() => shown.lines()[0] === 'AFTER' && /^PROMPT\$/.test(shown.lines()[1] ?? ''), 10_000, 'what came next');
+    // All erased up to the cursor, the command too, as the server's copy has it.
+    expect(shown.lines().slice(2).join('')).toBe('');
+    const late = page(terminal.id);
+    await late.readied();
+    await until(() => late.lines()[0] === 'AFTER', 10_000, 'the screen');
+    expect(late.lines()).toEqual(shown.lines());
+  }, 20_000);
+});
+
 describe('the shell’s environment', () => {
   it('leaves out what is Pelican’s, npm’s, Claude Code’s mark and the outer terminal’s, and adds the folder’s launch settings', () => {
     const outer = {

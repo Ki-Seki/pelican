@@ -13,6 +13,7 @@ import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
   type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
 } from '../shared/terminal.js';
+import { guardOutput } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
 import { refreshAuth } from './auth.js';
 import { config } from './config.js';
@@ -276,6 +277,8 @@ class Term {
   private parsed = 0;
   /** A key came from a page: what the shell prints next (its echo) goes out at once. */
   private keyed = false;
+  /** Output the copy could not take was said in the log, once. */
+  private thrown = false;
   /** The PTY is paused (flow control), and looked at again while it is. */
   private paused = false;
   private watching?: NodeJS.Timeout;
@@ -300,6 +303,11 @@ class Term {
     // cursor, by counting cells. A cell takes at most 16 combining marks, so no output grows one,
     // or the screen a page gets, without bound.
     loadWidths(this.screen, Unicode11Addon);
+    // Output xterm throws on stops neither the copy nor Pelican, where a throw would be fatal.
+    guardOutput(this.screen, (error) => {
+      if (!this.thrown) console.warn('[pelican] a terminal\'s screen lost some output xterm could not take:', error instanceof Error ? error.message : error);
+      this.thrown = true;
+    });
     this.serializer = new SerializeAddon();
     this.screen.loadAddon(this.serializer);
     // The copy answers what programs ask of the terminal (device attributes, the cursor's
