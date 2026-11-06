@@ -2,7 +2,8 @@ import { createContext, useContext } from 'react';
 
 import { setWaiting, useWaiting, waitingOf } from './drafts';
 import type { WaitingItem } from './quote';
-import { defuseMentions, dropPrivate, fenceFor, maskSecrets, plainControls } from './sanitize';
+import { defuseMentions, dropPrivate, fenceFor, plainControls } from './sanitize';
+import { maskSecrets } from './secrets';
 
 /** One line of a unified diff, numbered in the old file, the new one, or both. */
 export type DiffLine =

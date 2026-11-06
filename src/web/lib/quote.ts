@@ -36,7 +36,8 @@ import { MAX_REPLIES } from './drafts';
 import { baseName, clockTime } from './format';
 import { newId } from './ids';
 import { commentsMessage, type CommentBlock } from './review';
-import { capQuote, defuseMentions, LINE_BREAK, maskSecrets, quotedLines } from './sanitize';
+import { capQuote, defuseMentions, LINE_BREAK, quotedLines } from './sanitize';
+import { maskSecrets } from './secrets';
 
 export { promptGist, readPrompt };
 export type { PromptPart };

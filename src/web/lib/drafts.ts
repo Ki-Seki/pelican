@@ -4,7 +4,8 @@ import type { Attachment } from '../../shared/protocol';
 import { readPrompt } from '../../shared/quoted';
 import { newId } from './ids';
 import type { QuoteFrom, WaitingItem } from './quote';
-import { capQuote, maskSecrets } from './sanitize';
+import { capQuote } from './sanitize';
+import { maskSecrets } from './secrets';
 
 /**
  * Half-written messages, one per chat (a session, or a new session in a folder), kept in this

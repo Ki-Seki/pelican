@@ -5,7 +5,8 @@ import {
   attachBlock, attachHeader, fileItem, fileMention, itemName, itemTitle, MAX_QUOTE_LINES, messageWith, olderQuote, preparePassage, quoteItem,
   quoteLines, readMessage, replyBlocks, sendNowMessage, type WaitingItem,
 } from '../src/web/lib/quote';
-import { capQuote, defuseMentions, fenceFor, maskSecrets, quotedLines } from '../src/web/lib/sanitize';
+import { capQuote, defuseMentions, fenceFor, quotedLines } from '../src/web/lib/sanitize';
+import { maskSecrets } from '../src/web/lib/secrets';
 
 /*
  * Claude Desktop's own patterns for reading a message back (its bundle, chunk c4d199b75, functions
@@ -102,6 +103,45 @@ describe('a quote, prepared as Claude Desktop prepares one', () => {
     const key = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB', '-----END OPENSSH PRIVATE KEY-----'].join('\n');
     expect(maskSecrets(`before\n${key}\nafter`)).toBe(`before\n-----BEGIN OPENSSH PRIVATE KEY-----\n${'\u2022'.repeat(52)}\n-----END OPENSSH PRIVATE KEY-----\nafter`);
     expect(maskSecrets('nothing secret here')).toBe('nothing secret here');
+  });
+
+  // Desktop's outputs (its ME, shared-m-1) for each of these, as the expected values.
+  it('masks a token right after an escape, as in JSON or a URL, and after a lone hyphen', () => {
+    const anthropic = fake('sk-', 'ant-', 'api03-', 'A'.repeat(30));
+    const github = fake('gh', 'p_', 'x'.repeat(36));
+    const dotsAfter = (token: string) => `${token.slice(0, 8)}${'\u2022'.repeat(token.length - 8)}`;
+    expect(maskSecrets(`"\\n${anthropic}"`)).toBe(`"\\n${dotsAfter(anthropic)}"`);
+    expect(maskSecrets(`"\\t${github}"`)).toBe(`"\\t${dotsAfter(github)}"`);
+    expect(maskSecrets(`%20${anthropic}`)).toBe(`%20${dotsAfter(anthropic)}`);
+    expect(maskSecrets(`%2520${github}`)).toBe(`%2520${dotsAfter(github)}`);
+    expect(maskSecrets(`\\x41${anthropic}`)).toBe(`\\x41${dotsAfter(anthropic)}`);
+    expect(maskSecrets(`\\u0041${github}`)).toBe(`\\u0041${dotsAfter(github)}`);
+    expect(maskSecrets(`-${anthropic}`)).toBe(`-${dotsAfter(anthropic)}`);
+    expect(maskSecrets(`x -${anthropic}`)).toBe(`x -${dotsAfter(anthropic)}`);
+    expect(maskSecrets(`The token is in the URL: https://h/cb?code%3D${github}`)).toBe(`The token is in the URL: https://h/cb?code%3D${dotsAfter(github)}`);
+  });
+
+  it('masks a token inside a word after _ or a digit, never after a letter', () => {
+    const anthropic = fake('sk-', 'ant-', 'api03-', 'A'.repeat(30));
+    const github = fake('gh', 'p_', 'x'.repeat(36));
+    expect(maskSecrets(`a_${github}`)).toBe(`a_${github.slice(0, 8)}${'\u2022'.repeat(32)}`);
+    expect(maskSecrets(`9${github}`)).toBe(`9${github.slice(0, 8)}${'\u2022'.repeat(32)}`);
+    expect(maskSecrets(`task${anthropic}`)).toBe(`task${anthropic}`);
+  });
+
+  it('masks a token with an invisible character inside it, whole', () => {
+    expect(maskSecrets(fake('sk-ant-api03-', 'A'.repeat(10), '\u200B', 'A'.repeat(20)))).toBe(`sk-ant-a${'\u2022'.repeat(36)}`);
+    expect(maskSecrets(fake('gh', 'p_', 'x'.repeat(10), '\u00AD', 'x'.repeat(26)))).toBe(`ghp_xxxx${'\u2022'.repeat(33)}`);
+  });
+
+  it('masks a JWT of three parts, also after an escape, and leaves a header and payload alone', () => {
+    const header = fake('ey', 'JhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+    const payload = fake('ey', 'JzdWIiOiIxMjM0NTY3ODkwIn0');
+    const signature = 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+    expect(maskSecrets(`${header}.${payload}`)).toBe(`${header}.${payload}`);
+    expect(maskSecrets(`${header}.${payload}.`)).toBe(`${header}.${payload}.`);
+    expect(maskSecrets(`${header}.${payload}.${signature}`)).toBe(`eyJhbGci${'\u2022'.repeat(100)}`);
+    expect(maskSecrets(`\\n${header}.${payload}.${signature}`)).toBe(`\\neyJhbGci${'\u2022'.repeat(100)}`);
   });
 
   it('is cut to 1,500 characters with …, never between the halves of a character outside the BMP', () => {

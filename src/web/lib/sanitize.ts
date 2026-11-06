@@ -1,98 +1,12 @@
 /**
  * What Claude Desktop does to text taken from the page before it goes to Claude, done the same way
- * so that a message reads alike in both apps: secrets masked, an @ that would mention a file made
- * harmless, lines split where Desktop splits them, and a code fence that holds whatever it fences.
+ * so that a message reads alike in both apps: a quote cut to Desktop's length, an @ that would
+ * mention a file made harmless, lines split where Desktop splits them, and a code fence that holds
+ * whatever it fences. Secrets are masked by lib/secrets.
  */
 
 /** Where a quote's lines break: Desktop splits on all of these. */
 export const LINE_BREAK = /\r\n?|[\n\u2028\u2029]/;
-
-/* ---------- secrets ---------- */
-
-/** A secret starts on its own, not inside a longer word or token. */
-const ALONE = '(?<![A-Za-z0-9_-])';
-
-/** Desktop's patterns for keys and tokens, by kind: Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe, age, GitLab, a JWT. */
-const TOKENS = [
-  'sk-ant-[A-Za-z0-9_-]{20,}',
-  'sk-(?:proj|svcacct|admin|None)-[A-Za-z0-9_-]{20,}',
-  'sk-[A-Za-z0-9]{20,}',
-  '(?:gh[opsu]_|github_pat_)[A-Za-z0-9_]{20,}',
-  'ghr_[A-Za-z0-9]{20,}',
-  'AKIA[A-Z0-9]{16}',
-  'xox[abceprs]-[A-Za-z0-9-]{10,}',
-  'xapp-[0-9]-[A-Z0-9]{1,20}-[0-9]{1,20}-[A-Za-z0-9]{10,}',
-  'AIza[A-Za-z0-9_-]{35}',
-  '(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}',
-  'whsec_[A-Za-z0-9]{20,}',
-  'AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}',
-  'gl(?:pat|dt)-[A-Za-z0-9_-]{20,}',
-  'eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}(?:\\.[A-Za-z0-9_-]*)*',
-];
-const TOKEN = new RegExp(`${ALONE}(?:${TOKENS.join('|')})`, 'g');
-
-/** A private key, from its BEGIN line to its END line, as Desktop finds one. */
-const SPACES = '\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000';
-const ANY_SPACE = `\\t\\v\\f\\r\\n\\u2028\\u2029 ${SPACES}`;
-const DASHES = '-{4,5}';
-const KEY_WORDS = `PRIVATE[${ANY_SPACE}]*KEY(?:[${ANY_SPACE}]*BLOCK)?[ \\t${SPACES}]*${DASHES}`;
-const PRIVATE_KEY = new RegExp(
-  `${DASHES}[ \\t${SPACES}]*BEGIN[A-Z0-9${ANY_SPACE}]*${KEY_WORDS}[A-Za-z0-9+/=$\\\\\\r\\n\\u2028\\u2029${SPACES}]{0,5000}?${DASHES}[ \\t${SPACES}]*END[A-Z0-9${ANY_SPACE}]*${KEY_WORDS}`,
-  'g',
-);
-
-/** The rest of a token a pattern began: letters, digits, _ and inner hyphens. */
-const TOKEN_TAIL = /(?:[A-Za-z0-9_]|(?<=[A-Za-z0-9_])-(?=[A-Za-z0-9_]))*/y;
-
-const dots = (text: string) => text.split('\n').map((line) => '\u2022'.repeat(line.length)).join('\n');
-
-/**
- * One secret masked, as Desktop masks it: a short one whole, a longer one after its first 8
- * characters; a private key keeps its BEGIN and END lines, which say what it is.
- */
-function masked(secret: string, key: boolean): string {
-  if (key && secret.startsWith('-----BEGIN')) {
-    const end = secret.lastIndexOf('-----END');
-    const header = /-{4,5}/g;
-    header.lastIndex = 10;
-    const body = header.exec(secret);
-    const from = body ? body.index + body[0].length : 10;
-    const to = end > from ? end : secret.length;
-    return secret.slice(0, from) + dots(secret.slice(from, to)) + secret.slice(to);
-  }
-  if (secret.length <= 12) return dots(secret);
-  return secret.slice(0, 8) + dots(secret.slice(8));
-}
-
-/** The text with every key, token and private key in it masked with •, the way Claude Desktop masks a quote. */
-export function maskSecrets(text: string): string {
-  const found: Array<{ start: number; end: number; key: boolean }> = [];
-  for (const match of text.matchAll(PRIVATE_KEY)) found.push({ start: match.index, end: match.index + match[0].length, key: true });
-  for (const match of text.matchAll(TOKEN)) {
-    TOKEN_TAIL.lastIndex = match.index + match[0].length;
-    TOKEN_TAIL.exec(text);
-    found.push({ start: match.index, end: Math.max(TOKEN_TAIL.lastIndex, match.index + match[0].length), key: false });
-  }
-  if (found.length === 0) return text;
-  found.sort((a, b) => a.start - b.start || a.end - b.end);
-  const spans: typeof found = [];
-  for (const span of found) {
-    const last = spans.at(-1);
-    if (last && span.start < last.end) {
-      last.end = Math.max(last.end, span.end);
-      last.key ||= span.key;
-    } else {
-      spans.push({ ...span });
-    }
-  }
-  let out = '';
-  let at = 0;
-  for (const span of spans) {
-    out += text.slice(at, span.start) + masked(text.slice(span.start, span.end), span.key);
-    at = span.end;
-  }
-  return out + text.slice(at);
-}
 
 /* ---------- a quote's length ---------- */
 
