@@ -18,7 +18,7 @@ import { openImage } from './Lightbox';
 import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PromptBody, QuoteAction } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
-import { ToolCallView, ToolTarget } from './ToolCall';
+import { sentFilesOf, ToolCallView, ToolTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -47,17 +47,17 @@ function Thinking({ text, live, defaultOpen = false }: { text: string; live?: bo
   );
 }
 
-type Segment = { kind: 'steps'; key: string; parts: Part[] } | Extract<Part, { kind: 'text' | 'image' }> | { kind: 'workflow'; key: string; part: Extract<Part, { kind: 'tool' }> };
+type Segment = { kind: 'steps'; key: string; parts: Part[] } | Extract<Part, { kind: 'text' | 'image' }> | { kind: 'card'; key: string; part: Extract<Part, { kind: 'tool' }> };
 
 /**
- * Runs of tool calls and thinking become one block of steps between Claude's prose. A workflow is
- * a card of its own, never folded away among the steps.
+ * Runs of tool calls and thinking become one block of steps between Claude's prose. A workflow,
+ * and the files Claude sent, are cards of their own, never folded away among the steps.
  */
 function segment(parts: Part[]): Segment[] {
   const out: Segment[] = [];
   for (const part of parts) {
-    if (part.kind === 'tool' && part.call.name === 'Workflow') {
-      out.push({ kind: 'workflow', key: part.key, part });
+    if (part.kind === 'tool' && (part.call.name === 'Workflow' || sentFilesOf(part.call).length > 0)) {
+      out.push({ kind: 'card', key: part.key, part });
     } else if (part.kind === 'tool' || part.kind === 'thinking') {
       const last = out.at(-1);
       if (last?.kind === 'steps') last.parts.push(part);
@@ -153,7 +153,7 @@ const AssistantTurn = memo(function AssistantTurn({
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
           <Steps key={seg.key} parts={seg.parts} cwd={cwd} running={running} view={view} />
-        ) : seg.kind === 'workflow' ? (
+        ) : seg.kind === 'card' ? (
           <ToolCallView key={seg.key} call={seg.part.call} cwd={cwd} running={running} defaultOpen={view === 'verbose'} />
         ) : seg.kind === 'text' ? (
           <Markdown key={seg.key} text={seg.text} className="my-2" />
@@ -664,7 +664,10 @@ function partialTarget(block: Extract<PartialBlock, { type: 'tool_use' }>): Reco
     if (script) return { script: jsonStringStart(block.inputJson.slice(script.index + script[0].length)) };
     // Partial JSON: pull out the first string field so the row says what it is doing.
     const match = block.inputJson.match(/"(description|command|file_path|pattern|url|query)"\s*:\s*"((?:[^"\\]|\\.)*)/);
-    return match ? { [match[1]!]: match[2]!.replace(/\\n/g, ' ') } : {};
+    if (match) return { [match[1]!]: match[2]!.replace(/\\n/g, ' ') };
+    // A file being sent, by the first name written so far.
+    const file = /"files"\s*:\s*\[?\s*"((?:[^"\\]|\\.)*)/.exec(block.inputJson);
+    return file ? { files: [file[1]!] } : {};
   }
 }
 
@@ -690,7 +693,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
           // Laid out as a finished step's row (ToolCall): a long command is cut, never the icon or the verb.
           <div key={i} data-step-writing className="flex min-h-8 min-w-0 items-center gap-2 text-[13px] text-muted">
             <Icon className="size-3.5 shrink-0" />
-            <span className="shrink-0 text-fg/80">{summary.verb}</span>
+            <span className="shrink-0 text-fg/80">{summary.running ?? summary.verb}</span>
             {summary.target && <ToolTarget summary={summary} />}
             <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-faint" />
           </div>

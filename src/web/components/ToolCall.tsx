@@ -1,11 +1,13 @@
-import { CheckCircle2, ChevronRight, Circle, CircleDot, FileText, Loader2 } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import type { DeliveredFile } from '../../shared/protocol';
 import { api } from '../lib/api';
-import { duration } from '../lib/format';
+import { duration, formatBytes } from '../lib/format';
 import { useFileLink, usePathLinks } from '../lib/path-links';
 import { useSessionId } from '../lib/session-context';
+import { STATIC_DEMO } from '../lib/static-demo';
 import { useSessionView } from '../lib/store';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
 import { answersOf, buildItems, cleanOutput, type Outcome, outcomeOf, resultImages, resultText, type ToolCall } from '../lib/turns';
@@ -78,56 +80,202 @@ function Images({ call }: { call: ToolCall }) {
   );
 }
 
-/** One file Claude sent: a picture, a page, a document, or just its name. */
-function SentFile({ path, open: startOpen }: { path: string; open: boolean }) {
-  const sessionId = useSessionId();
+/**
+ * How a file Claude sent shows, by its type, as in Claude Desktop: a picture as itself, a page or
+ * an SVG as a still preview, text to read, a PDF in the browser's own viewer, anything else as a
+ * file to save.
+ */
+export type SentKind = 'picture' | 'page' | 'text' | 'pdf' | 'file';
+
+const PICTURE = /\.(png|jpe?g|gif|webp)$/i;
+const PAGE = /\.(html?|svg)$/i;
+const TEXT = /\.(md|markdown|txt|text|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|env|xml|sh|bash|zsh|fish|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|lua|sql|r|js|jsx|mjs|cjs|ts|tsx|css|scss|vue|svelte|diff|patch)$/i;
+
+export function sentKind(file: DeliveredFile): SentKind {
+  if (PICTURE.test(file.path)) return 'picture';
+  if (PAGE.test(file.path)) return 'page';
+  if (/\.pdf$/i.test(file.path)) return 'pdf';
+  if (TEXT.test(file.path) || /^text\//.test(file.type ?? '') || file.type === 'application/json') return 'text';
+  return 'file';
+}
+
+/** The files a call handed over: what Claude Code delivered with SendUserFile, the page an Artifact call published. */
+export function sentFilesOf(call: ToolCall): DeliveredFile[] {
+  if (!call.result || call.result.is_error) return [];
+  if (call.name === 'SendUserFile') return call.result.delivered?.files ?? [];
+  if (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish')) return [{ path: str(call.input.file_path) }];
+  return [];
+}
+
+const fileName = (file: string) => file.split('/').pop() || file;
+const CARD = 'rounded-xl border border-line bg-panel';
+/** A card of one line, as Claude Desktop's: as wide as what it says, never wider than the column. */
+const LINE = 'flex min-h-10 min-w-0 items-center gap-2 pr-1 pl-2.5 text-[13px] pointer-coarse:min-h-11';
+
+/** A file's type, as Claude Desktop marks a card: its extension, small. */
+function Badge({ name }: { name: string }) {
+  const ext = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1] ?? '';
+  return <span aria-hidden className="grid h-[18px] min-w-7 shrink-0 place-items-center rounded border border-line px-1 text-[9.5px] font-semibold tracking-wide text-faint uppercase">{ext || 'file'}</span>;
+}
+
+/** The name, and the size Claude Code found when it sent it. */
+function Label({ name, size }: { name: string; size?: number }) {
+  return (
+    <>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-fg/90">{name}</span>
+      {size !== undefined && <span className="shrink-0 text-[11.5px] text-faint tabular-nums">{formatBytes(size)}</span>}
+    </>
+  );
+}
+
+const ICON = 'grid size-8 shrink-0 place-items-center rounded-lg text-faint hover:bg-hover hover:text-fg pointer-coarse:size-10';
+
+/** Saves the file, as it is on the computer now. */
+function Save({ sessionId, file, href }: { sessionId: string; file: string; href?: string }) {
+  const name = fileName(file);
+  return (
+    <a href={href ?? api.sentUrl(sessionId, file, true)} download={name} aria-label={`Download ${name}`} title="Download" className={ICON}>
+      <Download className="size-3.5" />
+    </a>
+  );
+}
+
+/** Folded, a text file draws no more than this: a long one would otherwise be laid out whole, unseen. */
+const FOLDED_CHARS = 20_000;
+
+/** A text file Claude sent, to read: Markdown as it reads, anything else as it is; one taller than its box folded. */
+function TextBody({ text, markdown, truncated }: { text: string; markdown: boolean; truncated?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [all, setAll] = useState(false);
+  const [long, setLong] = useState(text.length > FOLDED_CHARS);
+  const shown = all ? text : text.slice(0, FOLDED_CHARS);
+  // Whether it is taller than its box, at the width it is read at.
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (!element || all) return undefined;
+    const check = () => setLong(text.length > FOLDED_CHARS || element.scrollHeight > element.clientHeight + 1);
+    check();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [all, text]);
+  if (!text.trim()) return <div className="px-3 py-2 text-[12px] text-faint">Empty file</div>;
+  return (
+    <div className="px-3 py-2">
+      <div ref={box} className={all ? '' : `max-h-72 overflow-hidden ${long ? '[mask-image:linear-gradient(to_bottom,black_75%,transparent)]' : ''}`}>
+        {markdown ? <Markdown text={shown} className="text-[14px]" /> : <pre className="font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-fg/90">{shown}</pre>}
+      </div>
+      {long && (
+        <button type="button" aria-expanded={all} className="relative mt-1 text-[12px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg" onClick={() => setAll((v) => !v)}>
+          {all ? 'Show less' : 'Show all'}
+        </button>
+      )}
+      {truncated && all && <div className="mt-1 text-[12px] text-faint">Only the first 512 KB is shown</div>}
+    </div>
+  );
+}
+
+/** A file Claude sent, as its type shows: in place (`open`), or as a card that opens it. */
+function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; file: DeliveredFile; open: boolean }) {
+  const kind = sentKind(file);
+  const name = fileName(file.path);
   const [open, setOpen] = useState(startOpen);
-  const name = path.split('/').pop() ?? path;
-  const kind = /\.(png|jpe?g|gif|webp)$/i.test(name) ? 'image' : /\.(html?|svg)$/i.test(name) ? 'page' : /\.(md|markdown)$/i.test(name) ? 'doc' : 'file';
+  const [broken, setBroken] = useState(false);
+  // The site's demo has no computer behind it: its picture comes as data, as text does.
+  const needsData = open && (kind === 'page' || kind === 'text' || (kind === 'picture' && STATIC_DEMO));
   const { data, error, isLoading } = useQuery({
-    queryKey: ['sent', sessionId, path],
-    queryFn: () => api.sent(sessionId!, path),
-    enabled: open && Boolean(sessionId),
+    queryKey: ['sent', sessionId, file.path],
+    queryFn: () => api.sent(sessionId, file.path),
+    enabled: needsData,
     staleTime: 60_000,
   });
-  const chip = (
-    <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex min-h-9 w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-left text-[13px]">
-      <FileText className="size-4 shrink-0 text-faint" />
-      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{name}</span>
-      {isLoading ? <Loader2 className="size-3.5 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />}
-    </button>
-  );
-  if (!open) return chip;
-  if (error) return <div>{chip}<div className="mt-1 text-[12px] text-danger">{(error as Error).message}</div></div>;
-  if (!data) return chip;
-  if (kind === 'image' && data.image) {
+  const failure = error ? <div className="px-3 pb-2 text-[12px] text-danger">{(error as Error).message}</div> : null;
+
+  if (kind === 'picture' && open && !broken) {
+    const src = STATIC_DEMO ? data?.image : api.sentUrl(sessionId, file.path);
+    if (!src) return failure ?? <div className={`${CARD} ${LINE} w-fit max-w-full`}><Badge name={name} /><Label name={name} size={file.size} /><Loader2 className="mr-2 size-3.5 animate-spin text-faint" /></div>;
     return (
-      <button type="button" onClick={() => openImage(data.image)} className="block">
-        <img src={data.image} alt={name} className="max-h-96 max-w-full rounded-lg border border-line" />
-      </button>
+      <div className="basis-full">
+        <div className="group relative w-fit max-w-full">
+          <button type="button" aria-label={`Open ${name}`} onClick={() => openImage(src)} className="block max-w-full">
+            <img src={src} alt={name} title={name} loading="lazy" decoding="async" onError={() => setBroken(true)} className="max-h-80 max-w-full rounded-xl border border-line bg-panel" />
+          </button>
+          <div className="absolute top-1.5 right-1.5 rounded-lg bg-bg/85 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
+            <Save sessionId={sessionId} file={file.path} {...(STATIC_DEMO ? { href: src } : {})} />
+          </div>
+        </div>
+      </div>
     );
   }
-  if (kind === 'page' && data.text !== undefined) return <PreviewCard source={{ kind: /\.svg$/i.test(name) ? 'svg' : 'html', code: data.text, title: name }} label={name} />;
-  if (kind === 'doc' && data.text !== undefined) {
-    return <div>{chip}<div className="mt-1 rounded-lg border border-line bg-bg px-3 py-2"><Markdown text={data.text} className="text-[14px]" /></div></div>;
+  if (kind === 'page' && open && data?.text !== undefined && !data.truncated) {
+    return (
+      <div className="basis-full">
+        <PreviewCard source={{ kind: /\.svg$/i.test(name) ? 'svg' : 'html', code: data.text, title: name }} label={name} download={{ href: api.sentUrl(sessionId, file.path, true), name }} />
+      </div>
+    );
   }
-  return <div>{chip}{data.text !== undefined && <div className="mt-1"><Output text={data.text} /></div>}</div>;
+  if (kind === 'pdf' || kind === 'file') {
+    // A PDF opens in a tab of its own, in the browser's viewer; anything else is saved.
+    const pdf = kind === 'pdf';
+    return (
+      <div className={`${CARD} ${LINE} w-fit max-w-full`}>
+        <a
+          href={api.sentUrl(sessionId, file.path, !pdf)}
+          {...(pdf ? { target: '_blank', rel: 'noopener' } : { download: name })}
+          aria-label={pdf ? `Open ${name}` : `Download ${name}`}
+          className="flex min-w-0 flex-1 items-center gap-2 self-stretch"
+        >
+          <Badge name={name} />
+          <Label name={name} size={file.size} />
+          {!pdf && <Download className="mr-2.5 size-3.5 shrink-0 text-faint" />}
+        </a>
+        {pdf && <Save sessionId={sessionId} file={file.path} />}
+      </div>
+    );
+  }
+  // Text, and a picture or a page while it is closed (or cannot be shown): a card that opens it.
+  const unshowable = broken || (kind === 'page' && data?.truncated);
+  return (
+    <div className={`${CARD} overflow-hidden ${open && kind === 'text' ? 'basis-full' : 'w-fit max-w-full'}`}>
+      <div className={LINE}>
+        <button type="button" aria-label={name} aria-expanded={open && !unshowable} disabled={Boolean(unshowable)} onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left">
+          <Badge name={name} />
+          <Label name={name} size={file.size} />
+          {!unshowable && (isLoading ? <Loader2 className="size-3.5 shrink-0 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />)}
+        </button>
+        <Save sessionId={sessionId} file={file.path} />
+      </div>
+      {open && failure}
+      {broken && <div className="px-3 pb-2 text-[12px] text-faint">This picture can’t be shown here</div>}
+      {kind === 'page' && data?.truncated && <div className="px-3 pb-2 text-[12px] text-faint">Too large to preview here</div>}
+      {open && kind === 'text' && data && (
+        <div className="border-t border-line bg-bg">
+          {data.text !== undefined ? <TextBody text={data.text} markdown={/\.(md|markdown)$/i.test(name)} truncated={data.truncated} /> : <div className="px-3 py-2 text-[12px] text-faint">A binary file; nothing to show here</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Files Claude handed over (SendUserFile, Artifact), shown the way Claude Desktop shows them. */
 function SentFiles({ call }: { call: ToolCall }) {
-  // What Claude Code delivered, at the paths it checked; never the paths Claude asked for.
+  const sessionId = useSessionId();
+  const files = sentFilesOf(call);
   const delivered = call.result?.delivered;
-  const files = call.name === 'Artifact' ? [str(call.input.file_path)].filter(Boolean) : (delivered?.files ?? []).map((file) => file.path);
   const caption = delivered?.caption ?? (str(call.input.caption) || str(call.input.description));
   const link = resultText(call.result).match(/https:\/\/claude\.ai\/[^\s)"']+/)?.[0];
-  // Shown in place unless Claude meant them as attachments to save.
-  const render = call.name === 'Artifact' || (delivered?.display ?? str(call.input.display)) !== 'attach';
+  // In place, unless Claude meant them as files to save.
+  const open = call.name === 'Artifact' || delivered?.display !== 'attach';
+  const missed = delivered?.missed ?? 0;
+  if (!sessionId) return null;
   return (
-    <div className="my-1 space-y-1.5">
-      {caption && <div className="text-[13px] text-muted">{caption}</div>}
-      {files.map((file) => <SentFile key={file} path={file} open={render} />)}
-      {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
+    // What shows in place takes a line of its own; cards sit side by side, as in Claude Desktop.
+    <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} className="my-1.5 flex flex-wrap items-start gap-1.5">
+      {caption && <div className="basis-full text-[13.5px] text-muted">{caption}</div>}
+      {files.map((file) => <SentFile key={file.path} sessionId={sessionId} file={file} open={open} />)}
+      {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
+      {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>
   );
 }
@@ -365,7 +513,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   // Files and visuals only from calls that ran: a call Claude only wrote (one no app answered, or
   // one that failed) shows as a step, with its input as text.
   const ran = Boolean(call.result && !call.result.is_error);
-  if (ran && (call.name === 'SendUserFile' || (call.name === 'Artifact' && str(call.input.file_path) && (!call.input.action || call.input.action === 'publish')))) return <SentFiles call={call} />;
+  if (sentFilesOf(call).length > 0) return <SentFiles call={call} />;
   // Claude Desktop's visuals (diagrams, charts, small tools): drawn in place, as Desktop shows them.
   if (ran && /(^|__)show_widget$/.test(call.name) && str(call.input.widget_code)) {
     const code = str(call.input.widget_code);
@@ -380,13 +528,17 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   if (call.name === 'ExitPlanMode' && str(call.input.plan) && call.result) return <PlanCard call={call} />;
 
   const Icon = summary.icon;
-  const failed = outcome.kind === 'failed';
+  // Claude Code ran it and delivered none of its files (one now leads elsewhere): no better than failing.
+  const undelivered = ran && call.result?.delivered?.files.length === 0;
+  const failed = outcome.kind === 'failed' || undelivered;
+  // A tool with words of its own for a step at work and one that failed says them, as Claude Desktop does.
+  const verb = outcome.kind === 'pending' && running ? summary.running ?? summary.verb : failed ? summary.failed ?? summary.verb : summary.verb;
   // A refused or interrupted edit changed nothing, whatever it meant to change.
   const changed = stats && (outcome.kind === 'done' || outcome.kind === 'pending') && (stats.added > 0 || stats.removed > 0);
   const row = (target: React.ReactNode) => (
     <>
       <Icon className={`size-3.5 shrink-0 ${failed ? 'text-danger' : ''}`} />
-      <span className="shrink-0 text-fg/80">{summary.verb}</span>
+      <span className="shrink-0 text-fg/80">{verb}</span>
       {target}
       {changed && (
         <span className="shrink-0 font-mono text-[11px]">
@@ -396,7 +548,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
       )}
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
         {outcome.kind === 'pending' && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
-        {failed && <span className="text-[11px] text-danger">failed</span>}
+        {failed && !summary.failed && <span className="text-[11px] text-danger">failed</span>}
         {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
         {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
         <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
@@ -410,7 +562,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
         // opens the step (its toggle lies under the whole row, the name's link above it). On a
         // touch screen the row is a finger tall and the name takes taps over all of its height.
         <div className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg pointer-coarse:min-h-11">
-          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${summary.verb} ${summary.target ?? ''}`.trim()} className="absolute inset-0 rounded-md" />
+          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${verb} ${summary.target ?? ''}`.trim()} className="absolute inset-0 rounded-md" />
           {row(
             <a href={fileLink.href} onClick={fileLink.onClick} title={`Open ${fileLink.path}`} className={`relative z-[1] flex min-w-0 ${STEP_LINK} pointer-coarse:self-stretch pointer-coarse:items-center pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-1`}>
               <ToolTarget summary={summary} />

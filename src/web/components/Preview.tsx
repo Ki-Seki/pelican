@@ -1,4 +1,4 @@
-import { Code2, Eye, Maximize2, Play, X } from 'lucide-react';
+import { Code2, Download, Eye, Maximize2, Play, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { PREVIEW_POLICY } from '../../shared/preview-policy';
@@ -245,8 +245,11 @@ export function PreviewOverlay() {
   );
 }
 
-/** A visual or a page, shown rendered, with a way to run its scripts, see its code and open it full screen. */
-export function PreviewCard({ source, label, defaultCode = false }: { source: PreviewSource; label?: string; defaultCode?: boolean }) {
+/**
+ * A visual or a page, shown rendered, with a way to run its scripts, see its code and open it full
+ * screen; a file Claude sent, also to save (`download`).
+ */
+export function PreviewCard({ source, label, defaultCode = false, download }: { source: PreviewSource; label?: string; defaultCode?: boolean; download?: { href: string; name: string } }) {
   const [code, setCode] = useState(defaultCode);
   const [run, setRun] = useState(false);
   return (
@@ -258,6 +261,11 @@ export function PreviewCard({ source, label, defaultCode = false }: { source: Pr
           {code ? <Eye className="size-3.5" /> : <Code2 className="size-3.5" />}
           {code ? 'Preview' : 'Code'}
         </button>
+        {download && (
+          <a href={download.href} download={download.name} aria-label={`Download ${download.name}`} title="Download" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
+            <Download className="size-3.5" />
+          </a>
+        )}
         <button type="button" aria-label="Open full screen" onClick={() => openPreview(source, run)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
           <Maximize2 className="size-3.5" />
         </button>
