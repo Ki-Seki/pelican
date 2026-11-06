@@ -199,6 +199,27 @@ describe('a file Claude sent', () => {
     expect((await screen.findByRole('img', { name: 'b.png' })).getAttribute('class')).toContain('object-contain');
   });
 
+  it('names a file whose name hides characters as the approval does, each shown, with its warning', async () => {
+    show([prompt, ...sent('s25', [`${WORK}/photo\u202egnp.command`, `${WORK}/shot\u200b.png`])]);
+    const group = screen.getByRole('group', { name: 'Sent 2 files' });
+    const save = await within(group).findByRole('link', { name: 'Download photo⟨U+202E⟩gnp.command' });
+    expect(save.getAttribute('download')).toBe('photo⟨U+202E⟩gnp.command');
+    expect(within(group).getByText('photo⟨U+202E⟩gnp.command')).toBeTruthy();
+    const picture = within(group).getByRole('img', { name: 'shot⟨U+200B⟩.png' });
+    expect(picture.getAttribute('title')).toBe('shot⟨U+200B⟩.png');
+    expect(within(group).getByText(/invisible or direction-changing characters/)).toBeTruthy();
+    // Nothing the card says, or names it by, hides a character or turns text around.
+    const HIDDEN = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
+    expect(group.textContent).not.toMatch(HIDDEN);
+    for (const element of group.querySelectorAll('*')) for (const attribute of element.attributes) expect(attribute.value).not.toMatch(HIDDEN);
+  });
+
+  it('warns of nothing when no name hides anything', async () => {
+    show([prompt, ...sent('s26', [`${WORK}/build.zip`])]);
+    await screen.findByRole('link', { name: 'Download build.zip' });
+    expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
+  });
+
   it('stays a card Claude meant to attach, read nowhere until it is opened', async () => {
     show([prompt, ...sent('s5', [`${WORK}/shots/dark.png`, `${WORK}/report.md`, `${WORK}/page.html`], { display: 'attach' })]);
     const card = await screen.findByRole('button', { name: 'report.md' });
@@ -287,6 +308,12 @@ describe('a file Claude is sending', () => {
     again([prompt, asking, answered('s9', { files: [{ path: `${WORK}/build.zip`, size: 2048 }] })], running());
     expect(screen.queryByText('Sending file')).toBeNull();
     expect(await screen.findByRole('link', { name: 'Download build.zip' })).toBeTruthy();
+  });
+
+  it('names a file whose name hides characters with each of them shown, while it is sent', () => {
+    show([prompt, call('s27', { files: ['/Users/ada/work/photo\u202egnp.command'] })], running());
+    expect(screen.getByText('Sending file')).toBeTruthy();
+    expect(screen.getByText('photo⟨U+202E⟩gnp.command')).toBeTruthy();
   });
 
   it('says it failed in Claude Desktop’s words, with Claude Code’s reason a tap away', () => {

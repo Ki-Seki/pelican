@@ -18,6 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 
+import { revealHidden } from '../../shared/hidden';
 import { todosOf } from '../../shared/tasks';
 import { workflowOf } from '../../shared/workflows';
 
@@ -106,9 +107,10 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'Skill':
       return { icon: Wrench, verb: 'Skill', target: str(input.skill) ?? str(input.command) };
     case 'SendUserFile': {
-      // In Claude Desktop's words; each file by its name (the approval shows where it is).
+      // In Claude Desktop's words; each file by its name (the approval shows where it is), with any
+      // character that hides or turns text around shown as such.
       const files = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
-      const target = files.map((f) => f.split('/').pop()).filter(Boolean).join(', ');
+      const target = files.map((f) => f.split('/').pop()).filter(Boolean).map((f) => revealHidden(f!).text).join(', ');
       return { icon: Paperclip, verb: 'Send file', running: 'Sending file', failed: 'Failed to send', ...(target ? { target } : {}) };
     }
     case 'Workflow': {

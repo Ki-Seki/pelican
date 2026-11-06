@@ -946,7 +946,8 @@ app.get('/api/sessions/:id/sent/raw', async (c) => {
   const ext = path.extname(name).slice(1).toLowerCase();
   const picture = typeOf(PICTURE_TYPES, ext);
   const media = typeOf(MEDIA_TYPES, ext);
-  const disposition = (how: 'inline' | 'attachment') => `${how}; filename*=UTF-8''${encodeURIComponent(name)}`;
+  // Saved under the name its card shows: a character that hides or turns text around shown as such.
+  const disposition = (how: 'inline' | 'attachment') => `${how}; filename*=UTF-8''${encodeURIComponent(revealHidden(name).text)}`;
   const asked = c.req.query('download') !== undefined ? 'download' : picture ? 'picture' : media ? 'media' : ext === 'pdf' ? 'pdf' : 'download';
   const headers: Record<string, string> = asked === 'picture' && picture
     ? { 'Content-Type': picture, 'Cache-Control': KEPT_ASKING, ...INERT }

@@ -19,7 +19,7 @@ const savedClaude = process.env.CLAUDE_CONFIG_DIR;
 const A = randomUUID();
 const B = randomUUID();
 const MB = 1024 * 1024;
-const ODD = ['page.constructor', 'page.__proto__', 'page.toString'];
+const ODD = ['page.constructor', 'page.__proto__', 'page.toString', 'photo\u202egnp.command'];
 /** Sent, then moved away: a name a page would take for markup, with a character that turns text around. */
 const GONE = 'old <img src=x onerror=alert(1)> \u202efdp.pdf';
 const PAGE = '<!doctype html><h1>Hi</h1>\n';
@@ -116,7 +116,7 @@ beforeAll(async () => {
       content: [answer('refused', '1 file could NOT be delivered to the user')],
       toolUseResult: record([{ path: path.join(root, 'secret.txt'), size: 17, isImage: false, pathValidated: true, upload_error: 'not sent: it now resolves to what was not approved' }]),
     },
-    { type: 'user', content: [answer('odd', '7 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f))) },
+    { type: 'user', content: [answer('odd', '8 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f))) },
     { type: 'user', content: [answer('media', '7 files delivered to user.')], toolUseResult: record(Object.keys(MEDIA).map((f) => path.join(work, f))) },
   ]);
   await rm(path.join(work, GONE));
@@ -377,7 +377,7 @@ describe('a file Claude sent, by a link', () => {
   });
 
   it('is no picture for an extension every object has a property of: it downloads, and reads as text', async () => {
-    for (const name of ODD) {
+    for (const name of ODD.slice(0, 3)) {
       const response = await linked(A, path.join(work, name));
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toBe('application/octet-stream');
@@ -386,6 +386,12 @@ describe('a file Claude sent, by a link', () => {
       const read = await shown(A, path.join(work, name));
       expect(await read.json()).toEqual({ path: name, size: PAGE.length, text: PAGE });
     }
+  });
+
+  it('is saved under the name its card shows: a character that turns text around shown as such', async () => {
+    const response = await linked(A, path.join(work, 'photo\u202egnp.command'));
+    expect(response.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''${encodeURIComponent('photo⟨U+202E⟩gnp.command')}`);
+    expect(response.headers.get('content-disposition')).not.toContain(encodeURIComponent('\u202e'));
   });
 
   it('sends exactly the bytes it said, however the file changes meanwhile', async () => {

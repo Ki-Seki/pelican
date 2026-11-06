@@ -1,7 +1,8 @@
-import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2 } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2, TriangleAlert } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { revealHidden } from '../../shared/hidden';
 import type { DeliveredFile } from '../../shared/protocol';
 import { api, ApiError, type SentState } from '../lib/api';
 import { duration, formatBytes } from '../lib/format';
@@ -113,7 +114,13 @@ export function sentFilesOf(call: ToolCall): DeliveredFile[] {
   return [];
 }
 
-const fileName = (file: string) => file.split('/').pop() || file;
+/**
+ * A file's name as it shows, with any character that hides or turns text around shown as such
+ * (⟨U+202E⟩): sent without asking, a file's card may be the only place its name is seen, and one
+ * such character makes a script read as a picture.
+ */
+const fileName = (file: string) => revealHidden(file.split('/').pop() || file).text;
+const hidesCharacters = (file: string) => revealHidden(file.split('/').pop() || file).hidden;
 const CARD = 'rounded-xl border border-line bg-panel';
 /** A card of one line, as Claude Desktop's: as wide as what it says, never wider than the column. */
 const LINE = 'flex min-h-10 min-w-0 items-center gap-2 pr-1 pl-2.5 text-[13px] pointer-coarse:min-h-11';
@@ -399,6 +406,7 @@ function SentFiles({ call }: { call: ToolCall }) {
   const layout: Layout = { natural: pictures === others.length && !kinds.includes('audio'), square: pictures > 0 && pictures < others.length };
   // Players first, then the rest in the order Claude sent them.
   const order = files.map((file, i) => ({ file, i })).sort((a, b) => Number(playable(kinds[b.i]!)) - Number(playable(kinds[a.i]!)));
+  const hidden = files.some((file) => hidesCharacters(file.path));
   // Whether each is still there to have, known before any of them shows: older sessions are full of
   // files that have since moved. Should nobody be able to say, they show as they would.
   const paths = [...new Set(files.map((file) => file.path))].slice(0, 50);
@@ -417,6 +425,12 @@ function SentFiles({ call }: { call: ToolCall }) {
       {/* Claude's words with the files, as Claude Desktop shows them: as a reply reads, Markdown and all. */}
       {caption && <Markdown text={caption} className="basis-full" />}
       {checked && order.map(({ file, i }) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} layout={layout} state={states.data?.get(file.path)} />)}
+      {checked && hidden && (
+        <div className="flex basis-full items-start gap-1.5 text-[12.5px] leading-snug text-danger">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          This contains invisible or direction-changing characters, shown as ⟨U+…⟩. It may not do what it seems to.
+        </div>
+      )}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>
