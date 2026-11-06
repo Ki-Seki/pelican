@@ -695,7 +695,7 @@ export function Chat({
 
   // Ctrl+` shows the terminal and gives it the keys, as in Claude Desktop; pressed in the terminal,
   // it hides it and the message box has them again. The side chat makes way first.
-  const step = useWorkspaceStep();
+  const paneTab = shownTab(useWorkspaceStep());
   const { setOpen: setPaneOpen } = workspace;
   useEffect(() => {
     if (!cwd) return undefined;
@@ -703,7 +703,7 @@ export function Chat({
       if (!togglesTerminal(e) || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
       e.preventDefault();
       const inTerminal = e.target instanceof Element && Boolean(e.target.closest('[data-terminal]'));
-      if (paneShown && shownTab(step) === 'terminal' && inTerminal) {
+      if (paneShown && paneTab === 'terminal' && inTerminal) {
         setPaneOpen(false);
         composer.current?.focus();
         return;
@@ -713,7 +713,7 @@ export function Chat({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cwd, paneShown, step, setPaneOpen, makeWay, showWorkspace]);
+  }, [cwd, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
   // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
   const terminals = useTerminalsAvailable();
   const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {
