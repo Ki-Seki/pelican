@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, File, Folder, Loader2, Search, TextSearch, X } from 'lucide-react';
+import { ChevronRight, File, Folder, Loader2, Search, SquareTerminal, TextSearch, X } from 'lucide-react';
 import { useDeferredValue, useState } from 'react';
 
 import { api, isDemoNote } from '../lib/api';
 import { baseName, formatBytes } from '../lib/format';
+import { askForTerminal, useTerminalsAvailable } from '../lib/terminals';
 import type { WorkspaceStep } from '../lib/workspace-route';
 import { FileViewer } from './FileViewer';
 import { PathLabel } from './PathLabel';
@@ -60,6 +61,7 @@ export function WorkspaceFiles({ cwd, step, open, go, up, onAddToMessage }: {
   const tree = useQuery({ queryKey: ['tree', cwd, dir], queryFn: () => api.tree(cwd, dir), enabled: open && !file && !typed });
   const names = useQuery({ queryKey: ['files', cwd, typed], queryFn: () => api.files(cwd, typed), enabled: open && !file && Boolean(typed), staleTime: 10_000 });
   const text = useQuery({ queryKey: ['search', cwd, inText], queryFn: () => api.search(cwd, inText), enabled: open && Boolean(inText), staleTime: 10_000, retry: false });
+  const terminals = useTerminalsAvailable();
 
   if (file) return <FileViewer cwd={cwd} path={file} {...(step.line ? { line: step.line } : {})} onAddToMessage={onAddToMessage} />;
 
@@ -138,15 +140,32 @@ export function WorkspaceFiles({ cwd, step, open, go, up, onAddToMessage }: {
 
       {!searching && (
         <>
-          <nav aria-label="Folder" className="no-scrollbar flex items-center gap-0.5 overflow-x-auto px-2 pb-1.5 text-[12.5px]">
-            <button type="button" onClick={() => up({ tab: 'files' })} aria-current={crumbs.length === 0 ? 'location' : undefined} className={`h-9 shrink-0 rounded-md px-1.5 font-mono ${crumbs.length === 0 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{baseName(cwd)}</button>
-            {crumbs.map((part, i) => (
-              <span key={i} className="flex shrink-0 items-center">
-                <ChevronRight className="size-3 text-faint" />
-                <button type="button" onClick={() => up({ tab: 'files', path: `${crumbs.slice(0, i + 1).join('/')}/` })} aria-current={i === crumbs.length - 1 ? 'location' : undefined} className={`h-9 rounded-md px-1.5 font-mono ${i === crumbs.length - 1 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{part}</button>
-              </span>
-            ))}
-          </nav>
+          <div className="flex items-center gap-1 pr-1 pb-1.5">
+            <nav aria-label="Folder" className="no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-2 text-[12.5px]">
+              <button type="button" onClick={() => up({ tab: 'files' })} aria-current={crumbs.length === 0 ? 'location' : undefined} className={`h-9 shrink-0 rounded-md px-1.5 font-mono ${crumbs.length === 0 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{baseName(cwd)}</button>
+              {crumbs.map((part, i) => (
+                <span key={i} className="flex shrink-0 items-center">
+                  <ChevronRight className="size-3 text-faint" />
+                  <button type="button" onClick={() => up({ tab: 'files', path: `${crumbs.slice(0, i + 1).join('/')}/` })} aria-current={i === crumbs.length - 1 ? 'location' : undefined} className={`h-9 rounded-md px-1.5 font-mono ${i === crumbs.length - 1 ? 'text-fg' : 'text-muted hover:text-fg'}`}>{part}</button>
+                </span>
+              ))}
+            </nav>
+            {terminals && (
+              // A new terminal in the folder shown here, as Open in terminal on a folder does in Claude Desktop.
+              <button
+                type="button"
+                aria-label="Open in terminal"
+                title="Open in terminal"
+                onClick={() => {
+                  askForTerminal(dir ? `${cwd.replace(/\/$/, '')}/${dir}` : cwd);
+                  go({ tab: 'terminal' });
+                }}
+                className="grid size-9 shrink-0 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg"
+              >
+                <SquareTerminal className="size-4" />
+              </button>
+            )}
+          </div>
           {tree.isLoading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
           {tree.error && <div className="px-3 py-6 text-[13px] text-danger">{(tree.error as Error).message}</div>}
           {tree.data?.length === 0 && <div className="px-3 py-8 text-center text-[13px] text-faint">An empty folder</div>}
