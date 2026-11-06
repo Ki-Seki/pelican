@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { revealHidden } from '../src/shared/hidden';
 import type { PermissionRequest } from '../src/shared/protocol';
 
 const { PermissionCard } = await import('../src/web/components/PermissionCard');
@@ -53,6 +54,27 @@ describe('an approval to send a file', () => {
     render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: '/tmp/re\u202Etxt.md' })} />);
     expect(screen.getByText('Claude wants to send you a file')).toBeTruthy();
     expect(screen.getByText('/tmp/re⟨U+202E⟩txt.md')).toBeTruthy();
+    expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
+  });
+
+  it('names a screenshot as macOS does, keeps its caption’s emoji whole, and warns of nothing', () => {
+    const screenshot = '/Users/ada/Desktop/Screenshot 2026-11-06 at 10.00.00\u202fAM.png';
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: [screenshot], caption: 'Here it is \u2714\ufe0f' })} />);
+    // Exactly: a matcher's own spacing would make the narrow space a plain one.
+    expect(screen.getByRole('listitem').textContent).toBe(screenshot);
+    expect(screen.getByText('Here it is \u2714\ufe0f')).toBeTruthy();
+    expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
+    // The name its card and its download take is its own.
+    expect(revealHidden('Screenshot 2026-11-06 at 10.00.00\u202fAM.png')).toEqual({ text: 'Screenshot 2026-11-06 at 10.00.00\u202fAM.png', hidden: false });
+  });
+
+  it('reads a caption as words: a script’s joiners stay, what turns it around is shown and warned of', () => {
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: ['/Users/ada/work/a.png'], caption: '\u0646\u0627\u0645\u0647\u200c\u0647\u0627' })} />);
+    expect(screen.getByText('\u0646\u0627\u0645\u0647\u200c\u0647\u0627')).toBeTruthy();
+    expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
+    cleanup();
+    render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: ['/Users/ada/work/a.png'], caption: 'Your invoice \u2714\ufe0f\u202efdp.exe' })} />);
+    expect(screen.getByText('Your invoice \u2714\ufe0f⟨U+202E⟩fdp.exe')).toBeTruthy();
     expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
   });
 });

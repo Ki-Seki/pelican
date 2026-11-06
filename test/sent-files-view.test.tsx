@@ -214,6 +214,30 @@ describe('a file Claude sent', () => {
     for (const element of group.querySelectorAll('*')) for (const attribute of element.attributes) expect(attribute.value).not.toMatch(HIDDEN);
   });
 
+  it('names a screenshot as macOS does, saves it under its own name, and warns of nothing', async () => {
+    const name = 'Screenshot 2026-11-06 at 10.00.00\u202fAM.png';
+    show([prompt, ...sent('s28', [`${WORK}/${name}`], { caption: 'Here it is \u2714\ufe0f' })]);
+    const group = screen.getByRole('group', { name: 'Sent file' });
+    await waitFor(() => expect(group.querySelector('img')).toBeTruthy());
+    const picture = group.querySelector('img')!;
+    expect(picture.getAttribute('alt')).toBe(name);
+    expect(picture.getAttribute('title')).toBe(name);
+    const save = group.querySelector('a[download]')!;
+    expect(save.getAttribute('download')).toBe(name);
+    expect(save.getAttribute('aria-label')).toBe(`Download ${name}`);
+    expect(group.textContent).toContain('Here it is \u2714\ufe0f');
+    expect(group.textContent).not.toContain('⟨U+');
+    expect(screen.queryByText(/invisible or direction-changing characters/)).toBeNull();
+  });
+
+  it('names a screenshot as macOS does while it is sent', () => {
+    const name = 'Screenshot 2026-11-06 at 10.00.00\u202fAM.png';
+    show([prompt, call('s29', { files: [`${WORK}/${name}`] })], running());
+    expect(screen.getByText('Sending file')).toBeTruthy();
+    expect(document.body.textContent).toContain(name);
+    expect(document.body.textContent).not.toContain('⟨U+');
+  });
+
   it('warns of nothing when no name hides anything', async () => {
     show([prompt, ...sent('s26', [`${WORK}/build.zip`])]);
     await screen.findByRole('link', { name: 'Download build.zip' });

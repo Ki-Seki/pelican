@@ -85,10 +85,16 @@ can read your sessions and have Claude run commands as you, so treat access to i
   in its git config. Claude Code asks before it runs them in a terminal, but never in a session
   started through its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has
   trusted that brings any of these, Pelican lists them, read from the folder's files (the git
-  config through `git config`, which starts nothing, with the files it includes), and offers
-  **Trust and start** or **Use my settings only**. With your settings only, Claude Code loads just
-  your user settings, and git runs none of the repository's filters, its file-system monitor or
-  its hooks folder; a folder whose git config git cannot read in full does not start that way.
+  config through `git config`, which starts nothing, with the files it includes), each whole, a
+  hook's arguments too, with what hides or turns text around written out as ⟨U+…⟩ and warned of,
+  as an approval shows it, and offers **Trust and start** or **Use my settings only**. In a command
+  a space other than a plain one is written out too, unless Pelican finds it in quotes, a
+  heredoc's body or a comment, as bash, zsh, dash and macOS's bash 3.2 read the command and a
+  script it hands a shell in the ways Pelican follows (`bash -c`, `eval`, `ssh`, a heredoc or a
+  pipe into `sh`, and the like); where Pelican cannot tell, every such space is written out. A
+  string that a program runs in a shell of its own (python's `os.system`, `make`) is not followed. With your settings only, Claude Code loads just your user settings,
+  and git runs none of the repository's filters, its file-system monitor or its hooks folder; a
+  folder whose git config git cannot read in full does not start that way.
   A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
   written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
   Claude Code has worked there before, unless you chose your settings only for it. Listing a

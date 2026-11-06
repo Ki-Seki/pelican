@@ -4,13 +4,22 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { EMOJI, HIDDEN } from '../src/shared/hidden';
+import { EMOJI } from '../src/shared/hidden';
 
 const root = path.join(import.meta.dirname, '..');
 
-// Characters that do not show as what they are (HIDDEN): in a file as they are, the code reads
-// otherwise than it runs, and GitHub warns of hidden Unicode; written as escapes (\u202e), they
-// read as they compile. The approval card shows the same ones.
+/**
+ * Characters that do not show as what they are: controls, invisible ones (zero-width ones, joiners,
+ * variation selectors, tags, fillers), direction-changing ones, private ones, separators and spaces
+ * other than a plain one, and ones drawn blank. In a file as they are, the code reads otherwise
+ * than it runs, and GitHub warns of hidden Unicode; written as escapes (\u202e), they read as they
+ * compile. This is code hygiene, a list of its own: what Pelican writes out on screen (revealHidden
+ * in src/shared/hidden.ts) leaves ordinary text alone, a space other than a plain one in words, a
+ * path or where it finds a shell reads it as text, an emoji's own characters, a private-use glyph,
+ * and writes out some characters this lets through, such as a carriage return or a code point not
+ * assigned yet.
+ */
+const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Default_Ignorable_Code_Point}\u2800\ufffc\u{1d159}]|(?! )\p{Zs}/u;
 
 /**
  * Prose, the docs and the README, where an emoji is written as it shows, with the invisible

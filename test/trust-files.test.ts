@@ -48,7 +48,7 @@ describe.skipIf(process.platform === 'win32')('a named pipe in a folder nobody t
       await pipeAt(path.join(dir, name));
       // More than Node's four file threads: any check that waited on the pipe would stall the rest.
       const checks = await Promise.all(Array.from({ length: 6 }, () => within(trustQuestion(dir), 2000)));
-      for (const check of checks) expect(check).toEqual({ folder: dir, brings: [`Cannot be read: ${name}`] });
+      for (const check of checks) expect(check).toEqual({ folder: dir, brings: [`Cannot be read: ${name}`], commands: [[]] });
       await expect(within(launchFor(dir), 2000)).rejects.toBeInstanceOf(NeedsTrust);
       const other = path.join(root, 'other.txt');
       await writeFile(other, 'hello');
