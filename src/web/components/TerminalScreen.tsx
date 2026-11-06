@@ -11,6 +11,7 @@ import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../s
 import { api, checkSignedIn } from '../lib/api';
 import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
+import { showCursor } from '../lib/terminal-cursor';
 import {
   asksForSecret, bufferText, cleanPaste, cleanPastes, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText,
 } from '../lib/terminal-input';
@@ -189,6 +190,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     t.open(el);
     term.current = t;
     fitter.current = fitAddon;
+    showCursor(t);
     // A tap gives the screen the keys, never a phone's keyboard.
     if (touch) t.textarea?.setAttribute('inputmode', 'none');
 
@@ -302,7 +304,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
             if (size.cols !== t.cols || size.rows !== t.rows) sizedElsewhere.current = true;
             t.resize(size.cols, size.rows);
           });
-          t.write(screen.snapshot);
+          // Its cursor drawn, though the screen has not had the keys (a phone's never does).
+          t.write(screen.snapshot, () => showCursor(t));
           events.current.onProgram(id, screen.program);
           if (screen.exit) ended(screen.exit);
         },
