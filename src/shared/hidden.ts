@@ -40,10 +40,12 @@
  * can only join two arguments).
  *
  * Shown joined by spaces, a program's arguments (`runs: 'argv'`) write out every one, as nothing
- * tells it from the space between two arguments. Elsewhere such a space is left as it is: in a
- * path, a name or words it is the space it shows, and written out it would warn of every macOS
- * screenshot (U+202F before AM), French quotation and CJK sentence that holds one. A PowerShell
- * command keeps it too: PowerShell takes every Unicode space for a space, as it reads.
+ * tells it from the space between two arguments. A PowerShell command (`runs: 'powershell'`) keeps
+ * them: PowerShell takes every Unicode space for a space, as it reads. But one that names a POSIX
+ * shell (sh, bash, zsh, wsl, ssh and the like), whose script PowerShell hands on and which reads it
+ * otherwise, has every one written out. Elsewhere such a space is left as it is: in a path, a name
+ * or words it is the space it shows, and written out it would warn of every macOS screenshot (U+202F
+ * before AM), French quotation and CJK sentence that holds one.
  *
  * Written out in a command, a path, a name, a rule or a tool's input, which show in monospace:
  * U+FA2E and U+FA2F, compatibility ideographs that the monospace font draws as a blank in Chrome
@@ -126,25 +128,30 @@ function written(char: string, before: string | undefined): boolean {
 export type Reading = {
   /** Words: what Claude says a command does, a search, a caption. */
   prose?: boolean;
-  /** What runs: a shell command, or a program and its arguments shown joined by spaces. */
-  runs?: 'shell' | 'argv';
+  /** What runs: a shell command, a program and its arguments shown joined by spaces, or a PowerShell command. */
+  runs?: 'shell' | 'argv' | 'powershell';
 };
+
+/** A PowerShell command that names a POSIX shell, or ssh: it hands that a script, which reads a space otherwise. */
+const POSIX_SHELL = /(?:^|[\s'"`&|;(){},=\\/])(?:sh|bash|zsh|dash|ksh|mksh|ash|yash|fish|csh|tcsh|busybox|wsl|ssh)(?:\.exe)?(?=$|[\s'"`;|&(){},])/i;
 
 const isSpace = (char: string) => SPACE.test(char);
 
 /**
  * The text with each character that can make it read otherwise than it runs written out as a token
  * (⟨U+202E⟩), and whether there were any, as above: a command, a path, a name, a rule or a tool's
- * input by default, words with `prose`, a shell command or a program's arguments with `runs`.
+ * input by default, words with `prose`, a shell command, a program's arguments or a PowerShell
+ * command with `runs`.
  */
 export function revealHidden(text: string, { prose = false, runs }: Reading = {}): { text: string; hidden: boolean } {
   let hidden = false;
   // Where a shell reads a space as part of a word; undefined: everywhere, as when it cannot tell.
   const inWord = runs === 'shell' && SPACE.test(text) ? inWords(text, isSpace) : undefined;
+  const keepsSpaces = runs === undefined || (runs === 'powershell' && !POSIX_SHELL.test(text));
   const shown = text.replace(PARTS, (char: string, emoji: string | undefined, at: number) => {
     if (emoji !== undefined) return emoji;
     if (SPACE.test(char)) {
-      if (runs === undefined || (runs === 'shell' && inWord !== undefined && !inWord.has(at))) return char;
+      if (keepsSpaces || (runs === 'shell' && inWord !== undefined && !inWord.has(at))) return char;
     } else if (BLANK_IN_MONOSPACE.test(char)) {
       if (prose) return char;
     } else if (prose && written(char, [...text.slice(Math.max(0, at - 2), at)].at(-1))) {

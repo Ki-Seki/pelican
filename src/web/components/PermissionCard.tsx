@@ -184,9 +184,10 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const edit = request.toolName === 'Edit'
     ? { before: str(input.old_string), after: str(input.new_string) }
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
-  // A Bash command as the shell reads it: a space other than a plain one is written out where the
-  // shell takes it as part of a word. PowerShell takes every such space for a space, as it reads.
-  const command = request.toolName === 'Bash' ? revealHidden(str(input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
+  // A command as its shell reads it: in Bash, a space other than a plain one is written out where the
+  // shell takes it as part of a word; PowerShell takes every such space for a space, as it reads,
+  // but for what it hands a POSIX shell (src/shared/hidden.ts).
+  const command = request.toolName === 'Bash' ? revealHidden(str(input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(input.command), { runs: 'powershell' }) : undefined;
   const target = summary.target ? revealHidden(summary.target, { prose: summary.prose || summary.words }) : undefined;
   const workflow = request.toolName === 'Workflow';
   // Files Claude would send you: each by its path, and its caption, which is words.

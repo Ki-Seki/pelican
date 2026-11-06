@@ -11,9 +11,9 @@ export type SessionStatus = 'idle' | 'running' | 'waiting' | 'live';
 
 /**
  * Where a command is in an item of what a folder brings (its trust sheet): from, to, and whether a
- * shell runs it or it is a program and its arguments, joined by spaces.
+ * shell runs it, it is a program and its arguments, joined by spaces, or PowerShell runs it.
  */
-export type CommandAt = [from: number, to: number, runs: 'shell' | 'argv'];
+export type CommandAt = [from: number, to: number, runs: 'shell' | 'argv' | 'powershell'];
 
 export type SessionSummary = {
   id: string;

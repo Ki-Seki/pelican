@@ -280,8 +280,8 @@ function fromSettings(settings: unknown): Item[] {
             // Its exec form: the program, run with these arguments and no shell.
             found.push(runs(`${event} hook: `, [hook.command, ...hook.args.map(String)].join(' '), 'argv'));
           } else {
-            // Run by a shell, or by PowerShell, which takes every space for one.
-            found.push(hook.shell === 'powershell' ? said(`${event} hook: ${hook.command}`) : runs(`${event} hook: `, hook.command, 'shell'));
+            // Run by a shell, or by PowerShell, which takes every space for one (but in what it hands a POSIX shell).
+            found.push(runs(`${event} hook: `, hook.command, hook.shell === 'powershell' ? 'powershell' : 'shell'));
           }
         }
       }

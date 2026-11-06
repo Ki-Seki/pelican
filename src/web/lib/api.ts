@@ -152,7 +152,7 @@ export type AuthState = { required: boolean; mode: AuthMode; signedIn: boolean }
 function trustIn(brings: unknown, commands: unknown): { brings: string[]; commands?: CommandAt[][] } {
   const items = Array.isArray(brings) ? brings.filter((b): b is string => typeof b === 'string') : [];
   const at = (item: string, command: unknown) => Array.isArray(command) && command.length === 3 && Number.isInteger(command[0]) && Number.isInteger(command[1])
-    && 0 <= command[0] && command[0] <= command[1] && command[1] <= item.length && (command[2] === 'shell' || command[2] === 'argv');
+    && 0 <= command[0] && command[0] <= command[1] && command[1] <= item.length && (command[2] === 'shell' || command[2] === 'argv' || command[2] === 'powershell');
   const each = Array.isArray(brings) && items.length === brings.length && Array.isArray(commands) && commands.length === items.length
     && commands.every((list, i) => Array.isArray(list) && list.every((command) => at(items[i]!, command)));
   return each ? { brings: items, commands: commands as CommandAt[][] } : { brings: items };
