@@ -169,9 +169,14 @@ const WORDS = /^(?:texts?|messages?|body|content|query|prompt|title|subject|desc
 /** Whether a tool's input holds words under `key` (WORDS). */
 export const holdsWords = (key: string) => WORDS.test(key);
 
+/** How deep a tool's input is shown key by key; deeper, on a line, every space but a plain one written out. */
+const DEEPEST_INPUT = 32;
+
 /**
  * A tool's input as JSON, as `JSON.stringify(input, null, 2)` writes it, each string shown as what
- * its key names: words (WORDS), a shell command (`command`), or else a name. Keys are names.
+ * its key names: words (WORDS), a shell command (`command`), or else a name. Keys are names. Past
+ * DEEPEST_INPUT levels (an input can be thousands deep, which a level at a time would take the
+ * page's stack for), what is left shows as JSON on one line, as a program's arguments show.
  */
 export function revealInput(input: unknown): { text: string; hidden: boolean } {
   let hidden = false;
@@ -180,21 +185,34 @@ export function revealInput(input: unknown): { text: string; hidden: boolean } {
     hidden ||= shown.hidden;
     return JSON.stringify(shown.text);
   };
-  const write = (value: unknown, reading: Reading, indent: string): string | undefined => {
+  const write = (value: unknown, reading: Reading, indent: string, depth: number): string | undefined => {
     if (typeof value === 'string') return reveal(value, reading);
+    if (depth >= DEEPEST_INPUT && value !== null && typeof value === 'object') {
+      let json: string | undefined;
+      try {
+        json = JSON.stringify(value);
+      } catch {
+        // Deeper than this browser writes JSON: said so, and warned of, as nothing of it can be read.
+        hidden = true;
+        return '"(nested too deeply to show)"';
+      }
+      const shown = revealHidden(json ?? 'null', { runs: 'argv' });
+      hidden ||= shown.hidden;
+      return shown.text;
+    }
     const inner = `${indent}  `;
     if (Array.isArray(value)) {
       if (value.length === 0) return '[]';
-      return `[\n${value.map((item) => `${inner}${write(item, reading, inner) ?? 'null'}`).join(',\n')}\n${indent}]`;
+      return `[\n${value.map((item) => `${inner}${write(item, reading, inner, depth + 1) ?? 'null'}`).join(',\n')}\n${indent}]`;
     }
     if (value !== null && typeof value === 'object') {
       const fields = Object.entries(value).flatMap(([key, item]) => {
-        const shown = write(item, WORDS.test(key) ? { prose: true } : key === 'command' ? { runs: 'shell' } : {}, inner);
+        const shown = write(item, WORDS.test(key) ? { prose: true } : key === 'command' ? { runs: 'shell' } : {}, inner, depth + 1);
         return shown === undefined ? [] : [`${inner}${reveal(key, {})}: ${shown}`];
       });
       return fields.length === 0 ? '{}' : `{\n${fields.join(',\n')}\n${indent}}`;
     }
     return JSON.stringify(value);
   };
-  return { text: write(input, {}, '') ?? '', hidden };
+  return { text: write(input, {}, '', 0) ?? '', hidden };
 }

@@ -241,4 +241,13 @@ describe('a tool’s input', () => {
     // Keys are names, and a bidi control is written out anywhere.
     expect(revealInput({ ['k\u202e']: 'x', text: 'a\u202eb' }).text).toBe('{\n  "k⟨U+202E⟩": "x",\n  "text": "a⟨U+202E⟩b"\n}');
   });
+
+  it('shows one nested thousands deep, as far as 32 levels as above, the rest on a line with every space but a plain one written out', () => {
+    // As the server sends it: JSON takes it.
+    const input = JSON.parse(`{"query":"docs","filter":${'['.repeat(3000)}{"command":"echo a\u00a0b"}${']'.repeat(3000)}}`) as Record<string, unknown>;
+    const shown = revealInput(input);
+    expect(shown.text.startsWith('{\n  "query": "docs",\n  "filter": [\n    [\n')).toBe(true);
+    expect(shown.text).toContain(`${'['.repeat(3000 - 31)}{"command":"echo a⟨U+00A0⟩b"}${']'.repeat(3000 - 31)}`);
+    expect(shown.hidden).toBe(true);
+  });
 });
