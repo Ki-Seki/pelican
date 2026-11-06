@@ -31,6 +31,7 @@ import type {
 import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
+import type { NewTerminal, TerminalInfo, TerminalList } from '../../shared/terminal';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
 import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
 
@@ -297,6 +298,18 @@ export const api = {
       throw new ApiError(body.error ?? response.statusText, response.status);
     }
     return ((await response.json()) as { attachment: Attachment }).attachment;
+  },
+  /** Every terminal, and whether this Pelican runs any (the first ask loads the PTY). */
+  terminals: () => request<TerminalList>('terminals'),
+  /** A new terminal: the user's shell in a folder, at this size, with a command to run there or none. */
+  openTerminal: (body: NewTerminal) => send<{ terminal: TerminalInfo }>('POST', 'terminals', body).then((r) => r.terminal),
+  /** Ends a terminal: its shell is hung up, as closing a window does. */
+  closeTerminal: (id: string) => send<{ ok: boolean }>('DELETE', `terminals/${encodeURIComponent(id)}`),
+  /** The address of a terminal's socket, at a size (relative to the page, as api/ws). */
+  terminalSocket: (id: string, cols: number, rows: number) => {
+    const url = new URL(`api/terminal?id=${encodeURIComponent(id)}&cols=${cols}&rows=${rows}`, appBase);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.toString();
   },
   pushKey: () => request<{ key: string | null }>('push/key').then((r) => r.key),
   subscribePush: (subscription: PushSubscriptionJSON, openUrl: string) =>

@@ -1,9 +1,10 @@
 /**
  * Keys, in one place: what sends a message, and the few shortcuts Pelican shares with Claude
- * Desktop and the CLI (Esc stops Claude, ⌘K searches the sessions, ⌘\ closes a pane, ⌘/ lists the keys).
+ * Desktop and the CLI (Esc stops Claude, ⌘K searches the sessions, ⌘\ closes a pane, Ctrl+` the
+ * terminal, ⌘/ lists the keys).
  */
 
-type KeyLike = { key: string; isComposing?: boolean; keyCode?: number; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean };
+type KeyLike = { key: string; code?: string; isComposing?: boolean; keyCode?: number; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean };
 
 /** Apple keyboards print ⌘ where others print Ctrl, and their Ctrl+K is the text fields' own. */
 export const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
@@ -23,6 +24,13 @@ export const composing = (e: KeyLike): boolean => Boolean(e.isComposing) || e.ke
 
 /** Cmd/Ctrl+\: closes the pane beside the conversation it is pressed in, as Close pane does in Claude Desktop. */
 export const closesPane = (e: KeyLike): boolean => e.key === '\\' && Boolean(e.metaKey || e.ctrlKey);
+
+/**
+ * Ctrl+`: shows the terminal, and hides it from inside it, as in Claude Desktop (Ctrl on a Mac
+ * too). The key left of 1, whatever a keyboard prints on it.
+ */
+export const togglesTerminal = (e: KeyLike): boolean =>
+  Boolean(e.ctrlKey) && !e.metaKey && !e.altKey && !e.shiftKey && (e.code === 'Backquote' || e.key === '`');
 
 /** ⌘ on Apple keyboards, Ctrl elsewhere, with no other modifier. */
 export const withMod = (e: KeyLike): boolean =>

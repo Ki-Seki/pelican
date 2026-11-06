@@ -41,6 +41,9 @@ export const DEMO_NOTE = STATIC_DEMO
 /** Where the site's demo sends people who want the real thing. */
 export const INSTALL_URL = '../docs.html#install';
 
+/** What the site's demo says in the Terminal tab; `pelican --demo`'s server says its own. */
+export const DEMO_TERMINAL = 'This is a demo, so nothing runs here. Install Pelican for a terminal on your computer.';
+
 /** The demo saying what it does not do; shown as a note. */
 export class DemoRefusal extends Error {}
 
@@ -50,6 +53,8 @@ export async function staticRequest(base: URL, path: string, init?: RequestInit)
   const [query, params] = path.split('?');
   // Searching the files' text needs the computer: the demo says so, asking for nothing.
   if (query === 'search') throw new DemoRefusal(DEMO_NOTE);
+  // So does a terminal: the tab says so in its place.
+  if (query === 'terminals') return { available: false, reason: DEMO_TERMINAL, terminals: [] };
   // Which files are there, for links in the conversation: from the folder's whole list, saved.
   if (query === 'exists') {
     const asked = new URLSearchParams(params);

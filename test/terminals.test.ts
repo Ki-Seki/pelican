@@ -436,7 +436,7 @@ describe('who gets a terminal', () => {
     const terminal = await open();
     config.demo = true;
     const listed = await api('GET', '/api/terminals');
-    expect(listed.body).toEqual({ available: false, reason: expect.stringMatching(/^This is the demo: it has no terminal\./), terminals: [] });
+    expect(listed.body).toEqual({ available: false, reason: expect.stringMatching(/^This is the demo, so nothing runs here\./), terminals: [] });
     expect((await api('GET', '/api/info')).body.terminal).toEqual({ available: false, reason: listed.body.reason });
     expect((await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 })).status).toBe(403);
     const refused = page(terminal.id);

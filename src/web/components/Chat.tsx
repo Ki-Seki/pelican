@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MessageSquare, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
@@ -691,6 +691,17 @@ export function Chat({
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
   } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
 
+  // The trust sheet, for a terminal in a folder nobody trusted that brings programs.
+  const askTrust = useCallback((brings: string[]) => new Promise<TrustChoice | undefined>((resolve) => {
+    let settled = false;
+    const once = (choice?: TrustChoice) => {
+      if (settled) return;
+      settled = true;
+      resolve(choice);
+    };
+    setTrustAsk({ brings, answer: (choice) => once(choice), cancel: () => once() });
+  }), []);
+
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
     [sessionId, view.offset, view.messages, detail?.tasks],
@@ -1008,6 +1019,7 @@ export function Chat({
             if (!workspace.docked) workspace.setOpen(false);
             void send('', [], prefs.sendWhileBusy, 'comments');
           }}
+          askTrust={askTrust}
         />
       )}
       {sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}

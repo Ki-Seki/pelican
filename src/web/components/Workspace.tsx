@@ -3,18 +3,19 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { api } from '../lib/api';
+import { api, type TrustChoice } from '../lib/api';
 import { baseName } from '../lib/format';
-import { closesPane, composing, isApple } from '../lib/keyboard';
+import { closesPane, composing, hasKeyboard, isApple } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments, useCommentsChat } from '../lib/review';
+import { wantTerminalFocus } from '../lib/terminals';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
 import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
-import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
+import { WorkspaceChanges, WorkspaceFiles, WorkspaceTerminal } from './WorkspaceTabs';
 
 /**
  * From this width Changes and files sits beside the conversation instead of over it; under the
@@ -29,6 +30,12 @@ const SEND_KEYS = isApple ? '⌘↵' : 'Ctrl+Enter';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
+
+/** Without a trust sheet to ask with, a folder that needs trusting starts no terminal. */
+const noTrust = async (): Promise<TrustChoice | undefined> => undefined;
+
+/** The tab the view shows, or would show on opening: the address's, else the one last looked at. */
+export const shownTab = (step: WorkspaceStep | undefined): WorkspaceTab => step?.tab ?? lastTab;
 
 /**
  * Whether Changes and files is open, and where. On a computer it is a pane beside the conversation
@@ -114,7 +121,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments, askTrust = noTrust }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -134,6 +141,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
+  /** The trust sheet, for a terminal in a folder nobody trusted that brings programs: the answer, or none. */
+  askTrust?: (brings: string[]) => Promise<TrustChoice | undefined>;
 }) {
   const comments = useComments(useCommentsChat(cwd));
   const commentsIn = useMemo(() => {
@@ -154,8 +163,15 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const switchTab = (to: WorkspaceTab) => {
     lastTab = to;
     tapped.current = true;
+    // Picked on a computer, the terminal takes the keys, to type in at once.
+    if (to === 'terminal' && hasKeyboard()) wantTerminalFocus();
     goTo({ tab: to }, false);
   };
+  // The terminal stays connected while another tab shows, ready at once when it comes back;
+  // until it is first shown, it is not loaded at all.
+  const [terminalShown, setTerminalShown] = useState(false);
+  if (open && tab === 'terminal' && !terminalShown) setTerminalShown(true);
+  if (!open && terminalShown) setTerminalShown(false);
 
   // Read again while it is looked at, and only then: every 5 s while Claude works, every 30 s
   // otherwise, never while it waits for an answer or the view is closed. In a large repository
@@ -204,6 +220,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           options={[
             { value: 'changes', label: git && git.files.length > 0 ? `Changes · ${git.files.length}` : 'Changes' },
             { value: 'files', label: 'Files' },
+            { value: 'terminal', label: 'Terminal' },
           ]}
         />
       )}
@@ -233,9 +250,20 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   // The view's lowest row keeps clear of a phone's or a tablet's home indicator, also beside the
   // conversation: the bar saying Claude waits (a phone's view has it), else the comments, else a
-  // selection's Quote and Copy; the end of what scrolls, too. A computer has no such edge (the
-  // inset is 0 there), so nothing moves.
+  // selection's Quote and Copy, or the terminal's keys; the end of what scrolls, too. A computer
+  // has no such edge (the inset is 0 there), so nothing moves.
   const waits = !docked && Boolean(needsYou);
+  const terminal = terminalShown && (
+    <div className={tab === 'terminal' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      <WorkspaceTerminal
+        cwd={cwd}
+        hidden={tab !== 'terminal'}
+        {...(comments.length === 0 && !waits ? { lowest: docked ? 'pane' as const : 'phone' as const } : {})}
+        askTrust={askTrust}
+        onQuote={(quote) => onAddToMessage(quote, 'quote')}
+      />
+    </div>
+  );
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
   const selectionFoot = useMemo<SelectionFootAt | undefined>(
     () => (foot ? { at: foot, ...(comments.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
@@ -295,7 +323,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           </button>
         </div>
         <div className="shrink-0 px-4">{header}</div>
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+        {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
+        {terminal}
         <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>
@@ -329,7 +358,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </div>
         <div className="px-3">{header}</div>
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+      {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
+      {terminal}
       <div ref={setFoot} className="shrink-0" />
       {footer}
       {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}

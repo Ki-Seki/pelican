@@ -532,7 +532,7 @@ let sweeping: NodeJS.Timeout | undefined;
 
 /** Why this Pelican runs no terminals at all: the demo, or --no-terminal. */
 function refusal(): string | undefined {
-  if (config.demo) return 'This is the demo: it has no terminal. Start Pelican without --demo for one.';
+  if (config.demo) return 'This is the demo, so nothing runs here. Start Pelican without --demo for a terminal.';
   if (!config.terminal) return 'The terminal is off: Pelican was started with --no-terminal.';
   return undefined;
 }
