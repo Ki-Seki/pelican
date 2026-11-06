@@ -310,6 +310,18 @@ describe('a reply in the export', () => {
     }
   });
 
+  it('reads an autolink as every reader reads one, and writes the `<` of one only some read so as text', () => {
+    // A no-break space is in an autolink for all of them, and NUL is U+FFFD there, as CommonMark has it.
+    expect(reply('See <urn:isbn:0451450523 `> and <img src="https://evil.example/p.png"> `')).toBe('See <urn:isbn:0451450523 `> and &lt;img src="https://evil.example/p.png"> \\`');
+    expect(reply('See <ab:x\u0000`> and <img src="https://evil.example/p.png"> `')).toBe('See <ab:x�`> and &lt;img src="https://evil.example/p.png"> \\`');
+    // DEL, and a `!` in an email's name, the conversation's reader takes for no autolink and the others for one.
+    expect(reply('<ab:\u007f![x](https://evil.example/p.png)>')).toBe('&lt;ab:\u007f[x · evil.example](https://evil.example/p.png)>');
+    expect(reply('Mail <ops!`team@corp.example> or `<img src="https://evil.example/p.png">`')).toBe('Mail &lt;ops!`team@corp.example> or `&lt;img src="https://evil.example/p.png">\\`');
+    for (const said of ['<ab:\u007f![x](https://evil.example/p.png)>', 'Mail <ops!`team@corp.example> or `<img src="https://evil.example/p.png">`']) {
+      expect(trouble(reply(said)), said).toEqual([]);
+    }
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

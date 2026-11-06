@@ -441,7 +441,9 @@ const DASHES = /^-+[ \t]*$/;
  * leaves open is closed at its end. The rest is as written: what the reader takes as code stays
  * code.
  */
-export function reply(text: string, id = 1): string {
+export function reply(said: string, id = 1): string {
+  // NUL is U+FFFD to every reader, as CommonMark has it: in an address too, which it would end here.
+  const text = said.replaceAll('\0', '\ufffd');
   const out: Array<string | undefined> = [];
   const open: Block[] = [];
   const context: Context = { id, definitions: new Map(), notes: new Map(), room: 2 * text.length + 100_000 };
@@ -1096,7 +1098,19 @@ function definitions(lines: readonly Line[], context?: Context): number {
 // the reader reads them.
 
 const ASCII_PUNCTUATION = /[!-\/:-@[-`{-~]/;
-const AUTOLINK = /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>\x00-\x1f]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/y;
+const EMAIL_DOMAIN = '@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*';
+/**
+ * An autolink, as every reader takes one, micromark (the conversation's reader) the strictest: a
+ * scheme, then no ASCII control character, space, `<` or `>`; or an email, with no `!` in its name.
+ * NUL is none of them, as the reply is read with U+FFFD in its place, as readers read it.
+ */
+const AUTOLINK = new RegExp(`<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\x00-\\x20<>\\x7f]*|[A-Za-z0-9.#$%&'*+/=?^_\`{|}~-]+${EMAIL_DOMAIN})>`, 'y');
+/**
+ * One that only some readers take for an autolink: with DEL, which the others allow, or a `!` in
+ * an email's name, as the spec has it. Its `<` is written `&lt;`, so that none takes it for one,
+ * and all read what is in it as the conversation does.
+ */
+const AUTOLINK_SOME = new RegExp(`<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\x00-\\x20<>]*|[A-Za-z0-9.!#$%&'*+/=?^_\`{|}~-]+${EMAIL_DOMAIN})>`, 'y');
 /**
  * A `<` some reader may take for HTML: a tag's name and what may go on a tag, a closing tag, a
  * comment, a declaration or an instruction. Any other is text in all of them, as written.
@@ -1662,7 +1676,7 @@ function inline(text: string, { sure, breaks = [], context }: { sure: boolean; b
       const link = pointed === undefined ? matchAt(AUTOLINK, text, i) : null;
       if (pointed !== undefined) i = matchAt(HTML_START, text, i) ? put(i, address(text.slice(i, pointed + 1)), pointed + 1) : pointed + 1;
       else if (link) i += link[0].length;
-      else if (matchAt(HTML_START, text, i)) i = put(i, '&lt;', i + 1);
+      else if (matchAt(HTML_START, text, i) || matchAt(AUTOLINK_SOME, text, i)) i = put(i, '&lt;', i + 1);
       else i += 1;
     } else if (c === '!' && text[i + 1] === '[') {
       const link = reading.links.get(i);
