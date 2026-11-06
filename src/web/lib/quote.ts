@@ -4,6 +4,11 @@
  * lines. Quotes wait above the message box and go above your words, each a block of its own.
  */
 
+import { HEADER, QUOTED } from '../../shared/prompt-parts';
+
+// How a prompt with quotes is shown: shared, as the export reads prompts the same way.
+export { type PromptPart, promptParts } from '../../shared/prompt-parts';
+
 /** What was selected: text from the conversation, or lines of a file from line `start` on, numbered as in the file. */
 export type Selection = { text: string } | { text: string; path: string; start: number };
 
@@ -11,11 +16,6 @@ export type Selection = { text: string } | { text: string; path: string; start: 
 export const MAX_QUOTE_LINES = 200;
 /** Past this a quote is cut short: drafts are kept in the page, and a message must fit a request. */
 const MAX_QUOTE_CHARS = 20_000;
-
-/** Where a quote is from: a path and a line or a range, as a line comment names it too (lib/review). */
-const HEADER = /^(\S(?:.*\S)?):(\d+)(?:-(\d+))?( \(removed\))?$/;
-const QUOTED = /^>( |$)/;
-const FENCE = /^\s*(```|~~~)/;
 
 const quoted = (lines: readonly string[]) => lines.map((line) => (line ? `> ${line}` : '>')).join('\n');
 
@@ -90,43 +90,6 @@ export function splitQuotes(message: string): { quotes: string[]; text: string }
     while (at < lines.length && lines[at] === '') at += 1;
   }
   return { quotes, text: lines.slice(at).join('\n') };
-}
-
-/** A prompt as it is shown: its words, and the quotes in it (where one is from, and what it says). */
-export type PromptPart = { kind: 'text'; text: string } | { kind: 'quote'; from?: string; text: string };
-
-/**
- * A prompt cut into its words and its quotes: a quote is a run of lines that start with `>`, with
- * the `path:line` line just above it when there is one (a quote from a file, a comment on a line).
- * Lines in a fenced code block are never a quote.
- */
-export function promptParts(text: string): PromptPart[] {
-  const lines = text.split('\n');
-  const parts: PromptPart[] = [];
-  let words: string[] = [];
-  let fenced = false;
-  const flush = () => {
-    const kept = words.join('\n').replace(/^\n+|\n+$/g, '');
-    if (kept) parts.push({ kind: 'text', text: kept });
-    words = [];
-  };
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    if (FENCE.test(line)) fenced = !fenced;
-    const from = !fenced && HEADER.test(line) && QUOTED.test(lines[i + 1] ?? '') ? line : undefined;
-    const first = from ? i + 1 : i;
-    if (fenced || !QUOTED.test(lines[first] ?? '')) {
-      words.push(line);
-      continue;
-    }
-    let end = first;
-    while (end < lines.length && QUOTED.test(lines[end]!)) end += 1;
-    flush();
-    parts.push({ kind: 'quote', ...(from ? { from } : {}), text: lines.slice(first, end).map((l) => l.replace(QUOTED, '')).join('\n') });
-    i = end - 1;
-  }
-  flush();
-  return parts;
 }
 
 /** What a quote waiting above the message box is called: where it is from, or how it begins. */

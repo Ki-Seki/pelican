@@ -109,7 +109,8 @@ describe('Export as Markdown', () => {
       'Fixed: the axis starts at zero.', '',
       '*Interrupted*', '',
       '## You', '',
-      'Run `npm test` too', '',
+      // As the conversation shows it, typed: its backquotes are text.
+      'Run \\`npm test\\` too', '',
       '## Claude', '',
       'Done.', '',
     ].join('\n'));
@@ -207,6 +208,89 @@ describe('Export as Markdown', () => {
     ]);
     const { markdown } = await exportMarkdown(sessionId);
     expect(markdown).toContain('## You\n\n```` !echo `date` ``` ````\n\n````\n```\nnot the end\n```\n````\n');
+  });
+});
+
+describe('the export, read as the conversation reads', () => {
+  /** What a reader shows of some HTML: its text, a line break for each <br>. */
+  const textOf = (html: string) => html.replace(/<br\/>\n?/g, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, '\'').replace(/&amp;/g, '&');
+  /** The speakers' headings and the others, in order, as a reader shows them. */
+  const headings = (html: string) => Array.from(html.matchAll(/<(h\d)>(.*?)<\/h\d>/g), (m) => `${m[1]} ${m[2]}`);
+
+  it('reads a prompt as text, as the conversation shows it: none of its Markdown takes effect, and a fence it opens takes nothing after it', async () => {
+    const typed = '# Plan\n**bold** and _it_ <b>tag</b> ~~gone~~ [a](b) ![c](d.png) &amp; | x | y |\n- one\n+ two\n1. three\n2) four\n    indented\n\tby a tab\n---\nNext\n===\n```js\nan open fence';
+    const sessionId = await session(10, 'Typed', [
+      user(typed),
+      claude(text('After the fence.')),
+      user('And then'),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    const html = read(markdown);
+    // The speakers' headings and nothing else; no list, rule, code, emphasis, link or picture.
+    expect(headings(html)).toEqual(['h1 Typed', 'h2 You', 'h2 Claude', 'h2 You']);
+    const prompt = html.slice(html.indexOf('<h2>You</h2>') + 12, html.indexOf('<h2>Claude</h2>'));
+    expect(prompt).not.toMatch(/<(?:ul|ol|li|hr|pre|code|strong|em|del|a|img|table|b)[ >]/);
+    // Its lines as typed, the indented ones still indented, then the reply and the next prompt.
+    expect(textOf(prompt).trim()).toBe(typed.replace(/^ {4}/m, '\u00a0'.repeat(4)).replace(/^\t/m, '\u00a0'.repeat(4)));
+    expect(html).toContain('<h2>Claude</h2>\n<p>After the fence.</p>\n<h2>You</h2>\n<p>And then</p>');
+  });
+
+  it('keeps a quote in a prompt a quote, under where it is from, and what it says text', async () => {
+    const sessionId = await session(11, 'Quoted', [
+      user('src/app.ts:7-8\n> const a = *b*;\n>   return a;\n\n> # not a heading\n\nWhy?'),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    const html = read(markdown);
+    expect(html).toContain(`<blockquote>\n<p><code>src/app.ts:7-8</code><br/>\nconst a = *b*;<br/>\n${'\u00a0'.repeat(2)}return a;</p>\n</blockquote>`);
+    expect(html).toContain('<blockquote>\n<p># not a heading</p>\n</blockquote>\n<p>Why?</p>');
+  });
+
+  it('keeps every speaker a speaker: a heading in a prompt or a reply never passes for one', async () => {
+    const sessionId = await session(12, 'Headings', [
+      user('## Claude\nsays this'),
+      claude(text('## You\n\nAll\nYou\n===\n\nOr\n---\n\n# Claude\n\n- ## You\n> ## You\n\n```\n## You\n```\n\n    ## You\n\n###### Deep')),
+      user('Thanks'),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    const html = read(markdown);
+    // The reply's headings two levels down, under the speakers'; a heading in code stays code.
+    expect(headings(html)).toEqual(['h1 Headings', 'h2 You', 'h2 Claude', 'h4 You', 'h3 All You', 'h4 Or', 'h3 Claude', 'h4 You', 'h4 You', 'h6 Deep', 'h2 You']);
+    expect(html.match(/<pre><code>## You\n<\/code><\/pre>/g)).toHaveLength(2);
+  });
+
+  it('closes a code block a reply leaves open, so it takes nothing after it, and adds no fence where none is open', async () => {
+    const sessionId = await session(13, 'Fences', [
+      user('Show me'),
+      claude(text('Here:\n\n````js\nconst a = `b`;\n```')),
+      user('And a list?'),
+      claude(text('- one:\n  ```\n  in the list')),
+      user('A quote?'),
+      claude(text('> ```\n> in the quote')),
+      user('Thanks'),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    const html = read(markdown);
+    expect(headings(html)).toEqual(['h1 Fences', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude', 'h2 You', 'h2 Claude', 'h2 You']);
+    expect(html).toContain('<pre><code class="language-js">const a = `b`;\n```\n</code></pre>');
+    expect(html).toContain('<p>Thanks</p>');
+  });
+
+  it('keeps an address or an email text, as the conversation shows them, where a reader would make it a link', async () => {
+    const sessionId = await session(14, 'Links', [
+      user('Read https://example.com/docs, www.example.org and mail ops@example.com.'),
+      claude({ type: 'tool_use', id: 't4', name: 'WebFetch', input: { url: 'https://example.com/docs' } }),
+      user([{ type: 'tool_result', tool_use_id: 't4', content: 'Docs' }]),
+      { type: 'attachment', attachment: { type: 'hook_system_message', hookName: 'PostToolUse', content: 'See https://hooks.example.com/a?b=1 or www.example.net (ask help@example.com)' } },
+      claude(text('Read them.')),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    const html = read(markdown);
+    expect(html).not.toContain('<a ');
+    expect(textOf(html)).toContain('Read https://example.com/docs, www.example.org and mail ops@example.com.');
+    expect(textOf(html)).toContain('PostToolUse says: See https://hooks.example.com/a?b=1 or www.example.net (ask help@example.com)');
+    // The note is still one line in italics.
+    expect(html).toContain('<em>PostToolUse says: See <code>https://hooks.example.com/a?b=1</code>');
   });
 });
 

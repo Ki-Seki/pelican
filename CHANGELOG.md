@@ -8,6 +8,11 @@
 - A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
   recommends; other tags after a black flag, which can spell anything unseen, are left out. The
   repository's check for hidden characters holds the docs to the same three.
+- Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of
+  its Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its
+  quotes are quotes. A heading in a reply sits under the speakers' (`##` becomes `####`), so none
+  passes for "You" or "Claude", and a code block a reply leaves open ends with it. Addresses and
+  emails in prompts and Claude Code's notes stay text, as code, where a reader would link them.
 
 ## 0.4.0
 
