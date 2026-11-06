@@ -12,17 +12,19 @@ const FLICK = 0.5;
  * phone its top can be dragged down to close it, as the sheets there can.
  */
 export function Sheet({
-  open, onClose, title, children, done, size = 'normal', header,
+  open, onClose, title, children, done, size = 'normal', header, behind,
 }: {
   open: boolean;
   onClose: () => void;
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   done?: boolean;
   /** large: nearly the whole screen on a phone, wide on a computer, for reading files and diffs. */
   size?: 'normal' | 'large';
   /** Shown under the title, outside the scrolling part. */
   header?: ReactNode;
+  /** Over the dimmed page and under the sheet: what a long press opened the sheet for, raised. */
+  behind?: ReactNode;
 }) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -65,6 +67,7 @@ export function Sheet({
     <Modal open={open} onClose={onClose} labelledBy={titleId}>
       <div className="flex h-full w-full items-end justify-center sm:items-center sm:p-6">
         <div className="animate-fade absolute inset-0 bg-black/30 transition-opacity duration-200 group-data-closing/modal:opacity-0" onClick={onClose} />
+        {behind}
         <div
           ref={panel}
           className={`animate-sheet pb-safe relative flex w-full flex-col rounded-t-2xl border border-line bg-panel shadow-2xl transition-[translate,transform,opacity] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-closing/modal:translate-y-full motion-reduce:transition-none sm:rounded-2xl sm:group-data-closing/modal:translate-y-3 sm:group-data-closing/modal:opacity-0 ${size === 'large' ? 'h-[92%] max-w-3xl sm:h-[85%]' : 'max-h-[85%] max-w-md'}`}
