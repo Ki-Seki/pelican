@@ -1,10 +1,12 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
+import { promptParts } from '../shared/prompt-parts.js';
 import type { ChatMessage } from '../shared/protocol.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
 import { buildItems, cleanOutput, type SentFile, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
+import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
 import { loadMessages, sessionInfo } from './sessions.js';
 import { refreshTranscriptIndex } from './transcripts.js';
 
@@ -44,16 +46,19 @@ export async function remove(sessionId: string): Promise<void> {
   await refreshTranscriptIndex();
 }
 
-/** Backticks around code, more of them than any run inside it, so nothing in it ends the code. */
-const fence = (code: string, fewest: number) => '`'.repeat(Math.max(fewest, ...Array.from(code.matchAll(/`+/g), (run) => run[0].length + 1)));
-const inlineCode = (code: string) => (code.includes('`') ? `${fence(code, 1)} ${code} ${fence(code, 1)}` : `\`${code}\``);
-const codeBlock = (code: string) => `${fence(code, 3)}\n${code}\n${fence(code, 3)}`;
-/** A command as typed: inline, or a block of its own when it has more lines, which would end inline code. */
-const asCode = (code: string) => (/[\r\n]/.test(code) ? codeBlock(code) : inlineCode(code));
+/**
+ * A prompt as the conversation shows it: its words as text, and the quotes above them as quotes;
+ * one from a file under where it is from, its lines as code, as the conversation shows them.
+ */
+const prompt = (text: string) => promptParts(text).map((part) => {
+  if (part.kind === 'text') return asText(part.text);
+  const quote = part.from ? [inlineCode(part.from), ...(part.text ? [codeBlock(part.text)] : [])].join('\n') : asText(part.text);
+  return quote.split('\n').map((line) => (line ? `> ${line}` : '>')).join('\n');
+});
 
 const toolLine = (name: string, input: Record<string, unknown>) => {
   const target = ['file_path', 'command', 'pattern', 'url', 'query', 'description'].map((k) => input[k]).find((v) => typeof v === 'string');
-  return `- ${name}${target ? `: ${inlineCode(String(target).split(/\r\n?|\n/)[0]!)}` : ''}`;
+  return `- ${inlineText(name)}${target ? `: ${inlineCode(String(target).split(/\r\n?|\n/)[0]!)}` : ''}`;
 };
 
 /**
@@ -61,12 +66,12 @@ const toolLine = (name: string, input: Record<string, unknown>) => {
  * as it is written: nothing in it is taken as Markdown.
  */
 const note = (text: string) => text.split(/\r\n?|\n/).map((line) => line.trim()).filter(Boolean)
-  .map((line) => `*${line.replace(/[\\`*_[\]<>&~|]/g, '\\$&')}*`).join('\n');
+  .map((line) => `*${inlineText(line)}*`).join('\n');
 
 /** What a prompt carried besides its words: pictures, which have no names, and files by name. */
 const attached = (pictures: number, files: SentFile[]) => {
   const all = [...(pictures === 1 ? ['a picture'] : pictures > 1 ? [`${pictures} pictures`] : []), ...files.map((file) => file.name)];
-  return all.length > 0 ? [`Attached: ${all.join(', ')}`] : [];
+  return all.length > 0 ? [`Attached: ${inlineText(all.join(', '))}`] : [];
 };
 
 /** A workflow's end, in the words of its line in the conversation. */
@@ -77,17 +82,20 @@ const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
  * The conversation as Markdown, with all the conversation shows, as Claude Code's /export has all
  * its screen shows: prompts and replies in full with what was attached, `!` and `/` commands as
  * code with their output, tool calls as one line each, and Claude Code's own lines (a background
- * task's note, Interrupted, a failed request, a hook's word, a compaction) in italics. What the
- * conversation leaves out stays out: the notes Claude Code and Pelican give Claude with a prompt (a
- * side chat's note, in a system reminder), the tags around commands and a compaction's summary.
- * The days the conversation is marked off by are left out, as the terminal has none.
+ * task's note, Interrupted, a failed request, a hook's word, a compaction) in italics. Each reads
+ * as the conversation shows it: a prompt, a note and a name as text, none of it Markdown, and a
+ * reply as Markdown that keeps to itself (markdown.ts): its headings under the speakers', its HTML
+ * as text and its pictures as links, in any reader. What the conversation
+ * leaves out stays out: the notes Claude Code and Pelican give Claude with a prompt (a side chat's
+ * note, in a system reminder), the tags around commands and a compaction's summary. The days the
+ * conversation is marked off by are left out, as the terminal has none.
  */
 export async function exportMarkdown(sessionId: string): Promise<{ title: string; markdown: string }> {
   const info = await sessionInfo(sessionId);
   const title = info?.customTitle || info?.summary || 'Claude Code session';
   const messages: ChatMessage[] = await loadMessages(sessionId);
-  const out: string[] = [`# ${title}`, ''];
-  if (info?.cwd) out.push(`Folder: \`${info.cwd}\``, '');
+  const out: string[] = [`# ${inlineText(title.replace(/\s+/g, ' ').trim())}`, ''];
+  if (info?.cwd) out.push(`Folder: ${inlineCode(info.cwd)}`, '');
   let speaker: string | undefined;
   const say = (who: 'You' | 'Claude', blocks: string[]) => {
     if (blocks.length === 0) return;
@@ -98,7 +106,7 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   // What the conversation view shows, read the same way.
   for (const item of buildItems(messages, config.machine)) {
     if (item.kind === 'user') {
-      const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())] : item.text ? [item.text] : [];
+      const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())] : item.text ? prompt(item.text) : [];
       say('You', [...words, ...attached(item.images.length, item.files)]);
     } else if (item.kind === 'shell') {
       const output = [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd();
@@ -120,7 +128,7 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
         else if (part.kind === 'text' && part.text.trim()) {
           if (tools.length > 0) blocks.push(tools.join('\n'));
           tools = [];
-          blocks.push(part.text.trim());
+          blocks.push(reply(part.text.trim()));
         }
       }
       if (tools.length > 0) blocks.push(tools.join('\n'));

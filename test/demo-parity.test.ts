@@ -164,9 +164,9 @@ describe('in the demo’s page', async () => {
   const { startDemo } = await import('../src/web/lib/demo');
   const { api } = await import('../src/web/lib/api');
   const { getView, setRun } = await import('../src/web/lib/store');
+  beforeAll(() => startDemo({ machine: 'laptop', home: '/demo', version: '0', auth: false, demo: true }));
 
   it('Stop on the command Claude left running ends it, and the session has nothing left at work', async () => {
-    startDemo({ machine: 'laptop', home: '/demo', version: '0', auth: false, demo: true });
     setRun(DEV, demoRunState(DEV)!);
     await expect(api.stopTask(DEV, 'bash_1')).resolves.toEqual({ ok: true });
     expect(getView(DEV).run?.tasks).toBeUndefined();

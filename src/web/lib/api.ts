@@ -255,8 +255,9 @@ export const api = {
   unqueue: (id: string, uuid: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}/queued/${encodeURIComponent(uuid)}`),
   /** The mode a new session starts in, from Claude Code's settings (no folder: a scratch session). */
   defaults: (cwd?: string) => request<{ permissionMode: PermissionMode | null }>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
-  subagent: (id: string, agent: string) =>
-    request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
+  /** The last messages of an Agent call's subagent's transcript, or those before message `before`. */
+  subagent: (id: string, agent: string, before?: number) =>
+    request<MessagesPage>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}${before !== undefined ? `?before=${before}` : ''}`),
   /** A Workflow call's run, from the run's own files (or this Pelican's Claude, while it runs it). */
   workflow: (id: string, call: string) =>
     request<{ workflow: Workflow }>(`sessions/${encodeURIComponent(id)}/workflows/${encodeURIComponent(call)}`).then((r) => r.workflow),

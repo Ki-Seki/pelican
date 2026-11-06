@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, RunState, ServerInfo } from '../src/shared/protocol';
 
@@ -10,27 +10,37 @@ const { addLocalMessage, getView, setRun } = await import('../src/web/lib/store'
 const { DEMO_NOTE } = await import('../src/web/lib/static-demo');
 
 const CWD = '/demo/code/acme-web';
-const SESSION = 'a3f1c2d4-1111-4a1b-8c3d-000000000001';
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed') => ({ content, status, activeForm: `${content}ing` });
 const tasks = [todo('Add dark colors', 'completed'), todo('Add the toggle', 'in_progress'), todo('Remember the choice', 'pending'), todo('Run the tests', 'pending')];
 
-const waiting: RunState = {
-  sessionId: SESSION,
+/** Claude waiting to edit a file, as a run of the session's. */
+const waitingIn = (sessionId: string): RunState => ({
+  sessionId,
   cwd: CWD,
   busy: true,
   settings: { model: 'default' },
   partial: [],
   permissions: [{
-    id: 'demo-permission', sessionId: SESSION, toolName: 'Edit', always: 'Allow all edits this session', createdAt: 0,
+    id: 'demo-permission', sessionId, toolName: 'Edit', always: 'Allow all edits this session', createdAt: 0,
     input: { file_path: `${CWD}/src/settings/Settings.tsx`, old_string: 'a\nb', new_string: 'a\nb\nc' },
   }],
-};
+});
 
 const message = (uuid: string, role: ChatMessage['role'], blocks: ChatMessage['blocks']): ChatMessage => ({ uuid, role, blocks, timestamp: 1 });
 
 beforeAll(() => {
   vi.useFakeTimers();
   startDemo({ machine: 'laptop', home: '/demo', version: '0', auth: false, demo: true } satisfies ServerInfo);
+});
+
+// Each test has a session of its own, at the same place: a dark theme under way, an edit to allow.
+let made = 0;
+let SESSION: string;
+let waiting: RunState;
+beforeEach(() => {
+  made += 1;
+  SESSION = `a3f1c2d4-1111-4a1b-8c3d-${String(made).padStart(12, '0')}`;
+  waiting = waitingIn(SESSION);
   addLocalMessage(SESSION, message('m1', 'user', [{ type: 'text', text: 'Add a dark theme' }]));
   addLocalMessage(SESSION, message('m2', 'assistant', [{ type: 'tool_use', id: 't1', name: 'TodoWrite', input: { todos: tasks } }]));
   addLocalMessage(SESSION, message('m3', 'assistant', [{ type: 'tool_use', id: 't2', name: 'Edit', input: { file_path: `${CWD}/theme.css`, old_string: 'x', new_string: 'x\ny\nz' } }]));
@@ -54,6 +64,9 @@ describe('the demo', () => {
   });
 
   it('answers a message with what Claude would do, and keeps it when the page is read again', async () => {
+    // Once the turn under way has ended.
+    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
+    vi.runAllTimers();
     await api.send(SESSION, { text: 'Use the system setting', attachments: [], settings: {}, uuid: 'mine' });
     vi.runAllTimers();
     const messages = getView(SESSION).messages;
@@ -70,7 +83,12 @@ describe('the demo', () => {
     expect(isDemoNote(upload)).toBe(true);
   });
 
-  it('shows what Rewind would put back, from the conversation', () => {
+  it('shows what Rewind would put back, from the conversation', async () => {
+    // The edit allowed, then a prompt that edits nothing.
+    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
+    vi.runAllTimers();
+    await api.send(SESSION, { text: 'Use the system setting', attachments: [], settings: {}, uuid: 'mine' });
+    vi.runAllTimers();
     expect(rewindPreview(getView(SESSION).messages, 'm1')).toMatchObject({ canRewind: true, files: [`${CWD}/theme.css`, `${CWD}/src/settings/Settings.tsx`] });
     expect(rewindPreview(getView(SESSION).messages, 'mine')).toEqual({ canRewind: false });
     // An edit's lines count as they change back: the lines its old and new text share stay.

@@ -40,12 +40,12 @@ import { searchText } from './search.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
-import { listSummaries, loadMessages, loadPage, loadSubagent, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { listSummaries, loadMessages, loadPage, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
 import { transcriptImage } from './history.js';
 import { instance } from './running.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
-import { AGENT_ID, CALL_ID, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
+import { AGENT_ID, CALL_ID, subagentPage, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
 
 export const app = new Hono();
 
@@ -1020,8 +1020,18 @@ export function byteRange(header: string | undefined, size: number): { start: nu
   return first < size ? { start: first, end: Math.min(last ?? size - 1, size - 1) } : null;
 }
 
+/**
+ * A page of an Agent call's subagent's own transcript, as a workflow agent's comes: its last
+ * messages by default, `before` for earlier ones, each one and the page bounded.
+ */
 app.get('/api/sessions/:id/agents/:agent', async (c) => {
-  return c.json({ messages: await loadSubagent(c.req.param('id'), c.req.param('agent')) });
+  const id = uuidOf(c.req.param('id'));
+  const value = c.req.query('before');
+  const before = value === undefined ? undefined : Number(value);
+  if (!id || (before !== undefined && !(Number.isSafeInteger(before) && before >= 0))) return c.json({ error: 'No such agent' }, 404);
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 60) || 60, 1), 300);
+  const page = await subagentPage(id, c.req.param('agent'), { ...(before !== undefined ? { before } : {}), limit });
+  return page ? c.json(page) : c.json({ error: 'No such agent' }, 404);
 });
 
 app.get('/api/files', async (c) => {

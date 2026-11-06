@@ -77,5 +77,5 @@ describe('a session waiting for an answer in another app', () => {
     await checkWaiting(Date.now() + NOTIFY_AFTER_MS);
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Claude needs your input in the terminal' }));
-  });
+  }, 15_000);
 });

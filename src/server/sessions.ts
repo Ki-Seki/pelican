@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
@@ -11,7 +11,6 @@ import { folderKind } from './folders.js';
 import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
-import { toChatMessage } from './normalize.js';
 import { sideChatSource } from './side-chat.js';
 import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
@@ -236,16 +235,6 @@ export async function sentFiles(sessionId: string): Promise<Set<string>> {
     }
   }
   return paths;
-}
-
-/** What a subagent did inside an Agent call: its own transcript, next to the session's. */
-export async function loadSubagent(sessionId: string, agentId: string): Promise<ChatMessage[]> {
-  if (!/^[\w-]{1,80}$/.test(agentId)) return [];
-  const dir = infoCache.get(sessionId)?.cwd;
-  const raw = await getSubagentMessages(sessionId, agentId, dir ? { dir } : {}).catch(() => []);
-  return raw
-    .map((message) => toChatMessage(message as unknown as Record<string, unknown>))
-    .filter((message): message is ChatMessage => Boolean(message));
 }
 
 /** A page of messages ending before index `before` (default: the end). */

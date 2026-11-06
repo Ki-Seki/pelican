@@ -149,14 +149,13 @@ function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: num
 
 /**
  * Where Changes and files puts a file's selection bar: a row of its own under what scrolls, so
- * the file never scrolls under it; `safe`: the lowest row of the view, clear of the home indicator,
- * as the view's other lowest rows are: on a phone, 8px above the edge at least; beside the
- * conversation, as deep as a tablet's indicator, and the 6px it has on a computer. A viewer with
- * none keeps the bar at the foot of the file as it scrolls.
+ * the file never scrolls under it; `safe`: the lowest row of the view, clear of the home indicator
+ * and level with the view's other lowest rows (Send now, and beside the conversation the message
+ * boxes): 8px above the edge at least, on a phone and on a computer. A viewer with none keeps the
+ * bar at the foot of the file as it scrolls.
  */
-export type SelectionFootAt = { at: HTMLElement; safe?: 'phone' | 'pane' };
+export type SelectionFootAt = { at: HTMLElement; safe?: boolean };
 export const SelectionFoot = createContext<SelectionFootAt | undefined>(undefined);
-const SAFE_FOOT = { phone: 'pb-safe', pane: 'pb-[max(0.375rem,env(safe-area-inset-bottom))]' };
 
 /** Under a selection of lines: quote them into the message as `path:7-8` and the lines, or copy the text. */
 function SelectionBar({ from, to, onQuote, text, place }: { from: number; to: number; onQuote: () => void; text: string; place: string }) {
@@ -353,7 +352,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>
           </LinesContext.Provider>
-          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? SAFE_FOOT[foot.safe] : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
+          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
         </>
       )}
       {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}

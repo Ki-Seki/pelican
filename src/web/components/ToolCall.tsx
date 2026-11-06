@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
-import type { DeliveredFile } from '../../shared/protocol';
+import type { ChatMessage, DeliveredFile } from '../../shared/protocol';
 import { api, ApiError, type SentState } from '../lib/api';
 import { duration, formatBytes } from '../lib/format';
 import { useFileLink, usePathLinks } from '../lib/path-links';
@@ -441,7 +441,10 @@ function SentFiles({ call }: { call: ToolCall }) {
   );
 }
 
-/** What a subagent did, from its own transcript: its tool calls, opened on request. */
+/**
+ * What a subagent did, from its own transcript: its tool calls, opened on request. A page at a
+ * time, the newest first, as a workflow agent's: a long one is tens of megabytes.
+ */
 function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
   const sessionId = useSessionId();
   const [open, setOpen] = useState(false);
@@ -451,17 +454,38 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
     enabled: open && Boolean(sessionId),
     staleTime: 60_000,
   });
-  const steps = useMemo(() => buildItems(data ?? []).flatMap((item) => (item.kind === 'assistant' ? item.parts : [])).filter((part) => part.kind === 'tool'), [data]);
+  // Earlier pages, asked for one at a time, up to where the newest begins; let go if it was read again.
+  const [earlier, setEarlier] = useState<{ messages: ChatMessage[]; offset: number; joins: number }>();
+  const [loading, setLoading] = useState(false);
+  const before = earlier && data && earlier.joins === data.offset ? earlier : undefined;
+  const offset = before?.offset ?? data?.offset ?? 0;
+  const older = async () => {
+    if (loading || !data || offset === 0) return;
+    setLoading(true);
+    try {
+      const page = await api.subagent(sessionId!, agentId, offset);
+      setEarlier((had) => ({ messages: [...page.messages, ...(had && had.joins === data.offset ? had.messages : [])], offset: page.offset, joins: data.offset }));
+    } finally {
+      setLoading(false);
+    }
+  };
+  const messages = useMemo(() => [...(before?.messages ?? []), ...(data?.messages ?? [])], [before, data]);
+  const steps = useMemo(() => buildItems(messages).flatMap((item) => (item.kind === 'assistant' ? item.parts : [])).filter((part) => part.kind === 'tool'), [messages]);
   if (!sessionId) return null;
   return (
     <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px]">
-      <button type="button" className="flex min-h-7 w-full items-center gap-1.5 text-left text-faint hover:text-fg" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <ChevronRight className={`size-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
-        {open && data ? `${steps.length} steps` : 'Steps it took'}
-        {open && isLoading && <Loader2 className="size-3.5 animate-spin" />}
-      </button>
+      <div className="flex min-h-7 items-center gap-3">
+        <button type="button" className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left text-faint hover:text-fg" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          {open && data ? `${offset > 0 ? 'Last ' : ''}${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : 'Steps it took'}
+          {open && (isLoading || loading) && <Loader2 className="size-3.5 shrink-0 animate-spin" />}
+        </button>
+        {open && offset > 0 && (
+          <button type="button" onClick={() => void older()} className="relative shrink-0 text-[12px] text-faint after:absolute after:-inset-x-1.5 after:-inset-y-3 hover:text-fg">Show earlier</button>
+        )}
+      </div>
       {open && error && <div className="py-1 text-[12px] text-danger">{(error as Error).message}</div>}
-      {open && data && steps.length === 0 && <div className="py-1 text-[12px] text-faint">No steps were recorded.</div>}
+      {open && data && steps.length === 0 && offset === 0 && <div className="py-1 text-[12px] text-faint">No steps were recorded.</div>}
       {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} /> : null))}
     </div>
   );

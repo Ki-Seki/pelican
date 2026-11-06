@@ -51,6 +51,30 @@
   leave focus on the session's row where it went, or on the next row when it leaves the list, and
   Undo brings focus back to it; Archive used to drop it to the page.
 - The demo, and the live demo on the website, have a pinned session.
+- A `!` command that is a command in backquotes, such as `` `grep x f` ``, takes exit code 1 as
+  an answer, as Claude Code does, not as a failure: where a command would start, Pelican reads a
+  backquote as Claude Code's parser does, after `;`, `|`, `if` or an assignment too.
+- A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
+  recommends; other tags after a black flag, which can spell anything unseen, are left out. The
+  repository's check for hidden characters holds the docs to the same three.
+- An approval shows every character that does not show as what it is, as `⟨U+E0078⟩`, and warns
+  of it: tags, variation selectors, fillers, soft hyphens and spaces other than a plain one too,
+  which showed as nothing, so a command could read as `./build.sh` and run another file. What
+  Claude says a command does keeps its emoji whole.
+- Export as Markdown reads as the conversation does. A prompt is text, as you typed it: none of
+  its Markdown takes effect, so a ``` it opens no longer swallows the rest of the file, and its
+  quotes are quotes, a quote from a file its lines as code. A reply keeps to itself in any reader
+  (GitHub, VS Code's preview): a heading in it sits under the speakers' (`##` becomes `####`), so
+  none passes for "You" or "Claude"; its HTML is text, as the conversation shows it, so none hides
+  the turns after it; a picture is a link that names its site, never loaded when the file is read;
+  and a code block it leaves open ends with it. Addresses and emails in prompts and Claude Code's
+  notes stay text, as code, where a reader would link them.
+- Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
+  the message boxes; it sat 2px lower.
+- An Agent call's steps come a page at a time, the newest first, with Show earlier, as a workflow
+  agent's do: a long subagent's transcript, tens of megabytes, no longer reaches the phone whole.
+  A step too large to show says what was left out of it, and the transcript is read only from the
+  session's own folder.
 
 ## 0.4.0
 

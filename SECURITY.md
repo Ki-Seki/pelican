@@ -64,7 +64,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   they appear and after the page comes back into view. Settings take web origins only: `*`,
   `null` and the like are refused at start, with a warning.
 - **What Claude writes stays on the screen.** Images in a reply load only from Pelican itself;
-  another site's image is a link you can open. Pages and visuals Claude makes show as still
+  another site's image is a link you can open. Export as Markdown writes it as that link too, and
+  a reply's HTML as text, so a Markdown reader that opens the file loads nothing a reply names and
+  shows no heading or turn the reply made up. Pages and visuals Claude makes show as still
   pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: a visual
   Claude merely wrote into its reply shows as text. A still picture keeps no frames, embeds, links
   or scripts, wherever they hide: a browser looks up a frame's host name before any policy stops
@@ -131,7 +133,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
   formats, each a regular file whose real path, links followed, is inside the session's own folder
-  next to its transcript, and within a size. An agent's steps come a page at a time, at most 768 KB
+  next to its transcript, and within a size. An Agent call's steps are read the same way, from its
+  subagent's own transcript in that folder. An agent's steps come a page at a time, at most 768 KB
   of them (a message larger than 128 KB has its parts cut, saying how many were left out), and its
   pictures are left out.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask

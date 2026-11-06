@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -124,15 +124,19 @@ describe('changes per turn, from Claude Code’s records', () => {
   });
 
   it('follows the session as it grows, reading only what was added', async () => {
+    // A copy of its own to grow, read once as it is.
+    const grows = path.join(dir, 's1-grows.jsonl');
+    await copyFile(file, grows);
+    expect((await sessionChanges(grows, cwd)).turns.map((turn) => turn.n)).toEqual([1, 3, 4]);
     const t = transcript(cwd);
     const next = t.prompt('One more');
     t.tool('Write', { file_path: `${cwd}/b.txt` }, { type: 'create', filePath: `${cwd}/b.txt`, content: '1\n2\n', structuredPatch: [], originalFile: null });
     // The new rows continue the conversation from its last row.
-    const last = JSON.parse((await import('node:fs')).readFileSync(file, 'utf8').trimEnd().split('\n').at(-1)!) as { uuid: string };
+    const last = JSON.parse((await readFile(grows, 'utf8')).trimEnd().split('\n').at(-1)!) as { uuid: string };
     const first = JSON.parse(t.lines[0]!) as Record<string, unknown>;
     t.lines[0] = JSON.stringify({ ...first, parentUuid: last.uuid });
-    await appendFile(file, `${t.lines.join('\n')}\n`);
-    const { turns } = await sessionChanges(file, cwd);
+    await appendFile(grows, `${t.lines.join('\n')}\n`);
+    const { turns } = await sessionChanges(grows, cwd);
     expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 3, removed: 0, created: true }] });
   });
 });

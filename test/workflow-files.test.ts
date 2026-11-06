@@ -10,7 +10,7 @@ import { accessToken, loadAuth } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { loadMessages } from '../src/server/sessions';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
-import { workflowAgentPage, workflowCalls, workflowView } from '../src/server/workflows';
+import { subagentPage, workflowAgentPage, workflowCalls, workflowView } from '../src/server/workflows';
 
 // Everything here is made up, in the shape Claude Code 2.1.318 writes: a transcript, and beside it
 // the session's own folder with a workflow's record, journal, agents and scripts.
@@ -216,6 +216,68 @@ describe('a workflow agent’s steps', () => {
     const page = (await workflowAgentPage(id, 'toolu_p2', 'a1', { limit: 60 }))!;
     expect(page.messages.length).toBeLessThan(60);
     expect(JSON.stringify(page).length).toBeLessThan(900_000);
+  });
+});
+
+describe('an Agent call’s steps', () => {
+  /** An Agent call that ran a subagent, as Claude Code writes one: its result names the agent. */
+  const agentCall = (agentId: string): Row[] => [
+    { type: 'assistant', message: { id: 'msg_agent', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'toolu_ag', name: 'Agent', input: { description: 'Look around', prompt: 'Look around the server.' } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_ag', content: [{ type: 'text', text: `Done.\nagentId: ${agentId}` }] }] } },
+  ];
+
+  it('come a page at a time, from the newest, read from the agent’s own file in the session’s folder', async () => {
+    const id = newSession();
+    await transcript(id, agentCall('ag1'));
+    await put(id, 'subagents/agent-ag1.jsonl', agentRows('ag1', 60_000, 75));
+    const last = (await subagentPage(id, 'ag1', { limit: 60 }))!;
+    expect(last).toMatchObject({ total: 151, offset: 91 });
+    expect(last.messages).toHaveLength(60);
+    expect(last.messages.at(-1)!.blocks[0]).toMatchObject({ type: 'tool_result', tool_use_id: 't75' });
+    const before = (await subagentPage(id, 'ag1', { before: last.offset, limit: 60 }))!;
+    expect(before).toMatchObject({ total: 151, offset: 31 });
+    // One the session kept no transcript of has no steps, as before; a name of another shape, none at all.
+    expect(await subagentPage(id, 'other', {})).toEqual({ messages: [], total: 0, offset: 0 });
+    expect(await subagentPage(id, '../agent-ag1', {})).toBeUndefined();
+  });
+
+  it('never come to more than a phone should load at once, and say what was left out', async () => {
+    const id = newSession();
+    await transcript(id, agentCall('ag2'));
+    const rows: Row[] = [];
+    for (let i = 0; i < 80; i += 1) {
+      rows.push({ parentUuid: i ? `c${i - 1}` : null, isSidechain: true, agentId: 'ag2', type: i % 2 ? 'user' : 'assistant', uuid: `c${i}`, timestamp: new Date().toISOString(),
+        message: i % 2 ? { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${i - 1}`, content: 'x'.repeat(200_000) }] } : { id: `m${i}`, role: 'assistant', content: [{ type: 'tool_use', id: `t${i}`, name: 'Write', input: { file_path: '/work/shop/big.txt', content: 'y'.repeat(100_000) } }] } });
+    }
+    // Last, one call too large for a page by its many keys alone.
+    rows.push({ parentUuid: 'c79', isSidechain: true, agentId: 'ag2', type: 'assistant', uuid: 'c80', timestamp: new Date().toISOString(),
+      message: { id: 'm80', role: 'assistant', content: [{ type: 'tool_use', id: 't80', name: 'StructuredOutput', input: Object.fromEntries(Array.from({ length: 60 }, (_, k) => [`finding${k}`, 'z'.repeat(4000)])) }] } });
+    await put(id, 'subagents/agent-ag2.jsonl', `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+    const response = await ask(`/api/sessions/${id}/agents/ag2`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body.length).toBeLessThan(900_000);
+    const page = JSON.parse(body) as { messages: Array<{ blocks: Array<{ type: string; input?: Record<string, unknown> }> }>; total: number; offset: number };
+    expect(page.total).toBe(81);
+    expect(page.offset).toBeGreaterThan(0);
+    // What was cut says so: the result's text ends short, the call's keys say how many more there were.
+    expect(page.messages.at(-1)!.blocks[0]!.input!['…']).toMatch(/^\d+ more keys of its input left out$/);
+    const earlier = (await (await ask(`/api/sessions/${id}/agents/ag2?before=${page.offset}`)).json()) as { offset: number; total: number };
+    expect(earlier.offset).toBeLessThan(page.offset);
+  });
+
+  it('answer only for an agent of the session, inside its folder, behind the sign-in', async () => {
+    const id = newSession();
+    await transcript(id, agentCall('ag3'));
+    // An agent file that is a link out of the session's folder is not read.
+    await writeFile(path.join(outside, 'agent.jsonl'), agentRows('ag3', 60_000).replace('Review the server.', 'SECRET'));
+    await mkdir(path.join(folder(id), 'subagents'), { recursive: true });
+    await symlink(path.join(outside, 'agent.jsonl'), path.join(folder(id), 'subagents', 'agent-ag3.jsonl'));
+    const linked = await ask(`/api/sessions/${id}/agents/ag3`);
+    expect(await linked.json()).toEqual({ messages: [], total: 0, offset: 0 });
+    expect((await ask(`/api/sessions/not-a-session/agents/ag3`)).status).toBe(404);
+    expect((await ask(`/api/sessions/${id}/agents/ag3?before=-1`)).status).toBe(404);
+    expect((await ask(`/api/sessions/${id}/agents/ag3`, { authorization: '' })).status).toBe(401);
   });
 });
 

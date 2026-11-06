@@ -379,15 +379,146 @@ function hereDocumentEnd(line: string, from: number): number | undefined {
 }
 
 /**
+ * A compound command open where a backquote is read, by what tells its reading apart (`(…)` is a
+ * group too): where the statement that opened it began, and how many statements came before it.
+ */
+interface Compound {
+  kind: 'if' | 'loop' | 'case' | 'group';
+  at: number;
+  before: number;
+}
+/** The keywords that open a compound command; `fi`, `done`, `esac` and `}` close one. */
+const OPENERS = new Map<string, Compound['kind']>([['if', 'if'], ['while', 'loop'], ['until', 'loop'], ['for', 'loop'], ['select', 'loop'], ['case', 'case'], ['{', 'group']]);
+const CLOSERS = new Set(['fi', 'done', 'esac', '}']);
+/** The keywords after which a command comes. */
+const BEFORE_COMMAND = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', '{', '!']);
+/** Commands that declare variables, whose words Claude Code's parser reads apart from other commands'. */
+const DECLARATIONS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+const ASSIGNMENT = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/;
+/** A redirection's operator, after its descriptor if it has one (`>`, `2>&`, `<<<`, `{fd}>`), not `<(`. */
+const REDIRECTION = /^(?:\d+|\{[A-Za-z_]\w*\})?(?:&>>?|[<>]&|>>|>\||<<<|<>|[<>](?!\())/;
+
+/** The words of a stretch of a command line: split at blanks, not inside quotes, backquotes, `(…)` or `${…}`. */
+function shellWords(text: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (c === '\\') {
+      word += text.slice(i, i + 2);
+      i += 1;
+    } else if (c === '\'' || c === '"' || c === '`') {
+      let close = i + 1;
+      while (close < text.length && text[close] !== c) close += c !== '\'' && text[close] === '\\' ? 2 : 1;
+      word += text.slice(i, close + 1);
+      i = close;
+    } else if (depth === 0 && /[ \t\r\n]/.test(c)) {
+      if (word) words.push(word);
+      word = '';
+    } else {
+      if (c === '(' || (c === '{' && text[i - 1] === '$')) depth += 1;
+      else if ((c === ')' || c === '}') && depth > 0) depth -= 1;
+      word += c;
+    }
+  }
+  if (word) words.push(word);
+  return words;
+}
+
+/** The compounds open after a statement that began at `at`, by the keywords it starts with: `if a` opens one, `fi` closes it. */
+function compoundsAfter(open: readonly Compound[], statement: string, at: number, before: number): Compound[] {
+  const compounds = [...open];
+  for (const word of shellWords(statement)) {
+    const kind = OPENERS.get(word);
+    if (kind) compounds.push({ kind, at, before });
+    else if (CLOSERS.has(word)) compounds.pop();
+    else if (!BEFORE_COMMAND.has(word)) break;
+  }
+  return compounds;
+}
+
+/**
+ * Whether a command's name comes next after `text`, the start of a statement that began at `at`,
+ * as Claude Code's parser reads one: after nothing, or only assignments, redirections with their
+ * files, `!` and the keywords a command follows, or after a declaration command (`export`,
+ * `local`…) and its words. Then the compounds open there; undefined when a command's name came.
+ */
+function nameNext(text: string, open: readonly Compound[], at: number, before: number): Compound[] | undefined {
+  const compounds = [...open];
+  let file = false;
+  let assigned = false;
+  for (const word of shellWords(text)) {
+    const redirection = REDIRECTION.exec(word);
+    if (file) file = false;
+    else if (redirection) file = redirection[0].length === word.length;
+    else if (ASSIGNMENT.test(word)) assigned = true;
+    else if (word === '!') continue;
+    else if (assigned) return undefined;
+    else if (DECLARATIONS.has(word)) return compounds;
+    else if (BEFORE_COMMAND.has(word)) {
+      const kind = OPENERS.get(word);
+      if (kind) compounds.push({ kind, at, before });
+    } else return undefined;
+  }
+  return file ? undefined : compounds;
+}
+
+/**
+ * The patterns Claude Code's parser reads where a case's command starts with a backquote: words to
+ * a blank, `|` or `)` (outside quotes and parentheses), `|` between them, then a `)` if one
+ * follows. Where they end, and whether they hold an odd number of backquotes, so that one after
+ * them opens what the rest of the line never closes (where each backquote has its pair).
+ */
+function casePatterns(line: string, at: number): { end: number; odd: boolean } {
+  let odd = false;
+  let i = at;
+  for (;;) {
+    let depth = 0;
+    let quote: string | undefined;
+    for (; i < line.length; i += 1) {
+      const c = line[i]!;
+      if (c === '\\' && quote !== '\'') i += 1;
+      else if (quote) {
+        if (c === quote) quote = undefined;
+        else if (c === '`' && quote === '"') odd = !odd;
+      } else if (c === '\'' || c === '"') quote = c;
+      else if (c === '`') odd = !odd;
+      else if (c === '(') depth += 1;
+      else if (depth > 0 && c === ')') depth -= 1;
+      else if (c === '\n' || (depth === 0 && /[ \t|)]/.test(c))) break;
+    }
+    const next = line.slice(i).search(/[^ \t]/);
+    const after = next < 0 ? line.length : i + next;
+    if (line[after] === '|') {
+      i = after + 1 + Math.max(0, line.slice(after + 1).search(/[^ \t]/));
+      continue;
+    }
+    return { end: line[after] === ')' ? after + 1 : i, odd };
+  }
+}
+
+/**
  * The statements of a command line, as Claude Code's bash mode takes one apart to read what its
  * exit code means (its own parser: the line's lists and pipelines taken apart, each statement in
  * them whole). They end at `;`, `&`, `&&`, `||`, `|`, `|&` and line ends, never inside quotes,
  * `(…)`, `$(…)`, `${…}`, backquotes or `[[ … ]]`, so a subshell or a group is one statement, its
- * first word `(grep` or `{`. A comment, from a `#` that starts a word, is none, whatever it holds;
- * a here-document's line from its `<<` on, and its body, are part of the statement before them.
- * Some lines no shell takes come apart as that parser takes them: a `)` or a `}` with nothing open,
- * or a `;` with nothing before it, is a statement of its own, and words after a subshell or a
- * `[[ … ]]` that starts a statement start another.
+ * first word `(grep` or `{` (in a backquote, a `(` or `${` holds no backquote: the next ends it).
+ * A comment, from a `#` that starts a word, is none, whatever it holds; a here-document's line
+ * from its `<<` on, and its body, are part of the statement before them. Some lines no shell takes
+ * come apart as that parser takes them: a `)` or a `}` with nothing open, or a `;` with nothing
+ * before it, is a statement of its own, and words after a subshell or a `[[ … ]]` that starts a
+ * statement start another.
+ * That parser starts no command with a backquote. Where a command's name would be, after nothing
+ * or only assignments, redirections, `!` or the keywords a command follows, it breaks off there:
+ * the backquote is a statement of its own (a `#` right after it starts a comment), or the end of
+ * the subshell it is in, whose statement is then its `(`. It starts over after it, so the
+ * backquote that closed the command opens another, and a line of only `` `grep x f` `` is read by
+ * `grep`. In a group or a subshell inside another compound, it takes the rest of the line into
+ * the outermost compound instead, and in a case's patterns it reads a pattern there, or takes the
+ * rest of the line too when that pattern leaves a backquote open. Right after the keyword that
+ * closes a compound, a backquote is a statement of its own as well, and the parser starts over
+ * after it. A `[ … ]` that starts a statement ends at its `]`.
  */
 function statements(line: string): string[] {
   if (line.length > PARSED_MAX) return [line];
@@ -403,22 +534,45 @@ function statements(line: string): string[] {
   let ended = false;
   /** The statement under way has a redirection after its words, which the rest of it then belongs to, a `#` too. */
   let redirected = false;
+  /** The statement under way is a `[ … ]`, which ends at its `]`. */
+  let test = false;
+  /** The compounds the statements so far left open. */
+  let compounds: Compound[] = [];
+  /**
+   * The subshells open where a command would start, one in another, nothing else open between:
+   * where each opened, where its statement under way began, whether that is in a `[[ … ]]`, and
+   * the compounds open in it, the line's first and the subshell itself last.
+   */
+  const levels: Array<{ paren: number; start: number; test: boolean; compounds: Compound[] }> = [];
   const end = (at: number, next: number) => {
     const text = line.slice(start, at).trim();
-    if (text) out.push(text);
+    if (text) {
+      compounds = compoundsAfter(compounds, text, start, out.length);
+      out.push(text);
+    }
     start = next;
     leads = undefined;
     redirected = false;
+    test = false;
   };
   const alone = (at: number, text: string) => {
     end(at, at + text.length);
+    compounds = compoundsAfter(compounds, text, at, out.length);
     out.push(text);
     ended = true;
   };
   const blank = (at: number) => line.slice(start, at).trim() === '';
+  /** Whether a command's name would be at `at`, which starts a word, in a statement begun at `from`: then the compounds open there. */
+  const commandAt = (from: number, at: number, within: readonly Compound[]) => {
+    const before = line.slice(from, at);
+    if (before.trim() !== '' && !/[ \t\r\n]/.test(line[at - 1]!)) return undefined;
+    return nameNext(before, within, start, out.length);
+  };
   for (let i = 0; i < line.length; i += 1) {
     const c = line[i]!;
     const top = open.at(-1);
+    /** The subshell this is directly in, where a command could start. */
+    const level = open.length > 0 && open.length === levels.length && !levels.at(-1)!.test ? levels.at(-1) : undefined;
     if (top === '"') {
       if (c === '\\') i += 1;
       else if (c === '"') open.pop();
@@ -450,22 +604,83 @@ function statements(line: string): string[] {
       continue;
     }
     if (c === '`') {
-      if (top === '`') open.pop();
-      else open.push('`');
+      // Right after the keyword that closes a compound (`done`, `fi`, `esac`, `}`), that parser
+      // reads a backquote as a statement of its own, and starts over after it, as where a command
+      // would start: what was open before is left behind.
+      if (open.length === 0 && compounds.length > 0 && CLOSERS.has(line.slice(start, i).trim())) {
+        end(i, i);
+        alone(i, '`');
+        compounds = [];
+        continue;
+      }
+      const there = top === '`' ? undefined : open.length === 0 ? commandAt(start, i, compounds) : level && commandAt(level.start, i, level.compounds);
+      if (there === undefined) {
+        if (top === '`') open.pop();
+        else open.push('`');
+        continue;
+      }
+      // Claude Code's parser starts no command with one. In a group or a subshell inside another
+      // compound, it takes the rest of the line into the outermost one; in a case's patterns it
+      // reads a pattern there, then a command, unless that leaves a backquote open, which takes
+      // the rest of the line in the same way.
+      const patterns = there.some((compound) => compound.kind === 'case') ? casePatterns(line, i) : undefined;
+      if (patterns?.odd || there.some((compound, k) => compound.kind === 'group' && k > 0)) {
+        out.length = there[0]!.before;
+        out.push(line.slice(there[0]!.at).trim());
+        return out;
+      }
+      if (patterns) {
+        if (level) {
+          level.compounds = compoundsAfter(level.compounds, line.slice(level.start, i), start, out.length);
+          level.start = patterns.end;
+        } else {
+          end(i, i);
+          end(patterns.end, patterns.end);
+        }
+        i = patterns.end - 1;
+        continue;
+      }
+      // Elsewhere it breaks off there and starts over after it: the backquote is a statement of
+      // its own, or the end of the subshell it is in, which is its `(`.
+      if (level) {
+        end(level.paren + 1, i + 1);
+        open.pop();
+        levels.pop();
+        ended = true;
+      } else {
+        alone(i, '`');
+      }
+      compounds = [];
       continue;
     }
+    // In a backquote, a `(` or a `${` holds no backquote: the next one ends it, as in bash.
     if (c === '$' && line[i + 1] === '{') {
-      open.push('}');
+      if (top !== '`') open.push('}');
       i += 1;
       continue;
     }
     if (c === '(') {
+      if (top === '`') continue;
       if (open.length === 0 && blank(i)) leads = i;
+      // `((` starts arithmetic for that parser, never two subshells.
+      const there = line[i + 1] === '(' || line[i - 1] === '(' ? undefined : open.length === 0 ? commandAt(start, i, compounds) : level && commandAt(level.start, i, level.compounds);
+      if (there) levels.push({ paren: i, start: i + 1, test: false, compounds: [...there, { kind: 'group', at: start, before: out.length }] });
       open.push(')');
       continue;
     }
     if (c === ')') {
       if (top === ')') {
+        if (open.length === levels.length) {
+          // In a case's patterns, it ends a pattern instead.
+          const inner = levels.at(-1)!;
+          const now = compoundsAfter(inner.compounds, line.slice(inner.start, i), start, out.length);
+          if (now.at(-1)?.kind === 'case') {
+            inner.compounds = now;
+            inner.start = i + 1;
+            continue;
+          }
+          levels.pop();
+        }
         open.pop();
         if (open.length === 0 && leads !== undefined) {
           end(i + 1, i + 1);
@@ -480,7 +695,8 @@ function statements(line: string): string[] {
       open.pop();
       continue;
     }
-    if (c === '#' && top !== '}' && !(redirected && open.length === 0) && startsWord(line, i)) {
+    // After a backquote of its own, Claude Code's parser takes a `#` for a comment too.
+    if (c === '#' && top !== '}' && !(redirected && open.length === 0) && (startsWord(line, i) || (i === start && line[i - 1] === '`'))) {
       const eol = line.indexOf('\n', i);
       const stop = eol < 0 ? line.length : eol;
       if (open.length === 0) end(i, stop);
@@ -498,7 +714,28 @@ function statements(line: string): string[] {
       }
       continue;
     }
+    if (open.length > 0 && open.length === levels.length) {
+      const inner = levels.at(-1)!;
+      if ((c === '[' || c === ']') && line[i + 1] === c && startsWord(line, i) && endsWord(line, i + 2)) {
+        inner.test = c === '[';
+      } else if (!inner.test && /[;&|\n]/.test(c) && line[i - 1] !== '>' && line[i - 1] !== '<' && !(c === '&' && line[i + 1] === '>')) {
+        inner.compounds = compoundsAfter(inner.compounds, line.slice(inner.start, i), start, out.length);
+        inner.start = i + 1;
+      }
+    }
     if (open.length > 0) continue;
+    // A `[ … ]` that starts a statement ends at its `]`: a word after it, not a redirection,
+    // starts another statement. A `]` a backquote follows ends none, and starts the next instead.
+    if (c === '[' && blank(i) && endsWord(line, i + 1)) test = true;
+    else if (c === ']' && test && startsWord(line, i)) {
+      const gap = line.slice(i + 1).search(/[^ \t]/);
+      const next = gap < 0 ? line.length : i + 1 + gap;
+      if (line[i + 1] === '`') end(i, i);
+      else if (endsWord(line, i + 1) && next < line.length && !/[;&|\n)#]/.test(line[next]!) && !REDIRECTION.test(line.slice(next))) {
+        end(i + 1, i + 1);
+        ended = true;
+      }
+    }
     if (c === '[' && line[i + 1] === '[' && startsWord(line, i) && endsWord(line, i + 2)) {
       if (blank(i)) leads = i;
       open.push(']]');

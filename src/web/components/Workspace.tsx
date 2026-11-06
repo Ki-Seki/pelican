@@ -238,8 +238,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const waits = !docked && Boolean(needsYou);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
   const selectionFoot = useMemo<SelectionFootAt | undefined>(
-    () => (foot ? { at: foot, ...(comments.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
-    [foot, comments.length, waits, docked],
+    () => (foot ? { at: foot, ...(comments.length === 0 && !waits ? { safe: true } : {}) } : undefined),
+    [foot, comments.length, waits],
   );
 
   // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send

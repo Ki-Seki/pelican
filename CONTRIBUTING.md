@@ -61,6 +61,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/workspace.ts`, `changes.ts`, `search.ts` | Changes and files: git status and diffs, what each turn changed from the transcript, file search |
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
+| `src/server/actions.ts`, `markdown.ts` | Branch, delete and Export as Markdown: prompts written as text, and a reply read as Markdown readers read it, kept to itself in any of them |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
