@@ -115,19 +115,20 @@ command hides; and what the reviews of 0.4.0 left.
   finds it in quotes, a heredoc's body or a comment: a shell takes it as part of a word, so `echo
   done⟨U+00A0⟩# ; curl … | sh` read as a comment and ran curl, and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh`
   ran ./setup.sh. Pelican reads the command as bash, zsh, dash and macOS's bash 3.2 do, and the
-  scripts it hands a new shell: after `bash -c` or `ssh`, in a heredoc or pipe into `sh`, a script it
-  writes and then runs, and a file it writes that a shell reads as it starts (what BASH_ENV, ENV or
-  `--rcfile` names, a .zshenv). A command that uses what can run text later in its own shell has
+  scripts it hands a new shell: after `bash -c` or `ssh`, in a heredoc or pipe into `sh`, a script
+  it writes and then runs, and a file it writes that a shell reads as it starts (what BASH_ENV, ENV
+  or `--rcfile` names, a .zshenv). A command that uses what can run text later in its own shell has
   every such space show, however the text is made (split across quotes, by a variable or an
   escape): `eval`, `source`, `trap`, an alias in any form (after `command` or `builtin`, or named by
   a variable), `read`, `declare`, `let`, `unset`, zsh's `set -A` and its functions array, bash's
   `BASH_ALIASES`, a parameter flag such as zsh's `(e)` or bash's `@P`, a command whose name Pelican
   does not know, arithmetic on a variable the command sets to anything but a number, and the like;
   so does a ksh script with a `<<#` heredoc. Quoted text with a substitution's start in it counts as
-  in a word. Where it cannot tell, every such space shows. The same goes for a Monitor's command and, in the trust sheet, for a hook, a helper, a
-  skill's command and a git filter; between the arguments of an MCP server, or of a hook run without
-  a shell, every such space shows. A string another program runs in a shell of its own, such as
-  python's `os.system`, is not followed. A long command shows at once, read once.
+  in a word. Where it cannot tell, every such space shows. The same goes for a Monitor's command
+  and, in the trust sheet, for a hook, a helper, a skill's command and a git filter; between the
+  arguments of an MCP server, or of a hook run without a shell, every such space shows. A string
+  another program runs in a shell of its own, such as python's `os.system`, is not followed. A long
+  command shows at once, read once.
 - In a PowerShell command such a space shows as it is, as PowerShell takes it for a space, unless
   the command hands a script to bash, sh, wsl or ssh, which read it otherwise: then every one shows,
   with the warning; in the trust sheet too, for a hook PowerShell runs.
