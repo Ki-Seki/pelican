@@ -4,12 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, Delivery, FileContent, RunState } from '../src/shared/protocol';
+import type { SentState } from '../src/web/lib/api';
 import type { SessionView } from '../src/web/lib/store';
 
 Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
 Object.assign(window, { matchMedia: (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }) });
 
-const { api } = await import('../src/web/lib/api');
+const { api, ApiError } = await import('../src/web/lib/api');
 const { MessageList } = await import('../src/web/components/MessageList');
 
 const SESSION = 'dddddddd-0000-4000-8000-000000000001';
@@ -49,15 +50,20 @@ const texts: Record<string, FileContent> = {
   [`${WORK}/chart.svg`]: { path: 'chart.svg', size: 60, text: '<svg viewBox="0 0 10 10"><circle r="4"/></svg>' },
 };
 let asked: string[] = [];
+/** What a card's HEAD finds of each file; anything not named is there. */
+let states: Record<string, SentState | Promise<SentState>> = {};
 
 beforeEach(() => {
   asked = [];
+  states = {};
   vi.spyOn(api, 'sent').mockImplementation(async (_id, file) => {
     asked.push(file);
+    if (states[file] === 'gone') throw new ApiError('No longer on this computer', 410);
     const content = texts[file];
     if (!content) throw new Error('Not a file Claude sent in this session');
     return content;
   });
+  vi.spyOn(api, 'sentStates').mockImplementation(async (_id, paths) => new Map(await Promise.all(paths.map(async (path) => [path, await (states[path] ?? 'there')] as const))));
 });
 afterEach(() => {
   cleanup();
@@ -65,11 +71,11 @@ afterEach(() => {
 });
 
 describe('a file Claude sent', () => {
-  it('shows as a picture, from where Claude Code delivered it, with its caption, opened large on a tap, and saved from its button', () => {
+  it('shows as a picture, from where Claude Code delivered it, with its caption, opened large on a tap, and saved from its button', async () => {
     show([prompt, ...sent('s1', [`${WORK}/shots/dark.png`], { caption: 'The settings page in the dark theme' })]);
     const group = screen.getByRole('group', { name: 'Sent file' });
     expect(within(group).getByText('The settings page in the dark theme')).toBeTruthy();
-    const picture = within(group).getByRole('img', { name: 'dark.png' }) as HTMLImageElement;
+    const picture = await within(group).findByRole('img', { name: 'dark.png' }) as HTMLImageElement;
     expect(picture.getAttribute('src')).toBe(raw(`${WORK}/shots/dark.png`));
     const save = within(group).getByRole('link', { name: 'Download dark.png' });
     expect(save.getAttribute('href')).toBe(raw(`${WORK}/shots/dark.png`, true));
@@ -92,9 +98,9 @@ describe('a file Claude sent', () => {
     expect(asked.sort()).toEqual([`${WORK}/chart.svg`, `${WORK}/page.html`, `${WORK}/report.md`, `${WORK}/signups.csv`]);
   });
 
-  it('opens a PDF in a tab of its own, in the browser’s viewer, and offers anything else to save', () => {
+  it('opens a PDF in a tab of its own, in the browser’s viewer, and offers anything else to save', async () => {
     show([prompt, ...sent('s4', [`${WORK}/week-45.pdf`, `${WORK}/build.zip`])]);
-    const pdf = screen.getByRole('link', { name: 'Open week-45.pdf' });
+    const pdf = await screen.findByRole('link', { name: 'Open week-45.pdf' });
     expect(pdf.getAttribute('href')).toBe(raw(`${WORK}/week-45.pdf`));
     expect(pdf.getAttribute('target')).toBe('_blank');
     expect(pdf.textContent).toContain('2 KB');
@@ -107,10 +113,10 @@ describe('a file Claude sent', () => {
 
   it('stays a card Claude meant to attach, read nowhere until it is opened', async () => {
     show([prompt, ...sent('s5', [`${WORK}/shots/dark.png`, `${WORK}/report.md`, `${WORK}/page.html`], { display: 'attach' })]);
+    const card = await screen.findByRole('button', { name: 'report.md' });
     expect(screen.queryByRole('img')).toBeNull();
     expect(screen.queryByTitle('page.html')).toBeNull();
     expect(asked).toEqual([]);
-    const card = screen.getByRole('button', { name: 'report.md' });
     expect(card.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(card);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Week 45' })).toBeTruthy());
@@ -118,10 +124,10 @@ describe('a file Claude sent', () => {
     expect((screen.getByRole('img', { name: 'dark.png' }) as HTMLImageElement).getAttribute('src')).toBe(raw(`${WORK}/shots/dark.png`));
   });
 
-  it('says how many files Claude Code could not send, and shows none of them', () => {
+  it('says how many files Claude Code could not send, and shows none of them', async () => {
     show([prompt, ...sent('s6', [`${WORK}/build.zip`], { missed: 1 })]);
     expect(screen.getByText('1 more file could not be sent')).toBeTruthy();
-    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(await screen.findAllByRole('link')).toHaveLength(1);
   });
 
   it('says why a file it could not read is not there', async () => {
@@ -129,25 +135,70 @@ describe('a file Claude sent', () => {
     await waitFor(() => expect(screen.getByText('Not a file Claude sent in this session')).toBeTruthy());
   });
 
-  it('is never folded away among a long run of steps', () => {
+  it('says one that is no longer on the computer is gone, the same for every type, with nothing to tap', async () => {
+    const files = ['shots/dark.png', 'week-45.pdf', 'build.zip', 'report.md', 'page.html'].map((f) => `${WORK}/${f}`);
+    for (const file of files) states[file] = 'gone';
+    show([prompt, ...sent('s13', files)]);
+    const group = screen.getByRole('group', { name: 'Sent 5 files' });
+    await waitFor(() => expect(within(group).getAllByText('No longer on this computer')).toHaveLength(5));
+    for (const name of ['dark.png', 'week-45.pdf', 'build.zip', 'report.md', 'page.html']) expect(within(group).getByText(name)).toBeTruthy();
+    expect(within(group).getAllByText('2 KB')).toHaveLength(5);
+    expect(within(group).queryAllByRole('link')).toEqual([]);
+    expect(within(group).queryAllByRole('button')).toEqual([]);
+    expect(within(group).queryByRole('img')).toBeNull();
+    expect(within(group).queryByText(/can’t be shown/)).toBeNull();
+  });
+
+  it('says one too large to serve is so, before any tap', async () => {
+    states[`${WORK}/build.zip`] = 'large';
+    show([prompt, ...sent('s14', [`${WORK}/build.zip`])]);
+    await waitFor(() => expect(screen.getByText('Larger than Pelican serves (200 MB)')).toBeTruthy());
+    expect(screen.queryByRole('link', { name: 'Download build.zip' })).toBeNull();
+  });
+
+  it('shows a call’s files once it knows which are still there, asking once for them all, and loads none before', async () => {
+    let found: (state: SentState) => void = () => {};
+    states[`${WORK}/shots/dark.png`] = new Promise<SentState>((resolve) => { found = resolve; });
+    show([prompt, ...sent('s15', [`${WORK}/shots/dark.png`, `${WORK}/report.md`], { caption: 'Both' })]);
+    const group = screen.getByRole('group', { name: 'Sent 2 files' });
+    expect(within(group).getByText('Both')).toBeTruthy();
+    expect(within(group).queryByRole('img')).toBeNull();
+    expect(within(group).queryAllByRole('link')).toEqual([]);
+    expect(asked).toEqual([]);
+    found('there');
+    await waitFor(() => expect(within(group).getByRole('img', { name: 'dark.png' })).toBeTruthy());
+    expect(vi.mocked(api.sentStates).mock.calls).toEqual([[SESSION, [`${WORK}/shots/dark.png`, `${WORK}/report.md`]]]);
+    // There, and still not a picture a browser can show.
+    fireEvent.error(within(group).getByRole('img', { name: 'dark.png' }));
+    expect(within(group).getByText('This picture can’t be shown here')).toBeTruthy();
+    expect(within(group).getByRole('link', { name: 'Download dark.png' })).toBeTruthy();
+  });
+
+  it('shows the files as they would be should nobody be able to say which are there', async () => {
+    vi.mocked(api.sentStates).mockRejectedValue(new ApiError('Can’t reach laptop', 0));
+    show([prompt, ...sent('s16', [`${WORK}/build.zip`])]);
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Download build.zip' })).toBeTruthy());
+  });
+
+  it('is never folded away among a long run of steps', async () => {
     const reads: ChatMessage[] = Array.from({ length: 6 }, (_, i) => ({
       uuid: `read-${i}`, role: 'assistant', timestamp: at, blocks: [{ type: 'tool_use', id: `read-${i}`, name: 'Read', input: { file_path: `${WORK}/f${i}.ts` } }],
     }));
     show([prompt, ...reads, ...sent('s8', [`${WORK}/build.zip`]), ...reads.map((r, i) => ({ ...r, uuid: `more-${i}`, blocks: [{ ...r.blocks[0]!, id: `more-${i}` }] as ChatMessage['blocks'] }))]);
     expect(screen.getAllByText(/steps/).length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: 'Download build.zip' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: 'Download build.zip' })).toBeTruthy();
   });
 });
 
 describe('a file Claude is sending', () => {
-  it('says so while the call runs, then shows the file as the result comes', () => {
+  it('says so while the call runs, then shows the file as the result comes', async () => {
     const asking = call('s9', { files: ['report.md'] });
     const { again } = show([prompt, asking], running());
     expect(screen.getByText('Sending file')).toBeTruthy();
     expect(screen.getByText('report.md')).toBeTruthy();
     again([prompt, asking, answered('s9', { files: [{ path: `${WORK}/build.zip`, size: 2048 }] })], running());
     expect(screen.queryByText('Sending file')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Download build.zip' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: 'Download build.zip' })).toBeTruthy();
   });
 
   it('says it failed in Claude Desktop’s words, with Claude Code’s reason a tap away', () => {

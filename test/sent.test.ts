@@ -20,6 +20,8 @@ const A = randomUUID();
 const B = randomUUID();
 const MB = 1024 * 1024;
 const ODD = ['page.constructor', 'page.__proto__', 'page.toString'];
+/** Sent, then moved away: a name a page would take for markup, with a character that turns text around. */
+const GONE = 'old <img src=x onerror=alert(1)> \u202efdp.pdf';
 const PAGE = '<!doctype html><h1>Hi</h1>\n';
 
 /** What Claude Code records of a SendUserFile result, for files at these paths. */
@@ -79,6 +81,7 @@ beforeAll(async () => {
   await writeFile(path.join(work, 'grow.bin'), Buffer.alloc(MB, 1));
   await writeFile(path.join(work, 'shrink.bin'), Buffer.alloc(MB, 1));
   await writeFile(path.join(work, 'empty.txt'), '');
+  await writeFile(path.join(work, GONE), '%PDF-1.4\n%%EOF\n');
 
   await transcript(A, work, [
     { type: 'user', content: [{ type: 'text', text: 'Send me what you made' }] },
@@ -92,7 +95,7 @@ beforeAll(async () => {
         send('unanswered', ['/Users/ada/.ssh/id_ed25519']),
         send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin']),
         send('refused', ['secret.txt']),
-        send('odd', [...ODD, 'grow.bin', 'shrink.bin', 'empty.txt']),
+        send('odd', [...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE]),
       ],
     },
     { type: 'user', content: [answer('ran')], toolUseResult: record([path.join(work, 'report.md')], { caption: 'The report', display: 'render' }) },
@@ -108,8 +111,9 @@ beforeAll(async () => {
       content: [answer('refused', '1 file could NOT be delivered to the user')],
       toolUseResult: record([{ path: path.join(root, 'secret.txt'), size: 17, isImage: false, pathValidated: true, upload_error: 'not sent: it now resolves to what was not approved' }]),
     },
-    { type: 'user', content: [answer('odd', '6 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt'].map((f) => path.join(work, f))) },
+    { type: 'user', content: [answer('odd', '7 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f))) },
   ]);
+  await rm(path.join(work, GONE));
   await transcript(B, path.join(root, 'other'), [
     { type: 'user', content: [{ type: 'text', text: 'Send me yours' }] },
     { type: 'assistant', content: [send('b1', ['theirs.txt'])] },
@@ -160,17 +164,17 @@ describe('what Claude Code records a SendUserFile call delivered', () => {
 
 describe('files Claude sent', () => {
   it('are what Claude Code recorded it delivered, from calls that ran: not what Claude asked for, nor a call that failed, was only written, or was refused', async () => {
-    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt'].map((f) => path.join(work, f)).sort());
+    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f)).sort());
     expect([...(await sentFiles(B))]).toEqual([path.join(root, 'other', 'theirs.txt')]);
   });
 });
 
-const ask = (url: string, headers: Record<string, string> = {}) =>
-  app.request(url, { headers: { host: 'localhost:7860', 'x-pelican': '1', authorization: `Bearer ${accessToken()}`, ...headers } });
+const ask = (url: string, headers: Record<string, string> = {}, method = 'GET') =>
+  app.request(url, { method, headers: { host: 'localhost:7860', 'x-pelican': '1', authorization: `Bearer ${accessToken()}`, ...headers } });
 const shown = (id: string, file: string) => ask(`/api/sessions/${id}/sent?path=${encodeURIComponent(file)}`);
-/** As a page asks for a file by a link (an image, a tab, a download): no header of Pelican's. */
-const linked = (id: string, file: string, extra = '', headers: Record<string, string> = {}) =>
-  ask(`/api/sessions/${id}/sent/raw?path=${encodeURIComponent(file)}${extra}`, { 'x-pelican': '', 'sec-fetch-site': 'same-origin', ...headers });
+/** As a page asks for a file by a link (an image, a tab, a download): no header of Pelican's. A HEAD comes from the page's own code, marked. */
+const linked = (id: string, file: string, extra = '', { method = 'GET', ...headers }: Record<string, string> = {}) =>
+  ask(`/api/sessions/${id}/sent/raw?path=${encodeURIComponent(file)}${extra}`, { 'x-pelican': method === 'HEAD' ? '1' : '', 'sec-fetch-site': 'same-origin', ...headers }, method);
 
 describe('a file Claude sent, to show', () => {
   it('reads the text of one it sent in this session, an SVG as text for its preview, a picture as data', async () => {
@@ -184,8 +188,11 @@ describe('a file Claude sent, to show', () => {
       expect((await shown(A, file)).status).toBe(404);
       expect((await linked(A, file)).status).toBe(404);
     }
-    expect((await shown(A, path.join(work, 'swapped.md'))).status).toBe(404);
-    expect((await linked(A, path.join(work, 'swapped.md'))).status).toBe(404);
+    // What Claude sent is no longer there: what the link leads to is never served instead.
+    for (const answer of [await shown(A, path.join(work, 'swapped.md')), await linked(A, path.join(work, 'swapped.md'))]) {
+      expect(answer.status).toBe(410);
+      expect(await answer.text()).not.toContain('not for the page');
+    }
     expect((await shown(A, path.join(root, 'other', 'theirs.txt'))).status).toBe(404);
     expect((await linked(A, path.join(root, 'other', 'theirs.txt'))).status).toBe(404);
     expect((await shown(B, path.join(root, 'other', 'theirs.txt'))).status).toBe(200);
@@ -197,6 +204,33 @@ describe('a file Claude sent, to show', () => {
     expect((await ask(`/api/sessions/${A}/sent?path=${encodeURIComponent(file)}`, { 'x-pelican': '' })).status).toBe(403);
     expect((await linked(A, file, '', { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
     expect((await app.request(`/api/sessions/${A}/sent/raw?path=${encodeURIComponent(file)}`, { headers: { host: 'localhost:7860' } })).status).toBe(401);
+  });
+});
+
+describe('whether the files Claude sent are still there', () => {
+  const states = (id: string, files: string[], headers: Record<string, string> = {}) =>
+    ask(`/api/sessions/${id}/sent/state?${files.map((f) => `p=${encodeURIComponent(f)}`).join('&')}`, headers);
+
+  it('says which are there, gone or too large to serve, for files Claude sent in this session only', async () => {
+    const answer = await states(A, [
+      path.join(work, 'report.md'), path.join(work, GONE), path.join(work, 'huge.bin'), path.join(work, 'swapped.md'),
+      path.join(root, 'secret.txt'), '/etc/hosts', path.join(root, 'other', 'theirs.txt'), 'report.md',
+    ]);
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({
+      there: [path.join(work, 'report.md')],
+      gone: [path.join(work, GONE), path.join(work, 'swapped.md')].sort(),
+      large: [path.join(work, 'huge.bin')],
+    });
+    expect(await (await states(B, [path.join(root, 'other', 'theirs.txt'), path.join(work, 'report.md')])).json()).toEqual({ there: [path.join(root, 'other', 'theirs.txt')], gone: [], large: [] });
+    expect((await states(A, Array.from({ length: 51 }, (_, i) => path.join(work, `f${i}`)))).status).toBe(400);
+  });
+
+  it('is behind the same gate as the rest', async () => {
+    const files = [path.join(work, 'report.md')];
+    expect((await states(A, files, { 'x-pelican': '' })).status).toBe(403);
+    expect((await states(A, files, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await app.request(`/api/sessions/${A}/sent/state?p=${encodeURIComponent(files[0]!)}`, { headers: { host: 'localhost:7860', 'x-pelican': '1' } })).status).toBe(401);
   });
 });
 
@@ -238,6 +272,49 @@ describe('a file Claude sent, by a link', () => {
   it('is not served past 200 MB', async () => {
     const response = await linked(A, path.join(work, 'huge.bin'));
     expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: 'Larger than Pelican serves (200 MB)' });
+    expect((await linked(A, path.join(work, 'huge.bin'), '', { method: 'HEAD' })).status).toBe(413);
+  });
+
+  it('says a file no longer where Claude Code delivered it is Gone, to the page, and to a HEAD before any tap', async () => {
+    const file = path.join(work, GONE);
+    const read = await shown(A, file);
+    expect(read.status).toBe(410);
+    expect(read.headers.get('cache-control')).toBe('no-store');
+    expect(await read.json()).toEqual({ error: 'No longer on this computer' });
+    for (const extra of ['', '&download=1']) {
+      const head = await linked(A, file, extra, { method: 'HEAD' });
+      expect(head.status).toBe(410);
+      expect(await head.text()).toBe('');
+      expect((await linked(A, file, extra)).status).toBe(410);
+    }
+    // Still there: a HEAD says so, and reads nothing.
+    const there = await linked(A, path.join(work, 'notes.pdf'), '', { method: 'HEAD' });
+    expect(there.status).toBe(200);
+    expect(await there.text()).toBe('');
+  });
+
+  it('says so in a page of its own to a browser that opened it, in Pelican’s words, running nothing', async () => {
+    const page = await linked(A, path.join(work, GONE), '', { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' });
+    expect(page.status).toBe(410);
+    expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(page.headers.get('content-security-policy')).toMatch(/^sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'$/);
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(page.headers.get('cache-control')).toBe('no-store');
+    const text = await page.text();
+    expect(text).toContain('<p class="name">old &lt;img src=x onerror=alert(1)&gt; ⟨U+202E⟩fdp.pdf</p>');
+    expect(text).toContain('<p>No longer on this computer</p>');
+    expect(text).not.toContain('<img');
+    expect(text).not.toContain('<script');
+    const large = await linked(A, path.join(work, 'huge.bin'), '', { accept: 'text/html' });
+    expect(large.status).toBe(413);
+    expect(await large.text()).toContain('<p>Larger than Pelican serves (200 MB)</p>');
+    // Nothing of the asked-for path comes back for a file Claude did not send.
+    const other = await linked(A, '/etc/<b>hosts', '', { accept: 'text/html' });
+    expect(other.status).toBe(404);
+    const refused = await other.text();
+    expect(refused).toContain('<p>Not a file Claude sent in this session</p>');
+    expect(refused).not.toContain('hosts');
   });
 
   it('is no picture for an extension every object has a property of: it downloads, and reads as text', async () => {

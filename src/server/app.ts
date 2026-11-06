@@ -13,6 +13,7 @@ import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import { revealHidden } from '../shared/hidden.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
 import { setArchived } from './archive.js';
@@ -827,44 +828,113 @@ app.delete('/api/sessions/:id/queued/:uuid', (c) => {
  * or by what this Pelican's Claude has just said, which the transcript has a moment later.
  */
 async function sentHere(sessionId: string, file: string): Promise<boolean> {
-  if (!file || file.length > 4096 || !path.isAbsolute(file)) return false;
-  return Boolean(getRun(sessionId)?.delivered.has(file)) || (await sentFiles(sessionId)).has(file);
+  return (await sentIn(sessionId))(file);
 }
 
+/** The same, for many files at once: the transcript is read once. */
+async function sentIn(sessionId: string): Promise<(file: string) => boolean> {
+  const live = getRun(sessionId)?.delivered;
+  const recorded = await sentFiles(sessionId);
+  return (file) => Boolean(file) && file.length <= 4096 && path.isAbsolute(file) && (Boolean(live?.has(file)) || recorded.has(file));
+}
+
+/** Why a file Claude sent cannot be had, in the words its card says it in. */
 const NOT_SENT = 'Not a file Claude sent in this session';
+const GONE = 'No longer on this computer';
+const TOO_LARGE = 'Larger than Pelican serves (200 MB)';
+
+/** Larger than this, a file Claude sent is not served, as one of the folder's is not. */
+const SENT_MAX_BYTES = 200 * 1024 * 1024;
+
+const html = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** A page of a line, in Pelican's colours, that runs nothing and is never framed. */
+const NOTE_PAGE = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+};
+
+const notePage = (title: string, line: string) => `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>${html(title)}</title>
+<style>
+  body { margin: 0; min-height: 100dvh; display: grid; place-content: center; gap: 6px; padding: 24px; box-sizing: border-box; text-align: center; background: #fafafa; color: #555; font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; }
+  p { margin: 0; }
+  .name { color: #171717; font: 13px/1.5 ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  @media (prefers-color-scheme: dark) { body { background: #0a0a0a; color: #b0b0b0; } .name { color: #ededed; } }
+</style>
+<p class="name">${html(title)}</p>
+<p>${html(line)}</p>
+`;
+
+/**
+ * A file Claude sent that cannot be had, and why: to the page, as JSON; to a browser that opened it
+ * as a page of its own (a PDF's tab, a download it shows), in a page of Pelican's words. Never kept,
+ * as the file may come back.
+ */
+function unavailable(c: Context, status: 404 | 410 | 413, why: string, file?: string): Response {
+  if (!/\btext\/html\b/i.test(c.req.header('accept') ?? '')) return c.json({ error: why }, status, { 'Cache-Control': 'no-store' });
+  return c.body(notePage(file ? revealHidden(path.basename(file)).text : 'Pelican', why), status, { ...NOTE_PAGE, 'Cache-Control': 'no-store' });
+}
 
 /**
  * A file Claude sent in this session, to show: its text (up to half a megabyte), or a picture as
  * data (up to 4 MB), read where Claude Code recorded it, through no link that leads out of its
- * folder. An SVG is text, for its still preview.
+ * folder. An SVG is text, for its still preview. One no longer there is Gone (410), not missing.
  */
 app.get('/api/sessions/:id/sent', async (c) => {
   const file = c.req.query('path') ?? '';
-  if (!(await sentHere(c.req.param('id'), file))) return c.json({ error: NOT_SENT }, 404);
+  if (!(await sentHere(c.req.param('id'), file))) return unavailable(c, 404, NOT_SENT);
   try {
     return c.json(await readProjectFile(path.dirname(file), path.basename(file), PICTURE_TYPES));
   } catch {
-    return c.json({ error: 'The file is gone' }, 404);
+    return unavailable(c, 410, GONE, file);
   }
 });
 
-/** Larger than this, a file Claude sent is not served, as one of the folder's is not. */
-const SENT_MAX_BYTES = 200 * 1024 * 1024;
+/** At most this many files Claude sent are asked about at once: one call's. */
+const SENT_ASKED_MAX = 50;
+
+/**
+ * Whether files Claude sent in this session are still there to have, asked once by their cards
+ * before any tap: each is `there`, `gone` (no longer a file where Claude Code delivered it, or a link
+ * from there out of its folder), or `large` (past what Pelican serves). A path Claude did not send
+ * here is left out. Each file is opened as a download would open it, and nothing is read.
+ */
+app.get('/api/sessions/:id/sent/state', async (c) => {
+  const asked = [...new Set(c.req.queries('p') ?? [])];
+  if (asked.length > SENT_ASKED_MAX) return c.json({ error: `Ask about ${SENT_ASKED_MAX} files at most` }, 400);
+  const sent = await sentIn(c.req.param('id'));
+  const answer: Record<'there' | 'gone' | 'large', string[]> = { there: [], gone: [], large: [] };
+  await Promise.all(asked.filter(sent).map(async (file) => {
+    const opened = await openProjectFile(path.dirname(file), path.basename(file)).catch(() => undefined);
+    await opened?.handle.close();
+    answer[!opened ? 'gone' : opened.size > SENT_MAX_BYTES ? 'large' : 'there'].push(file);
+  }));
+  for (const list of Object.values(answer)) list.sort();
+  return c.json(answer);
+});
 
 /**
  * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;
  * a PDF for the browser's own viewer, in a tab of its own; anything else, and anything asked for
  * with `download`, as an attachment. Read only, as it is on disk when asked for (a file that grows
- * meanwhile sends no more), up to 200 MB, never sniffed.
+ * meanwhile sends no more), up to 200 MB, never sniffed. One no longer there is Gone (410).
  */
 app.get('/api/sessions/:id/sent/raw', async (c) => {
   const file = c.req.query('path') ?? '';
-  if (!(await sentHere(c.req.param('id'), file))) return c.json({ error: NOT_SENT }, 404);
+  if (!(await sentHere(c.req.param('id'), file))) return unavailable(c, 404, NOT_SENT);
   const opened = await openProjectFile(path.dirname(file), path.basename(file)).catch(() => undefined);
-  if (!opened) return c.json({ error: 'The file is gone' }, 404);
+  if (!opened) return unavailable(c, 410, GONE, file);
   if (opened.size > SENT_MAX_BYTES) {
     await opened.handle.close();
-    return c.json({ error: 'That file is larger than 200 MB' }, 413);
+    return unavailable(c, 413, TOO_LARGE, file);
   }
   const name = path.basename(file);
   const ext = path.extname(name).slice(1).toLowerCase();

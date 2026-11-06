@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { DeliveredFile } from '../../shared/protocol';
-import { api } from '../lib/api';
+import { api, ApiError, type SentState } from '../lib/api';
 import { duration, formatBytes } from '../lib/format';
 import { useFileLink, usePathLinks } from '../lib/path-links';
 import { useSessionId } from '../lib/session-context';
@@ -118,13 +118,30 @@ function Badge({ name }: { name: string }) {
   return <span aria-hidden className="grid h-[18px] min-w-7 shrink-0 place-items-center rounded border border-line px-1 text-[9.5px] font-semibold tracking-wide text-faint uppercase">{ext || 'file'}</span>;
 }
 
-/** The name, and the size Claude Code found when it sent it. */
-function Label({ name, size }: { name: string; size?: number }) {
+/** The name, and the size Claude Code found when it sent it; `muted` for a file that cannot be had. */
+function Label({ name, size, muted = false }: { name: string; size?: number; muted?: boolean }) {
   return (
     <>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-fg/90">{name}</span>
+      <span className={`min-w-0 flex-1 truncate font-mono text-[12.5px] ${muted ? 'text-faint' : 'text-fg/90'}`}>{name}</span>
       {size !== undefined && <span className="shrink-0 text-[11.5px] text-faint tabular-nums">{formatBytes(size)}</span>}
     </>
+  );
+}
+
+/** Why a file Claude sent cannot be had, as the server says it too (app.ts). */
+const GONE = 'No longer on this computer';
+const TOO_LARGE = 'Larger than Pelican serves (200 MB)';
+
+/** A file Claude sent that cannot be had: named and sized, muted, with why, and nothing to tap. */
+function Unavailable({ name, size, why }: { name: string; size?: number; why: string }) {
+  return (
+    <div className={`${CARD} w-fit max-w-full`}>
+      <div className={`${LINE} pr-3`}>
+        <Badge name={name} />
+        <Label name={name} size={size} muted />
+      </div>
+      <div className="-mt-1.5 px-3 pb-2 text-[12px] text-faint">{why}</div>
+    </div>
   );
 }
 
@@ -176,8 +193,11 @@ function TextBody({ text, markdown, truncated }: { text: string; markdown: boole
   );
 }
 
-/** A file Claude sent, as its type shows: in place (`open`), or as a card that opens it. */
-function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; file: DeliveredFile; open: boolean }) {
+/**
+ * A file Claude sent, as its type shows: in place (`open`), or as a card that opens it. `state`:
+ * whether it is still there to have, as its call's files were found.
+ */
+function SentFile({ sessionId, file, open: startOpen, state }: { sessionId: string; file: DeliveredFile; open: boolean; state?: SentState }) {
   const kind = sentKind(file);
   const name = fileName(file.path);
   const [open, setOpen] = useState(startOpen);
@@ -187,9 +207,11 @@ function SentFile({ sessionId, file, open: startOpen }: { sessionId: string; fil
   const { data, error, isLoading } = useQuery({
     queryKey: ['sent', sessionId, file.path],
     queryFn: () => api.sent(sessionId, file.path),
-    enabled: needsData,
+    enabled: needsData && state !== 'gone' && state !== 'large',
     staleTime: 60_000,
   });
+  const gone = state === 'gone' || (error instanceof ApiError && error.status === 410);
+  if (gone || state === 'large') return <Unavailable name={name} size={file.size} why={gone ? GONE : TOO_LARGE} />;
   const failure = error ? <div className="px-3 pb-2 text-[12px] text-danger">{(error as Error).message}</div> : null;
 
   // On the site, a picture too large to come as data has nothing to show it from.
@@ -270,12 +292,23 @@ function SentFiles({ call }: { call: ToolCall }) {
   // In place, unless Claude meant them as files to save.
   const open = call.name === 'Artifact' || delivered?.display !== 'attach';
   const missed = delivered?.missed ?? 0;
+  // Whether each is still there to have, known before any of them shows: older sessions are full of
+  // files that have since moved. Should nobody be able to say, they show as they would.
+  const paths = [...new Set(files.map((file) => file.path))].slice(0, 50);
+  const states = useQuery({
+    queryKey: ['sent-state', sessionId, ...paths],
+    queryFn: () => api.sentStates(sessionId!, paths),
+    enabled: Boolean(sessionId),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const checked = states.data !== undefined || states.isError;
   if (!sessionId) return null;
   return (
     // What shows in place takes a line of its own; cards sit side by side, as in Claude Desktop.
-    <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} className="my-1.5 flex flex-wrap items-start gap-1.5">
+    <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} aria-busy={!checked} className="my-1.5 flex flex-wrap items-start gap-1.5">
       {caption && <div className="basis-full text-[13.5px] text-muted">{caption}</div>}
-      {files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} />)}
+      {checked && files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} state={states.data?.get(file.path)} />)}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>
