@@ -33,7 +33,7 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
-import { wantTerminalFocus } from '../lib/terminals';
+import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
@@ -714,6 +714,12 @@ export function Chat({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cwd, paneShown, step, setPaneOpen, makeWay, showWorkspace]);
+  // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
+  const terminals = useTerminalsAvailable();
+  const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {
+    askForTerminal(cwd, command);
+    makeWay(() => showWorkspace({ tab: 'terminal' }));
+  } : undefined), [cwd, terminals, makeWay, showWorkspace]);
   // The trust sheet, for a terminal in a folder nobody trusted that brings programs.
   const askTrust = useCallback((brings: string[]) => new Promise<TrustChoice | undefined>((resolve) => {
     let settled = false;
@@ -855,6 +861,7 @@ export function Chat({
 
   return (
     <PathLinksContext.Provider value={links}>
+    <RunInTerminal.Provider value={runInTerminal}>
     <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
@@ -1095,6 +1102,7 @@ export function Chat({
       )}
     </div>
     </CommentsChat.Provider>
+    </RunInTerminal.Provider>
     </PathLinksContext.Provider>
   );
 }

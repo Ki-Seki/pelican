@@ -1,11 +1,13 @@
-import { ArrowUpRight, Check, Copy, Image as ImageIcon } from 'lucide-react';
-import { memo, type ReactNode, useState } from 'react';
+import { ArrowUpRight, Check, Copy, Image as ImageIcon, Play } from 'lucide-react';
+import { memo, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
+import { TERMINAL_LIMITS } from '../../shared/terminal';
 import { rehypePathRefs } from '../lib/path-refs';
+import { RunInTerminal, runsInShell } from '../lib/terminals';
 import { openImage } from './Lightbox';
 import { PathRef } from './PathLink';
 import { PreviewCard } from './Preview';
@@ -69,30 +71,84 @@ export function RemoteImage({ src, alt }: { src: string; alt?: string }) {
   );
 }
 
+/**
+ * A code block, with Copy in a bar of its own, as in Claude's apps: over the code, it hid the first
+ * line of every block that scrolls sideways. A shell's commands can also run in a new terminal in
+ * the session's folder, once asked whether to: the bar asks, in place.
+ */
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const run = useContext(RunInTerminal);
+  const [asking, setAsking] = useState(false);
+  const confirm = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (asking) confirm.current?.focus({ preventScroll: true });
+  }, [asking]);
+  const language = /language-(\w+)/.exec(String((children as { props?: { className?: string } } | undefined)?.props?.className ?? ''))?.[1];
+  // HTML and SVG in a reply can be seen rendered too; it starts as code, the way it was written.
+  if (language === 'html' || language === 'svg') {
+    return <div className="my-2"><PreviewCard source={{ kind: language, code: textOf(children) }} label={language.toUpperCase()} defaultCode /></div>;
+  }
+  const code = textOf(children);
+  const command = code.replace(/\s+$/, '');
+  const runnable = run && runsInShell(language) && command.trim() !== '' && command.length <= TERMINAL_LIMITS.command;
+  return (
+    <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
+      <div
+        className="flex h-8 items-center gap-1 border-b border-line pr-1 pl-3 text-[11.5px] text-faint select-none"
+        onKeyDown={(e) => {
+          // Esc takes the question back, and does not stop Claude.
+          if (asking && e.key === 'Escape') {
+            e.preventDefault();
+            setAsking(false);
+          }
+        }}
+      >
+        {asking && runnable ? (
+          <>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">Run in a new terminal?</span>
+            <button
+              ref={confirm}
+              type="button"
+              onClick={() => {
+                setAsking(false);
+                run(command);
+              }}
+              className="h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg"
+            >
+              Run
+            </button>
+            <button type="button" onClick={() => setAsking(false)} className="h-6 shrink-0 rounded-full px-2 text-[12px] text-muted hover:bg-hover hover:text-fg">Cancel</button>
+          </>
+        ) : (
+          <>
+            <span className="min-w-0 flex-1 truncate">{language}</span>
+            {runnable && (
+              <button
+                type="button"
+                aria-label="Run in terminal"
+                title="Run in terminal"
+                onClick={() => setAsking(true)}
+                className="relative grid size-7 place-items-center rounded-md text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg"
+              >
+                <Play className="size-3.5" />
+              </button>
+            )}
+            <CopyButton text={code} />
+          </>
+        )}
+      </div>
+      <pre className="m-0! rounded-none! border-0!">{children}</pre>
+    </div>
+  );
+}
+
 const components: Components = {
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noreferrer noopener">
       {children}
     </a>
   ),
-  pre: ({ children }) => {
-    const language = /language-(\w+)/.exec(String((children as { props?: { className?: string } } | undefined)?.props?.className ?? ''))?.[1];
-    // HTML and SVG in a reply can be seen rendered too; it starts as code, the way it was written.
-    if (language === 'html' || language === 'svg') {
-      return <div className="my-2"><PreviewCard source={{ kind: language, code: textOf(children) }} label={language.toUpperCase()} defaultCode /></div>;
-    }
-    // The copy button has a bar of its own, as in Claude's apps: over the code, it hid the first
-    // line of every block that scrolls sideways.
-    return (
-      <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
-        <div className="flex h-8 items-center gap-2 border-b border-line pr-1 pl-3 text-[11.5px] text-faint select-none">
-          <span className="min-w-0 flex-1 truncate">{language}</span>
-          <CopyButton text={textOf(children)} />
-        </div>
-        <pre className="m-0! rounded-none! border-0!">{children}</pre>
-      </div>
-    );
-  },
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   img: ({ src, alt }) => {
     if (typeof src !== 'string' || !src) return null;
     if (!loadsInPlace(src)) return <RemoteImage src={src} {...(alt ? { alt } : {})} />;
