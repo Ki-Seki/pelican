@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+- Pinned sessions, as in Claude Desktop. Pin one with a swipe right on its row on a phone (left is
+  still Archive), with the pin beside Archive when you point at a row on a computer, or with Pin in
+  the session menu; in the list, Undo shows for five seconds. Pinned sessions lead the list under
+  Pinned, grouped by time or by project, and under their project's filter, each with its status
+  (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on the computer
+  for all your browsers: a session pinned in Claude Desktop is not pinned here, and Desktop's pins
+  are left alone. Archiving a session unpins it.
+- The demo, and the live demo on the website, have a pinned session.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and
