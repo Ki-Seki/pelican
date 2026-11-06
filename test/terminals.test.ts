@@ -18,8 +18,8 @@ import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState, terminalTiming,
-  testShell,
+  capMarks, closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState,
+  terminalTiming, testShell,
 } from '../src/server/terminals';
 import { Page, pause, until } from './terminal-page';
 
@@ -453,6 +453,42 @@ describe('flow control', () => {
     const back = page(terminal.id);
     await back.readied();
     await until(() => back.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen as it is');
+  }, 90_000);
+});
+
+describe('marks on a character', () => {
+  const marks = (n: number) => '\u0301'.repeat(n);
+
+  it('are kept up to 16 in a row, across chunks of output, and start again after a character or an escape sequence', () => {
+    expect(capMarks(`e${marks(3)}`, 0)).toEqual({ text: `e${marks(3)}`, run: 3 });
+    expect(capMarks(`a${marks(40)}b`, 0)).toEqual({ text: `a${marks(16)}b`, run: 0 });
+    // A run split between two chunks is one run.
+    expect(capMarks(marks(10), 10)).toEqual({ text: marks(6), run: 20 });
+    expect(capMarks(`${marks(5)}c`, 20)).toEqual({ text: 'c', run: 0 });
+    // xterm starts a new cell after an escape sequence, so a run does too.
+    expect(capMarks(`a${marks(16)}\u001b[m${marks(16)}`, 0).text).toBe(`a${marks(16)}\u001b[m${marks(16)}`);
+    // Joiners, selectors and marks beyond the first plane count; Chinese and plain text pass as they are.
+    expect(capMarks(`x${'\u200d\ufe0f\u{e0100}'.repeat(10)}`, 0).text).toBe(`x${'\u200d\ufe0f\u{e0100}'.repeat(5)}\u200d`);
+    expect(capMarks('中文 café ok', 3)).toEqual({ text: '中文 café ok', run: 0 });
+    expect(capMarks('plain', 3)).toEqual({ text: 'plain', run: 0 });
+  });
+
+  it('are at most 16 in what the copy keeps and the pages get, however many a program prints', async () => {
+    const file = path.join(dir, 'marks.txt');
+    // One letter with ten million marks on it: 20 MB.
+    await writeFile(file, `a${marks(10_000_000)}b\n`);
+    const terminal = await open();
+    const shown = await atPrompt(terminal.id);
+    const rss = process.memoryUsage().rss;
+    shown.type(`cat ${file}; echo DO''NE\r`);
+    await shown.sees(/DONE\r\n/, 60_000);
+    expect(shown.output).toContain(`a${marks(16)}b`);
+    expect(shown.received).toBeLessThan(10_000);
+    const late = page(terminal.id);
+    const ready = await late.readied();
+    expect(ready.snapshot.length).toBeLessThan(10_000);
+    expect(late.lines()).toContain(`a${marks(16)}b`);
+    expect(process.memoryUsage().rss - rss).toBeLessThan(200 * 1024 * 1024);
   }, 90_000);
 });
 

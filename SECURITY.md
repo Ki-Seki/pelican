@@ -104,7 +104,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   Code's mark (`CLAUDECODE`), nor what describes the terminal or service Pelican runs in. At most
   10 terminals run at once, each shown on at most 8 pages, and a page sends at most 64 KB at a
   time; a page that stops reading is let go rather than kept in memory, and the shell waits for a
-  slow one instead. A terminal lives in memory only: one unused for 12 hours with nothing running
+  slow one instead. What the server keeps of a terminal's screen is bounded too: 2,000 lines, and
+  at most 16 combining marks on a character, however many a program prints. A terminal lives in memory only: one unused for 12 hours with nothing running
   in it is closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end
   with Pelican. Nothing runs in a terminal without you: the page sends its shell only what you
   type, paste or click (the server's copy answers what a program asks of the terminal, once, a
