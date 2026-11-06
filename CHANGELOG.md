@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.0
+
+A terminal beside the conversation, as Claude Desktop has one.
+
+### Highlights
+
+- **Terminal.** Your login shell on the computer, in the session's folder, with the environment
+  Claude Code has there, as in Claude Desktop: `npm test` and `git status` see the files Claude is
+  editing, and git by hand goes there. It keeps running when you close the page or your phone
+  sleeps, and when you come back it shows the screen as it was, scrollback and a program such as
+  vim included, and goes on from there. Closing it hangs its shell up, as closing a window does;
+  one unused for 12 hours with nothing running in it closes on its own, and all end when Pelican
+  stops. Its output comes over a connection of its own, so it never holds up an approval, and while
+  a phone on a slow link catches up the shell waits for it, so Ctrl+C gets through at once. Claude
+  sees nothing of a terminal unless you put it in a message; `!` commands go into the conversation
+  as before.
+
+### Security
+
+- A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
+  answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
+  trusted that brings programs is asked about first, and in one kept to your settings only, git
+  runs none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`),
+  npm's (`npm_*`) or Claude Code's mark (`CLAUDECODE`). At most 10 terminals run at once, each on
+  up to 8 pages; nothing of them is written to disk. The demo has none, and `pelican --no-terminal`
+  (also for `pelican service install`) starts Pelican without them.
+- The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
+  the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package.
+  It is optional: where it cannot load, such as on Alpine (musl) or after an install with
+  `--omit=optional`, the terminal says why, and `!` commands work as before.
+
+### Site, docs and project
+
+- The docs describe the terminal: where it runs, what it keeps and when it ends, `--no-terminal`,
+  and its security.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

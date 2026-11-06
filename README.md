@@ -118,6 +118,8 @@ Whoever can use Pelican can run commands as you, so:
 - What Claude writes renders in a sandboxed frame that cannot reach Pelican, as a still picture
   until you tap Run.
 - A folder runs nothing of its own, such as hooks or MCP servers, until you trust it.
+- A terminal is your shell, as you: it opens under the same checks, runs in a folder as Claude Code
+  does there, keeps nothing on disk and ends with Pelican.
 
 The whole model is in [SECURITY.md](SECURITY.md).
 

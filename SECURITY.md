@@ -93,6 +93,23 @@ can read your sessions and have Claude run commands as you, so treat access to i
   trusted folder, git runs for the Changes panel with hooks, the file-system monitor, external
   diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of a work
   tree outside the folder.
+- **A terminal is your shell, as you, with the same doors.** A terminal runs your login shell on
+  this computer, in the folder a request names (in the app, the session's), and can do there
+  whatever you can in a terminal. Its socket opens only as Pelican's other one does: a signed-in
+  browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; and it runs
+  in a folder as Claude Code does, so a folder nobody trusted that brings programs is asked about
+  first, and in one kept to your settings only, git runs none of the repository's filters,
+  file-system monitor or hooks folder (the settings Claude Code and `!` commands get there). The
+  shell's environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`) or Claude
+  Code's mark (`CLAUDECODE`), nor what describes the terminal or service Pelican runs in. At most
+  10 terminals run at once, each shown on at most 8 pages, and a page sends at most 64 KB at a
+  time; a page that stops reading is let go rather than kept in memory, and the shell waits for a
+  slow one instead. A terminal lives in memory only: one unused for 12 hours with nothing running
+  in it is closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end
+  with Pelican. Claude sees nothing of a terminal unless you put it in a message. The demo has no
+  terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is pinned to
+  one version, and CI checks that its files, for every platform, are those of Microsoft's node-pty
+  of that version, against the integrity the npm registry publishes for it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'
@@ -130,7 +147,7 @@ one, in the session's `tool-results` folder, readable only by you. It stores upl
 notification keys and subscriptions, the folders you trusted or kept to your settings, the usage
 figures it counted from the transcripts (token counts, times, models and folders, no conversation
 text) with the sessions it ran and how long they waited for you, and a note of the running server
-in `~/.local/state/pelican`.
+in `~/.local/state/pelican`. Terminals, and what they show, are kept in memory only.
 
 ## Reporting a vulnerability
 

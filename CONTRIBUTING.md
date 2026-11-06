@@ -60,6 +60,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/workspace.ts`, `changes.ts`, `search.ts` | Changes and files: git status and diffs, what each turn changed from the transcript, file search |
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
+| `src/server/terminals.ts`, `pty.ts` | Terminals: the shell in a PTY, the server's copy of its screen, its socket and flow control, and the optional PTY package |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
@@ -67,7 +68,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
+| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, what changed upstream, the registry CI installs the package from, and the check that the terminal's binaries are Microsoft's |
 
 ## Keeping up with Claude Code
 
