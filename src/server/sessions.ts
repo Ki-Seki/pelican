@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
-import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { shortTitle } from '../shared/titles.js';
 import { archivedIds } from './archive.js';
 import { config } from './config.js';
@@ -206,23 +206,26 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
 }
 
 /**
- * Files Claude handed to the user in a session (SendUserFile, Artifact): the
- * only files outside the session's folder the app may show, and only these paths.
+ * Files Claude handed to the user in a session: the only files the app shows by a path a request
+ * names, and only these paths. For SendUserFile, each file Claude Code recorded it delivered, at
+ * the path it checked, never the path Claude asked for; for Claude Desktop's Artifact, the file
+ * it published. Only calls that ran: one Claude only wrote (no app answered it, or it failed)
+ * hands over nothing.
  */
 export async function sentFiles(sessionId: string): Promise<Set<string>> {
   const messages = await loadMessages(sessionId);
-  // Only calls that ran: one Claude only wrote (no app answered it, or it failed) hands over nothing.
-  const ran = new Set<string>();
+  const ran = new Map<string, ToolResultBlock>();
   for (const message of messages) {
-    for (const block of message.blocks) if (block.type === 'tool_result' && !block.is_error) ran.add(block.tool_use_id);
+    for (const block of message.blocks) if (block.type === 'tool_result' && !block.is_error) ran.set(block.tool_use_id, block);
   }
   const paths = new Set<string>();
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
     for (const block of message.blocks) {
-      if (block.type !== 'tool_use' || !ran.has(block.id)) continue;
-      if (block.name === 'SendUserFile' && Array.isArray(block.input.files)) {
-        for (const file of block.input.files) if (typeof file === 'string') paths.add(file);
+      const result = block.type === 'tool_use' ? ran.get(block.id) : undefined;
+      if (!result || block.type !== 'tool_use') continue;
+      if (block.name === 'SendUserFile') {
+        for (const file of result.delivered?.files ?? []) paths.add(file.path);
       } else if (block.name === 'Artifact' && typeof block.input.file_path === 'string') {
         paths.add(block.input.file_path);
       }

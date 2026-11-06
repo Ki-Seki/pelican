@@ -116,11 +116,13 @@ function SentFile({ path, open: startOpen }: { path: string; open: boolean }) {
 
 /** Files Claude handed over (SendUserFile, Artifact), shown the way Claude Desktop shows them. */
 function SentFiles({ call }: { call: ToolCall }) {
-  const files = call.name === 'Artifact' ? [str(call.input.file_path)].filter(Boolean) : (Array.isArray(call.input.files) ? (call.input.files as unknown[]).filter((f): f is string => typeof f === 'string') : []);
-  const caption = str(call.input.caption) || str(call.input.description);
+  // What Claude Code delivered, at the paths it checked; never the paths Claude asked for.
+  const delivered = call.result?.delivered;
+  const files = call.name === 'Artifact' ? [str(call.input.file_path)].filter(Boolean) : (delivered?.files ?? []).map((file) => file.path);
+  const caption = delivered?.caption ?? (str(call.input.caption) || str(call.input.description));
   const link = resultText(call.result).match(/https:\/\/claude\.ai\/[^\s)"']+/)?.[0];
   // Shown in place unless Claude meant them as attachments to save.
-  const render = call.name === 'Artifact' || str(call.input.display) !== 'attach';
+  const render = call.name === 'Artifact' || (delivered?.display ?? str(call.input.display)) !== 'attach';
   return (
     <div className="my-1 space-y-1.5">
       {caption && <div className="text-[13px] text-muted">{caption}</div>}

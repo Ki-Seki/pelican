@@ -35,7 +35,7 @@ import { startShell, stopShell } from './shell-runs.js';
 import { isSideChat } from './side-chat.js';
 import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
-import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, readProjectFile } from './workspace.js';
+import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, PICTURE_TYPES, readProjectFile } from './workspace.js';
 import { searchText } from './search.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
@@ -84,10 +84,11 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-/** What the page loads without fetch, so it cannot mark: an uploaded image, a picture in a message, a download. */
+/** What the page loads without fetch, so it cannot mark: an uploaded image, a picture in a message, a file Claude sent, a download. */
 const unmarked = (c: Context) => c.req.method === 'GET'
   && (/^\/api\/uploads\/[^/]+$/.test(c.req.path) || /^\/api\/sessions\/[^/]+\/export$/.test(c.req.path)
-    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path) || c.req.path === '/api/file/raw');
+    || /^\/api\/sessions\/[^/]+\/images\/[^/]+\/\d+$/.test(c.req.path) || c.req.path === '/api/file/raw'
+    || /^\/api\/sessions\/[^/]+\/sent\/raw$/.test(c.req.path));
 
 /** The Origin header as an origin (`null`, garbage and missing are none). */
 function originOf(header: string | undefined): string | undefined {
@@ -821,14 +822,75 @@ app.delete('/api/sessions/:id/queued/:uuid', (c) => {
   return ok ? c.json({ ok }) : c.json({ error: 'That message is no longer waiting' }, 409);
 });
 
+/**
+ * Whether Claude sent this very file in this session (sessions.ts, sentFiles): by its transcript,
+ * or by what this Pelican's Claude has just said, which the transcript has a moment later.
+ */
+async function sentHere(sessionId: string, file: string): Promise<boolean> {
+  if (!file || file.length > 4096 || !path.isAbsolute(file)) return false;
+  return Boolean(getRun(sessionId)?.delivered.has(file)) || (await sentFiles(sessionId)).has(file);
+}
+
+const NOT_SENT = 'Not a file Claude sent in this session';
+
+/**
+ * A file Claude sent in this session, to show: its text (up to half a megabyte), or a picture as
+ * data (up to 4 MB), read where Claude Code recorded it, through no link that leads out of its
+ * folder. An SVG is text, for its still preview.
+ */
 app.get('/api/sessions/:id/sent', async (c) => {
   const file = c.req.query('path') ?? '';
-  if (!file || !(await sentFiles(c.req.param('id'))).has(file)) return c.json({ error: 'Not a file Claude sent in this session' }, 404);
+  if (!(await sentHere(c.req.param('id'), file))) return c.json({ error: NOT_SENT }, 404);
   try {
-    return c.json(await readProjectFile(path.dirname(file), path.basename(file)));
+    return c.json(await readProjectFile(path.dirname(file), path.basename(file), PICTURE_TYPES));
   } catch {
     return c.json({ error: 'The file is gone' }, 404);
   }
+});
+
+/** Larger than this, a file Claude sent is not served, as one of the folder's is not. */
+export const SENT_MAX_BYTES = 200 * 1024 * 1024;
+
+/**
+ * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;
+ * a PDF for the browser's own viewer, in a tab of its own; anything else, and anything asked for
+ * with `download`, as an attachment. Read only, as it is on disk now, up to 200 MB, never sniffed.
+ */
+app.get('/api/sessions/:id/sent/raw', async (c) => {
+  const file = c.req.query('path') ?? '';
+  if (!(await sentHere(c.req.param('id'), file))) return c.json({ error: NOT_SENT }, 404);
+  const opened = await openProjectFile(path.dirname(file), path.basename(file)).catch(() => undefined);
+  if (!opened) return c.json({ error: 'The file is gone' }, 404);
+  if (opened.size > SENT_MAX_BYTES) {
+    await opened.handle.close();
+    return c.json({ error: 'That file is larger than 200 MB' }, 413);
+  }
+  const name = path.basename(file);
+  const ext = path.extname(name).slice(1).toLowerCase();
+  const disposition = (how: 'inline' | 'attachment') => `${how}; filename*=UTF-8''${encodeURIComponent(name)}`;
+  const asked = c.req.query('download') === undefined ? (PICTURE_TYPES[ext] ? 'picture' : ext === 'pdf' ? 'pdf' : 'download') : 'download';
+  const headers: Record<string, string> = asked === 'picture'
+    ? { 'Content-Type': PICTURE_TYPES[ext]!, 'Cache-Control': KEPT_ASKING, ...INERT }
+    : asked === 'pdf'
+      ? { 'Content-Type': 'application/pdf', 'Content-Disposition': disposition('inline'), 'Cache-Control': 'private, no-store', ...SENT_PDF }
+      : { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition('attachment'), 'Cache-Control': 'private, no-store', ...INERT };
+  if (asked === 'picture') {
+    // Shown again as the conversation scrolls: a browser that has this very version is told so.
+    const info = await opened.handle.stat();
+    const tag = `"${createHash('sha256').update(`${file}\0${info.ino}\0${info.size}\0${info.mtimeMs}`).digest('base64url').slice(0, 27)}"`;
+    if (unchanged(c, tag)) {
+      await opened.handle.close();
+      return c.body(null, 304, { ETag: tag, 'Cache-Control': KEPT_ASKING });
+    }
+    headers.ETag = tag;
+  }
+  headers['Content-Length'] = String(opened.size);
+  // HEAD takes this route too and wants no body: a stream nobody reads would hold the file open.
+  if (c.req.method === 'HEAD') {
+    await opened.handle.close();
+    return c.body(null, 200, headers);
+  }
+  return c.body(Readable.toWeb(opened.handle.createReadStream()) as ReadableStream, 200, headers);
 });
 
 app.get('/api/sessions/:id/agents/:agent', async (c) => {
@@ -898,6 +960,18 @@ const INERT = {
   'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; frame-ancestors 'self'",
   'X-Frame-Options': 'SAMEORIGIN',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+};
+
+/**
+ * A PDF Claude sent, opened in a tab of its own: the browser's PDF viewer shows it, which runs
+ * nothing of it as a page of Pelican's, and is never framed. Never sniffed either, so it is never
+ * read as a page. No sandbox and no further policy: those keep some browsers' viewers from it.
+ */
+const SENT_PDF = {
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
 

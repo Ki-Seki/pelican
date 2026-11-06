@@ -50,7 +50,7 @@ import { type Completions, forgetCompletions, knownModels, noteTerminalCommands,
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
-import { toChatMessage } from './normalize.js';
+import { deliveryOf, toChatMessage } from './normalize.js';
 import { answerable, notify, oneLine } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
@@ -364,6 +364,13 @@ export class SessionRun {
   private flows = new Map<string, LiveFlow>();
   /** Claude's calls to schedule tools, until their results say what was scheduled. */
   private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
+  /** Claude's SendUserFile calls, until their results say what Claude Code delivered. */
+  private sending = new Set<string>();
+  /**
+   * The files Claude Code said it delivered here, by their paths, as it says so: its transcript has
+   * them a moment later, and a page shows a file as soon as the result comes.
+   */
+  readonly delivered = new Set<string>();
   private wakeup?: ScheduledCheck;
   private crons = new Map<string, ScheduledCheck>();
   /** When Claude Code lets each recurring check go. */
@@ -1123,6 +1130,8 @@ export class SessionRun {
       const name = str(block.name);
       if (name === 'ScheduleWakeup' || name === 'CronCreate' || name === 'CronDelete') {
         this.scheduling.set(block.id, { name, input: (block.input ?? {}) as Record<string, unknown> });
+      } else if (name === 'SendUserFile') {
+        this.sending.add(block.id);
       }
     }
   }
@@ -1130,6 +1139,13 @@ export class SessionRun {
   private noteResults(raw: Record<string, unknown>): void {
     const content = (raw.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(content)) return;
+    // What a SendUserFile call delivered, by the one result its row holds, as normalize reads it.
+    const results = (content as Array<Record<string, unknown>>).filter((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string');
+    const sends = results.filter((b) => this.sending.delete(b.tool_use_id as string));
+    const output = raw.tool_use_result;
+    if (results.length === 1 && sends.length === 1 && sends[0]!.is_error !== true && output && typeof output === 'object' && !Array.isArray(output)) {
+      for (const file of deliveryOf(output as Record<string, unknown>)?.files ?? []) this.delivered.add(file.path);
+    }
     // A workflow's run id is only in its call's result: the folder its agents write to.
     const launched = (raw.tool_use_result ?? {}) as { taskId?: unknown; runId?: unknown };
     const flow = typeof launched.taskId === 'string' ? this.flows.get(launched.taskId) : undefined;

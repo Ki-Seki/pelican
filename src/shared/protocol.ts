@@ -65,7 +65,22 @@ export type ToolResultBlock = {
   denied?: boolean;
   /** What a Workflow call launched, as Claude Code records it next to the result. */
   workflow?: WorkflowLaunch;
+  /** What a SendUserFile call delivered, as Claude Code records it next to the result. */
+  delivered?: Delivery;
 };
+
+/**
+ * A file Claude sent you, as Claude Code recorded it delivered: its absolute path on the computer,
+ * as Claude Code checked it, its size then, whether Claude Code took it for a picture, and its type.
+ */
+export type DeliveredFile = { path: string; size?: number; image?: boolean; type?: string };
+
+/**
+ * What one SendUserFile call delivered: the files, how Claude meant them shown (`render`: in
+ * place; `attach`: as a file to save; unset: by their type), its caption, and how many files
+ * Claude Code did not deliver (`missed`).
+ */
+export type Delivery = { files: DeliveredFile[]; display?: 'render' | 'attach'; caption?: string; missed?: number };
 
 /** The run a Workflow call started: its run id (the folder its agents write to) and its task. */
 export type WorkflowLaunch = {

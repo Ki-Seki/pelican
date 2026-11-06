@@ -6,9 +6,12 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, ToolResultBlock } from '../src/shared/protocol';
+import { app } from '../src/server/app';
+import { accessToken, loadAuth } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { feedFor } from '../src/server/feed';
 import { closeAll, getRun, sendMessage } from '../src/server/runner';
+import { sentFiles } from '../src/server/sessions';
 import { refreshTranscriptIndex, transcriptPath } from '../src/server/transcripts';
 import { type ContentBlock, type MessagesRequest, type StandIn, standInApi, until } from './stand-in-api';
 
@@ -26,6 +29,8 @@ let api: StandIn;
 let folder: string;
 let session: string;
 const live: ChatMessage[] = [];
+/** What a page that asked for the file the moment its result came got. */
+let shownAtOnce: Promise<Response> | Response | undefined;
 
 /** The turns Claude was asked to take (not titles or suggestions, which come without tools). */
 const turns = () => api.requests.filter((request) => (request.tools?.length ?? 0) > 0);
@@ -52,9 +57,20 @@ beforeAll(async () => {
     DISABLE_AUTOUPDATER: '1',
     DISABLE_ERROR_REPORTING: '1',
   });
+  config.auth = 'auto';
+  await loadAuth();
   session = await sendMessage({ cwd: folder }, { text: 'Send me the report', attachments: [], settings: {} });
   feedFor(session).listeners.add((event) => {
-    if (event.type === 'message') live.push(event.message);
+    if (event.type !== 'message') return;
+    live.push(event.message);
+    // A page asks for the file as soon as the card shows, before Claude Code's transcript has the row.
+    const sent = event.message.blocks.find((block): block is ToolResultBlock => block.type === 'tool_result' && Boolean(block.delivered));
+    const file = sent?.delivered?.files[0]?.path;
+    if (file && !shownAtOnce) {
+      shownAtOnce = app.request(`/api/sessions/${session}/sent?path=${encodeURIComponent(file)}`, {
+        headers: { host: 'localhost:7860', 'x-pelican': '1', authorization: `Bearer ${accessToken()}` },
+      });
+    }
   });
   await until(() => turns().some((request) => results(request).length > 0) && getRun(session)?.busy === false, 90_000, 'the turn that sends the file');
 }, 120_000);
@@ -81,6 +97,17 @@ describe('a session Pelican starts, in the Claude Code the Agent SDK bundles', (
     const rows = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { toolUseResult?: { attachments?: Array<{ path: string }> } });
     const recorded = rows.find((row) => row.toolUseResult?.attachments);
     expect(recorded?.toolUseResult).toMatchObject({ caption: 'Here is the report.', attachments: [{ path: path.join(folder, 'report.md'), isImage: false, pathValidated: true }] });
-    expect(live.some((message) => message.blocks.some((block) => block.type === 'tool_result' && (block as ToolResultBlock).tool_use_id === answered.tool_use_id))).toBe(true);
+  });
+
+  it('shows the file in the conversation as the result comes, from where Claude Code checked it', async () => {
+    const answered = results(turns().at(-1)!)[0]!;
+    const result = live.flatMap((message) => message.blocks).find((block): block is ToolResultBlock => block.type === 'tool_result' && block.tool_use_id === answered.tool_use_id);
+    expect(result?.delivered).toEqual({ files: [{ path: path.join(folder, 'report.md'), size: 39, type: 'text/markdown' }], caption: 'Here is the report.' });
+    const response = await shownAtOnce!;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ text: '# Signups\n\n12,480 last week, 18% more.\n' });
+    // And from the transcript once Claude Code has written it, after its Claude has gone.
+    await refreshTranscriptIndex();
+    expect([...(await sentFiles(session))]).toEqual([path.join(folder, 'report.md')]);
   });
 });
