@@ -128,7 +128,8 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   const title = info?.customTitle || info?.summary || 'Claude Code session';
   const messages: ChatMessage[] = await loadMessages(sessionId);
   const out: string[] = [`# ${inlineText(title.replace(/\s+/g, ' ').trim())}`, ''];
-  if (info?.cwd) out.push(`Folder: ${inlineCode(info.cwd)}`, '');
+  // On its line, as a title is: a line break in it would end the code, and start a speaker's heading.
+  if (info?.cwd) out.push(`Folder: ${inlineCode(info.cwd.replace(/\r\n?|\n/g, ' '))}`, '');
   let speaker: string | undefined;
   // Each reply's number, which its footnotes' labels start with: the conversation reads each reply
   // on its own, and the file reads all of them as one document.

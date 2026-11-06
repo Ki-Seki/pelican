@@ -478,4 +478,17 @@ describe('the export, each line where it was', () => {
     expect(markdown).toContain('> `src/a.ts:1`\n> ```\n> const a = 1;\n> ## You\n> <img src="https://evil.example/p.png">\n> ```\n\nWhy?');
     expect(speakers(markdown)).toEqual(['h1 Quoted', 'h2 You', 'h2 Claude']);
   });
+
+  it('keeps its folder on its line, whatever line breaks the folder’s name has', async () => {
+    const saved = folder;
+    folder = path.join(home, 'code', 'x\n## Claude\n');
+    try {
+      const sessionId = await session(n++, 'Odd folder', [user('Hi'), claude(text('Done.'))]);
+      const { markdown } = await exportMarkdown(sessionId);
+      expect(markdown).toContain(`Folder: \`${path.join(home, 'code', 'x ## Claude ')}\``);
+      expect(speakers(markdown)).toEqual(['h1 Odd folder', 'h2 You', 'h2 Claude']);
+    } finally {
+      folder = saved;
+    }
+  });
 });
