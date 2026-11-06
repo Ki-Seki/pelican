@@ -163,16 +163,16 @@ command hides; and what the reviews of 0.4.0 left.
   allowed-tools and hooks. A hook's or a server's YAML shows with its lines as written, so a second
   line that runs curl no longer reads as part of a `#` comment on the first, and the sheet says
   where an escape such as `\n` reads otherwise than it is written. A folder's files are read in time
-  that grows with their size, not with its square: frontmatter of 480 KB held the server for 47
-  seconds, as did a command of a megabyte whose ```! block or frontmatter never ends. The sheet
-  lists from a file up to 200 items and 256 KB of them as it shows them, and from a folder up to
-  1,000 and 1 MB, reading up to 32 MB of its files, more than any project brings. An item it warns
-  of, and Pelican's own word on what it could not read, come first, so no number of harmless items
-  leaves one out, and what the repository's git config runs is read and listed whatever the folder's
-  other files bring. Past that the sheet names, above the list and in red, the files it shows part
-  of, and the folder is asked about as before, also where it lists nothing. A hook whose type or
-  arguments are nested too deep to read shows as one Pelican cannot read, where the request failed
-  and nothing started.
+  that grows with their size, not with its square: in 0.4.0, frontmatter of 480 KB held the server
+  for 38 seconds, and a command of a megabyte whose ```! block or frontmatter never ends for 46. The
+  sheet lists from a file up to 200 items and 256 KB of them as it shows them, and from a folder up
+  to 1,000 and 1 MB, reading up to 32 MB of its files, more than any project brings. An item it
+  warns of, and Pelican's own word on what it could not read, come first, so no number of harmless
+  items leaves one out, and what the repository's git config runs is read and listed whatever the
+  folder's other files bring. Past that the sheet names, above the list and in red, the files it
+  shows part of, and the folder is asked about as before, also where it lists nothing. A hook whose
+  type or arguments are nested too deep to read shows as one Pelican cannot read, where the request
+  failed and nothing started.
 - A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
   recommends; other tags after a black flag, which can spell anything unseen, are left out. The
   repository's check for hidden characters holds the docs to the same three.
