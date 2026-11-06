@@ -62,7 +62,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
 | `src/server/terminals.ts`, `pty.ts` | Terminals: the shell in a PTY, the server's copy of its screen, its socket and flow control, and the optional PTY package |
 | `src/server/terminal-snapshot.ts` | The screen a page that comes back gets: xterm's serializer, fixed where it drew otherwise, and what it leaves out |
-| `src/shared/terminal-widths.ts`, `terminal-guards.ts` | What every terminal's xterm draws with, on the server and on a page: Unicode 11's widths with at most 16 marks on a character, and guards against output xterm throws on |
+| `src/shared/terminal-widths.ts`, `terminal-guards.ts` | What every terminal's xterm draws with, on the server and on a page: Unicode 11's widths with at most 16 marks on a character, and guards against output xterm throws on, or does too much with (counts far past the screen, links, titles) |
 | `src/web/components/WorkspaceTerminal.tsx`, `TerminalScreen.tsx` | The Terminal tab: its terminals, the phone's key row and line field, and the screen (xterm.js, loaded only by the tab) |
 | `src/web/lib/terminal-socket.ts`, `terminal-input.ts`, `terminal-cursor.ts`, `terminals.ts` | A page's connection to a terminal, what its keys and pastes send, its cursor, and Open, Run in terminal and Ctrl+` from the rest of the app |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |

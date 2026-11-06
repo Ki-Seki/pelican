@@ -12,8 +12,9 @@ A terminal beside the conversation, as Claude Desktop has one.
   in Desktop, and hides it again from inside it. Each terminal is a tab named after the program in
   front (zsh, npm, vim); + opens another, Open in terminal at the top of a folder in Files opens one
   there, and End hangs the shown one up, as closing a window does, asking first while a program runs
-  in it. On a computer you type straight into it, with input methods, the emoji picker and
-  dictation too, select to Quote or Copy, and Ctrl and the wheel sets the text size. Its colors and
+  in it, also one left in the background. On a computer you type straight into it, with input
+  methods, the emoji picker and dictation too, select to Quote or Copy, and Ctrl and the wheel sets
+  the text size. Its colors and
   font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim does
   to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
@@ -27,8 +28,8 @@ A terminal beside the conversation, as Claude Desktop has one.
   hears what a line printed.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
-  program such as vim, with its mouse and cursor, included, without changing the size the shell has
-  on another page. A shell that ends keeps its last screen, with Start again; so does one Pelican
+  program such as vim, with its mouse, its cursor and the colors it set, included, without changing
+  the size the shell has on another page. A shell that ends keeps its last screen, with Start again; so does one Pelican
   ended when it stopped, as all terminals end with Pelican. One unused for 12 hours with nothing
   running in it closes on its own, and one nobody typed into that no page shows makes room when 10
   run; with 10 in use, the Terminal tab lists those in other folders, to end one, asking first
@@ -55,10 +56,14 @@ A terminal beside the conversation, as Claude Desktop has one.
 - A paste into a terminal, and the phone's line, leave out control characters, as xterm, kitty
   and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
   the shell's paste early and run without Enter.
-- What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, and
-  at most 16 combining marks on a character, whatever a program prints between them, so no output
-  grows Pelican's memory, or a phone's, without bound; and output xterm throws on stops neither
-  Pelican nor a page's screen.
+- What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, at
+  most 16 combining marks on a character, whatever a program prints between them, the latest 2,048
+  links (the computer keeps none) and no title; a sequence that repeats a character, scrolls,
+  inserts or deletes lines or moves by tab stops does so at most a screen's worth of times (REP a
+  line's), however large a count it gives, and the computer's copy takes output in a little at a
+  time; so no output grows Pelican's memory, or a phone's, without bound, or holds the rest of
+  Pelican up for more than a moment; and output xterm throws on stops neither Pelican nor a page's
+  screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.

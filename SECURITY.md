@@ -107,9 +107,14 @@ can read your sessions and have Claude run commands as you, so treat access to i
   service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
   page sends at most 64 KB at a time; a page that stops reading is let go rather than kept in
   memory, and the shell waits for a slow one instead. What the server keeps of a terminal's screen,
-  and what a page draws of it, is bounded too: 2,000 lines, and at most 16 combining marks on a
-  character, however many a program prints and whatever it puts between them; and output xterm
-  throws on stops neither Pelican nor a page's screen. A terminal lives in memory only: one unused
+  and what a page draws of it, is bounded too: 2,000 lines, at most 16 combining marks on a
+  character, however many a program prints and whatever it puts between them, the latest 2,048
+  links (OSC 8) on a page, each to an address of at most 2,083 characters, none on the server, and
+  no title. A sequence that repeats a character (REP), scrolls, inserts or deletes lines, or moves by
+  tab stops does so at most a screen's worth of times (REP a line's), whatever count it gives, as
+  more changes nothing; and the server's copy takes output in a piece at a time, so the rest of
+  Pelican is answered in between, also while a program floods the screen. Output xterm throws on
+  stops neither Pelican nor a page's screen. A terminal lives in memory only: one unused
   for 12 hours with nothing running in it is
   closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end with
   Pelican. Nothing runs in a terminal without you: the page sends its shell only what you type,
