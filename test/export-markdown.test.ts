@@ -299,6 +299,17 @@ describe('a reply in the export', () => {
     expect(reply('> | a |\n> | - |\n \n> ---')).toBe('> | a |\n> | - |\n>\n \n> ---');
   });
 
+  it('lets no `!` that ends a picture’s name, written in a link’s words, make a picture of the link after it', () => {
+    expect(reply('![Status ![ok!](ok.svg)[here](https://evil.example/h.png)](https://e.example/s.png)')).toBe(
+      '\\![Status ok\\![here](https://evil.example/h.png)](https://e.example/s.png)',
+    );
+    // A footnote call after it is a link by reference to the footnote, where a reader has no footnotes.
+    expect(reply('[![wow!](u)[^1]](https://e.example)\n\n[^1]: https://evil.example/p.png')).toBe('[wow\\![^1-1]](https://e.example)\n\n[^1-1]: https://evil.example/p.png');
+    for (const said of ['![Status ![ok!](ok.svg)[here](https://evil.example/h.png)](https://e.example/s.png)', '![Status ![ok!](ok.svg)[r]](https://e.example/s.png)\n\n[r]: https://evil.example/r.png', '[![a!](u)![b!](v)[c](https://evil.example/c.png)](w)']) {
+      expect(trouble(reply(said)), said).toEqual([]);
+    }
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

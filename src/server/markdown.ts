@@ -1240,6 +1240,9 @@ function inlineRow(text: string, context: Context): string {
   return out;
 }
 
+/** Whether words end with a `!` that is not escaped, which makes a picture of a `[…]` right after it. */
+const bangAtEnd = (words: string) => words.endsWith('!') && !escapedAt(words, words.length - 1);
+
 /** Whether the character at `at` is escaped: an odd run of backslashes before it. */
 function escapedAt(text: string, at: number): boolean {
   let run = 0;
@@ -1600,8 +1603,18 @@ function inline(text: string, { sure, breaks = [], context }: { sure: boolean; b
   let breakAt = 0;
   const put = (at: number, words: string, next: number) => {
     let before = text.slice(from, at);
-    // A `!` just before a link written here would make a picture of it.
-    if (words.startsWith('[') && before.endsWith('!') && !escapedAt(text, at - 1)) before = `${before.slice(0, -1)}\\!`;
+    // A `!` just before a link written here would make a picture of it: one in the reply's words,
+    // or at the end of what was written in their place just before, such as a picture's name.
+    if (words.startsWith('[')) {
+      if (before) {
+        if (before.endsWith('!') && !escapedAt(text, at - 1)) before = `${before.slice(0, -1)}\\!`;
+      } else {
+        const last = out.findLastIndex((part) => part !== '');
+        if (last >= 0 && bangAtEnd(out[last]!)) out[last] = `${out[last]!.slice(0, -1)}\\!`;
+      }
+    }
+    // And one at the end of what is written here, of a `[` right after it in the reply's words.
+    if (bangAtEnd(words) && text[next] === '[') words = `${words.slice(0, -1)}\\!`;
     out.push(before, words);
     from = next;
     return next;
