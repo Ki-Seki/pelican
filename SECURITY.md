@@ -116,11 +116,17 @@ can read your sessions and have Claude run commands as you, so treat access to i
   and its brief mode still turn the tool off, and it sends no file to Remote Control viewers on
   claude.ai. Pelican serves a file of a session only at a path Claude Code recorded it delivered
   there, the absolute path it checked rather than the one Claude asked for (or, from Claude
-  Desktop, the file an Artifact call published), and refuses any other path a request names. It
-  reads the file as it is on disk when you look, read only, a regular file reached through no link
-  that leads out of its folder, up to 200 MB. A picture shows as itself and text as text, inert; a
-  page or an SVG is a still preview, as above; a PDF opens in the browser's own viewer, in a tab of
-  its own, never sniffed or framed; anything else downloads.
+  Desktop, the file an Artifact call published), and refuses any other path a request names; it
+  says whether a file is still there only of the files Claude sent in that session. It reads the
+  file as it is on disk when you look, read only, a regular file reached through no link that leads
+  out of its folder, up to 200 MB, and sends no more of it than it said it would, however the file
+  grows meanwhile (a download of one of the folder's files too). A picture shows as itself and text
+  as text, inert; a video or a sound plays as itself, never sniffed, a part at a time, and in a tab of
+  its own the browser's player may load it from Pelican but nothing runs (a sandbox that allows no
+  scripts, and no other content); a page or an SVG is a still preview, as above; a PDF opens in the
+  browser's own viewer, in a tab of its own, never sniffed or framed; anything else downloads. A
+  file's name shows any character that hides or turns text around as ⟨U+…⟩, with a warning, on its
+  card and in the name it is saved under, so a script cannot pass for a picture.
 - **A workflow's files stay in its session's folder.** A workflow's card reads, for a run the
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
