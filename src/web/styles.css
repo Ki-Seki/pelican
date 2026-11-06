@@ -226,6 +226,11 @@ body {
 }
 .prose-chat th { background: var(--hover); font-weight: 600; }
 
+/* A quoted passage, marked where it was said (lib/passages): a highlighter's amber, as a search's
+   finds are; and a selection whose note is being written, which keeps the system's own colour. */
+::highlight(pelican-quote-source) { background-color: color-mix(in oklab, var(--mark) 60%, transparent); }
+::highlight(pelican-quote-noting) { background-color: Highlight; color: HighlightText; }
+
 /* Syntax colours (highlight.js classes), kept muted. */
 .hljs-comment, .hljs-quote { color: var(--faint); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-type { color: #8a3ffc; }

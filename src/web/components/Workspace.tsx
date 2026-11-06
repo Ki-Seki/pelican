@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
+import { useWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
 import { closesPane, composing, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
@@ -14,6 +15,7 @@ import { SendComments } from './Comments';
 import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
+import { waitingCount } from './WaitingItems';
 import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
 
 /**
@@ -134,7 +136,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
 }) {
-  const comments = useComments(useCommentsChat(cwd));
+  const chat = useCommentsChat(cwd);
+  const comments = useComments(chat);
+  // Everything that waits to go with the next message: line comments, quotes, files.
+  const waiting = useWaiting(chat);
   const commentsIn = useMemo(() => {
     const count = new Map<string, number>();
     for (const c of comments) count.set(c.path, (count.get(c.path) ?? 0) + 1);
@@ -237,20 +242,25 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const waits = !docked && Boolean(needsYou);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
   const selectionFoot = useMemo<SelectionFootAt | undefined>(
-    () => (foot ? { at: foot, ...(comments.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
-    [foot, comments.length, waits, docked],
+    () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
+    [foot, waiting.length, waits, docked],
   );
 
-  // Comments wait here, across files, and go with the next message, as in Claude Desktop; Send
-  // now (⌘↵) sends them on their own.
-  const footer = comments.length > 0 && (
-    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits ? '' : 'pb-safe'}`}>
-      <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
-        {comments.length === 1 ? '1 comment' : `${comments.length} comments`}<span className="text-faint"> {comments.length === 1 ? 'goes' : 'go'} with your next message</span>
-      </span>
+  // What waits goes with the next message, as comments do in Claude Desktop; Send now (⌘↵) sends it
+  // on its own. Beside the conversation its chips are in view above the message box, so the foot
+  // is only Send now; on a phone, where the view covers the box, it says what waits.
+  const count = waitingCount(waiting);
+  const footer = waiting.length > 0 && (
+    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
+      {!docked && (
+        <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
+          {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
+        </span>
+      )}
       {onSendComments && (
-        <button type="button" onClick={onSendComments} title={`Send now (${SEND_KEYS})`} className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
+        <button type="button" onClick={onSendComments} aria-keyshortcuts="Meta+Enter Control+Enter" title={`Send now (${SEND_KEYS})`} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
           Send now
+          {docked && SEND_KEYS && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{SEND_KEYS}</span>}
         </button>
       )}
     </div>
@@ -264,7 +274,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     if (docked && closesPane(e)) {
       e.preventDefault();
       onClose();
-    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && comments.length > 0 && onSendComments) {
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && waiting.length > 0 && onSendComments) {
       e.preventDefault();
       onSendComments();
     }

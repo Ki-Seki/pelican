@@ -1,175 +1,279 @@
 /**
- * Quoting what you select, in plain text that reads the same in every Claude Code app: lines of a
- * file as `path:7-8` with the lines under it, anything else (a reply, a tool's output) as `>`
- * lines. Quotes wait above the message box and go above your words, each a block of its own.
+ * Quotes, line comments and files waiting to go with the next message, and that message as Claude
+ * Desktop writes it, byte for byte, so Desktop and the CLI see Pelican's quotes as replies, and
+ * Pelican shows theirs (shared/quoted reads them back):
+ *
+ *   @"src/prefs.ts"                         files attached, on the first line
+ *   <!-- reply 2 -->                        quotes with a note: the first marker counts them
+ *   > first quote
+ *
+ *   first note
+ *
+ *   <!-- reply -->
+ *   > second quote
+ *
+ *   second note
+ *
+ *
+ *   In `src/theme.css` at line 12:          line comments, then three line breaks
+ *   ```css
+ *   --surface: #fff;
+ *   ```
+ *   Keep it
+ *
+ *
+ *   <!-- attach -->                         quotes with no note, each a block
+ *   > a passage
+ *
+ *   <!-- attach: src/app.ts:7-8 -->         lines of a file carry where they are
+ *   > const a = 1;
+ *
+ *   your words
  */
 
-/** What was selected: text from the conversation, or lines of a file from line `start` on, numbered as in the file. */
-export type Selection = { text: string } | { text: string; path: string; start: number };
+import { promptGist, type PromptPart, readPrompt, REPLY } from '../../shared/quoted';
+import { MAX_REPLIES } from './drafts';
+import { baseName, clockTime } from './format';
+import { newId } from './ids';
+import { commentsMessage, type CommentBlock } from './review';
+import { capQuote, defuseMentions, LINE_BREAK, maskSecrets, quotedLines } from './sanitize';
 
-/** A file quote longer than this many lines keeps its first ones, and its range says so. */
-export const MAX_QUOTE_LINES = 200;
-/** Past this a quote is cut short: drafts are kept in the page, and a message must fit a request. */
-const MAX_QUOTE_CHARS = 20_000;
+export { promptGist, readPrompt };
+export type { PromptPart };
 
-/** Where a quote is from: a path and a line or a range, as a line comment names it too (lib/review). */
-const HEADER = /^(\S(?:.*\S)?):(\d+)(?:-(\d+))?( \(removed\))?$/;
-const QUOTED = /^>( |$)/;
-const FENCE = /^\s*(```|~~~)/;
+export { MAX_REPLIES };
 
-const quoted = (lines: readonly string[]) => lines.map((line) => (line ? `> ${line}` : '>')).join('\n');
+/** Desktop's words when a message holds as many quotes with a note as it can. */
+export const TOO_MANY_REPLIES = 'Your message can hold up to 99 quotes with a note. Send it, then add more.';
+
+/** Where a waiting item was taken from. */
+export type QuoteFrom = {
+  /**
+   * Claude's reply, your prompt, a step's output, the side chat's answer, a file, a diff, the
+   * terminal; `earlier` for one read back from a message, where nothing says.
+   */
+  what: 'reply' | 'prompt' | 'step' | 'side' | 'file' | 'diff' | 'terminal' | 'earlier';
+  /** The conversation item it is in (its data-quote-from), to show it there again. */
+  key?: string;
+  /** When that was said. */
+  at?: number;
+  /** Where the passage is in that item: how many characters other than spaces come before its start, and before its end. */
+  span?: [number, number];
+};
+
+/** What waits above the message box for the next message: a quote, a line comment or a file. */
+export type WaitingItem = {
+  id: string;
+  kind: 'quote' | 'file' | 'comment';
+  /** A quote's passage (secrets masked, 1,500 characters at most), a comment's code, a file's path. */
+  text: string;
+  /** What you said about it: a quote's note, which makes it a reply, or a comment. */
+  note?: string;
+  from: QuoteFrom;
+  /** The file a quote of lines or a comment is in. */
+  path?: string;
+  /** Its first and last line. */
+  lines?: [number, number];
+  /** A comment's line as the diff marked it; a removed one is Desktop's "before changes". */
+  side?: 'add' | 'del' | 'same';
+  /** A folder attached, not a file. */
+  folder?: boolean;
+  /** The terminal tab a quote of output is from. */
+  tab?: string;
+};
+
+/** A quote with a note: a reply, in Desktop's word. */
+export const isReply = (item: WaitingItem): boolean => item.kind === 'quote' && Boolean(item.note?.trim());
+
+/* ---------- making one ---------- */
 
 /**
- * The selection's lines. A file's are kept as they are, blank ones included, so they match their
- * numbers, all but the line break a selection of whole lines ends with; text from the conversation
- * loses the blank lines around it, and a run of them counts as one. Indentation stays either way:
- * output and code read by it.
+ * A passage as a quote holds it, as Claude Desktop prepares one: secrets masked, then cut to
+ * 1,500 characters. Text from the conversation loses the space around it; lines of a file keep
+ * their indentation and lose only the line breaks around them.
  */
-function linesOf(text: string, file: boolean): string[] {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd());
-  if (file) {
-    if (lines.length > 1 && lines.at(-1) === '') lines.pop();
-    return lines;
-  }
-  const kept: string[] = [];
-  for (const line of lines) {
-    if (!line && (kept.length === 0 || kept.at(-1) === '')) continue;
-    kept.push(line);
-  }
-  while (kept.at(-1) === '') kept.pop();
-  return kept;
+export function preparePassage(text: string, lines = false): string {
+  const kept = lines ? text.replace(/^(?:\r?\n)+|(?:\r?\n)+$/g, '') : text.trim();
+  return capQuote(maskSecrets(kept));
 }
 
-/** A quote's lines, past what a message can carry cut short at the end of a line. */
-const capped = (body: string) => (body.length > MAX_QUOTE_CHARS ? body.slice(0, MAX_QUOTE_CHARS).replace(/\n[^\n]*$/, '') : body);
-
-/**
- * Lines of a file quoted under where they are (`src/app.ts:7-8`, or `src/app.ts:7` for one line),
- * from line `start` on: the first ones when there are too many, and the range names exactly the
- * lines the quote holds. Empty when they are all blank.
- */
-function fileQuote(path: string, start: number, lines: readonly string[]): string {
-  if (!lines.some(Boolean)) return '';
-  const body = capped(quoted(lines.slice(0, MAX_QUOTE_LINES)));
-  const end = start + body.split('\n').length - 1;
-  return `${path}:${end > start ? `${start}-${end}` : start}\n${body}`;
+/** A quote of `text`, or nothing for one shorter than two characters (Desktop's least). */
+export function quoteItem(text: string, from: QuoteFrom, extra: Partial<Pick<WaitingItem, 'note' | 'path' | 'lines' | 'tab'>> = {}): WaitingItem | undefined {
+  const passage = preparePassage(text, Boolean(extra.lines));
+  if (passage.trim().length < 2 && !extra.lines) return undefined;
+  if (!passage.trim()) return undefined;
+  return { id: newId(), kind: 'quote', text: passage, from, ...extra };
 }
 
-/**
- * The quote for a selection. A file's lines carry where they are; text from the conversation is
- * quoted as it reads. Empty when nothing but space was selected.
- */
-export function quoteText(selection: Selection): string {
-  if ('path' in selection) return fileQuote(selection.path, selection.start, linesOf(selection.text, true));
-  const lines = linesOf(selection.text, false);
-  if (lines.length === 0) return '';
-  const body = quoted(lines);
-  return body.length > MAX_QUOTE_CHARS ? `${capped(body)}\n> …` : body;
+/** A file or folder attached as context, sent as an @"path" mention. */
+export const fileItem = (path: string, folder = false): WaitingItem => ({ id: newId(), kind: 'file', text: path, path, from: { what: 'file' }, ...(folder ? { folder } : {}) });
+
+/* ---------- what Claude receives ---------- */
+
+/** `<!-- attach -->`, or with a label (where lines are from) and a terminal tab: `<!-- attach: src/a.ts:7-8 -->`. */
+export function attachHeader(label?: string, tab?: string): string {
+  if (!label && !tab) return '<!-- attach -->';
+  let shown = label?.replace(new RegExp(LINE_BREAK, 'g'), ' ');
+  while (shown !== undefined && /-->|\|/.test(shown)) shown = shown.replace(/-->|\|/g, '');
+  shown = shown === undefined ? undefined : defuseMentions(shown).trim();
+  return `<!-- attach: ${[shown, tab ? `tab:${tab}` : undefined].filter(Boolean).join(' | ')} -->`;
 }
 
-// A message with its quotes above the words: lib/drafts has it, as it loads with the first screen.
-export { messageWithQuotes } from './drafts';
+/** A label for lines of a file: `src/app.ts:7-8`, or `src/app.ts:12` for one. */
+export const linesLabel = (path: string, lines?: [number, number]): string => (lines ? `${path}:${lines[0] === lines[1] ? lines[0] : `${lines[0]}-${lines[1]}`}` : path);
 
-/**
- * The quotes a message starts with, as messageWithQuotes put them there, and the words after
- * them: what goes back above the message box when a send fails.
- */
-export function splitQuotes(message: string): { quotes: string[]; text: string } {
-  const lines = message.split('\n');
-  const quotes: string[] = [];
-  let at = 0;
-  for (;;) {
-    let end = at;
-    if (HEADER.test(lines[end] ?? '') && QUOTED.test(lines[end + 1] ?? '')) end += 1;
-    if (!QUOTED.test(lines[end] ?? '')) break;
-    while (QUOTED.test(lines[end] ?? '')) end += 1;
-    // Each ends at a blank line, or the message does: words right under one are not of this shape.
-    if (end < lines.length && lines[end] !== '') break;
-    quotes.push(lines.slice(at, end).join('\n'));
-    at = end;
-    while (at < lines.length && lines[at] === '') at += 1;
-  }
-  return { quotes, text: lines.slice(at).join('\n') };
+/** A quote with no note, as context: Desktop's attach block. */
+export function attachBlock(item: WaitingItem): string {
+  return `${attachHeader(item.path ? linesLabel(item.path, item.lines) : undefined, item.tab)}\n${quotedLines(item.text)}`;
 }
 
-/** A prompt as it is shown: its words, and the quotes in it (where one is from, and what it says). */
-export type PromptPart = { kind: 'text'; text: string } | { kind: 'quote'; from?: string; text: string };
+/** Lines in a note that read as a reply marker are written `&lt;!-- reply…`; three line breaks or more become two. */
+const escapeNote = (note: string) => note.replace(/^<!-- reply(?: [0-9]+)? -->$/gm, (marker) => `&lt;${marker.slice(1)}`).replace(/\n{3,}/g, '\n\n');
+
+/** A numbered reply marker in your words is written `&lt;!-- reply N -->`, so it is never read as one. */
+export const escapeWords = (text: string): string => text.replace(/<!-- reply [0-9]+ -->/g, (marker) => `&lt;${marker.slice(1)}`);
+
+/** Desktop's contexts of its own, never taken from a message: written `&lt;…`. */
+const escapeContexts = (text: string) => text.replace(/<(artifact-view-context|artifact-start-context)/g, '&lt;$1');
 
 /**
- * A prompt cut into its words and its quotes: a quote is a run of lines that start with `>`, with
- * the `path:line` line just above it when there is one (a quote from a file, a comment on a line).
- * Lines in a fenced code block are never a quote.
+ * Quotes with a note, as Desktop's reply blocks: the first marker counts them (99 at most), each
+ * is its `> ` lines, a blank line and the note, one blank line apart.
  */
-export function promptParts(text: string): PromptPart[] {
-  const lines = text.split('\n');
-  const parts: PromptPart[] = [];
-  let words: string[] = [];
-  let fenced = false;
-  const flush = () => {
-    const kept = words.join('\n').replace(/^\n+|\n+$/g, '');
-    if (kept) parts.push({ kind: 'text', text: kept });
-    words = [];
-  };
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    if (FENCE.test(line)) fenced = !fenced;
-    const from = !fenced && HEADER.test(line) && QUOTED.test(lines[i + 1] ?? '') ? line : undefined;
-    const first = from ? i + 1 : i;
-    if (fenced || !QUOTED.test(lines[first] ?? '')) {
-      words.push(line);
-      continue;
+export function replyBlocks(replies: readonly WaitingItem[]): string {
+  return replies
+    .slice(0, MAX_REPLIES)
+    .map((reply) => `${quotedLines(reply.text)}\n\n${escapeNote((reply.note ?? '').trim())}`)
+    .map((block, i, all) => `${i === 0 ? `<!-- reply ${all.length} -->` : REPLY}\n${block}`)
+    .join('\n\n');
+}
+
+/** Send now from the note box: one reply on its own, which steers Claude while it works. */
+export const sendNowMessage = (text: string, note: string): string => `${REPLY}\n${quotedLines(text)}\n\n${note.trim()}`;
+
+/** A file as Desktop mentions one: `@"src/prefs.ts"`, a folder with its slash. */
+export const fileMention = (path: string, folder = false): string => `@"${path.replaceAll('"', '').replace(/[/\\]+$/, '')}${folder ? '/' : ''}"`;
+
+/** A comment, or lines of a file with a note, as a comment on those lines. */
+const commentOf = (item: WaitingItem): CommentBlock => ({
+  path: item.path ?? '',
+  lines: item.lines ?? [1, 1],
+  removed: item.side === 'del',
+  code: item.text,
+  note: item.note ?? '',
+});
+
+/**
+ * The message for `typed` with what waits, in Desktop's order: the files, the replies and three
+ * line breaks, the comments and three more, the attached quotes, your words. Lines of a file
+ * with a note go as a comment on them, as Desktop's Add comment on a file does.
+ */
+export function messageWith(items: readonly WaitingItem[], typed: string): string {
+  const files = items.filter((item) => item.kind === 'file');
+  const replies = items.filter((item) => isReply(item) && !item.path);
+  const comments = items.filter((item) => item.kind === 'comment' || (isReply(item) && item.path));
+  const attached = items.filter((item) => item.kind === 'quote' && !isReply(item));
+  // Past Desktop's 99, a reply goes among your words, its quote and note as they read.
+  const extra = replies.slice(MAX_REPLIES).map((reply) => escapeWords(`${quotedLines(reply.text)}\n\n${(reply.note ?? '').trim()}`));
+  const words = [...extra, ...(typed !== '' ? [escapeWords(typed)] : [])];
+  const body = escapeContexts((attached.length > 0 ? `${attached.map(attachBlock).join('\n\n')}\n\n` : '') + words.join('\n\n'));
+  const commented = comments.length > 0 ? commentsMessage(comments.map(commentOf), body) : body.trim();
+  const section = replies.length > 0 ? escapeContexts(replyBlocks(replies)) : '';
+  const head = files.length > 0 ? `${files.map((file) => fileMention(file.path ?? file.text, file.folder)).join(' ')}\n` : '';
+  return head + (section ? `${section}\n\n\n${commented}` : commented);
+}
+
+/* ---------- read back ---------- */
+
+const NUMBERS = /^(.+):(\d+)(?:-(\d+))?$/;
+
+/**
+ * A message's waiting items and words, as messageWith put them together: what comes back to the
+ * box when a queued message is taken back to edit. Where each was taken from is not in the text.
+ */
+export function readMessage(text: string): { items: WaitingItem[]; text: string } {
+  const items: WaitingItem[] = [];
+  const words: string[] = [];
+  const from: QuoteFrom = { what: 'earlier' };
+  for (const part of readPrompt(text)) {
+    if (part.kind === 'text') words.push(part.text);
+    else if (part.kind === 'file') items.push({ ...fileItem(part.path, part.folder), from });
+    else if (part.kind === 'comment') {
+      items.push({ id: newId(), kind: 'comment', text: part.code ?? '', note: part.note, path: part.path, lines: part.lines, side: part.removed ? 'del' : 'same', from: { what: 'diff' } });
+    } else {
+      const numbered = part.label ? NUMBERS.exec(part.label) : null;
+      items.push({
+        id: newId(),
+        kind: 'quote',
+        text: part.text,
+        from,
+        ...(part.note ? { note: part.note } : {}),
+        ...(numbered ? { path: numbered[1]!, lines: [Number(numbered[2]), Number(numbered[3] ?? numbered[2])] as [number, number] } : {}),
+        ...(part.tab ? { tab: part.tab } : {}),
+      });
     }
-    let end = first;
-    while (end < lines.length && QUOTED.test(lines[end]!)) end += 1;
-    flush();
-    parts.push({ kind: 'quote', ...(from ? { from } : {}), text: lines.slice(first, end).map((l) => l.replace(QUOTED, '')).join('\n') });
-    i = end - 1;
   }
-  flush();
-  return parts;
+  return { items, text: words.join('\n\n') };
 }
 
-/** What a quote waiting above the message box is called: where it is from, or how it begins. */
-export function quoteLabel(quote: string): string {
-  const [first = '', second = ''] = quote.split('\n');
-  const header = QUOTED.test(second) ? HEADER.exec(first) : null;
-  if (header) return `${header[1]!.split('/').pop()}:${header[3] ? `${header[2]}-${header[3]}` : header[2]}`;
-  return quote.split('\n').map((line) => line.replace(QUOTED, '').trim()).find(Boolean) ?? '';
+/* ---------- how one is named ---------- */
+
+/** A file and its lines, short: `theme.css:12`, `app.ts:7-8`. */
+export const shortLines = (path: string, lines?: [number, number]): string => linesLabel(baseName(path), lines);
+
+const SOURCES: Record<QuoteFrom['what'], string> = {
+  reply: 'Claude’s reply',
+  prompt: 'your message',
+  step: 'a step',
+  side: 'the side chat',
+  file: 'a file',
+  diff: 'the changes',
+  terminal: 'the terminal',
+  earlier: '',
+};
+
+/** What a waiting item's editor is titled: "Quote from Claude’s reply · 10:42 AM", "Comment on theme.css:12". */
+export function itemTitle(item: WaitingItem): string {
+  if (item.kind === 'file') return item.folder ? 'Folder' : 'File';
+  if (item.kind === 'comment') return `Comment on ${shortLines(item.path ?? '', item.lines)}`;
+  const source = item.path ? shortLines(item.path, item.lines) : SOURCES[item.from.what];
+  const time = item.from.at && !item.path ? ` · ${clockTime(item.from.at)}` : '';
+  return source ? `Quote from ${source}${time}` : 'Quote';
 }
+
+/** A quote's first words, on one line. */
+export const passageStart = (item: WaitingItem): string => item.text.split(LINE_BREAK).map((line) => line.trim()).filter(Boolean).join(' ');
+
+/** What a waiting item is, in words, for a screen reader and a tooltip. */
+export function itemName(item: WaitingItem): string {
+  if (item.kind === 'file') return `${item.folder ? 'Folder' : 'File'} ${item.path ?? item.text}`;
+  if (item.kind === 'comment') return `Comment on ${shortLines(item.path ?? '', item.lines)}: ${item.note ?? ''}`;
+  const passage = item.path ? `${shortLines(item.path, item.lines)}` : `“${passageStart(item)}”`;
+  return item.note?.trim() ? `Your note on ${passage}: ${item.note.trim()}` : `Quote ${passage}`;
+}
+
+/* ---------- Pelican's older quotes, for what still holds them ---------- */
+
+/** A file quote before 0.5.0: `src/app.ts:7-8` above `> ` lines. The file viewer still hands its lines over this way. */
+export const MAX_QUOTE_LINES = 200;
 
 /**
- * Quotes on their way to a message box, by the box's draft key (the chat's view id). The box open
- * for that key takes them at once; with none open, they wait here for it.
- */
-const waiting = new Map<string, string[]>();
-const takers = new Map<string, (quote: string) => void>();
-
-/** Puts a quote above a chat's message box, for example `addQuote(viewId, quoteText(selection))`. */
-export function addQuote(key: string, quote: string): void {
-  if (!quote.trim()) return;
-  const take = takers.get(key);
-  if (take) take(quote);
-  else waiting.set(key, [...(waiting.get(key) ?? []), quote]);
-}
-
-/** The message box for `key` takes the quotes added for it, first those that waited; returns how to stop. */
-export function receiveQuotes(key: string, take: (quote: string) => void): () => void {
-  takers.set(key, take);
-  const queued = waiting.get(key) ?? [];
-  waiting.delete(key);
-  for (const quote of queued) take(quote);
-  return () => {
-    if (takers.get(key) === take) takers.delete(key);
-  };
-}
-
-/**
- * Lines `from` to `to` of a file (numbered from 1), quoted with where they are: the file viewer's
- * Quote. They are the file's own lines, a blank last one too: there is no selection's line break
- * to leave out, so the quote holds every line its range names.
+ * Lines `from` to `to` of a file (numbered from 1), quoted under where they are, as the file
+ * viewer's Quote hands them over (the message box takes them as a quote of those lines).
  */
 export function quoteLines(path: string, from: number, to: number, lines: readonly string[]): string {
-  return fileQuote(path, from, lines.slice(0, Math.max(0, to - from + 1)).map((line) => line.trimEnd()));
+  const kept = lines.slice(0, Math.max(0, Math.min(to - from + 1, MAX_QUOTE_LINES))).map((line) => line.trimEnd());
+  if (!kept.some(Boolean)) return '';
+  const end = from + kept.length - 1;
+  return `${path}:${end > from ? `${from}-${end}` : from}\n${kept.map((line) => (line ? `> ${line}` : '>')).join('\n')}`;
+}
+
+/** A quote handed over as text, Pelican's older way (`path:7-8` and `> ` lines, or `> ` lines), as a waiting item. */
+export function olderQuote(quote: string, from: QuoteFrom = { what: 'earlier' }): WaitingItem | undefined {
+  const [part] = readPrompt(quote);
+  if (!part || part.kind !== 'quote') return quoteItem(quote, from);
+  const numbered = part.label ? NUMBERS.exec(part.label.replace(/ \(removed\)$/, '')) : null;
+  return quoteItem(part.text, numbered ? { ...from, what: from.what === 'earlier' ? 'file' : from.what } : from, numbered ? { path: numbered[1]!, lines: [Number(numbered[2]), Number(numbered[3] ?? numbered[2])] } : {});
 }
 
 /**

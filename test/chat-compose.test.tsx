@@ -86,6 +86,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         return { shell: { id: `sh-${server.shells.length}`, command, startedAt: Date.now(), output: '' } };
       },
       upload: async (file: File): Promise<Attachment> => ({ id: `up-${file.name}`, name: file.name, mime: file.type || 'text/plain', size: file.size, path: `/tmp/${file.name}` }),
+      unqueue: async () => ({}),
     },
   };
 });
@@ -119,6 +120,9 @@ const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
 const { setPrefs } = await import('../src/web/lib/prefs');
 const { commentsOf, setComments } = await import('../src/web/lib/review');
+const { addWaiting, setWaiting, waitingOf } = await import('../src/web/lib/drafts');
+const { fileItem, messageWith } = await import('../src/web/lib/quote');
+type WaitingItem = import('../src/web/lib/quote').WaitingItem;
 const { setRun } = await import('../src/web/lib/store');
 const { goTo } = await import('../src/web/lib/workspace-route');
 
@@ -278,7 +282,7 @@ describe('what is being typed, when a message the chat sends on its own does not
     fireEvent.click(screen.getByLabelText('Changes and files'));
     fireEvent.click(await screen.findByText('Send now'));
     await screen.findByText('Can’t reach studio');
-    expect(server.sent.map((body) => body.text)).toEqual(['src/a.ts:3\n> + const a = 1;\nName this better']);
+    expect(server.sent.map((body) => body.text)).toEqual(['In `src/a.ts` at line 3:\n```ts\nconst a = 1;\n```\nName this better']);
     expect(box().value).toBe('Half-written thought');
     expect(commentsOf(SESSION)).toEqual([comment]);
     await waitFor(() => expect(loadDraft(SESSION)?.text).toBe('Half-written thought'), { timeout: 2000 });
@@ -467,18 +471,22 @@ describe('a new session moved to another folder before it starts', () => {
 
 describe('line comments, as in Claude Desktop', () => {
   const comment = { id: 'c1', path: 'src/styles/theme.css', kind: 'add' as const, line: 8, code: ":root[data-theme='dark'] {", note: 'Use the variables here too' };
-  const said = "src/styles/theme.css:8\n> + :root[data-theme='dark'] {\nUse the variables here too";
+  const said = "In `src/styles/theme.css` at line 8:\n```css\n:root[data-theme='dark'] {\n```\nUse the variables here too";
+  /** The comment's chip above the message box, where what goes with the next message waits. */
+  const chip = (note = 'Use the variables here too', line = 8) => screen.queryByRole('button', { name: `Comment on theme.css:${line}: ${note}` });
 
-  it('go with the next message, before what was typed and a blank line, and are gone once it went', async () => {
+  it('wait as chips in the box, go with the next message before what was typed, and are gone once it went', async () => {
     setComments(SESSION, [comment]);
     session();
     await loaded();
-    expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
+    expect(chip()).toBeTruthy();
+    // The line that used to say so above the box is gone: the chips say it.
+    expect(screen.queryByText(/go(es)? with your next message/)).toBeNull();
     fireEvent.change(box(), { target: { value: 'Looks good otherwise' } });
     fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe(`${said}\n\nLooks good otherwise`);
-    await waitFor(() => expect(screen.queryByText('1 comment goes with your next message')).toBeNull());
+    expect(server.sent[0]!.text).toBe(`${said}\n\n\nLooks good otherwise`);
+    await waitFor(() => expect(chip()).toBeNull());
   });
 
   it('belong to the session they were written in: another session in the folder neither shows nor sends them', async () => {
@@ -518,11 +526,11 @@ describe('line comments, as in Claude Desktop', () => {
     sendText('Looks good otherwise');
     await waitFor(() => expect(server.sent).toHaveLength(1));
     // On their way with it: no longer waiting for the next message.
-    expect(screen.queryByText('1 comment goes with your next message')).toBeNull();
+    expect(chip()).toBeNull();
     sendText('Also run the tests');
     await waitFor(() => expect(server.sent).toHaveLength(2));
     release();
-    expect(server.sent.map((body) => body.text)).toEqual([`${said}\n\nLooks good otherwise`, 'Also run the tests']);
+    expect(server.sent.map((body) => body.text)).toEqual([`${said}\n\n\nLooks good otherwise`, 'Also run the tests']);
   });
 
   it('go once however often Send now is tapped while they are on their way', async () => {
@@ -555,7 +563,8 @@ describe('line comments, as in Claude Desktop', () => {
     release();
     await screen.findByText('Can’t reach studio');
     expect(commentsOf(SESSION).map((c) => c.id)).toEqual(['c1', 'c2']);
-    expect(screen.getByText('2 comments go with your next message')).toBeTruthy();
+    expect(chip()).toBeTruthy();
+    expect(chip('And here', 9)).toBeTruthy();
   });
 
   it('stay when the message does not go through, and never go with a command', async () => {
@@ -566,12 +575,12 @@ describe('line comments, as in Claude Desktop', () => {
     fireEvent.change(box(), { target: { value: 'Looks good' } });
     fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    await screen.findByText('1 comment goes with your next message');
+    await waitFor(() => expect(chip()).toBeTruthy());
     fireEvent.change(box(), { target: { value: '/compact' } });
     fireEvent.keyDown(box(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(server.sent).toHaveLength(2));
     expect(server.sent[1]!.text).toBe('/compact');
-    expect(screen.getByText('1 comment goes with your next message')).toBeTruthy();
+    expect(chip()).toBeTruthy();
   });
 
   it('are sent on their own with Send now, from Changes and files', async () => {
@@ -600,7 +609,7 @@ describe('line comments, as in Claude Desktop', () => {
     fresh();
     sendText('Start with the theme');
     await waitFor(() => expect(server.sent).toHaveLength(1));
-    expect(server.sent[0]!.text).toBe(`${said}\n\nStart with the theme`);
+    expect(server.sent[0]!.text).toBe(`${said}\n\n\nStart with the theme`);
     expect(commentsOf(`new:${CWD}`)).toEqual([]);
   });
 });
@@ -621,6 +630,7 @@ describe('Commit, Push and Create PR', () => {
 describe('a file open in Changes and files', () => {
   const open = async () => {
     media['(min-width: 1024px)'] = true;
+    media['(hover: hover) and (pointer: fine)'] = true;
     setPrefs({ workspacePane: true });
     atFile(SESSION, 'src/a.ts');
     session();
@@ -642,10 +652,14 @@ describe('a file open in Changes and files', () => {
       document.dispatchEvent(new Event('selectionchange'));
     });
     fireEvent.click(await within(pane).findByRole('button', { name: 'Quote' }));
-    const quotes = await screen.findByRole('list', { name: 'Quotes' });
-    expect(within(quotes).getByText('a.ts:1-2')).toBeTruthy();
+    const chips = await screen.findByRole('list', { name: 'With your next message' });
+    expect(within(chips).getByText('a.ts:1-2')).toBeTruthy();
     expect(box().value).toBe('First this.');
     getSelection()!.removeAllRanges();
+    // It goes as Desktop attaches lines of a file: where they are, then the lines.
+    sendText('Why both?');
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe('<!-- attach: src/a.ts:1-2 -->\n> const a = 1;\n> const b = 2;\n\nWhy both?');
   });
 
   it('mentions the file in the message box, after what is typed', async () => {
@@ -653,6 +667,68 @@ describe('a file open in Changes and files', () => {
     fireEvent.click(within(pane).getByRole('button', { name: 'Mention' }));
     await waitFor(() => expect(box().value).toBe('First this. @src/a.ts '));
     expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+  });
+});
+
+describe('quotes with a note, as Claude Desktop sends them', () => {
+  const quote = (id: string, text: string, note?: string): WaitingItem => ({ id, kind: 'quote', text, from: { what: 'reply', key: 'a1' }, ...(note ? { note } : {}) });
+  const comment = { id: 'c1', path: 'src/a.ts', kind: 'add' as const, line: 3, code: 'const a = 1;', note: 'Name this better' };
+  afterEach(() => {
+    for (const chat of [SESSION, `new:${CWD}`, `side:${SESSION}`]) setWaiting(chat, []);
+  });
+
+  it('go with the next message in Desktop’s order, and come back in theirs, notes and all, when it does not go', async () => {
+    const items = [quote('q1', 'All 14 theme tests pass.'), quote('q2', 'one more set of values', 'Use the names we have'), fileItem('src/prefs.ts')];
+    for (const item of items) addWaiting(SESSION, item);
+    setComments(SESSION, [comment]);
+    server.answers = [new Error('Can’t reach studio')];
+    session();
+    await loaded();
+    sendText('Then run the tests.');
+    await screen.findByText('Can’t reach studio');
+    expect(server.sent[0]!.text).toBe([
+      '@"src/prefs.ts"',
+      '<!-- reply 1 -->', '> one more set of values', '', 'Use the names we have', '', '',
+      'In `src/a.ts` at line 3:', '```ts', 'const a = 1;', '```', 'Name this better', '', '',
+      '<!-- attach -->', '> All 14 theme tests pass.', '',
+      'Then run the tests.',
+    ].join('\n'));
+    // Every one back where it was, its note with it, and the words back in the box.
+    expect(waitingOf(SESSION).map((item) => item.id)).toEqual(['q1', 'q2', 'f-src/prefs.ts', 'c1'].map((id) => (id.startsWith('f-') ? items[2]!.id : id)));
+    expect(waitingOf(SESSION)[1]!.note).toBe('Use the names we have');
+    expect(box().value).toBe('Then run the tests.');
+  });
+
+  it('a queued message taken back to edit brings back what waited with it, and its words', async () => {
+    const queued = messageWith([quote('q1', 'one more set of values', 'Keep the names')], 'And run the tests');
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [], queued: [{ uuid: 'p1', text: queued }] };
+    session();
+    await loaded();
+    // Shown by its words, not its markers.
+    const row = await screen.findByRole('button', { name: 'And run the tests' });
+    expect(row.getAttribute('title')).toBe('Edit');
+    fireEvent.click(row);
+    await waitFor(() => expect(box().value).toBe('And run the tests'));
+    expect(waitingOf(SESSION)).toMatchObject([{ kind: 'quote', text: 'one more set of values', note: 'Keep the names' }]);
+  });
+
+  it('inside Changes and files: on a phone the foot says what waits, beside the conversation only Send now', async () => {
+    addWaiting(SESSION, quote('q1', 'All 14 theme tests pass.'));
+    setComments(SESSION, [comment]);
+    session();
+    await loaded();
+    fireEvent.click(screen.getByLabelText('Changes and files'));
+    expect(await screen.findByText('1 comment, 1 quote')).toBeTruthy();
+    expect(screen.getByText(/wait for your next message/)).toBeTruthy();
+    cleanup();
+    media['(min-width: 1024px)'] = true;
+    setPrefs({ workspacePane: true });
+    session();
+    await loaded();
+    const pane = await screen.findByRole('complementary', { name: 'Changes and files' });
+    expect(within(pane).getByRole('button', { name: /^Send now/ })).toBeTruthy();
+    expect(within(pane).queryByText(/wait for your next message/)).toBeNull();
+    setPrefs({ workspacePane: false });
   });
 });
 

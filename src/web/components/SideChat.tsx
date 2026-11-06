@@ -3,10 +3,11 @@ import { type KeyboardEvent, type RefObject, useCallback, useEffect, useLayoutEf
 
 import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
 import { api, isDemoNote, isUnreachable } from '../lib/api';
-import { clearDraft } from '../lib/drafts';
+import { clearDraft, putBackWaiting, takeWaiting } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
+import { messageWith } from '../lib/quote';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
 import { Composer, type ComposerDraft } from './Composer';
@@ -223,6 +224,7 @@ export function SideChat({
     };
   }, [state.open, side, demo]);
 
+  /** Asks a question, with what waits above the side chat's box: quotes /btw took along. */
   const ask = async (text: string, mode: SendMode = 'steer') => {
     // The first question is still making the side chat: this one waits in the box.
     if (asking.current) {
@@ -231,8 +233,11 @@ export function SideChat({
     }
     setError(undefined);
     const uuid = newId();
+    const taken = takeWaiting(draftKey);
+    const said = messageWith(taken, text);
     const giveItBack = (failure: unknown) => {
       setError({ text: (failure as Error).message, note: isDemoNote(failure) || isUnreachable(failure) });
+      putBackWaiting(draftKey, taken);
       setGiveBack({ text, key: Date.now(), back: true });
     };
     if (side) {
@@ -242,9 +247,9 @@ export function SideChat({
         remember(sessionId, moved);
         setSide(moved);
       }
-      addLocalMessage(side.id, pendingMessage(uuid, text));
+      addLocalMessage(side.id, pendingMessage(uuid, said));
       try {
-        await api.send(side.id, { text, attachments: [], settings, uuid, ...(busy ? { mode } : {}) });
+        await api.send(side.id, { text: said, attachments: [], settings, uuid, ...(busy ? { mode } : {}) });
         clearDraft(draftKey, text);
       } catch (failure) {
         removeLocalMessage(side.id, uuid);
@@ -253,9 +258,9 @@ export function SideChat({
       return;
     }
     asking.current = true;
-    addLocalMessage(waitingView, pendingMessage(uuid, text));
+    addLocalMessage(waitingView, pendingMessage(uuid, said));
     try {
-      const { sessionId: id } = await api.side(sessionId, { question: text, settings, uuid });
+      const { sessionId: id } = await api.side(sessionId, { question: said, settings, uuid });
       const made = { id, first: uuid };
       remember(sessionId, made);
       adoptView(waitingView, id);

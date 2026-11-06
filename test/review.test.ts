@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { commentsMessage, type LineComment, lineKey, parseDiff } from '../src/web/lib/review';
+import { commentBlock, commentsMessage, type LineComment, lineKey, parseDiff, withComments } from '../src/web/lib/review';
 
 const diff = [
   'diff --git a/db/schema.sql b/db/schema.sql',
@@ -59,24 +59,36 @@ describe('a diff, line by line', () => {
   });
 });
 
-describe('comments as a message', () => {
+describe('comments as a message, as Claude Desktop sends them', () => {
   const comment = (path: string, line: number, kind: LineComment['kind'], code: string, note: string): LineComment => ({ id: `${path}${line}`, path, line, kind, code, note });
 
-  it('quotes each line under its place, in file order, then says what was said', () => {
-    const text = commentsMessage([
+  it('by file, each file’s in line order: where it is, the line fenced, what was said', () => {
+    const text = withComments('Looks good otherwise', [
       comment('src/b.ts', 7, 'same', '  return x;', 'Why not early?'),
       comment('src/a.ts', 40, 'add', '    <ThemeToggle value={theme} />', ' Put it above the font size.\n'),
       comment('src/a.ts', 12, 'del', 'const timeout = 30;', 'Keep this one.'),
     ]);
     expect(text).toBe([
-      'src/a.ts:12 (removed)\n> - const timeout = 30;\nKeep this one.',
-      'src/a.ts:40\n> + <ThemeToggle value={theme} />\nPut it above the font size.',
-      'src/b.ts:7\n> return x;\nWhy not early?',
-    ].join('\n\n'));
+      'In `src/b.ts` at line 7:', '```ts', '  return x;', '```', 'Why not early?', '',
+      'In `src/a.ts` at line 12 (before changes):', '```ts', 'const timeout = 30;', '```', 'Keep this one.', '',
+      'In `src/a.ts` at line 40:', '```ts', '    <ThemeToggle value={theme} />', '```', 'Put it above the font size.', '', '',
+      'Looks good otherwise',
+    ].join('\n'));
   });
 
-  it('shortens a very long line', () => {
-    const text = commentsMessage([comment('min.js', 1, 'add', 'x'.repeat(500), 'Minified?')]);
-    expect(text.split('\n')[1]).toBe(`> + ${'x'.repeat(200)}…`);
+  it('keeps a long line whole, and fences code that holds a fence of its own in one more backtick', () => {
+    const long = 'x'.repeat(500);
+    expect(commentsMessage([commentBlock(comment('min.js', 1, 'add', long, 'Minified?'))])).toBe(`In \`min.js\` at line 1:\n\`\`\`js\n${long}\n\`\`\`\nMinified?`);
+    expect(commentsMessage([commentBlock(comment('README.md', 3, 'same', '```sh', 'Close it'))])).toBe('In `README.md` at line 3:\n````md\n```sh\n````\nClose it');
+  });
+
+  it('a note keeps one blank line at most, outside its code', () => {
+    expect(commentsMessage([commentBlock(comment('a.ts', 2, 'same', 'x', 'one\n\n\n\ntwo\n```\na\n\n\n\nb\n```'))]))
+      .toBe('In `a.ts` at line 2:\n```ts\nx\n```\none\n\ntwo\n```\na\n\n\n\nb\n```');
+  });
+
+  it('alone, or none: the words as they are, trimmed', () => {
+    expect(withComments('', [comment('a.ts', 1, 'same', 'x', 'y')])).toBe('In `a.ts` at line 1:\n```ts\nx\n```\ny');
+    expect(withComments('  No comments \n', [])).toBe('No comments');
   });
 });

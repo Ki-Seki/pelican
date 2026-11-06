@@ -1,6 +1,8 @@
-import { createContext, useContext, useSyncExternalStore } from 'react';
+import { createContext, useContext } from 'react';
 
-import { COMMENTS_KEY, whenDraftsForgotten } from './drafts';
+import { setWaiting, useWaiting, waitingOf } from './drafts';
+import type { WaitingItem } from './quote';
+import { defuseMentions, dropPrivate, fenceFor, maskSecrets, plainControls } from './sanitize';
 
 /** One line of a unified diff, numbered in the old file, the new one, or both. */
 export type DiffLine =
@@ -68,86 +70,99 @@ export const lineNumber = (line: CodeLine) => (line.kind === 'del' ? line.oldLin
 export const lineKey = (line: CodeLine) => `${line.kind === 'del' ? '-' : '+'}${lineNumber(line)}`;
 export const commentKey = (comment: LineComment) => `${comment.kind === 'del' ? '-' : '+'}${comment.line}`;
 
-const MAX_QUOTE = 200;
+/** A comment as it goes to Claude: where it is, the code it is about, what was said. */
+export type CommentBlock = { path: string; lines: [number, number]; removed?: boolean; code?: string; note: string };
+
+/** A comment on a line of a diff, as one goes to Claude. */
+export const commentBlock = (comment: LineComment): CommentBlock => ({
+  path: comment.path, lines: [comment.line, comment.line], removed: comment.kind === 'del', code: comment.code, note: comment.note,
+});
+
+/** What starts a line Claude Desktop would read as a header of its own, after any space: those lines of a snippet are quoted. */
+const SPACE = String.raw`[\t\v\f\p{Zs}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]`;
+const HEADER_LIKE = new RegExp(String.raw`^${SPACE}*(?=In\b[^\n]*\bat lines? \d|Reply\b[^\n]*:${SPACE}*$|<!-- attach)`, 'gmu');
+const UNSEEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+
+/** A path as a comment names it: on one line, its backticks made quotes, an @ defused; `-` for none. */
+const commentPath = (path: string) => defuseMentions(plainControls(dropPrivate(path).replace(/[\r\n\u2028\u2029]+/g, ' ')).replace(/[`\uFF40]/g, "'")) || '-';
 
 /**
- * Comments as the text of a message, in file order: where each one is, the line quoted (marked
- * + or - when it was added or removed), then what was said about it. Plain text, so it reads the
- * same in every Claude Code app the session is open in.
+ * Code as a comment quotes it, Desktop's way: line breaks made plain, secrets masked, an @
+ * defused, and a line that would read as a comment's header, a reply or an attach block marked
+ * as a quote, so it stays code.
  */
-export function commentsMessage(comments: readonly LineComment[]): string {
-  return [...comments]
-    .sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
-    .map((c) => {
-      const code = c.code.trim();
-      const quote = code.length > MAX_QUOTE ? `${code.slice(0, MAX_QUOTE)}…` : code;
-      const mark = c.kind === 'add' ? '+ ' : c.kind === 'del' ? '- ' : '';
-      return `${c.path}:${c.line}${c.kind === 'del' ? ' (removed)' : ''}\n> ${mark}${quote}\n${c.note.trim()}`;
-    })
-    .join('\n\n');
+function snippet(code: string): string {
+  const lines = plainControls(dropPrivate(code).replace(/\r(?!\n)/g, '\n').replace(/\r\n/g, '\n')).split('\n').map((line) => {
+    const seen = line.replace(UNSEEN, '');
+    return seen.search(HEADER_LIKE) === 0 || seen.trim() === '' ? seen : line;
+  });
+  return defuseMentions(maskSecrets(lines.join('\n'))).replace(HEADER_LIKE, '> ');
 }
+
+/** Blank lines in a note: never more than one in a row, outside its code. */
+function oneBlankLine(note: string): string {
+  return note.split(/(^```[\s\S]*?^```)/m).map((part, i) => (i % 2 === 1 ? part : part.replace(/\n{3,}/g, '\n\n'))).join('');
+}
+
+/** A code block's language, from its file's name: `css`, `tsx`, `py`. */
+const languageOf = (path: string) => /\.([A-Za-z0-9+]{1,10})$/.exec(path)?.[1]?.toLowerCase() ?? '';
 
 /**
- * A message with line comments before it, a blank line between, as Claude Desktop sends them with
- * the next message (or alone, Send now).
+ * Comments as Claude Desktop sends them, before `text` (the rest of the message), three line
+ * breaks apart: by file, each file's in line order, each "In `path` at line N:" (or "at lines
+ * A-B", and " (before changes)" for removed lines), the code fenced in one backtick more than any
+ * run in it, then what was said. One blank line between comments. `text` alone, trimmed, without any.
  */
-export function withComments(text: string, comments: readonly LineComment[]): string {
-  if (comments.length === 0) return text;
-  const body = text.trim();
-  return body ? `${commentsMessage(comments)}\n\n${body}` : commentsMessage(comments);
-}
-
-/**
- * Comments not sent yet, by the chat they were written in (its view id: a session, or a new
- * session in a folder), as Claude Desktop keeps them per session: they go with the next message
- * sent there, or all at once with Send now, never with another session's, even in the same folder.
- * Kept with the drafts in this browser (lib/drafts), so a reload loses none, and forgotten with them
- * when it signs out.
- *
- * Stored as `{ chats: { [chat]: comments } }`. Earlier builds of 0.4.0 kept them by folder, at the
- * top level: those are dropped, since nothing says which of the folder's sessions each was written in.
- */
-const KEY = COMMENTS_KEY;
-const KEEP_CHATS = 50;
-const KEEP_EACH = 200;
-const listeners = new Set<() => void>();
-const NONE: LineComment[] = [];
-
-function isComment(value: unknown): value is LineComment {
-  if (!value || typeof value !== 'object') return false;
-  const { id, path, kind, line, code, note } = value as Record<string, unknown>;
-  return typeof id === 'string' && typeof path === 'string' && (kind === 'add' || kind === 'del' || kind === 'same')
-    && typeof line === 'number' && typeof code === 'string' && typeof note === 'string';
-}
-
-function load(): Map<string, LineComment[]> {
-  try {
-    const raw = localStorage.getItem(KEY);
-    const stored = raw ? (JSON.parse(raw) as { chats?: unknown }) : undefined;
-    const chats = stored?.chats;
-    if (!chats || typeof chats !== 'object') {
-      if (raw) localStorage.removeItem(KEY);
-      return new Map();
+export function commentsMessage(comments: readonly CommentBlock[], text = ''): string {
+  const byFile = new Map<string, CommentBlock[]>();
+  for (const comment of comments) byFile.set(comment.path, [...(byFile.get(comment.path) ?? []), comment]);
+  const blocks: string[] = [];
+  for (const [path, list] of byFile) {
+    for (const comment of [...list].sort((a, b) => a.lines[0] - b.lines[0])) {
+      const [first, last] = comment.lines;
+      const out = [`In \`${commentPath(path)}\` at ${first === last ? `line ${first}` : `lines ${first}-${last}`}${comment.removed ? ' (before changes)' : ''}:`];
+      if (comment.code !== undefined) {
+        const code = snippet(comment.code);
+        const fence = fenceFor(code);
+        out.push(`${fence}${languageOf(path)}`, code, fence);
+      }
+      out.push(oneBlankLine(comment.note.trim()));
+      blocks.push(out.join('\n'));
     }
-    return new Map(Object.entries(chats as Record<string, unknown>).flatMap(([chat, list]) => {
-      const kept = Array.isArray(list) ? list.filter(isComment) : [];
-      return kept.length > 0 ? [[chat, kept] as [string, LineComment[]]] : [];
-    }));
-  } catch {
-    return new Map();
   }
+  const rest = text.trim();
+  if (blocks.length === 0) return rest;
+  return rest ? `${blocks.join('\n\n')}\n\n\n${rest}` : blocks.join('\n\n');
 }
 
-const byChat = load();
+/** A message with line comments before it, as Claude Desktop sends them with the next message (or alone, Send now). */
+export const withComments = (text: string, comments: readonly LineComment[]): string => commentsMessage(comments.map(commentBlock), text);
 
-function keep(): void {
-  try {
-    if (byChat.size === 0) localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, JSON.stringify({ chats: Object.fromEntries([...byChat].slice(-KEEP_CHATS)) }));
-  } catch {
-    // Private mode or full: the comments live as long as the page.
+/*
+ * Comments not sent yet wait with everything else that goes with a chat's next message (lib/drafts):
+ * by the chat they were written in (its view id: a session, or a new session in a folder), as
+ * Claude Desktop keeps them per session, never with another session's, even in the same folder.
+ * The views that show them under their lines see them as LineComments.
+ */
+
+const asItem = (comment: LineComment): WaitingItem => ({
+  id: comment.id, kind: 'comment', text: comment.code, note: comment.note, path: comment.path,
+  lines: [comment.line, comment.line], side: comment.kind, from: { what: comment.kind === 'same' ? 'file' : 'diff' },
+});
+
+const asComment = (item: WaitingItem): LineComment => ({
+  id: item.id, path: item.path ?? '', kind: item.side ?? 'same', line: item.lines?.[0] ?? 0, code: item.text, note: item.note ?? '',
+});
+
+const seen = new WeakMap<readonly WaitingItem[], LineComment[]>();
+const commentsIn = (items: readonly WaitingItem[]): LineComment[] => {
+  let comments = seen.get(items);
+  if (!comments) {
+    comments = items.filter((item) => item.kind === 'comment').map(asComment);
+    seen.set(items, comments);
   }
-}
+  return comments;
+};
 
 /**
  * The chat whose comments the views inside it show and add to, given by the chat (its view id). A
@@ -156,45 +171,23 @@ function keep(): void {
 export const CommentsChat = createContext<string | undefined>(undefined);
 export const useCommentsChat = (cwd: string): string => useContext(CommentsChat) ?? cwd;
 
-export function useComments(chat: string): LineComment[] {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => byChat.get(chat) ?? NONE,
-  );
-}
+export const useComments = (chat: string): LineComment[] => commentsIn(useWaiting(chat));
 
 /** The chat's comments as they are now, outside a component. */
-export const commentsOf = (chat: string): LineComment[] => byChat.get(chat) ?? NONE;
-
-export function setComments(chat: string, comments: LineComment[]): void {
-  byChat.delete(chat);
-  if (comments.length > 0) byChat.set(chat, comments.slice(-KEEP_EACH));
-  keep();
-  for (const listener of listeners) listener();
-}
+export const commentsOf = (chat: string): LineComment[] => commentsIn(waitingOf(chat));
 
 /**
- * Takes the chat's comments for a message on its way: they are its own from then on, so a second
- * message, or a second tap on Send now, sent before it went through carries none of them again.
+ * The chat's comments from now on: those kept change where they are among what waits, those gone
+ * go, and new ones wait after everything else.
  */
-export function takeComments(chat: string): LineComment[] {
-  const taken = commentsOf(chat);
-  if (taken.length > 0) setComments(chat, []);
-  return taken;
+export function setComments(chat: string, comments: readonly LineComment[]): void {
+  const current = waitingOf(chat);
+  const next = new Map(comments.map((comment) => [comment.id, comment]));
+  const kept = current.flatMap((item) => {
+    if (item.kind !== 'comment') return [item];
+    const comment = next.get(item.id);
+    return comment ? [{ ...asItem(comment), from: item.from }] : [];
+  });
+  const known = new Set(current.map((item) => item.id));
+  setWaiting(chat, [...kept, ...comments.filter((comment) => !known.has(comment.id)).map(asItem)]);
 }
-
-/** A message that did not go gives its comments back, before any written meanwhile. */
-export function putBackComments(chat: string, comments: readonly LineComment[]): void {
-  if (comments.length === 0) return;
-  const back = new Set(comments.map((c) => c.id));
-  setComments(chat, [...comments, ...commentsOf(chat).filter((c) => !back.has(c.id))]);
-}
-
-// Signing out leaves no comments behind in this browser: lib/drafts takes them out of storage.
-whenDraftsForgotten(() => {
-  byChat.clear();
-  for (const listener of listeners) listener();
-});

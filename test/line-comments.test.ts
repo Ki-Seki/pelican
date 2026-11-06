@@ -18,35 +18,42 @@ const comment = (id: string, note = 'Name it count'): LineComment => ({ id, path
 /** The comments module as a page loads it, with what this browser kept. */
 async function load() {
   vi.resetModules();
-  return import('../src/web/lib/review');
+  return { ...(await import('../src/web/lib/review')), ...(await import('../src/web/lib/drafts')) };
 }
 
 describe('line comments kept in this browser', () => {
   beforeEach(() => store.clear());
 
-  it('are kept by the chat they were written in, and come back after a reload', async () => {
+  it('wait with the rest of what goes with the chat’s next message, and come back after a reload', async () => {
     const first = await load();
     first.setComments(SESSION, [comment('c1')]);
     first.setComments('new:/code/app', [comment('c2')]);
     const again = await load();
     expect(again.commentsOf(SESSION)).toEqual([comment('c1')]);
+    expect(again.waitingOf(SESSION)).toMatchObject([{ id: 'c1', kind: 'comment', path: 'src/a.ts', lines: [4, 4], side: 'add', note: 'Name it count' }]);
     expect(again.commentsOf('new:/code/app')).toEqual([comment('c2')]);
     expect(again.commentsOf('/code/app')).toEqual([]);
   });
 
-  it('drop the store of earlier builds, kept by folder: nothing says which session each comment was written in', async () => {
-    store.set('pelican:comments', JSON.stringify({ '/code/app': [comment('old')] }));
+  it('change and go where they are among what waits, a quote beside them left as it was', async () => {
     const review = await load();
-    expect(review.commentsOf('/code/app')).toEqual([]);
-    expect(store.has('pelican:comments')).toBe(false);
+    const passage = review.waitingOf(SESSION);
+    expect(passage).toEqual([]);
+    review.setComments(SESSION, [comment('c1')]);
+    review.addWaiting(SESSION, { id: 'q1', kind: 'quote', text: 'a passage', from: { what: 'reply' } });
+    review.setComments(SESSION, [comment('c1', 'Name it total'), comment('c2')]);
+    expect(review.waitingOf(SESSION).map((item) => `${item.id}:${item.note ?? ''}`)).toEqual(['c1:Name it total', 'q1:', 'c2:Name it count']);
+    review.setComments(SESSION, []);
+    expect(review.waitingOf(SESSION).map((item) => item.id)).toEqual(['q1']);
   });
 
-  it('leave out what is not a comment, and survive a broken store', async () => {
+  it('come from the store earlier builds kept them in, once, and leave out what is not a comment', async () => {
     store.set('pelican:comments', JSON.stringify({ chats: { [SESSION]: [comment('c1'), { id: 'c2', note: 3 }, null], other: 'nonsense' } }));
     expect((await load()).commentsOf(SESSION)).toEqual([comment('c1')]);
+    expect(store.has('pelican:comments')).toBe(false);
     store.set('pelican:comments', '{not json');
     const review = await load();
-    expect(review.commentsOf(SESSION)).toEqual([]);
+    expect(review.commentsOf(SESSION)).toEqual([comment('c1')]);
     review.setComments(SESSION, [comment('c3')]);
     expect((await load()).commentsOf(SESSION)).toEqual([comment('c3')]);
   });
@@ -62,10 +69,10 @@ describe('line comments kept in this browser', () => {
 });
 
 describe('line comments in a message', () => {
-  it('go before the words, a blank line between, as Claude Desktop sends them', async () => {
+  it('go before the words, three line breaks between, as Claude Desktop sends them', async () => {
     const { withComments } = await load();
-    const said = 'src/a.ts:4\n> + const x = 1;\nName it count';
-    expect(withComments('  Looks good otherwise \n', [comment('c1')])).toBe(`${said}\n\nLooks good otherwise`);
+    const said = 'In `src/a.ts` at line 4:\n```ts\nconst x = 1;\n```\nName it count';
+    expect(withComments('  Looks good otherwise \n', [comment('c1')])).toBe(`${said}\n\n\nLooks good otherwise`);
     expect(withComments('', [comment('c1')])).toBe(said);
     expect(withComments('No comments', [])).toBe('No comments');
   });

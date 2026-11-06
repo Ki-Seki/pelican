@@ -1,21 +1,36 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { Attachment } from '../src/shared/protocol';
 
+/** The media queries that match: none (a touch screen as far as hover goes, Enter sending), or a computer's. */
+let media: Record<string, boolean> = {};
+const COMPUTER = '(hover: hover) and (pointer: fine)';
 beforeAll(() => {
-  // A computer: a fine pointer, so Enter sends unless set otherwise.
   window.matchMedia = ((query: string) => ({
-    matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    matches: Boolean(media[query]), media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
+  // jsdom has the element, not its modal behaviour.
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    if (!this.hasAttribute('open')) return;
+    this.removeAttribute('open');
+    setTimeout(() => this.dispatchEvent(new Event('close')), 0);
+  };
 });
 
 const { Composer } = await import('../src/web/components/Composer');
 const { setPrefs } = await import('../src/web/lib/prefs');
-const { loadDraft, saveDraft } = await import('../src/web/lib/drafts');
-const { addQuote } = await import('../src/web/lib/quote');
+const { addWaiting, loadDraft, saveDraft, waitingOf } = await import('../src/web/lib/drafts');
+const { fileItem, quoteItem } = await import('../src/web/lib/quote');
+type WaitingItem = import('../src/web/lib/quote').WaitingItem;
+
+const quote = (text: string, note?: string): WaitingItem => quoteItem(text, { what: 'reply' }, note ? { note } : {})!;
+const comment = (note: string): WaitingItem => ({ id: `c-${note}`, kind: 'comment', text: '  --surface: #fff;', note, path: 'src/styles/theme.css', lines: [12, 12], side: 'add', from: { what: 'diff' } });
 
 function renderComposer(draftKey = 'chat', extra: { onSideChat?: (question: string) => void; side?: boolean; draft?: { text: string; key: number } } = {}) {
   const onSend = vi.fn();
@@ -31,6 +46,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   setPrefs({ enterToSend: 'auto' });
+  media = {};
 });
 
 describe('the message box', () => {
@@ -97,83 +113,177 @@ describe('the message box', () => {
   });
 });
 
-describe('quotes above the message box', () => {
-  it('show as chips, go above the words when sent, and each can be removed first', () => {
-    const { onSend, box } = renderComposer('q1');
+describe('what waits above the message box', () => {
+  const chips = () => screen.queryByRole('list', { name: 'With your next message' });
+  const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+  it('shows four kinds, told apart: a quote in quotation marks, a quote with a note as its note, a comment where it is, a file by name', () => {
+    media[COMPUTER] = true;
+    renderComposer('w1');
     act(() => {
-      addQuote('q1', '> Why CSS variables?');
-      addQuote('q1', 'src/styles/theme.css:2-3\n>   --bg: #ffffff;\n>   --fg: #111111;');
-      addQuote('q1', '> left out');
+      addWaiting('w1', quote('All 14 theme tests pass.'));
+      addWaiting('w1', quote('It follows the system until you pick one.', 'Also while the page is open'));
+      addWaiting('w1', comment('Keep --surface'));
+      addWaiting('w1', fileItem('src/settings/prefs.ts'));
     });
-    expect(screen.getByText('Why CSS variables?')).toBeTruthy();
-    expect(screen.getByText('theme.css:2-3')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove the quote left out' }));
-    fireEvent.change(box, { target: { value: 'And not a context?' } });
-    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
-    expect(onSend).toHaveBeenCalledWith(
-      '> Why CSS variables?\n\nsrc/styles/theme.css:2-3\n>   --bg: #ffffff;\n>   --fg: #111111;\n\nAnd not a context?',
-      [],
-      'steer',
-    );
-    expect(screen.queryByText('Why CSS variables?')).toBeNull();
+    const items = [...chips()!.querySelectorAll('li')];
+    expect(items.map((li) => li.textContent)).toEqual([
+      '“All 14 theme tests pass.”',
+      '“It follows the system until you pick one.”Also while the page is open',
+      'theme.css:12Keep --surface',
+      'prefs.ts',
+    ]);
+    // Each says what it is to a screen reader, and on a computer has a × of its own.
+    expect(screen.getByRole('button', { name: 'Quote “All 14 theme tests pass.”' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Your note on “It follows the system until you pick one.”: Also while the page is open' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Comment on theme.css:12: Keep --surface' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'File src/settings/prefs.ts' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(4);
+    // The note reads as words, the passage before it quietly.
+    const reply = items[1]!.querySelectorAll('span');
+    expect(reply[0]!.className).toContain('text-faint');
+    expect(reply[1]!.className).toContain('text-fg');
   });
 
-  it('removed with the keys, give them to the next quote, or to the message box once none is left', async () => {
-    const { box } = renderComposer('q5');
+  it('on a phone are a finger tall and have no ×: Remove is in what a tap opens', async () => {
+    // There before the box opened: a chip, not the card a quote just taken gets.
+    addWaiting('w2', quote('All 14 theme tests pass.'));
+    renderComposer('w2');
+    const chip = screen.getByRole('button', { name: 'Quote “All 14 theme tests pass.”' });
+    expect(chip.className).toContain('h-11');
+    expect(screen.queryAllByRole('button', { name: /^Remove / })).toEqual([]);
+    fireEvent.click(chip);
+    const sheet = screen.getByRole('dialog', { name: 'Quote from Claude’s reply' });
+    expect(within(sheet).getByText('All 14 theme tests pass.')).toBeTruthy();
+    fireEvent.change(within(sheet).getByLabelText('Your note'), { target: { value: 'Which ones?' } });
+    expect(waitingOf('w2')[0]!.note).toBe('Which ones?');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove' }));
+    // Once the sheet has played its way out.
+    await waitFor(() => expect(waitingOf('w2')).toEqual([]));
+    expect(chips()).toBeNull();
+  });
+
+  it('opened on a computer: the whole passage and its note, changed as it is typed; Done or Esc closes it', () => {
+    media[COMPUTER] = true;
+    renderComposer('w3');
     act(() => {
-      addQuote('q5', '> first');
-      addQuote('q5', '> second');
+      addWaiting('w3', quote('It follows the system until you pick one.', 'Also follow it'));
     });
-    const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    fireEvent.click(screen.getByRole('button', { name: /^Your note on/ }));
+    const editor = screen.getByRole('dialog', { name: /^Quote from Claude’s reply/ });
+    const note = within(editor).getByLabelText('Your note') as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(note);
+    fireEvent.change(note, { target: { value: 'Also follow it while the page is open' } });
+    expect(waitingOf('w3')[0]!.note).toBe('Also follow it while the page is open');
+    fireEvent.keyDown(note, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Emptied, a quote's note is gone and it is a plain quote again.
+    fireEvent.click(screen.getByRole('button', { name: /^Your note on/ }));
+    fireEvent.change(screen.getByLabelText('Your note'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(waitingOf('w3')[0]!.note).toBeUndefined();
+    expect(screen.getByRole('button', { name: 'Quote “It follows the system until you pick one.”' })).toBeTruthy();
+  });
+
+  it('a comment keeps what it said when its note is emptied', () => {
+    media[COMPUTER] = true;
+    renderComposer('w4');
+    act(() => {
+      addWaiting('w4', comment('Keep --surface'));
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Comment on theme.css:12/ }));
+    fireEvent.change(screen.getByLabelText('Your note'), { target: { value: ' ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(waitingOf('w4')[0]!.note).toBe('Keep --surface');
+  });
+
+  it('removed with the keys, give them to the next chip, or to the message box once none is left', async () => {
+    media[COMPUTER] = true;
+    const { box } = renderComposer('w5');
+    act(() => {
+      addWaiting('w5', quote('first one'));
+      addWaiting('w5', quote('second one'));
+    });
     const remove = (label: string) => screen.getByRole('button', { name: `Remove the quote ${label}` });
-    remove('first').focus();
+    remove('first one').focus();
     // Enter or Space on a button clicks it with no pointer behind the click.
-    fireEvent.click(remove('first'), { detail: 0 });
+    fireEvent.click(remove('first one'), { detail: 0 });
     await frame();
-    expect(document.activeElement).toBe(remove('second'));
-    fireEvent.click(remove('second'), { detail: 0 });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Quote “second one”' }));
+    fireEvent.click(remove('second one'), { detail: 0 });
     await frame();
-    expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+    expect(chips()).toBeNull();
     expect(document.activeElement).toBe(box);
   });
 
-  it('removed with a tap on a phone, leave the keyboard down', async () => {
-    const { box } = renderComposer('q6');
-    act(() => addQuote('q6', '> only'));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove the quote only' }), { detail: 1 });
-    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  it('on a phone, the quote just taken waits as a card that leaves the keyboard down, with Add a note to bring it up', async () => {
+    const { box } = renderComposer('w6');
+    act(() => {
+      addWaiting('w6', quote('All 14 theme tests pass.'));
+    });
+    await frame();
+    // Not the card: it was there before this quote came.
+    act(() => {
+      addWaiting('w6', quote('one more set of values'));
+    });
+    await frame();
     expect(document.activeElement).not.toBe(box);
+    expect(screen.getByRole('button', { name: 'Quote “All 14 theme tests pass.”' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Quote “one more set of values”' })).toBeNull();
+    expect(screen.getByText('one more set of values')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a note' }));
+    await frame();
+    const note = screen.getByLabelText('Your note');
+    expect(document.activeElement).toBe(note);
+    fireEvent.change(note, { target: { value: 'Use the --bg and --fg names we have' } });
+    expect(waitingOf('w6')[1]!.note).toBe('Use the --bg and --fg names we have');
+    // Its × lets it go, a finger's width.
+    const remove = screen.getByRole('button', { name: 'Remove the quote one more set of values' });
+    expect(remove.className).toContain('size-11');
+    fireEvent.click(remove);
+    expect(waitingOf('w6').map((item) => item.text)).toEqual(['All 14 theme tests pass.']);
+  });
+
+  it('on a computer, take the keys to the message box as a quote comes, to say what about it', async () => {
+    media[COMPUTER] = true;
+    const { box } = renderComposer('w7');
+    act(() => {
+      addWaiting('w7', quote('one more set of values'));
+    });
+    await frame();
+    expect(document.activeElement).toBe(box);
+    expect(screen.queryByRole('button', { name: 'Add a note' })).toBeNull();
   });
 
   it('wait for the next message when a / command goes, which has to start its own', () => {
-    const { onSend, box } = renderComposer('q4');
-    act(() => addQuote('q4', '> keep me'));
+    const { onSend, box } = renderComposer('w8');
+    act(() => {
+      addWaiting('w8', quote('keep me here'));
+    });
     fireEvent.change(box, { target: { value: '/compact focus on the export' } });
     fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
     expect(onSend).toHaveBeenCalledWith('/compact focus on the export', [], 'steer');
-    expect(screen.getByText('keep me')).toBeTruthy();
+    expect(waitingOf('w8')).toHaveLength(1);
   });
 
   it('can be sent alone, and are kept with the draft', () => {
     vi.useFakeTimers();
     try {
-      const first = renderComposer('q2');
-      act(() => addQuote('q2', '> The settings page already reads them.'));
+      media[COMPUTER] = true;
+      const first = renderComposer('w9');
+      act(() => {
+        addWaiting('w9', quote('The settings page already reads them.', 'So why a context?'));
+      });
       first.unmount();
-      expect(loadDraft('q2')?.quotes).toEqual(['> The settings page already reads them.']);
-      const again = renderComposer('q2');
-      expect(screen.getByText('The settings page already reads them.')).toBeTruthy();
+      expect(loadDraft('w9')?.items).toMatchObject([{ kind: 'quote', text: 'The settings page already reads them.', note: 'So why a context?' }]);
+      const again = renderComposer('w9');
+      expect(screen.getByText('So why a context?')).toBeTruthy();
       fireEvent.keyDown(again.box, { key: 'Enter', keyCode: 13 });
-      expect(again.onSend).toHaveBeenCalledWith('> The settings page already reads them.', [], 'steer');
+      // The chat takes them as the message goes (Chat), with whatever was typed: here, nothing.
+      expect(again.onSend).toHaveBeenCalledWith('', [], 'steer');
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('come back as chips with a message whose send failed', () => {
-    const { box } = renderComposer('q3', { draft: { text: '> a quote\n\nmy words', key: 1 } });
-    expect(box.value).toBe('my words');
-    expect(screen.getByText('a quote')).toBeTruthy();
   });
 });
 
@@ -205,7 +315,7 @@ describe('a message that did not go, given back while more was typed', () => {
   const putBack = (at = 0) => fireEvent.click(screen.getAllByRole('button', { name: /^Put back / })[at]!);
   const upload = (name: string): Attachment => ({ id: `up-${name}`, name, mime: 'text/plain', size: 20, path: `/tmp/${name}` });
   /** The files in the box, which go with what is sent from it. */
-  const inBox = () => screen.queryAllByRole('button', { name: /^Remove (?!the quote )/ }).map((b) => b.getAttribute('aria-label')!.replace(/^Remove /, ''));
+  const inBox = () => screen.queryAllByRole('button', { name: /^Remove (?!the quote |the comment |the file )/ }).map((b) => b.getAttribute('aria-label')!.replace(/^Remove /, ''));
 
   it('joins what was typed, above it and a blank line apart', async () => {
     const { box } = typedThenGiven('Also: the logs', { text: 'Why does the export fail?' });
@@ -214,12 +324,7 @@ describe('a message that did not go, given back while more was typed', () => {
     expect(waiting()).toEqual([]);
   });
 
-  it('with quotes or files only, brings them back and leaves the words as they were, no blank lines above them', async () => {
-    const { box } = typedThenGiven('typed since', { text: 'src/a.ts:3\n> const a = 1;' });
-    await frame();
-    expect(box().value).toBe('typed since');
-    expect(screen.getByRole('list', { name: 'Quotes' }).textContent).toContain('a.ts:3');
-    cleanup();
+  it('with files only, brings them back and leaves the words as they were, no blank lines above them', async () => {
     const files = typedThenGiven('typed since', { text: '', attachments: [{ id: 'up1', name: 'shot.png', mime: 'image/png', size: 2048, path: '/tmp/up1' }] }, 'g2');
     await frame();
     expect(files.box().value).toBe('typed since');
@@ -359,13 +464,12 @@ describe('a message that did not go, given back while more was typed', () => {
 });
 
 describe('/btw', () => {
-  it('asks in the side chat, with the quotes, instead of sending here', () => {
+  it('asks in the side chat instead of sending here (the chat takes the quotes along)', () => {
     const onSideChat = vi.fn();
     const { onSend, box } = renderComposer('b1', { onSideChat });
-    act(() => addQuote('b1', '> the toggle'));
     fireEvent.change(box, { target: { value: '/btw why here?' } });
     fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
-    expect(onSideChat).toHaveBeenCalledWith('> the toggle\n\nwhy here?');
+    expect(onSideChat).toHaveBeenCalledWith('why here?');
     expect(onSend).not.toHaveBeenCalled();
     expect(box.value).toBe('');
     // On its own it is in the / list first, as a command: Enter takes it, the next Enter opens the side chat.

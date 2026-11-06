@@ -1,6 +1,7 @@
 import { Paperclip, X } from 'lucide-react';
 
 import type { QueuedPrompt } from '../../shared/protocol';
+import { promptGist } from '../../shared/quoted';
 
 /**
  * Prompts waiting for Claude's turn to end, above the composer, as Claude Code lists what you
@@ -18,7 +19,8 @@ export function QueuedStrip({ queued, onRemove, onEdit }: {
       <div className="px-3 pt-1 text-[11.5px] text-faint">Queued · sent when this turn ends</div>
       {queued.map((prompt) => {
         const files = prompt.attachments?.length ?? 0;
-        const text = prompt.text || (files === 1 ? prompt.attachments![0]!.name : `${files} files`);
+        // A queued message with quotes reads by its words, as its title would.
+        const text = (prompt.text && promptGist(prompt.text)) || (files === 1 ? prompt.attachments![0]!.name : `${files} files`);
         return (
           <div key={prompt.uuid} className="flex items-center gap-1 pr-1 pl-3">
             {files === 0 ? (

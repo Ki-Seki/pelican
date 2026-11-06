@@ -1,16 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Quote, Slash, Square, SquareTerminal, X } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api, apiUrl, isDemoNote } from '../lib/api';
-import { type Held, loadDraft, useDraftSaver } from '../lib/drafts';
+import { type Held, loadDraft, removeWaiting, updateWaiting, useDraftSaver, useWaiting, whenAdded } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
 import { composing, hasKeyboard, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
-import { messageWithQuotes, quoteLabel, receiveQuotes, splitQuotes, withQuote } from '../lib/quote';
+import { useMedia } from '../lib/media';
+import { showPassage, sourceElement } from '../lib/passages';
+import { type WaitingItem, withQuote } from '../lib/quote';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
+import { ChipEditor, QuoteCard, WaitingChips } from './WaitingItems';
 
 type Upload = { key: string; name: string; size: number; preview?: string; attachment?: Attachment; error?: string; note?: boolean };
 
@@ -286,6 +289,7 @@ export function Composer({
   trailing,
   disabled,
   onSideChat,
+  onShowItem,
   side = false,
   atBottom = true,
   ref,
@@ -311,8 +315,10 @@ export function Composer({
   /** Shown before Send and Stop: the context meter, on a phone. */
   trailing?: ReactNode;
   disabled?: boolean;
-  /** `/btw`, with a question or without: opens the session's side chat instead of sending. */
+  /** `/btw`, with a question or without: opens the session's side chat instead of sending; the quotes go with it. */
   onSideChat?: (question: string) => void;
+  /** Shows where a comment or a file that waits is: Changes or Files. Quotes from the conversation it shows itself. */
+  onShowItem?: (item: WaitingItem) => void;
   /** A side chat's own box: questions only, without files, settings, `!` or `/` commands. */
   side?: boolean;
   /** At the foot of the screen, clear of a phone's or a tablet's home indicator; a sheet keeps clear of it itself. */
@@ -324,8 +330,13 @@ export function Composer({
   const [text, setText] = useState(saved?.text ?? '');
   const [caret, setCaret] = useState(0);
   const [uploads, setUploads] = useState<Upload[]>(() => (saved?.attachments ?? []).map(restored));
-  // Quotes of what was selected (lib/quote), above the box until they go above the words.
-  const [quotes, setQuotes] = useState<string[]>(() => saved?.quotes ?? []);
+  // What waits to go with the next message (lib/drafts): quotes, comments, files. Chat takes it when
+  // a message goes; a phone shows the quote just taken as a card, to add a note to.
+  const items = useWaiting(draftKey);
+  const touch = !useMedia('(hover: hover) and (pointer: fine)');
+  const [carded, setCarded] = useState<string>();
+  const [editing, setEditing] = useState<{ id: string; chip: HTMLElement | null }>();
+  const frame = useRef<HTMLDivElement>(null);
   // What came back from a send that failed but could not share the box (givenBack), files and all.
   const [held, setHeld] = useState<Held[]>(() => saved?.held ?? []);
   const [sheet, setSheet] = useState<'model' | 'mode' | undefined>();
@@ -334,12 +345,14 @@ export function Composer({
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const chips = useRef<HTMLUListElement>(null);
+  const card = carded && touch ? items.find((item) => item.id === carded) : undefined;
+  const opened = editing ? items.find((item) => item.id === editing.id) : undefined;
   const listId = useId();
 
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
   const uploading = uploads.some((u) => !u.attachment && !u.error);
-  const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment) || quotes.length > 0) && !uploading;
+  const canSend = !disabled && (text.trim().length > 0 || uploads.some((u) => u.attachment) || items.length > 0) && !uploading;
 
   // What is typed is kept per chat until it is sent; a send that fails gives it back as it was.
   const draftSaver = useDraftSaver(draftKey);
@@ -349,18 +362,24 @@ export function Composer({
       justSent.current = false;
       return;
     }
-    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes, held);
-  }, [text, uploads, quotes, held, draftSaver]);
+    draftSaver.save(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), held);
+  }, [text, uploads, held, draftSaver]);
 
-  // A quote made anywhere in this chat (a reply, a file) comes here. On a computer the box takes
-  // the keys, to say what about it; a phone keeps its keyboard down, so more can be quoted first.
+  // A quote taken anywhere in this chat (a reply, a step, a file) comes here. On a computer the box
+  // takes the keys, to say what about it; a phone keeps its keyboard down, the quote waiting as a
+  // card with "Add a note" (a side chat's question is its note), so more can be quoted first.
   useEffect(() => {
     if (!draftKey) return undefined;
-    return receiveQuotes(draftKey, (quote) => {
-      setQuotes((list) => (list.includes(quote) ? list : [...list, quote]));
+    return whenAdded(draftKey, (item) => {
       if (hasKeyboard()) requestAnimationFrame(() => area.current?.focus({ preventScroll: true }));
+      else if (item.kind === 'quote' && !side) setCarded(item.id);
     });
-  }, [draftKey]);
+  }, [draftKey, side]);
+  // Gone (sent, removed), it takes its card and its editor with it.
+  useEffect(() => {
+    if (carded && !items.some((item) => item.id === carded)) setCarded(undefined);
+    if (editing && !items.some((item) => item.id === editing.id)) setEditing(undefined);
+  }, [items, carded, editing]);
 
   const trigger = useMemo(() => {
     const found = findTrigger(text, caret);
@@ -377,9 +396,8 @@ export function Composer({
   useEffect(() => {
     if (!draft || taken.has(draft)) return;
     taken.add(draft);
-    // A message given back (its send failed) brings its quotes back above the box, before any added since.
-    const given = draft.append || draft.block ? { quotes: [], text: draft.text } : splitQuotes(draft.text);
-    if (given.quotes.length > 0) setQuotes((list) => [...given.quotes, ...list.filter((q) => !given.quotes.includes(q))]);
+    // What waited with a message given back is back above the box already (Chat gives it back).
+    const given = { text: draft.text };
     const files = draft.attachments ?? [];
     const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: given.text, files: files.length > 0 }, !side) : undefined;
     const next = draft.block ? withQuote(text, draft.text)
@@ -500,7 +518,7 @@ export function Composer({
   };
   useImperativeHandle(ref, () => ({
     addFiles,
-    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), quotes, held),
+    saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), held),
     focus: () => area.current?.focus({ preventScroll: true }),
   }));
 
@@ -509,14 +527,22 @@ export function Composer({
   };
 
   /**
-   * A quote taken away. With the keys (or on a computer) they go on to the next quote, else to the
-   * box; a tap on a phone leaves them, so its keyboard stays down.
+   * Something that waited, taken away. With the keys (or on a computer) they go on to the next
+   * chip, else to the box; a tap on a phone leaves them, so its keyboard stays down.
    */
-  const removeQuote = (at: number, byKeys: boolean) => {
-    setQuotes((list) => list.filter((_, i) => i !== at));
+  const remove = (item: WaitingItem, byKeys: boolean) => {
+    if (!draftKey) return;
+    const at = items.filter((i) => i.id !== carded).findIndex((i) => i.id === item.id);
+    removeWaiting(draftKey, item.id);
     if (!byKeys && !hasKeyboard()) return;
-    requestAnimationFrame(() => (chips.current?.querySelectorAll('button')[at] ?? area.current)?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => (chips.current?.querySelectorAll<HTMLElement>('li')[at]?.querySelector('button') ?? area.current)?.focus({ preventScroll: true }));
   };
+  /** Shows where a waiting item came from (its editor has gone): the passage in the conversation, marked, or a comment or file in Changes or Files. */
+  const showItem = (item: WaitingItem) => {
+    if (item.kind === 'quote' && !item.path) requestAnimationFrame(() => showPassage(item.from));
+    else onShowItem?.(item);
+  };
+  const canShow = (item: WaitingItem) => (item.kind === 'quote' && !item.path ? Boolean(sourceElement(item.from.key)) : Boolean(onShowItem));
 
   /**
    * Puts a text that waited back in the box, its files with it, by the rule it came back by: above
@@ -558,8 +584,8 @@ export function Composer({
     if (shell) {
       const command = text.slice(1).trim();
       if (!command) return;
-      // The quotes stay for the next message: a command is not about them.
-      draftSaver.now(`!${command}`, [], quotes, held);
+      // What waits stays for the next message: a command is not about it.
+      draftSaver.now(`!${command}`, [], held);
       onShell!(command);
       justSent.current = true;
       setText('');
@@ -569,26 +595,26 @@ export function Composer({
     recognition.current?.stop();
     // /btw asks in the side chat, with the quotes; what goes with this session stays here.
     if (onSideChat && ASKS_BTW.test(text.trim())) {
-      onSideChat(messageWithQuotes(quotes, text.trim().replace(ASKS_BTW, '')));
+      onSideChat(text.trim().replace(ASKS_BTW, '').trim());
       setText('');
       setCaret(0);
-      setQuotes([]);
       return;
     }
     // Typed out of habit in a side chat, /btw only says what the rest is.
     const words = side ? text.trim().replace(ASKS_BTW, '').trim() : text.trim();
-    if (!words && quotes.length === 0 && !uploads.some((u) => u.attachment)) return;
-    // A / command has to start its message, and takes nothing but its words: the quotes and files
-    // wait for the next message, as with a ! command (files would go to it as its arguments).
+    if (!words && items.length === 0 && !uploads.some((u) => u.attachment)) return;
+    // A / command has to start its message, and takes nothing but its words: what waits and the
+    // files wait for the next message, as with a ! command (files would go to it as its arguments).
+    // What waits goes with the words otherwise: the chat takes it as the message goes.
     const command = words.startsWith('/');
     const attachments = command ? [] : uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
-    draftSaver.now(words, attachments, quotes, held);
-    onSend(command ? words : messageWithQuotes(quotes, words), attachments, mode);
+    draftSaver.now(words, attachments, held);
+    onSend(words, attachments, mode);
     justSent.current = true;
     setText('');
     setCaret(0);
     if (command) return;
-    setQuotes([]);
+    setCarded(undefined);
     for (const u of uploads) forget(u);
     setUploads([]);
   };
@@ -656,7 +682,7 @@ export function Composer({
 
   return (
     // In a very short window the chat scrolls as a whole; the composer stays at the bottom of it.
-    <div className={`${atBottom ? 'pb-safe' : 'pb-2'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
+    <div ref={frame} className={`${atBottom ? 'pb-safe' : 'pb-2'} relative shrink-0 px-3 pt-1 [@media(max-height:380px)]:sticky [@media(max-height:380px)]:bottom-0 [@media(max-height:380px)]:z-10 [@media(max-height:380px)]:bg-bg`}>
       {showSuggestions && (
         <div
           id={listId}
@@ -688,28 +714,21 @@ export function Composer({
         </div>
       )}
       <div className="mx-auto max-w-3xl rounded-[22px] border border-line bg-panel shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
-        {quotes.length > 0 && (
-          // Scrolls sideways when the quotes do not fit, fading at the edge as the model row does.
-          <ul ref={chips} aria-label="Quotes" className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pt-3 [mask-image:linear-gradient(to_right,black_calc(100%-14px),transparent)]">
-            {quotes.map((quote, i) => {
-              const label = quoteLabel(quote);
-              return (
-                <li key={`${i}:${quote}`} title={quote} className="flex h-8 max-w-[15rem] shrink-0 items-center gap-1.5 rounded-full border border-line bg-bg pr-0.5 pl-2.5 text-[12.5px] text-muted">
-                  <Quote aria-hidden className="size-3 shrink-0 text-faint" />
-                  {/* A file's lines go by where they are; other quotes by how they begin. */}
-                  <span className={`min-w-0 truncate ${quote.startsWith('>') ? '' : 'font-mono text-[12px]'}`}>{label}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove the quote ${label}`}
-                    onClick={(e) => removeQuote(i, e.detail === 0)}
-                    className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-1.5 hover:bg-hover hover:text-fg"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+        <WaitingChips
+          list={chips}
+          items={card ? items.filter((item) => item.id !== card.id) : items}
+          touch={touch}
+          {...(editing ? { open: editing.id } : {})}
+          onOpen={(item, chip) => setEditing((was) => (was?.id === item.id ? undefined : { id: item.id, chip }))}
+          onRemove={remove}
+        />
+        {card && draftKey && (
+          <QuoteCard
+            key={card.id}
+            item={card}
+            onNote={(note) => updateWaiting(draftKey, card.id, { note })}
+            onRemove={() => remove(card, false)}
+          />
         )}
         {uploads.length > 0 && (
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pt-3">
@@ -866,6 +885,20 @@ export function Composer({
         </div>
       </div>
 
+      {opened && draftKey && (
+        <ChipEditor
+          key={opened.id}
+          item={opened}
+          touch={touch}
+          anchor={editing?.chip ?? null}
+          frame={frame.current}
+          canShow={canShow(opened)}
+          onNote={(note) => updateWaiting(draftKey, opened.id, { note })}
+          onShow={() => showItem(opened)}
+          onRemove={() => remove(opened, false)}
+          onClose={() => setEditing(undefined)}
+        />
+      )}
       {!side && (
         <>
           <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />

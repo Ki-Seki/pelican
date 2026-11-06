@@ -96,8 +96,10 @@ beforeAll(() => {
 const { Chat } = await import('../src/web/components/Chat');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  const { setWaiting } = await import('../src/web/lib/drafts');
+  for (const chat of [SESSION, `side:${SESSION}`]) setWaiting(chat, []);
   localStorage.clear();
   sessionStorage.clear();
   media = {};
@@ -136,6 +138,19 @@ describe('the side chat', () => {
     expect(within(pane()!).getByText('why is the cache key per user?')).toBeTruthy();
     // Only its own conversation: the copy of the session's is not shown again.
     expect(within(pane()!).queryByText('Clean up the build')).toBeNull();
+  });
+
+  it('/btw takes the quotes waiting in the box along, and leaves comments for the session', async () => {
+    computer(1280);
+    const { addWaiting, waitingOf } = await import('../src/web/lib/drafts');
+    addWaiting(SESSION, { id: 'q1', kind: 'quote', text: 'one user never reads another’s build', from: { what: 'reply' } });
+    addWaiting(SESSION, { id: 'c1', kind: 'comment', text: 'const key = user.id;', note: 'Why the user?', path: 'src/cache.ts', lines: [1, 1], side: 'same', from: { what: 'file' } });
+    session();
+    await loaded();
+    type('Message Claude', '/btw is that safe?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    expect(server.side[0]!.question).toBe('<!-- attach -->\n> one user never reads another’s build\n\nis that safe?');
+    expect(waitingOf(SESSION).map((item) => item.id)).toEqual(['c1']);
   });
 
   it('opens with Cmd/Ctrl+;, and goes on with the same side chat once opened again in this visit', async () => {

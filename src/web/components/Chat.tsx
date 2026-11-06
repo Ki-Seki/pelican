@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MessageSquare, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
@@ -8,15 +8,15 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
-import { clearDraft, moveDraft } from '../lib/drafts';
+import { addWaiting, clearDraft, moveDraft, putBackWaiting, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
-import { addQuote } from '../lib/quote';
-import { CommentsChat, commentsOf, putBackComments, takeComments, useComments, withComments } from '../lib/review';
+import { messageWith, olderQuote, promptGist, readMessage, type WaitingItem } from '../lib/quote';
+import { CommentsChat } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
@@ -486,8 +486,9 @@ export function Chat({
 
   /**
    * Sends a message. `from`: the message box, whose words go back to it if the message does not go,
-   * and which takes the line comments along; Send now, the comments alone; or the chat itself
-   * (Retry, Compact, Cancel on a check-in), which leaves the box and the comments as they are.
+   * and which takes along what waits above it (quotes, line comments, files); Send now in Changes
+   * and files, what waits alone; or the chat itself (Retry, Compact, Cancel on a check-in), which
+   * leaves the box and what waits as they are.
    */
   const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat', trust?: TrustChoice) => {
     setSendError(undefined);
@@ -503,10 +504,12 @@ export function Chat({
       return;
     }
     const uuid = newId();
-    // Line comments go with the next prompt sent from this chat, as in Claude Desktop; a command
-    // takes none. Taken now, they go with this message only; they come back if it does not go.
-    const notes = from !== 'chat' && !text.trimStart().startsWith('/') ? takeComments(viewId) : [];
-    const said = withComments(text, notes);
+    // What waits above the box goes with the next prompt sent from this chat, as quotes and line
+    // comments do in Claude Desktop; a command takes none. Taken now, it goes with this message
+    // only; it comes back if the message does not go.
+    const box = from === 'box' || from === 'comments';
+    const taken = box && !text.trimStart().startsWith('/') ? takeWaiting(viewId) : [];
+    const said = box ? messageWith(taken, text) : text;
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
     try {
@@ -528,17 +531,16 @@ export function Chat({
         // the session it was for, not with the next new session in this folder.
         composer.current?.saveDraft();
         moveDraft(viewId, created);
-        // So do line comments a first message took none of (a / command takes none).
-        putBackComments(created, takeComments(viewId));
         adoptView(viewId, created);
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
       }
     } catch (error) {
-      // Nothing reached Claude: take the message back. Its comments wait again; words from the box
-      // go back to it, files and all, above anything typed since. What the chat sent leaves the box be.
+      // Nothing reached Claude: take the message back. What waited with it waits again; words from
+      // the box go back to it, files and all, above anything typed since. What the chat sent leaves
+      // the box be.
       removeLocalMessage(viewId, uuid);
-      putBackComments(viewId, notes);
+      putBackWaiting(viewId, taken);
       const giveBack = () => {
         if (from === 'box') setDraftText({ text, attachments, key: Date.now(), back: true });
       };
@@ -566,13 +568,15 @@ export function Chat({
   const firstPrompt = view.messages.find((m) => m.role === 'user' && m.blocks.some((b) => b.type === 'text'));
   const firstText = firstPrompt?.blocks.find((b) => b.type === 'text');
   // Before the list has it, a new session is called by its first prompt, shortened as the server does.
-  const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(firstText.text) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
+  const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(promptGist(firstText.text)) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
   // A side chat has none of its own; Changes and files and it take turns beside the conversation,
   // one on screen at a time.
   const composer = useRef<ComposerHandle>(null);
   const side = useSideChat(Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
+  /** The side chat's message box, where the quotes a side question takes along wait for it. */
+  const sideBox = sessionId ? `side:${sessionId}` : undefined;
   const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
@@ -682,8 +686,6 @@ export function Chat({
   // at their line; a turn's line its changes. The side chat makes way first, wherever it is.
   const { show: showWorkspace } = workspace;
   const { makeWay } = side;
-  // Line comments waiting to go with the next message from this chat.
-  const waitingComments = useComments(viewId);
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
     openFile: (path, line) => makeWay(() => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) })),
@@ -942,19 +944,16 @@ export function Chat({
             <NoteText text={sendError.text} />
           </Notice>
         )}
-        {waitingComments.length > 0 && !paneShown && (
-          <div className="mx-auto mb-2 flex max-w-3xl">
-            <button type="button" onClick={() => makeWay(() => workspace.show({ tab: 'changes' }))} className="relative flex min-h-9 min-w-0 items-center gap-1.5 rounded-full px-2 py-1 text-left text-[13px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover hover:text-fg">
-              <MessageSquare className="size-3.5 shrink-0 text-faint" />
-              <span className="truncate">{waitingComments.length === 1 ? '1 comment goes with your next message' : `${waitingComments.length} comments go with your next message`}</span>
-            </button>
-          </div>
-        )}
         {sessionId && view.run?.queued && view.run.queued.length > 0 && (
           <QueuedStrip
             queued={view.run.queued}
             onRemove={(prompt) => void api.unqueue(sessionId, prompt.uuid).catch(() => undefined)}
-            onEdit={(prompt) => void api.unqueue(sessionId, prompt.uuid).then(() => setDraftText({ text: prompt.text, key: Date.now(), append: true }), () => undefined)}
+            onEdit={(prompt) => void api.unqueue(sessionId, prompt.uuid).then(() => {
+              // What waited with it waits again above the box; its words go back in.
+              const back = readMessage(prompt.text);
+              putBackWaiting(viewId, back.items);
+              if (back.text) setDraftText({ text: back.text, key: Date.now(), append: true });
+            }, () => undefined)}
           />
         )}
       </div>
@@ -966,7 +965,20 @@ export function Chat({
         onSettings={changeSettings}
         models={modelList?.models}
         onSend={(text, attachments, mode) => void send(text, attachments, mode, 'box')}
-        {...(sessionId && !sideChat ? { onShell: (command: string) => void shell(command), onSideChat: side.show } : {})}
+        {...(sessionId && !sideChat ? {
+          onShell: (command: string) => void shell(command),
+          onSideChat: (question: string) => {
+            // The quotes waiting here go with the question; comments and files stay for this session.
+            if (sideBox) for (const item of takeWaiting(viewId, (i) => i.kind === 'quote')) addWaiting(sideBox, item);
+            side.show(question);
+          },
+        } : {})}
+        {...(cwd ? {
+          // A comment written on a diff shows there; a file, lines of one, or a comment on a file, in Files.
+          onShowItem: (item: WaitingItem) => makeWay(() => showWorkspace(item.kind === 'comment' && item.from.what === 'diff'
+            ? { tab: 'changes', path: item.path ?? item.text }
+            : { tab: 'files', path: item.path ?? item.text, ...(item.lines ? { line: item.lines[0] } : {}) })),
+        } : {})}
         side={sideChat}
         onStop={() => sessionId && void api.interrupt(sessionId)}
         stopping={Boolean(view.run?.stopping)}
@@ -999,12 +1011,13 @@ export function Chat({
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
             // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.
-            if (how === 'quote') addQuote(viewId, text);
-            else setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
+            const quote = how === 'quote' ? olderQuote(text, { what: 'file' }) : undefined;
+            if (quote) addWaiting(viewId, quote);
+            else if (how !== 'quote') setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
           onSendComments={() => {
-            // None waiting: there were none, or they are on their way (a second tap of Send now).
-            if (commentsOf(viewId).length === 0) return;
+            // Nothing waiting: there was nothing, or it is on its way (a second tap of Send now).
+            if (waitingOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
             void send('', [], prefs.sendWhileBusy, 'comments');
           }}

@@ -5,6 +5,7 @@ import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-a
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import { promptGist } from '../shared/quoted.js';
 import { shortTitle } from '../shared/titles.js';
 import { archivedIds } from './archive.js';
 import { config } from './config.js';
@@ -33,7 +34,8 @@ const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 export function sessionTitle(info: SDKSessionInfo, summarized = false): string | undefined {
   if (info.customTitle && oneLine(info.customTitle)) return oneLine(info.customTitle);
   if (summarized && info.summary && oneLine(info.summary)) return oneLine(info.summary);
-  return shortTitle(info.summary || info.firstPrompt || '') || undefined;
+  // A prompt that quotes (Claude Desktop's replies, Pelican's too) is called by its words, not its markers.
+  return shortTitle(promptGist(info.summary || info.firstPrompt || '')) || undefined;
 }
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */

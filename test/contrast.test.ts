@@ -54,6 +54,24 @@ describe('colours', () => {
     }
   });
 
+  it('let a waiting quote’s chip and its passage’s mark read: the faint lead and the note, and words under the mark', () => {
+    /** `top` laid over `under` at `amount`, as color-mix does (here in sRGB, near enough for a check). */
+    const over = (top: string, under: string, amount: number) => `#${[1, 3, 5].map((i) => {
+      const value = Math.round(parseInt(top.slice(i, i + 2), 16) * amount + parseInt(under.slice(i, i + 2), 16) * (1 - amount));
+      return value.toString(16).padStart(2, '0');
+    }).join('')}`;
+    for (const t of Object.values(themes)) {
+      // A chip sits on bg: the passage's lead faint, the note in fg, a comment's place faint.
+      expect(contrast(t.faint!, t.bg!)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(t.fg!, t.bg!)).toBeGreaterThanOrEqual(4.5);
+      // Where it was said, marked in the amber at 60% (styles.css, ::highlight(pelican-quote-source)).
+      const marked = over(t.mark!, t.bg!, 0.6);
+      expect(contrast(t.fg!, marked)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(t.muted!, marked)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(marked, t.bg!)).toBeGreaterThan(1.2);
+    }
+  });
+
   it('keep faint a step lighter than muted, so the two still read apart', () => {
     for (const t of Object.values(themes)) {
       expect(contrast(t.muted!, t.bg!) / contrast(t.faint!, t.bg!)).toBeGreaterThan(1.3);

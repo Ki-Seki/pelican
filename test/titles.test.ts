@@ -5,10 +5,18 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { listSummaries } from '../src/server/sessions';
+import { listSummaries, sessionTitle } from '../src/server/sessions';
 import { columns, shortTitle } from '../src/shared/titles';
 
 describe('a prompt as a title', () => {
+  it('that quotes, as Claude Desktop and Pelican write one, is called by its words, else its note, never its markers', () => {
+    const info = (firstPrompt: string) => ({ sessionId: 's1', summary: '', lastModified: 0, firstPrompt });
+    expect(sessionTitle(info('<!-- reply 1 -->\n> one more set of values\n\nUse the names we have\n\n\nThen run the tests.'))).toBe('Then run the tests.');
+    expect(sessionTitle(info('<!-- reply 1 -->\n> one more set of values\n\nUse the names we have\n\n\n'))).toBe('Use the names we have');
+    expect(sessionTitle(info('@"src/prefs.ts"\n<!-- attach: src/app.ts:7-8 -->\n> const a = 1;\n\nExplain this'))).toBe('Explain this');
+    expect(sessionTitle(info('> a quote typed by hand\n\nand words'))).toBe('and words');
+  });
+
   it('stays as it is when it fits on a line', () => {
     expect(shortTitle('Fix the flaky login test')).toBe('Fix the flaky login test');
     expect(shortTitle('  Fix\n  the test  ')).toBe('Fix the test');
