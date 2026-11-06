@@ -1,6 +1,6 @@
 // A page showing a terminal, as the web app's would: it writes the screen it is sent and the
-// output after it into a terminal of its own (xterm's headless one, with the Unicode 11 widths
-// TerminalScreen draws with), and acknowledges what it wrote.
+// output after it into a terminal of its own (xterm's headless one, with the widths TerminalScreen
+// draws with), and acknowledges what it wrote.
 import type net from 'node:net';
 
 import unicode11Addon from '@xterm/addon-unicode11';
@@ -8,6 +8,7 @@ import xtermHeadless, { type Terminal } from '@xterm/headless';
 import WebSocket from 'ws';
 
 import { type TerminalColors, TERMINAL_LIMITS, terminalServerMessage, type TerminalServerMessage } from '../src/shared/terminal';
+import { loadWidths } from '../src/shared/terminal-widths';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 const { Unicode11Addon } = unicode11Addon;
@@ -50,8 +51,7 @@ export class Page {
     const rows = options.rows ?? 24;
     this.ack = options.ack ?? true;
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
-    this.screen.loadAddon(new Unicode11Addon());
-    this.screen.unicode.activeVersion = '11';
+    loadWidths(this.screen, Unicode11Addon);
     this.ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?id=${encodeURIComponent(id)}&cols=${cols}&rows=${rows}`, {
       headers: options.headers ?? {},
     });

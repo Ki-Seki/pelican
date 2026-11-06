@@ -14,13 +14,13 @@ import WebSocket from 'ws';
 
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
-import { TERMINAL_CLOSE } from '../src/shared/terminal';
+import { TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  capMarks, closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState,
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, modesBeyondSnapshot, onColorRequests, shellEnvironment, terminalState,
   terminalTiming, testShell,
 } from '../src/server/terminals';
 import { Page, pause, until } from './terminal-page';
@@ -492,37 +492,60 @@ describe('flow control', () => {
 describe('marks on a character', () => {
   const marks = (n: number) => '\u0301'.repeat(n);
 
-  it('are kept up to 16 in a row, across chunks of output, and start again after a character or an escape sequence', () => {
-    expect(capMarks(`e${marks(3)}`, 0)).toEqual({ text: `e${marks(3)}`, run: 3 });
-    expect(capMarks(`a${marks(40)}b`, 0)).toEqual({ text: `a${marks(16)}b`, run: 0 });
-    // A run split between two chunks is one run.
-    expect(capMarks(marks(10), 10)).toEqual({ text: marks(6), run: 20 });
-    expect(capMarks(`${marks(5)}c`, 20)).toEqual({ text: 'c', run: 0 });
-    // xterm starts a new cell after an escape sequence, so a run does too.
-    expect(capMarks(`a${marks(16)}\u001b[m${marks(16)}`, 0).text).toBe(`a${marks(16)}\u001b[m${marks(16)}`);
-    // Joiners, selectors and marks beyond the first plane count; Chinese and plain text pass as they are.
-    expect(capMarks(`x${'\u200d\ufe0f\u{e0100}'.repeat(10)}`, 0).text).toBe(`x${'\u200d\ufe0f\u{e0100}'.repeat(5)}\u200d`);
-    expect(capMarks('中文 café ok', 3)).toEqual({ text: '中文 café ok', run: 0 });
-    expect(capMarks('plain', 3)).toEqual({ text: 'plain', run: 0 });
-  });
+  /** The most code points a cell of the page's screen holds. */
+  const heaviest = (shown: Page) => {
+    const buffer = shown.screen.buffer.active;
+    let most = 0;
+    for (let y = 0; y < buffer.length; y += 1) {
+      const line = buffer.getLine(y)!;
+      for (let x = 0; x < line.length; x += 1) most = Math.max(most, [...(line.getCell(x)?.getChars() ?? '')].length);
+    }
+    return most;
+  };
 
-  it('are at most 16 in what the copy keeps and the pages get, however many a program prints', async () => {
-    const file = path.join(dir, 'marks.txt');
-    // One letter with ten million marks on it: 20 MB.
-    await writeFile(file, `a${marks(10_000_000)}b\n`);
+  // What xterm passes over between marks, going on joining them to the letter before: a DEL, the
+  // C1 string terminator, a sequence it does not take.
+  for (const [name, between] of [['a DEL', '\u007f'], ['U+009C', '\u009c'], ['ESC [ 1 < m', '\u001b[1<m']]) {
+    it(`are at most 16 on a cell of the copy and of the pages, with ${name} after every 16`, async () => {
+      const file = path.join(dir, 'marks.txt');
+      // One letter, then two million marks.
+      await writeFile(file, `a${`${marks(16)}${between}`.repeat(125_000)}b\n`);
+      // A narrow screen, whose scrollback the marks overflow: what it keeps is all a page gets.
+      const size = { cols: 20, rows: 5 };
+      const terminal = await open(work(), size);
+      const shown = await atPrompt(terminal.id, size);
+      shown.type(`cat ${file}; echo DO''NE\r`);
+      await shown.sees(/DONE\r\n/, 60_000);
+      const late = page(terminal.id, size);
+      const ready = await late.readied();
+      await until(() => late.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
+      // A mark that started a cell of its own, and 16 more on it, where the page saw it all and
+      // where the copy's screen came.
+      expect(heaviest(shown)).toBe(17);
+      expect(heaviest(late)).toBe(17);
+      expect(late.lines()).toEqual(shown.lines());
+      // The lines the copy keeps, each of 20 such cells, and no more however many came.
+      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * 17 + 10_000);
+    }, 90_000);
+  }
+
+  it('are at most 16 on a cell, and a letter keeps its first 16, in one run however long', async () => {
+    const file = path.join(dir, 'marks-run.txt');
+    await writeFile(file, `a${marks(40)}b\n`);
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
-    const rss = process.memoryUsage().rss;
     shown.type(`cat ${file}; echo DO''NE\r`);
-    await shown.sees(/DONE\r\n/, 60_000);
-    expect(shown.output).toContain(`a${marks(16)}b`);
-    expect(shown.received).toBeLessThan(10_000);
+    await shown.sees(/DONE\r\n/);
     const late = page(terminal.id);
-    const ready = await late.readied();
-    expect(ready.snapshot.length).toBeLessThan(10_000);
-    expect(late.lines()).toContain(`a${marks(16)}b`);
-    expect(process.memoryUsage().rss - rss).toBeLessThan(200 * 1024 * 1024);
-  }, 90_000);
+    await late.readied();
+    await until(() => late.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
+    for (const seen of [shown, late]) {
+      const y = seen.lines().findIndex((line) => line.startsWith('a\u0301'));
+      const line = seen.screen.buffer.active.getLine(y)!;
+      // The letter and 16; then a mark, a cell of its own, and the 16 after it; then the last 7, and b.
+      expect([0, 1, 2, 3].map((x) => line.getCell(x)?.getChars())).toEqual([`a${marks(16)}`, marks(17), marks(7), 'b']);
+    }
+  }, 30_000);
 });
 
 describe('the shell’s environment', () => {

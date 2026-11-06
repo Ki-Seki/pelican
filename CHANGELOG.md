@@ -53,8 +53,9 @@ A terminal beside the conversation, as Claude Desktop has one.
 - A paste into a terminal, and the phone's line, leave out control characters, as xterm, kitty
   and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
   the shell's paste early and run without Enter.
-- What a terminal keeps of its screen is bounded: 2,000 lines, and at most 16 combining marks on
-  a character, so no output can fill Pelican's memory.
+- What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, and
+  at most 16 combining marks on a character, whatever a program prints between them, so no output
+  grows Pelican's memory, or a phone's, without bound.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.

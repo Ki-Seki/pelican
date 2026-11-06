@@ -13,6 +13,7 @@ import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
   type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
 } from '../shared/terminal.js';
+import { loadWidths } from '../shared/terminal-widths.js';
 import { refreshAuth } from './auth.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
@@ -147,40 +148,6 @@ function betweenSequences(screen: Screen): boolean {
   return state === undefined || state === 0;
 }
 
-/**
- * Characters drawn as part of the one before them: combining marks, joiners and selectors (those
- * of no width, as the Unicode 11 widths count them). xterm adds each to the cell before it, with
- * no limit, until a character of its own or an escape sequence comes.
- */
-const ZERO_WIDTH_RUN = /[\p{Mn}\p{Me}\p{Cf}\u1160-\u11ff\u1734\u{1171e}]+/gu;
-/** Marks one character keeps: more than any script stacks on one (Zalgo text stacks thousands). */
-export const MARKS_PER_CHARACTER = 16;
-
-/**
- * Output with each run of zero-width characters cut to MARKS_PER_CHARACTER, so a file of one
- * letter and millions of marks grows neither the copy nor a page by more than a cell, and the
- * screen sent with `ready` stays small. `carried` is the run the output before ended in;
- * `run` the one this ends in.
- */
-export function capMarks(text: string, carried: number): { text: string; run: number } {
-  // Nothing from U+0300 on (the first mark): nothing to cut, and the run, if any, has ended.
-  if (!/[^\u0000-\u02ff]/.test(text)) return { text, run: text ? 0 : carried };
-  let kept = '';
-  let from = 0;
-  let run = 0;
-  for (const match of text.matchAll(ZERO_WIDTH_RUN)) {
-    const before = match.index === 0 ? carried : 0;
-    const marks = [...match[0]];
-    const room = Math.max(0, MARKS_PER_CHARACTER - before);
-    if (marks.length > room) {
-      kept += text.slice(from, match.index) + marks.slice(0, room).join('');
-      from = match.index + match[0].length;
-    }
-    run = match.index + match[0].length === text.length ? before + marks.length : 0;
-  }
-  return { text: from === 0 ? text : kept + text.slice(from), run };
-}
-
 type ScreenCore = {
   coreMouseService?: { activeEncoding?: string };
   coreService?: { isCursorHidden?: boolean; decPrivateModes?: { origin?: boolean; cursorStyle?: 'block' | 'underline' | 'bar'; cursorBlink?: boolean } };
@@ -309,8 +276,6 @@ class Term {
   private parsed = 0;
   /** A key came from a page: what the shell prints next (its echo) goes out at once. */
   private keyed = false;
-  /** The zero-width characters the output so far ended in (capMarks). */
-  private marks = 0;
   /** The PTY is paused (flow control), and looked at again while it is. */
   private paused = false;
   private watching?: NodeJS.Timeout;
@@ -332,9 +297,9 @@ class Term {
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
     // Characters as wide as the pages draw them (TerminalScreen takes the same widths): an emoji
     // takes two cells there, and the screen a page gets back places what follows it, and the
-    // cursor, by counting cells.
-    this.screen.loadAddon(new Unicode11Addon());
-    this.screen.unicode.activeVersion = '11';
+    // cursor, by counting cells. A cell takes at most 16 combining marks, so no output grows one,
+    // or the screen a page gets, without bound.
+    loadWidths(this.screen, Unicode11Addon);
     this.serializer = new SerializeAddon();
     this.screen.loadAddon(this.serializer);
     // The copy answers what programs ask of the terminal (device attributes, the cursor's
@@ -396,12 +361,9 @@ class Term {
     };
   }
 
-  private output(printed: string): void {
-    if (this.closed) return;
-    const { text, run } = capMarks(printed, this.marks);
-    this.marks = run;
+  private output(text: string): void {
+    if (this.closed || !text) return;
     this.lastActive = Date.now();
-    if (!text) return;
     const bytes = Buffer.from(text, 'utf8');
     this.received += bytes.length;
     this.screen.write(text, () => {
