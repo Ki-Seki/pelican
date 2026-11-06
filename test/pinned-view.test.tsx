@@ -124,6 +124,8 @@ describe('pinned sessions in the list', () => {
     await screen.findByRole('button', { name: /^Pinned/ });
     expect(groups().map((g) => g.heading)).toEqual(['Pinned', 'app', 'docs']);
     expect(titles('Pinned')).toEqual(['Fix the login test', 'Watch the dev server', 'Check the queue', 'Release notes']);
+    // Counted as a project is: each session under it, the earlier runs folded into a row too.
+    expect(screen.getByRole('button', { name: /^Pinned/ }).textContent).toBe('Pinned6');
     expect(within(pinnedSection()).getByText('docs')).toBeTruthy();
     expect(titles('docs')).toEqual(['Tidy the docs']);
     expect(groups().find((g) => g.heading === 'docs')!.rows[0]).not.toContain(', docs,');
@@ -253,14 +255,17 @@ describe('a finger on a row', () => {
 });
 
 describe('the session menu', () => {
-  const menu = (shown: SessionSummary) => {
+  const menu = (shown: SessionSummary, onDeleted = () => {}) => {
     const client = new QueryClient();
     client.setQueryData(['sessions'], server);
-    return render(
-      <QueryClientProvider client={client}>
-        <SessionMenu open onClose={() => {}} sessionId={shown.id} session={shown} onRenamed={() => {}} onForked={() => {}} onDeleted={() => {}} />
-      </QueryClientProvider>,
-    );
+    return {
+      client,
+      ...render(
+        <QueryClientProvider client={client}>
+          <SessionMenu open onClose={() => {}} sessionId={shown.id} session={shown} onRenamed={() => {}} onForked={() => {}} onDeleted={onDeleted} />
+        </QueryClientProvider>,
+      ),
+    };
   };
 
   it('pins and unpins the session, next to Archive', async () => {
@@ -281,6 +286,16 @@ describe('the session menu', () => {
     menu(server.find((s) => s.id === 't1')!);
     fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
     expect(await screen.findByText('The disk is full')).toBeTruthy();
+  });
+
+  it('archives a pinned session, which the list it goes back to shows archived and unpinned', async () => {
+    const onDeleted = vi.fn();
+    const { client } = menu(server.find((s) => s.id === 'p1')!, onDeleted);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+    expect(archive).toHaveBeenCalledWith('p1', true);
+    const listed = client.getQueryData<SessionSummary[]>(['sessions'])!.find((s) => s.id === 'p1');
+    expect([listed?.archived, listed?.pinned]).toEqual([true, undefined]);
   });
 
   it('offers no pin for an archived session, only Unarchive', () => {

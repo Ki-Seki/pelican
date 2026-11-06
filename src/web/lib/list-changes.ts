@@ -30,24 +30,30 @@ export const undoOf = (before: SessionSummary, change: ListChange): ListChange =
 export const changeWords = (change: ListChange) =>
   ('pinned' in change ? (change.pinned ? 'Pinned' : 'Unpinned') : change.archived ? 'Archived' : 'Unarchived');
 
+/** Shows the session with these marks in the list and on its own page, until they are read again. */
+function show(queryClient: QueryClient, id: string, as: Marks): void {
+  queryClient.setQueryData<SessionSummary[]>(['sessions'], (list) => list?.map((s) => (s.id === id ? marked(s, as) : s)));
+  queryClient.setQueryData<{ session: SessionSummary | null }>(['session', id], (page) => (page?.session ? { ...page, session: marked(page.session, as) } : page));
+}
+
+/** Shows a change the server has made, in the list and on the session's own page, before they are read again. */
+export const showChange = (queryClient: QueryClient, session: SessionSummary, change: ListChange) =>
+  show(queryClient, session.id, changed(session, change));
+
 /**
  * Shows a change at once, in the list and on the session's own page, then makes it on the server;
  * what was shown is put back if the server says no (and the error thrown).
  */
 export async function makeChange(queryClient: QueryClient, session: SessionSummary, change: ListChange): Promise<void> {
   const detail = ['session', session.id];
-  const show = (as: Marks) => {
-    queryClient.setQueryData<SessionSummary[]>(['sessions'], (list) => list?.map((s) => (s.id === session.id ? marked(s, as) : s)));
-    queryClient.setQueryData<{ session: SessionSummary | null }>(detail, (page) => (page?.session ? { ...page, session: marked(page.session, as) } : page));
-  };
   // A list or page on its way would show it as it was.
   void queryClient.cancelQueries({ queryKey: ['sessions'] });
   void queryClient.cancelQueries({ queryKey: detail });
-  show(changed(session, change));
+  show(queryClient, session.id, changed(session, change));
   try {
     await ('pinned' in change ? api.pin(session.id, change.pinned) : api.archive(session.id, change.archived));
   } catch (error) {
-    show(session);
+    show(queryClient, session.id, session);
     throw error;
   } finally {
     void queryClient.invalidateQueries({ queryKey: ['sessions'] });

@@ -7,7 +7,7 @@ import { cacheShare, costShown, costWords, tokenTotal } from '../../shared/usage
 import { announce } from '../lib/announce';
 import { api } from '../lib/api';
 import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
-import { changeWords, type ListChange, makeChange } from '../lib/list-changes';
+import { changeWords, type ListChange, makeChange, showChange } from '../lib/list-changes';
 import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
 import { DEMO_NOTE } from '../lib/static-demo';
 import { compactNumber, percent, span, times } from '../lib/usage';
@@ -294,6 +294,7 @@ export function SessionMenu({
           label="Unarchive"
           onSelect={() => act(async () => {
             await api.archive(sessionId, false);
+            if (session) showChange(queryClient, session, { archived: false });
             onRenamed();
           })}
         />
@@ -301,8 +302,10 @@ export function SessionMenu({
         <SheetOption
           icon={<Archive className="size-4" />}
           label="Archive"
+          // The list it goes back to shows the session archived, and no longer pinned, at once.
           onSelect={() => act(async () => {
             await api.archive(sessionId, true);
+            if (session) showChange(queryClient, session, { archived: true });
             onDeleted();
           })}
         />

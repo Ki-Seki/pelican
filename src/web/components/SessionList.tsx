@@ -208,8 +208,9 @@ function Swipeable({ name, start, end, compact, selected, children }: {
     const dy = e.clientY - d.y;
     if (d.sideways === undefined) {
       if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      // Mostly up or down: that is the list scrolling, and the browser has it already.
-      d.sideways = Math.abs(dx) > Math.abs(dy);
+      // Mostly up or down: that is the list scrolling, and the browser has it already. Nor does a
+      // closed row with nothing on its left take a slide to the right.
+      d.sideways = Math.abs(dx) > Math.abs(dy) && (dx < 0 || Boolean(start) || d.from !== 0);
       if (!d.sideways) {
         drag.current = null;
         return;
@@ -378,6 +379,9 @@ function MoreRows({ root, onNear }: { root: React.RefObject<HTMLElement | null>;
 
 type Group = { key: string; label: string; entries: Entry[]; count: number };
 
+/** How many sessions a group holds, the earlier ones folded into its rows too. */
+const sessionsIn = (entries: Entry[]) => entries.reduce((n, entry) => n + 1 + entry.earlier.length, 0);
+
 function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const prefs = usePrefs();
   return (
@@ -510,7 +514,7 @@ export function SessionList({
     const entries = fold(filtered);
     const out: Group[] = [];
     const pinned = entries.filter((entry) => entry.session.pinned);
-    if (pinned.length > 0) out.push({ key: PINNED, label: 'Pinned', entries: pinned, count: pinned.length });
+    if (pinned.length > 0) out.push({ key: PINNED, label: 'Pinned', entries: pinned, count: sessionsIn(pinned) });
     const rest = entries.filter((entry) => !entry.session.pinned);
 
     if (prefs.listGroup === 'project' && !project) {
@@ -524,9 +528,8 @@ export function SessionList({
           byProject.set(key, group);
         }
         group.entries.push(entry);
-        group.count += 1 + entry.earlier.length;
       }
-      return [...out, ...byProject.values()];
+      return [...out, ...[...byProject.values()].map((group) => ({ ...group, count: sessionsIn(group.entries) }))];
     }
 
     const active = rest.filter((entry) => isActive(entry.session));
