@@ -56,7 +56,8 @@ A terminal beside the conversation, as Claude Desktop has one.
   the shell's paste early and run without Enter.
 - What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, and
   at most 16 combining marks on a character, whatever a program prints between them, so no output
-  grows Pelican's memory, or a phone's, without bound.
+  grows Pelican's memory, or a phone's, without bound; and output xterm throws on stops neither
+  Pelican nor a page's screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
