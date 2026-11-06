@@ -608,7 +608,7 @@ const saveFontSize = (t: Terminal) => setPrefs({ terminalFontSize: t.options.fon
  * (never the phone's keyboard), and a program that asked for the mouse gets it. `stop` ends a
  * glide, as ↓ does on its way to the newest output.
  */
-function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress: () => void): { detach: () => void; stop: () => void } {
+export function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress: () => void): { detach: () => void; stop: () => void } {
   const fingers = new Map<number, { x: number; y: number }>();
   let lastY = 0;
   let lastT = 0;
@@ -701,12 +701,19 @@ function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress:
   };
   // A long press is the screen as text, not the system's menu.
   const menu = (e: Event) => e.preventDefault();
+  // A finger moving on the screen is the screen's alone. Chrome on Android otherwise takes a flick
+  // for a fling of its own, and the next tap anywhere on the page, for a second, for stopping it:
+  // a key of the row, ↓ or Enter tapped right after a flick did nothing.
+  const own = (e: TouchEvent) => {
+    if (e.cancelable) e.preventDefault();
+  };
 
   el.addEventListener('pointerdown', down);
   el.addEventListener('pointermove', move);
   el.addEventListener('pointerup', up);
   el.addEventListener('pointercancel', up);
   el.addEventListener('contextmenu', menu);
+  el.addEventListener('touchmove', own, { passive: false });
   return {
     detach: () => {
       clearTimeout(press);
@@ -716,6 +723,7 @@ function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, longPress:
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
       el.removeEventListener('contextmenu', menu);
+      el.removeEventListener('touchmove', own);
     },
     stop: () => cancelAnimationFrame(glide),
   };
