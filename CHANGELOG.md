@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1
+
+- **Files Claude sends you, as in Claude Desktop.** In the sessions Pelican runs, Claude can send
+  you files (Claude Code's SendUserFile): Pelican now tells Claude Code it shows them, the way
+  Claude Code expects of an app that does, which turns that tool on and nothing else. Before, the
+  call failed with "SendUserFile is still listed for this conversation but is switched off in this
+  session right now". A file shows where Claude sent it, as it is sent and after a reload, read
+  from where Claude Code delivered it: a picture in place, larger on a tap; a page or an SVG as the
+  still preview, with Run; text to read, Markdown as it reads, folded when long; a PDF in your
+  browser's own viewer, in a tab of its own; anything else as a card to download, with its type,
+  name and size. A file Claude meant you to save stays a card until you open it. While the call
+  runs its step says "Sending file", and "Failed to send" if it fails, in Claude Desktop's words,
+  and sent files are never folded away among steps. Asked to send one from outside the session's
+  folder, the approval says "Claude wants to send you a file" and lists it, instead of the call's
+  raw input.
+- Files Claude sent in Claude Desktop show from Claude Code's record of what it delivered, so one
+  Claude named by a relative path shows too; a file Claude Code did not deliver never shows.
+- The demo, and the live demo on the website, have a file Claude sent: in "Try the dark theme on my
+  phone", a screenshot of the settings page in dark.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

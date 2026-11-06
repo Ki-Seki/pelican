@@ -105,6 +105,22 @@ can read your sessions and have Claude run commands as you, so treat access to i
   never a path, from that session's own `tool-results` folder, or, for a record a branch copied,
   from that of the session its row says it came from, when the record's path names that session:
   a regular file reached through no link and with no other name (no hard link).
+- **Only the files Claude sent are shown, and only as files.** In the sessions Pelican runs,
+  Pelican tells Claude Code it shows the files Claude sends (`CLAUDE_CODE_ATTACHMENTS_BY_PATH`, set
+  for Claude Code alone, never for a `!` command), which turns on SendUserFile and nothing else. In
+  that mode Claude Code uploads nothing: it checks that each file exists and is a regular file,
+  asks you first where its Read rules would (a file outside the session's folder), and records
+  where the file is. It then leaves out what governs its uploads, your organization's "File upload"
+  policy and its checks for a provider other than Anthropic's API and for
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`; its own switch for the tool (`tengu_send_user_file`)
+  and its brief mode still turn the tool off, and it sends no file to Remote Control viewers on
+  claude.ai. Pelican serves a file of a session only at a path Claude Code recorded it delivered
+  there, the absolute path it checked rather than the one Claude asked for (or, from Claude
+  Desktop, the file an Artifact call published), and refuses any other path a request names. It
+  reads the file as it is on disk when you look, read only, a regular file reached through no link
+  that leads out of its folder, up to 200 MB. A picture shows as itself and text as text, inert; a
+  page or an SVG is a still preview, as above; a PDF opens in the browser's own viewer, in a tab of
+  its own, never sniffed or framed; anything else downloads.
 - **A workflow's files stay in its session's folder.** A workflow's card reads, for a run the
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
