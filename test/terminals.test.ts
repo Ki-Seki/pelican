@@ -150,6 +150,17 @@ describe('a terminal', () => {
     expect(late.closed?.code).toBe(TERMINAL_CLOSE.gone);
   }, 30_000);
 
+  it('when Pelican stops, its pages lose the connection as to a server going away, to come back and start again', async () => {
+    const terminal = await open();
+    const shown = await atPrompt(terminal.id);
+    closeAllTerminals();
+    await until(() => shown.closed !== undefined);
+    expect(shown.closed?.code).toBe(1001);
+    const late = page(terminal.id);
+    await until(() => late.closed !== undefined);
+    expect(late.closed?.code).toBe(TERMINAL_CLOSE.gone);
+  }, 20_000);
+
   it('runs a command once the shell is ready for it (Run in terminal)', async () => {
     const terminal = await open(work(), { command: 'echo "ran $((40 + 2))"' });
     const shown = page(terminal.id);

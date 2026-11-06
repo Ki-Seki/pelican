@@ -100,7 +100,12 @@ export const TERMINAL_LIMITS = {
   rows: { min: 2, max: 300 },
 } as const;
 
-/** WebSocket close codes the server ends a terminal's socket with, and what they mean for the page. */
+/**
+ * WebSocket close codes the server ends a terminal's socket with, and what they mean for the page.
+ * When Pelican stops, its terminals end with it and their sockets close as a server going away
+ * does (1001): a page connects again, as after any dropped connection, and once Pelican is back it
+ * finds the terminal gone (Start again).
+ */
 export const TERMINAL_CLOSE = {
   /** The address had no terminal id, or a size out of range. */
   badRequest: 4400,

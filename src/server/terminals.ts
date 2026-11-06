@@ -497,15 +497,18 @@ class Term {
    * Closes it: the pages showing it are told, and the shell is hung up, as closing a window does.
    * The shell gets SIGHUP while its terminal is still there, so it hangs up its jobs too (a shell
    * that finds its terminal gone first just exits, and leaves them running); a moment later
-   * Pelican lets go of the PTY, and what ignored the hangup has no terminal any more.
+   * Pelican lets go of the PTY, and what ignored the hangup has no terminal any more. With
+   * `stopping`, Pelican is: its pages lose the connection as a server going away (1001), come
+   * back once Pelican does, and find the terminal gone, to start again.
    */
-  close(): void {
+  close(stopping = false): void {
     if (this.closed) return;
     this.closed = true;
     terminals.delete(this.id);
     for (const viewer of [...this.viewers]) {
       this.leave(viewer);
-      viewer.ws.close(TERMINAL_CLOSE.closed, 'Closed');
+      if (stopping) viewer.ws.close(1001, 'Pelican stopped');
+      else viewer.ws.close(TERMINAL_CLOSE.closed, 'Closed');
     }
     clearTimeout(this.gathering);
     clearInterval(this.watching);
@@ -601,7 +604,7 @@ export function closeTerminal(id: string): boolean {
 
 /** Every terminal ends with Pelican. */
 export function closeAllTerminals(): void {
-  for (const term of [...terminals.values()]) term.close();
+  for (const term of [...terminals.values()]) term.close(true);
   clearInterval(sweeping);
   sweeping = undefined;
 }
