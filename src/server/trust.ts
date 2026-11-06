@@ -73,7 +73,7 @@ async function readText(file: string): Promise<{ text?: string; odd?: true }> {
   }
   try {
     if ((await handle.stat()).size > MAX_READ) return { odd: true };
-    return { text: await handle.readFile('utf8') };
+    return { text: decoded(await handle.readFile()) };
   } catch {
     return { odd: true };
   } finally {
@@ -81,13 +81,28 @@ async function readText(file: string): Promise<{ text?: string; odd?: true }> {
   }
 }
 
-/** A JSON file's value (undefined when it is missing or not JSON), and whether it is not a regular file. */
-async function readJsonFile(file: string): Promise<{ value: unknown; odd?: true }> {
+/**
+ * A file's text as Claude Code reads it: UTF-8 with its byte-order mark left out, or UTF-16 when it
+ * starts with one, as Windows' Notepad saves either. Kept, the mark made JSON.parse fail.
+ */
+function decoded(bytes: Buffer): string {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  const text = bytes.toString('utf8');
+  return text.startsWith('\ufeff') ? text.slice(1) : text;
+}
+
+/**
+ * A JSON file's value (undefined when it is missing or not JSON), whether it is not a regular file,
+ * and whether it has words that are not JSON as Pelican reads it: Claude Code may read more than
+ * that, so a folder's such file is asked about rather than taken to bring nothing.
+ */
+async function readJsonFile(file: string): Promise<{ value: unknown; odd?: true; unparsed?: true }> {
   const { text, odd } = await readText(file);
   try {
     return { value: text === undefined ? undefined : JSON.parse(text) as unknown, ...(odd ? { odd } : {}) };
   } catch {
-    return { value: undefined };
+    return { value: undefined, ...(text?.trim() ? { unparsed: true as const } : {}) };
   }
 }
 
@@ -582,10 +597,10 @@ export async function whatFolderBrings(folder: string): Promise<Brings> {
   const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
   const found: Item[] = [];
-  // A file of the folder's that is not a regular file is not read, and is asked about instead.
+  // A file of the folder's that is not a regular file, or not JSON, is asked about instead.
   const json = async (file: string): Promise<unknown> => {
-    const { value, odd } = await readJsonFile(file);
-    if (odd) found.push(said(`Cannot be read: ${path.relative(dir, file)}`));
+    const { value, odd, unparsed } = await readJsonFile(file);
+    if (odd || unparsed) found.push(said(`Cannot be read: ${path.relative(dir, file)}`));
     return value;
   };
   const budget = budgetFor();
