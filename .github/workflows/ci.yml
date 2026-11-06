@@ -37,6 +37,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      # The terminal's PTY, for every platform as npm-shrinkwrap.json pins it and as npm installed
+      # it here, is Microsoft's node-pty, file for file.
+      - name: The terminal's binaries are Microsoft's
+        run: node scripts/pty-binaries.mjs
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
@@ -110,6 +114,12 @@ jobs:
           case "$link" in http://localhost:7862/?token=*) ;; *) exit 1 ;; esac
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$RUNNER_TEMP/cookies" "$link")" = 302
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 200
+          # The terminal as installed: its PTY loads, and a shell starts in a folder and is closed.
+          curl -fsS -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/terminals | grep -q '"available":true'
+          id=$(curl -fsS -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' -H 'Content-Type: application/json' \
+            -d "{\"cwd\":\"$RUNNER_TEMP\",\"cols\":80,\"rows\":24}" http://localhost:7862/api/terminals \
+            | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).terminal.id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' "http://localhost:7862/api/terminals/$id")" = 200
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
