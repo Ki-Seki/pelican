@@ -12,9 +12,10 @@ A terminal beside the conversation, as Claude Desktop has one.
   in Desktop, and hides it again from inside it. Each terminal is a tab named after the program in
   front (zsh, npm, vim); + opens another, Open in terminal at the top of a folder in Files opens one
   there, and End hangs the shown one up, as closing a window does, asking first while a program runs
-  in it. On a computer you type straight into it, select to Quote or Copy, and Ctrl and the wheel
-  sets the text size. Its colors and font are Pelican's, light or dark, and a program that asks for
-  its colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
+  in it. On a computer you type straight into it, with input methods, the emoji picker and
+  dictation too, select to Quote or Copy, and Ctrl and the wheel sets the text size. Its colors and
+  font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim does
+  to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, and
   Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-`

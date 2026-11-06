@@ -141,3 +141,44 @@ export function cleanPastes(el: HTMLElement, paste: (text: string) => void): () 
   el.addEventListener('paste', onPaste, { capture: true });
   return () => el.removeEventListener('paste', onPaste, { capture: true });
 }
+
+/**
+ * Text put into the screen's field without a key: the macOS Emoji and Symbols picker, the Windows
+ * emoji panel, some dictation and handwriting input. xterm in screen reader mode sends what keys
+ * type and what input methods compose, and leaves such text in its field, unsent: this hands it
+ * to `take`. Text that comes while a key is down, or with a composition, is xterm's to send.
+ * Returns what stops it.
+ */
+export function insertedText(field: HTMLElement, take: (text: string) => void): () => void {
+  let keyDown = false;
+  let composing = false;
+  /** When the last composition ended: the text it puts in comes after, and is xterm's too. */
+  let composed = Number.NEGATIVE_INFINITY;
+  const listeners: Array<[string, (event: Event) => void]> = [
+    ['keydown', () => {
+      keyDown = true;
+    }],
+    ['keyup', () => {
+      keyDown = false;
+    }],
+    ['blur', () => {
+      keyDown = false;
+    }],
+    ['compositionstart', () => {
+      composing = true;
+    }],
+    ['compositionend', () => {
+      composing = false;
+      composed = performance.now();
+    }],
+    ['input', (event) => {
+      const { inputType, data, isComposing } = event as InputEvent;
+      if (inputType !== 'insertText' || !data || keyDown || composing || isComposing || performance.now() - composed < 50) return;
+      take(data);
+    }],
+  ];
+  for (const [type, listener] of listeners) field.addEventListener(type, listener);
+  return () => {
+    for (const [type, listener] of listeners) field.removeEventListener(type, listener);
+  };
+}

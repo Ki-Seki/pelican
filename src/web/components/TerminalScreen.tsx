@@ -16,7 +16,7 @@ import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { showCursor } from '../lib/terminal-cursor';
 import {
-  asksForSecret, bufferText, cleanPaste, cleanPastes, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText,
+  asksForSecret, bufferText, cleanPaste, cleanPastes, colorQuery, insertedText, keySequence, lineBeforeCursor, themeColors, viewportText,
 } from '../lib/terminal-input';
 import { type Connection, TerminalConnection } from '../lib/terminal-socket';
 
@@ -187,8 +187,11 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       cursorBlink: false,
       // A phone types in the line field, so the screen never has the keys: its cursor still shows as one.
       cursorInactiveStyle: touch ? 'block' : 'outline',
-      // The rows, as text a screen reader reads, and on a computer what follows a key said aloud.
-      screenReaderMode: true,
+      // On a computer, the rows as text a screen reader reads, and what follows a key said aloud.
+      // It takes in output at half the speed: a phone, which has less to spare and never types
+      // into the screen, keeps a copy of the rows instead (rowsAsText), and reads out what a line
+      // printed (readNext).
+      screenReaderMode: !touch,
       minimumContrastRatio: 4.5,
       theme: pageTheme(),
       // xterm would log an error for every character it does not take where it comes (a DEL), and
@@ -233,6 +236,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     showCursor(t);
     // A tap gives the screen the keys, never a phone's keyboard.
     if (touch) t.textarea?.setAttribute('inputmode', 'none');
+    // Text a computer puts in without keys (an emoji picker, dictation), which xterm in screen
+    // reader mode leaves in its field.
+    const stopInserting = !touch && t.textarea ? insertedText(t.textarea, (text) => t.input(text, true)) : () => undefined;
+    const stopRows = touch ? rowsAsText(el, t) : () => undefined;
 
     t.onData((data) => {
       if (el.contains(document.activeElement)) reclaim();
@@ -314,6 +321,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     return () => {
       gestures?.detach();
       stopCleaning();
+      stopInserting();
+      stopRows();
       resized.disconnect();
       themed.disconnect();
       scheme.removeEventListener('change', recolor);
@@ -477,7 +486,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       {/* The keys' hidden field is as large as Safari needs, or it zooms the page in when a tap gives it the keys. */}
       {/* xterm's layers stack inside it (isolate), so what lies over the screen is over all of them; */}
       {/* a shell sized by a larger page is cut at its edge (overflow-hidden), not drawn over the keys under it. */}
-      {/* On a phone, what follows a line is read out by the page (readNext), not by xterm's own live region, which only keys clear. */}
+      {/* On a phone, what follows a line is read out by the page (readNext), and the rows are a copy (rowsAsText): xterm's screen reader mode is a computer's. */}
       <div
         ref={box}
         role="region"
@@ -533,6 +542,42 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     </div>
   );
 }));
+
+/**
+ * The rows on screen, as text a screen reader reads, as xterm's screen reader mode gives them (a
+ * list of rows), kept up to date at most four times a second while output comes. Returns what
+ * stops it.
+ */
+function rowsAsText(el: HTMLElement, t: Terminal): () => void {
+  const list = document.createElement('div');
+  list.setAttribute('role', 'list');
+  list.className = 'sr-only';
+  el.appendChild(list);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = 0;
+  const update = () => {
+    timer = undefined;
+    last = performance.now();
+    const buffer = t.buffer.active;
+    while (list.children.length > t.rows) list.lastChild!.remove();
+    while (list.children.length < t.rows) list.appendChild(document.createElement('div')).setAttribute('role', 'listitem');
+    for (let y = 0; y < t.rows; y += 1) {
+      const text = buffer.getLine(buffer.viewportY + y)?.translateToString(true) || ' ';
+      const row = list.children[y]!;
+      if (row.textContent !== text) row.textContent = text;
+    }
+  };
+  const soon = () => {
+    timer ??= setTimeout(update, Math.max(0, 250 - (performance.now() - last)));
+  };
+  const listening = [t.onWriteParsed(soon), t.onScroll(soon), t.onResize(soon)];
+  update();
+  return () => {
+    clearTimeout(timer);
+    for (const l of listening) l.dispose();
+    list.remove();
+  };
+}
 
 /** A link in the output: opened in a new tab, with Cmd or Ctrl held on a computer, on a tap on a phone. */
 function openLink(event: MouseEvent, uri: string, touch: boolean): void {
