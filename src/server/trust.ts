@@ -487,8 +487,8 @@ function* fenced(text: string): Generator<string> {
  * What a project's command, skill or agent may run without asking: tools its frontmatter allows,
  * hooks, MCP servers, a permission mode; and for a command or a skill, the shell it runs as it
  * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them. Each line is
- * read at most twice, so it takes time in proportion to the file, and capped() takes no more of it
- * than fits.
+ * read at most twice, so it takes time in proportion to the file; Gathered keeps no more of it than
+ * fits.
  */
 function* fromMarkdown(what: string, text: string, shell: boolean): Generator<Item> {
   // Its YAML ends a line at a carriage return alone too.
