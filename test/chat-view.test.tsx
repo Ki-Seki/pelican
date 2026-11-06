@@ -192,6 +192,15 @@ describe('the working line', () => {
     expect(screen.getByText('20s')).toBeTruthy();
   });
 
+  it('lays a step being written out as a finished one: a long command is cut, not its icon or its verb', () => {
+    const command = `timeout 100 log show --last 75m --style compact --predicate 'process == "launchd"' ${'x'.repeat(400)}`;
+    const writing = run({ partial: [{ type: 'tool_use', name: 'Bash', inputJson: JSON.stringify({ command }) }] });
+    const { container } = render(<MessageList sessionId="s" view={view({ run: writing })} mode="normal" />);
+    const row = container.querySelector('[data-step-writing]')!;
+    expect(row.textContent).toContain('Run');
+    for (const kept of [row.querySelector('svg'), row.querySelector('span')]) expect(kept?.getAttribute('class')).toMatch(/\bshrink-0\b/);
+  });
+
   it('falls back to the prompt that started the turn', () => {
     const messagesNow: ChatMessage[] = [{ uuid: 'u', role: 'user', blocks: [{ type: 'text', text: 'Go' }], timestamp: Date.now() - 7000 }];
     render(<MessageList sessionId="s" view={view({ messages: messagesNow, run: run({}) })} mode="normal" />);

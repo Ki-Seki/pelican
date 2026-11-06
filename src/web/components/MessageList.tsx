@@ -687,11 +687,12 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
         const summary = describeTool(block.name, partialTarget(block), cwd);
         const Icon = summary.icon;
         return (
-          <div key={i} className="flex min-h-8 items-center gap-2 text-[13px] text-muted">
-            <Icon className="size-3.5" />
-            <span className="text-fg/80">{summary.verb}</span>
+          // Laid out as a finished step's row (ToolCall): a long command is cut, never the icon or the verb.
+          <div key={i} data-step-writing className="flex min-h-8 min-w-0 items-center gap-2 text-[13px] text-muted">
+            <Icon className="size-3.5 shrink-0" />
+            <span className="shrink-0 text-fg/80">{summary.verb}</span>
             {summary.target && <ToolTarget summary={summary} />}
-            <Loader2 className="ml-auto size-3.5 animate-spin text-faint" />
+            <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-faint" />
           </div>
         );
       })}
