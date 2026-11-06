@@ -358,6 +358,32 @@ describe('a page that comes back', () => {
   }, 20_000);
 });
 
+describe('output in frames', () => {
+  it('reaches a page whole, a character cut by no frame, where xterm lost one cut after its 0x80', async () => {
+    // Lines of characters whose second byte is 0x80 (an em dash is E2 80 94), lengths varied: what
+    // a page keeps (2,000 lines) is about 900 KB, so a dozen frames end somewhere in it, a third of
+    // the time right after a 0x80.
+    const file = path.join(dir, 'dashes.txt');
+    const marks = '\u2014\u2026\u201c\u201d\u2019\u2022\u3002\u3001';
+    await writeFile(file, Array.from({ length: 2100 }, (_, n) => `${String(n).padStart(4, '0')} ${'\u2014'.repeat(20)}${'e'.repeat(n % 3)}${marks.repeat(16)}`).join('\n'));
+    const size = { cols: 200, rows: 24 };
+    const terminal = await open(work(), size);
+    const shown = await atPrompt(terminal.id, size);
+    shown.type(`cat ${file}; echo; echo DO''NE\r`);
+    await shown.sees(/DONE\r\n/, 30_000);
+    await until(() => shown.lines().includes('DONE'), 10_000, 'the screen');
+    const late = page(terminal.id, size);
+    await late.readied();
+    await until(() => late.lines().includes('DONE'), 10_000, 'the screen');
+    const count = (lines: string[]) => [...lines.join('')].filter((c) => marks.includes(c)).length;
+    // The page that read it frame by frame draws what the server's copy holds, every character.
+    expect(shown.lines()).toEqual(late.lines());
+    const kept = shown.lines().filter((line) => /^\d{4} /.test(line));
+    expect(kept.length).toBeGreaterThan(1900);
+    expect(count(kept)).toBe(kept.length * (20 + 128));
+  }, 60_000);
+});
+
 describe('what a program asks of the terminal', () => {
   it('is answered once, from the server’s copy, with no page showing it or several', async () => {
     // Nobody looks: a program that asks still gets its answer (fish asks as it starts).

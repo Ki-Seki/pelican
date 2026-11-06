@@ -150,6 +150,24 @@ export const TERMINAL_CLOSE = {
  */
 export const commandRunnable = (command: string): boolean => !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(command) && !holdsHidden(command);
 
+/**
+ * `data` (UTF-8) in pieces of at most `size` bytes, each cut between two characters: xterm 6.0.0
+ * loses a character cut after a byte 0x80 (`—` is E2 80 94) when it takes the rest in the next piece.
+ */
+export function utf8Pieces<T extends Uint8Array>(data: T, size: number): T[] {
+  if (data.length <= size) return [data];
+  const pieces: T[] = [];
+  for (let at = 0; at < data.length;) {
+    let end = Math.min(at + size, data.length);
+    // A byte 10xxxxxx goes on a character: the cut goes before the character.
+    while (end < data.length && end > at && (data[end]! & 0xc0) === 0x80) end -= 1;
+    if (end === at) end = Math.min(at + size, data.length);
+    pieces.push(data.subarray(at, end) as T);
+    at = end;
+  }
+  return pieces;
+}
+
 /** Whether a size is one a terminal takes. */
 export const sizeAllowed = (cols: unknown, rows: unknown): boolean => Number.isInteger(cols) && Number.isInteger(rows)
   && (cols as number) >= TERMINAL_LIMITS.cols.min && (cols as number) <= TERMINAL_LIMITS.cols.max

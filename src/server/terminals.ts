@@ -10,7 +10,7 @@ import type { RawData, WebSocket } from 'ws';
 
 import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
-  type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
+  type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage, utf8Pieces,
 } from '../shared/terminal.js';
 import { guardOutput } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
@@ -69,6 +69,13 @@ export const terminalTiming = {
 
 /** How long a closed terminal's shell has to hang up its jobs before Pelican lets go of its PTY. */
 const HANGUP_MS = 1000;
+
+/**
+ * The copy of the screen takes in output this many characters at a time: xterm takes in a piece
+ * whole, and some output takes long (a screen's worth of scrolling for every few bytes), so
+ * Pelican answers everything else between pieces, at most a tenth of a second apart.
+ */
+const COPY_PIECE = 512;
 
 /** Too many terminals run already (TERMINAL_LIMITS.terminals), and none of them has ended. */
 export class TooManyTerminals extends Error {}
@@ -334,10 +341,13 @@ class Term {
     this.lastActive = Date.now();
     const bytes = Buffer.from(text, 'utf8');
     this.received += bytes.length;
-    this.screen.write(text, () => {
-      this.parsed += bytes.length;
-      this.cut();
-    });
+    for (let at = 0; at < text.length; at += COPY_PIECE) {
+      const last = at + COPY_PIECE >= text.length;
+      this.screen.write(text.length <= COPY_PIECE ? text : text.slice(at, at + COPY_PIECE), last ? () => {
+        this.parsed += bytes.length;
+        this.cut();
+      } : undefined);
+    }
     this.pending.push(bytes);
     this.pendingBytes += bytes.length;
     // The first output goes at once, and the first after a key, so typing never waits; what
@@ -378,9 +388,10 @@ class Term {
     this.pressure();
   }
 
+  /** Output to a page, in frames each cut between two characters (utf8Pieces). */
   private sendOutput(viewer: Viewer, data: Buffer): void {
     if (viewer.ws.readyState !== viewer.ws.OPEN) return;
-    for (let at = 0; at < data.length; at += TERMINAL_LIMITS.frame) viewer.ws.send(data.subarray(at, at + TERMINAL_LIMITS.frame), { binary: true });
+    for (const frame of utf8Pieces(data, TERMINAL_LIMITS.frame)) viewer.ws.send(frame, { binary: true });
     viewer.unacked += data.length;
   }
 

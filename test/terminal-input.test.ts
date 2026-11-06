@@ -2,7 +2,7 @@
 // field, and the screen as text behind a long press (src/web/lib/terminal-input.ts).
 import { describe, expect, it } from 'vitest';
 
-import { terminalClientMessage } from '../src/shared/terminal';
+import { terminalClientMessage, utf8Pieces } from '../src/shared/terminal';
 import {
   asksForSecret, bufferText, type BufferLike, colorQuery, controlCharacter, keySequence, lineBeforeCursor, themeColors, viewportText,
 } from '../src/web/lib/terminal-input';
@@ -132,5 +132,24 @@ describe('the colors a program asks for', () => {
     expect(themeColors({ ...theme, background: 'rgba(0, 0, 0, 0.5)' })).toBeUndefined();
     expect(themeColors({ ...theme, brightWhite: undefined } as unknown as typeof theme)).toBeUndefined();
     expect(terminalClientMessage(JSON.stringify({ type: 'colors', colors: { ...colors, ansi: colors?.ansi.slice(1) } }))).toBeUndefined();
+  });
+});
+
+describe('output in pieces', () => {
+  it('is cut only between characters, so xterm takes each whole, and is all there', () => {
+    const encoder = new TextEncoder();
+    const text = `a\u2014b\u{1f680}c\u00e9\u4e2d${'x'.repeat(10)}\u2026`;
+    const bytes = encoder.encode(text);
+    for (let size = 4; size <= bytes.length + 1; size += 1) {
+      const pieces = utf8Pieces(bytes, size);
+      expect(pieces.every((piece) => piece.length <= size && piece.length > 0)).toBe(true);
+      // Each piece reads as text on its own: no character is cut.
+      const decoder = new TextDecoder('utf-8', { fatal: true });
+      expect(pieces.map((piece) => decoder.decode(piece)).join('')).toBe(text);
+    }
+    // A frame boundary right after E2 80, the start of an em dash: the dash goes to the next piece.
+    const dash = encoder.encode('ab\u2014cd');
+    expect(utf8Pieces(dash, 4).map((piece) => [...piece])).toEqual([[0x61, 0x62], [0xe2, 0x80, 0x94, 0x63], [0x64]]);
+    expect(utf8Pieces(dash, 64)).toEqual([dash]);
   });
 });
