@@ -369,7 +369,8 @@ function SentFiles({ call }: { call: ToolCall }) {
   return (
     // What shows in place at full width takes a line of its own; the rest sit side by side and wrap.
     <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} aria-busy={!checked} className="my-1.5 flex flex-wrap items-start gap-2">
-      {caption && <div className="basis-full text-[13.5px] text-muted">{caption}</div>}
+      {/* Claude's words with the files, as Claude Desktop shows them: as a reply reads, Markdown and all. */}
+      {caption && <Markdown text={caption} className="basis-full" />}
       {checked && files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} layout={layout} state={states.data?.get(file.path)} />)}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}

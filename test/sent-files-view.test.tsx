@@ -111,6 +111,21 @@ describe('a file Claude sent', () => {
     expect(asked).toEqual([]);
   });
 
+  it('shows its caption as Claude’s words, as a reply reads: Markdown and all', async () => {
+    show([prompt, ...sent('s20', [`${WORK}/build.zip`], { caption: 'Here’s the **chart** and `report.md`, details on [the dashboard](https://example.com/d/1).' })]);
+    const group = screen.getByRole('group', { name: 'Sent file' });
+    expect(within(group).getByText('chart').tagName).toBe('STRONG');
+    expect(within(group).getByText('report.md').tagName).toBe('CODE');
+    const link = within(group).getByRole('link', { name: 'the dashboard' });
+    expect(link.getAttribute('href')).toBe('https://example.com/d/1');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(group.textContent).not.toContain('**');
+    // In a reply's type, not a label's.
+    const words = within(group).getByText('chart').closest('.prose-chat')!;
+    expect(words.className).not.toMatch(/text-muted|text-\[13\.5px\]/);
+    await within(group).findByRole('link', { name: 'Download build.zip' });
+  });
+
   it('lays pictures that come alone side by side, each at its own size up to 360 tall and 480 wide, as in Claude Desktop', async () => {
     const shots = [1, 2, 3, 4].map((n) => `${WORK}/shots/phone-${n}.png`);
     show([prompt, ...sent('s17', shots)]);
