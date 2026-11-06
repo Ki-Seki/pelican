@@ -82,7 +82,11 @@ for (const session of sessions) {
   const detail = await save(`sessions/${q(session.id)}`);
   // What a command left running has printed, for its Output sheet.
   for (const task of detail?.run?.tasks ?? []) if (task.output) await save(`sessions/${q(session.id)}/tasks/${q(task.id)}/output`);
-  await save(`sessions/${q(session.id)}/messages?limit=120`);
+  const page = await save(`sessions/${q(session.id)}/messages?limit=120`);
+  // The files Claude sent, as their cards ask for them: on the site, a picture comes as data too.
+  for (const block of (page?.messages ?? []).flatMap((message) => message.blocks)) {
+    for (const file of block.type === 'tool_result' ? block.delivered?.files ?? [] : []) await save(`sessions/${q(session.id)}/sent?path=${q(file.path)}`);
+  }
   await save(`sessions/${q(session.id)}/mcp`);
   // What each turn changed, and each turn's diff of each of its files.
   const changes = await save(`sessions/${q(session.id)}/changes`);

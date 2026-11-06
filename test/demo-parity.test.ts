@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
+import { sentFiles } from '../src/server/sessions';
 import { readLastTurn } from '../src/server/transcripts';
 import { gitStatus } from '../src/server/workspace';
 import { workflowAgentPage, workflowView } from '../src/server/workflows';
@@ -35,6 +36,19 @@ describe('the demo shows what runs on and what waits', () => {
   it('a turn that stopped on an API error, as Claude Code writes it', async () => {
     const file = path.join(config.claudeHome, 'projects', path.join(config.home, 'code', 'docs-site').replace(/[^a-zA-Z0-9]/g, '-'), `${STOPPED}.jsonl`);
     expect((await readLastTurn(file))?.stopped).toBe('API overloaded');
+  });
+
+  it('a picture Claude sent, as Claude Code records it delivered, at the path where the demo keeps it', async () => {
+    const rows = await rowsOf(transcriptOf('acme-web', DEV));
+    const recorded = rows.find((row) => row.toolUseResult?.attachments)?.toolUseResult;
+    const file = path.join(config.home, 'code', 'acme-web', 'screenshots', 'settings-dark.png');
+    expect(recorded).toMatchObject({ caption: 'The settings page in the dark theme', attachments: [{ path: file, isImage: true, media_type: 'image/png', pathValidated: true }] });
+    expect((await stat(file)).size).toBe(recorded.attachments[0].size);
+    expect((await readFile(file)).subarray(1, 4).toString()).toBe('PNG');
+    expect([...(await sentFiles(DEV))]).toEqual([file]);
+    // Taken after the repository's last commit: a new file there.
+    const status = await gitStatus(path.join(config.home, 'code', 'acme-web'));
+    expect(status.repo && status.files.find((f) => f.path === 'screenshots/settings-dark.png')?.status).toBe('untracked');
   });
 
   it('a session waiting for an answer in the terminal, beside the one at work in Claude Desktop', () => {
