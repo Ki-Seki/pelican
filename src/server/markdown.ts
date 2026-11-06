@@ -1627,10 +1627,22 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
   const ticks = new Int32Array(n + 1);
   for (let i = 0; i < n; i += 1) ticks[i + 1] = ticks[i]! + (text[i] === '`' ? 1 : 0);
   const quoteIn = (from: number, to: number) => ticks[Math.min(to, n)]! - ticks[from]! > 0;
-  // And how many brackets: a bare link that takes one in (`http://x/![p](u`) takes a link or a
-  // picture apart, and a backquote in its title is free to start code after it.
+  // And how many brackets of a link, a picture or a footnote call as read: a bare link that takes
+  // one in (`http://x/![p](u`) takes it apart, and a backquote in its title is free to start code
+  // after it. One that is text in every reader (`http://[::1]/`, `?ids[]=1`) takes nothing apart.
   const squares = new Int32Array(n + 1);
-  for (let i = 0; i < n; i += 1) squares[i + 1] = squares[i]! + (text[i] === '[' || text[i] === ']' ? 1 : 0);
+  {
+    const marks = new Uint8Array(n);
+    const mark = (from: number, to: number) => {
+      for (let k = from; k < to; k += 1) if (text[k] === '[' || text[k] === ']') marks[k] = 1;
+    };
+    for (const [at, link] of reading.links) {
+      mark(at, at + (link.picture ? 2 : 1));
+      mark(link.close, link.end);
+    }
+    for (const [at, call] of reading.calls) mark(at, call.end);
+    for (let i = 0; i < n; i += 1) squares[i + 1] = squares[i]! + marks[i]!;
+  }
   const bracketIn = (from: number, to: number) => squares[Math.min(to, n)]! - squares[from]! > 0;
 
   /** How much the looks ahead below may read in all: twice the words. */
@@ -1640,8 +1652,9 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
    * Where a bare link that starts at `at` ends, as micromark (the conversation's reader) reads
    * one, when HTML comes right after it: a `<` that is written `&lt;`, which the link would run on
    * through, as it runs on through a `&`. Undefined for any other: one that ends elsewhere, or that
-   * could not be written in `<…>` as it is (with a backquote, a `&`, a backslash, a `>` or a
-   * bracket in it), or in a link's words or its address and title, where micromark makes none.
+   * could not be written in `<…>` as it is (with a backquote, a backslash, a `>` or a bracket in
+   * it), or in a link's words or its address and title, where micromark makes none. A `&` is as it
+   * is in `<…>`: no reader takes `&amp;` there for `&`, as micromark takes none in a bare link.
    */
   let edge: Int32Array | undefined;
   let opens: Int32Array | undefined;
@@ -1684,7 +1697,7 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
       else break;
     }
     if (trimming <= 0 || end <= at + start[0].length) return undefined;
-    return /[`&\\>[\]\x00-\x20\x7f]/.test(text.slice(at, end)) ? undefined : end;
+    return /[`\\>[\]\x00-\x20\x7f]/.test(text.slice(at, end)) ? undefined : end;
   };
   /**
    * What a look ahead found, where the reader may take some words whole from `from` to `end`:

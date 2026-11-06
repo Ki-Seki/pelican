@@ -385,6 +385,21 @@ describe('a reply in the export', () => {
     expect(links).toEqual(['https://api.example.com/v2', 'https://status.example.com']);
   });
 
+  it('keeps such a link the link it is with a query string, its `&` as it is', () => {
+    const said = '| API | Links |\n| --- | --- |\n| v2 | https://api.example.com/v2?a=1&b=2<br>https://status.example.com |';
+    expect(reply(said)).toBe('| API | Links |\n| --- | --- |\n| v2 | <https://api.example.com/v2?a=1&b=2>&lt;br>https://status.example.com |');
+    const links: string[] = [];
+    walk(tree(reply(said)), (node) => {
+      if (node.type === 'link') links.push(node.url!);
+    });
+    expect(links).toEqual(['https://api.example.com/v2?a=1&b=2', 'https://status.example.com']);
+    // What looks like a character's name stays as written, as micromark keeps it in the bare link,
+    // and one at its end is left out of it, as micromark leaves it.
+    expect(reply('https://x.example/?a&amp;b<br>end')).toBe('<https://x.example/?a&amp;b>&lt;br>end');
+    expect(reply('https://x.example/a&b;<br>end')).toBe('<https://x.example/a>&b;&lt;br>end');
+    expect(trouble(reply(said))).toEqual([]);
+  });
+
   it('keeps a picture written into the reply a picture only where its address is a data: one, as readers take the address', () => {
     // They pass spaces, tabs and a line ending before it, not a no-break space: that one is in it, and it loads.
     expect(reply('![x](\u00a0data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)')).toBe('[x](\u00a0data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)');
@@ -396,6 +411,22 @@ describe('a reply in the export', () => {
     const said = 'http://h.example/x![p](u "t`")`![q](https://evil.example/p.png "t`")';
     expect(reply(said)).toBe('http://h.example/x[p](u "t`")`\\![q](https://evil.example/p.png "t`")');
     expect(trouble(reply(said))).toEqual([]);
+    // So does one that takes in the `]` of a link it is in the words of.
+    const inLink = '[see http://h.example/x](u "t`") then `<b>`';
+    expect(reply(inLink)).toBe('[see http://h.example/x](u "t`") then `&lt;b>`');
+    expect(trouble(reply(inLink))).toEqual([]);
+  });
+
+  it('keeps code as code after a bare link whose brackets are text in every reader, as an IPv6 host or a query of a list is', () => {
+    // Its `<` was written `&lt;`, which shows as it is in code.
+    expect(reply('Open http://[::1]:8080/ and run `echo <x>`')).toBe('Open http://[::1]:8080/ and run `echo <x>`');
+    expect(reply('See https://h.example/?ids[]=1&ids[]=2 then `a <b> c`')).toBe('See https://h.example/?ids[]=1&ids[]=2 then `a <b> c`');
+    const code: string[] = [];
+    walk(tree(reply('See https://h.example/?ids[]=1 then `a <b> c`')), (node) => {
+      if (node.type === 'inlineCode') code.push(node.value!);
+    });
+    expect(code).toEqual(['a <b> c']);
+    expect(trouble(reply('Open http://[::1]:8080/ and run `echo <x>` and <b>bold</b>'))).toEqual([]);
   });
 
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
