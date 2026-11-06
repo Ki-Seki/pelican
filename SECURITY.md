@@ -121,7 +121,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   `https` one, in a new tab with no way back to Pelican. The demo has no terminal, and
   `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is pinned to one version, and
   CI checks that its files, for every platform, are those of Microsoft's node-pty of that version,
-  against the integrity the npm registry publishes for it.
+  against the integrity the npm registry publishes for it; that the few lines of its own, which pick
+  the platform's files, are those read for that version; and that none of its packages runs anything
+  as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'

@@ -54,7 +54,9 @@ A terminal beside the conversation, as Claude Desktop has one.
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
-  the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package.
+  the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
+  the few lines of @lydell's own against those read for this version, and that none of it runs
+  anything as npm installs it.
   It is optional: where it cannot load, such as on Alpine (musl) or after an install with
   `--omit=optional`, the terminal says why, and `!` commands work as before.
 
