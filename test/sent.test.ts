@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { app } from '../src/server/app';
+import { app, byteRange } from '../src/server/app';
 import { accessToken, loadAuth } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { toChatMessage } from '../src/server/normalize';
@@ -23,6 +23,9 @@ const ODD = ['page.constructor', 'page.__proto__', 'page.toString'];
 /** Sent, then moved away: a name a page would take for markup, with a character that turns text around. */
 const GONE = 'old <img src=x onerror=alert(1)> \u202efdp.pdf';
 const PAGE = '<!doctype html><h1>Hi</h1>\n';
+/** Made-up bytes of a video and of sounds: what a player asks of them is served, not what they hold. */
+const MEDIA = { 'clip.mp4': 'video/mp4', 'clip.webm': 'video/webm', 'clip.mov': 'video/quicktime', 'voice.mp3': 'audio/mpeg', 'note.m4a': 'audio/mp4', 'tone.wav': 'audio/wav', 'tone.ogg': 'audio/ogg' };
+const CLIP = Buffer.from(Array.from({ length: 100 }, (_, i) => i));
 
 /** What Claude Code records of a SendUserFile result, for files at these paths. */
 const record = (files: Array<string | Record<string, unknown>>, extra: Record<string, unknown> = {}) => ({
@@ -82,6 +85,7 @@ beforeAll(async () => {
   await writeFile(path.join(work, 'shrink.bin'), Buffer.alloc(MB, 1));
   await writeFile(path.join(work, 'empty.txt'), '');
   await writeFile(path.join(work, GONE), '%PDF-1.4\n%%EOF\n');
+  for (const name of Object.keys(MEDIA)) await writeFile(path.join(work, name), CLIP);
 
   await transcript(A, work, [
     { type: 'user', content: [{ type: 'text', text: 'Send me what you made' }] },
@@ -96,6 +100,7 @@ beforeAll(async () => {
         send('kinds', ['chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin']),
         send('refused', ['secret.txt']),
         send('odd', [...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE]),
+        send('media', Object.keys(MEDIA)),
       ],
     },
     { type: 'user', content: [answer('ran')], toolUseResult: record([path.join(work, 'report.md')], { caption: 'The report', display: 'render' }) },
@@ -112,6 +117,7 @@ beforeAll(async () => {
       toolUseResult: record([{ path: path.join(root, 'secret.txt'), size: 17, isImage: false, pathValidated: true, upload_error: 'not sent: it now resolves to what was not approved' }]),
     },
     { type: 'user', content: [answer('odd', '7 files delivered to user.')], toolUseResult: record([...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f))) },
+    { type: 'user', content: [answer('media', '7 files delivered to user.')], toolUseResult: record(Object.keys(MEDIA).map((f) => path.join(work, f))) },
   ]);
   await rm(path.join(work, GONE));
   await transcript(B, path.join(root, 'other'), [
@@ -164,7 +170,7 @@ describe('what Claude Code records a SendUserFile call delivered', () => {
 
 describe('files Claude sent', () => {
   it('are what Claude Code recorded it delivered, from calls that ran: not what Claude asked for, nor a call that failed, was only written, or was refused', async () => {
-    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE].map((f) => path.join(work, f)).sort());
+    expect([...(await sentFiles(A))].sort()).toEqual(['report.md', 'chart.png', 'notes.pdf', 'data.zip', 'page.svg', 'swapped.md', 'huge.bin', ...ODD, 'grow.bin', 'shrink.bin', 'empty.txt', GONE, ...Object.keys(MEDIA)].map((f) => path.join(work, f)).sort());
     expect([...(await sentFiles(B))]).toEqual([path.join(root, 'other', 'theirs.txt')]);
   });
 });
@@ -267,6 +273,59 @@ describe('a file Claude sent, by a link', () => {
       expect(response.headers.get('content-security-policy')).toMatch(/^sandbox; default-src 'none'/);
       await response.arrayBuffer();
     }
+  });
+
+  it('is a video or a sound to play in the page, of its own type, inert, kept and asked about again', async () => {
+    for (const [name, type] of Object.entries(MEDIA)) {
+      const response = await linked(A, path.join(work, name));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe(type);
+      expect(response.headers.get('content-disposition')).toBe(`inline; filename*=UTF-8''${name}`);
+      expect(response.headers.get('accept-ranges')).toBe('bytes');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('content-security-policy')).toBe("sandbox allow-same-origin; default-src 'none'; media-src 'self'; frame-ancestors 'self'");
+      expect(response.headers.get('cache-control')).toBe('private, no-cache');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(CLIP);
+      expect((await linked(A, path.join(work, name), '', { 'if-none-match': response.headers.get('etag')! })).status).toBe(304);
+    }
+    // Asked to download, it downloads.
+    const saved = await linked(A, path.join(work, 'clip.mp4'), '&download=1', { range: 'bytes=0-1' });
+    expect(saved.status).toBe(200);
+    expect(saved.headers.get('content-type')).toBe('application/octet-stream');
+    expect(saved.headers.get('accept-ranges')).toBeNull();
+    expect((await saved.arrayBuffer()).byteLength).toBe(100);
+  });
+
+  it('plays a part at a time: the range a player asks for, of the version it has', async () => {
+    const clip = path.join(work, 'clip.mp4');
+    const part = async (range: string, headers: Record<string, string> = {}) => {
+      const response = await linked(A, clip, '', { range, ...headers });
+      return { status: response.status, range: response.headers.get('content-range'), length: response.headers.get('content-length'), body: [...new Uint8Array(await response.arrayBuffer())] };
+    };
+    expect(await part('bytes=0-1')).toEqual({ status: 206, range: 'bytes 0-1/100', length: '2', body: [0, 1] });
+    expect(await part('bytes=97-')).toEqual({ status: 206, range: 'bytes 97-99/100', length: '3', body: [97, 98, 99] });
+    expect(await part('bytes=-2')).toEqual({ status: 206, range: 'bytes 98-99/100', length: '2', body: [98, 99] });
+    expect(await part('bytes=98-500')).toEqual({ status: 206, range: 'bytes 98-99/100', length: '2', body: [98, 99] });
+    expect(await part('bytes=100-')).toEqual({ status: 416, range: 'bytes */100', length: '0', body: [] });
+    // Several ranges, or one not written as a range, get the whole file.
+    expect((await part('bytes=0-1,5-6')).body).toHaveLength(100);
+    expect((await part('bytes=5-1')).status).toBe(200);
+    // A player that has another version gets this one whole.
+    const tag = (await linked(A, clip, '', { method: 'HEAD' })).headers.get('etag')!;
+    expect((await part('bytes=0-1', { 'if-range': tag })).status).toBe(206);
+    expect(await part('bytes=0-1', { 'if-range': '"another"' })).toMatchObject({ status: 200, range: null, length: '100' });
+    const head = await linked(A, clip, '', { method: 'HEAD', range: 'bytes=10-19' });
+    expect([head.status, head.headers.get('content-range'), await head.text()]).toEqual([206, 'bytes 10-19/100', '']);
+  });
+
+  it('reads a range as players write them, and nothing else', () => {
+    expect(byteRange(undefined, 10)).toBeUndefined();
+    expect(byteRange('bytes=0-', 10)).toEqual({ start: 0, end: 9 });
+    expect(byteRange('bytes=-20', 10)).toEqual({ start: 0, end: 9 });
+    expect(byteRange('bytes=-0', 10)).toBeNull();
+    expect(byteRange('bytes=0-', 0)).toBeNull();
+    expect(byteRange('bytes=99999999999999999999-', 10)).toBeNull();
+    for (const odd of ['bytes=-', 'bytes=a-b', 'items=0-1', 'bytes=0-1,2-3', 'bytes= 0-1']) expect(byteRange(odd, 10)).toBeUndefined();
   });
 
   it('is not served past 200 MB', async () => {

@@ -81,18 +81,24 @@ function Images({ call }: { call: ToolCall }) {
 }
 
 /**
- * How a file Claude sent shows, by its type, as in Claude Desktop: a picture as itself, a page or
- * an SVG as a still preview, text to read, a PDF in the browser's own viewer, anything else as a
- * file to save.
+ * How a file Claude sent shows, by its type, as in Claude Desktop: a picture as itself, a video or a
+ * sound in a player, a page or an SVG as a still preview, text to read, a PDF in the browser's own
+ * viewer, anything else as a file to save.
  */
-export type SentKind = 'picture' | 'page' | 'text' | 'pdf' | 'file';
+export type SentKind = 'picture' | 'video' | 'audio' | 'page' | 'text' | 'pdf' | 'file';
 
 const PICTURE = /\.(png|jpe?g|gif|webp)$/i;
+/** The videos and sounds Claude Desktop plays in place, by their names. */
+const VIDEO = /\.(mp4|webm|mov)$/i;
+const AUDIO = /\.(mp3|m4a|aac|wav|flac|opus|ogg|oga)$/i;
 const PAGE = /\.(html?|svg)$/i;
 const TEXT = /\.(md|markdown|txt|text|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|env|xml|sh|bash|zsh|fish|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|lua|sql|r|js|jsx|mjs|cjs|ts|tsx|css|scss|vue|svelte|diff|patch)$/i;
 
 export function sentKind(file: DeliveredFile): SentKind {
   if (PICTURE.test(file.path)) return 'picture';
+  // Unless Claude Code took one for a picture, as Claude Desktop tells them.
+  if (!file.image && VIDEO.test(file.path)) return 'video';
+  if (!file.image && AUDIO.test(file.path)) return 'audio';
   if (PAGE.test(file.path)) return 'page';
   if (/\.pdf$/i.test(file.path)) return 'pdf';
   if (TEXT.test(file.path) || /^text\//.test(file.type ?? '') || file.type === 'application/json') return 'text';
@@ -116,11 +122,15 @@ const TILE = 'size-[120px] shrink-0';
 const TILE_FACE = `${CARD} flex size-full flex-col items-start justify-between gap-1.5 p-2.5 text-left`;
 
 /**
- * How the files of one call lie, as Claude Desktop lays them out: pictures that come alone at their
- * own size, side by side (`natural`); beside other files, pictures as small squares and the other
- * files as tiles of the same size (`square`); other files alone as cards of a line.
+ * How the files of one call lie, as Claude Desktop lays them out: videos and sounds first, each in a
+ * player of its own; pictures that come alone, or with videos only, at their own size, side by side
+ * (`natural`), a video too; beside other files (or a sound), pictures as small squares, a video
+ * smaller, and the other files as tiles of a square's size (`square`); other files alone as cards of
+ * a line.
  */
 type Layout = { natural: boolean; square: boolean };
+
+const playable = (kind: SentKind) => kind === 'video' || kind === 'audio';
 
 /** A file's type, as Claude Desktop marks a card: its extension, small. */
 function Badge({ name }: { name: string }) {
@@ -268,6 +278,37 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
       </div>
     );
   }
+  if (playable(kind) && open && !broken) {
+    const src = api.sentUrl(sessionId, file.path);
+    if (kind === 'audio') {
+      // A sound, under its name, as Claude Desktop plays one.
+      return (
+        <div className="basis-full">
+          <div className={`${CARD} w-full max-w-[360px]`}>
+            <div className={LINE}>
+              <Badge name={name} />
+              <Label name={name} size={file.size} />
+              <Save sessionId={sessionId} file={file.path} />
+            </div>
+            <div className="px-2 pb-2">
+              <audio controls preload="metadata" src={src} title={name} aria-label={name} onError={() => setBroken(true)} className="block w-full" />
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="basis-full">
+        <div className={`group relative w-fit ${layout.natural ? 'max-w-[min(100%,480px)]' : 'max-w-[min(100%,320px)]'}`}>
+          <video
+            controls preload="metadata" playsInline src={src} title={name} aria-label={name} onError={() => setBroken(true)}
+            className={`block max-w-full rounded-xl bg-black ${layout.natural ? 'max-h-[360px]' : 'max-h-[240px]'}`}
+          />
+          <div className={CORNER}><Save sessionId={sessionId} file={file.path} /></div>
+        </div>
+      </div>
+    );
+  }
   if (kind === 'page' && open && data?.text !== undefined && !data.truncated) {
     return (
       <div className="basis-full">
@@ -305,7 +346,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
       </div>
     );
   }
-  // Text, and a picture or a page while it is closed (or cannot be shown): a card that opens it.
+  // Text, and a picture, a video, a sound or a page while it is closed (or cannot be shown): a card that opens it.
   const unshowable = broken || noData || (kind === 'page' && data?.truncated);
   const toggle = { type: 'button' as const, 'aria-label': name, 'aria-expanded': open && !unshowable, disabled: Boolean(unshowable), onClick: () => setOpen((v) => !v) };
   // A tile while it is closed and has nothing to say; open, it takes the width what it shows needs.
@@ -331,7 +372,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
         <Save sessionId={sessionId} file={file.path} />
       </div>
       {open && failure}
-      {(broken || noData) && <div className="px-3 pb-2 text-[12px] text-faint">This picture can’t be shown here</div>}
+      {(broken || noData) && <div className="px-3 pb-2 text-[12px] text-faint">{kind === 'video' ? 'This video can’t be played here' : kind === 'audio' ? 'This audio can’t be played here' : 'This picture can’t be shown here'}</div>}
       {kind === 'page' && data?.truncated && <div className="px-3 pb-2 text-[12px] text-faint">Too large to preview here</div>}
       {open && kind === 'text' && data && (
         <div className="border-t border-line bg-bg">
@@ -352,8 +393,12 @@ function SentFiles({ call }: { call: ToolCall }) {
   // In place, unless Claude meant them as files to save.
   const open = call.name === 'Artifact' || delivered?.display !== 'attach';
   const missed = delivered?.missed ?? 0;
-  const pictures = files.filter((file) => sentKind(file) === 'picture').length;
-  const layout: Layout = { natural: pictures === files.length, square: pictures > 0 && pictures < files.length };
+  const kinds = files.map(sentKind);
+  const others = kinds.filter((kind) => !playable(kind));
+  const pictures = others.filter((kind) => kind === 'picture').length;
+  const layout: Layout = { natural: pictures === others.length && !kinds.includes('audio'), square: pictures > 0 && pictures < others.length };
+  // Players first, then the rest in the order Claude sent them.
+  const order = files.map((file, i) => ({ file, i })).sort((a, b) => Number(playable(kinds[b.i]!)) - Number(playable(kinds[a.i]!)));
   // Whether each is still there to have, known before any of them shows: older sessions are full of
   // files that have since moved. Should nobody be able to say, they show as they would.
   const paths = [...new Set(files.map((file) => file.path))].slice(0, 50);
@@ -371,7 +416,7 @@ function SentFiles({ call }: { call: ToolCall }) {
     <div role="group" aria-label={files.length === 1 ? 'Sent file' : `Sent ${files.length} files`} aria-busy={!checked} className="my-1.5 flex flex-wrap items-start gap-2">
       {/* Claude's words with the files, as Claude Desktop shows them: as a reply reads, Markdown and all. */}
       {caption && <Markdown text={caption} className="basis-full" />}
-      {checked && files.map((file, i) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} layout={layout} state={states.data?.get(file.path)} />)}
+      {checked && order.map(({ file, i }) => <SentFile key={`${i}:${file.path}`} sessionId={sessionId} file={file} open={open} layout={layout} state={states.data?.get(file.path)} />)}
       {missed > 0 && <div className="basis-full text-[12px] text-faint">{missed === 1 ? '1 more file could not be sent' : `${missed} more files could not be sent`}</div>}
       {link && <a href={link} target="_blank" rel="noreferrer" className="inline-flex basis-full text-[12.5px] text-faint underline decoration-faint underline-offset-2 hover:text-fg">Open the published page</a>}
     </div>

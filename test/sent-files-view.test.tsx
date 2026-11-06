@@ -163,6 +163,42 @@ describe('a file Claude sent', () => {
     expect(screen.getByRole('link', { name: 'Download build.zip' }).closest('.size-\\[120px\\]')).toBeNull();
   });
 
+  it('plays a video and a sound in place, before the other files, as Claude Desktop does, each with a way to save it', async () => {
+    const { container } = show([prompt, ...sent('s21', [`${WORK}/build.zip`, `${WORK}/clip.mp4`, `${WORK}/voice.mp3`])]);
+    await screen.findByRole('link', { name: 'Download clip.mp4' });
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe(raw(`${WORK}/clip.mp4`));
+    expect([video.hasAttribute('controls'), video.getAttribute('preload'), video.hasAttribute('playsinline')]).toEqual([true, 'metadata', true]);
+    const audio = container.querySelector('audio')!;
+    expect(audio.getAttribute('src')).toBe(raw(`${WORK}/voice.mp3`));
+    expect(audio.hasAttribute('controls')).toBe(true);
+    expect(screen.getByRole('link', { name: 'Download voice.mp3' }).getAttribute('href')).toBe(raw(`${WORK}/voice.mp3`, true));
+    // Players first, then the rest as Claude sent them.
+    const zip = screen.getByRole('link', { name: 'Download build.zip' });
+    expect(video.compareDocumentPosition(zip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(audio.compareDocumentPosition(zip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(asked).toEqual([]);
+  });
+
+  it('keeps a video Claude meant to attach a card until it is opened, and says when it cannot be played', async () => {
+    const { container } = show([prompt, ...sent('s22', [`${WORK}/clip.mov`, `${WORK}/notes.ogg`], { display: 'attach' })]);
+    fireEvent.click(await screen.findByRole('button', { name: 'clip.mov' }));
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe(raw(`${WORK}/clip.mov`));
+    expect(container.querySelector('audio')).toBeNull();
+    fireEvent.error(video);
+    expect(screen.getByText('This video can’t be played here')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download clip.mov' })).toBeTruthy();
+  });
+
+  it('shows pictures at their own size beside a video, and as squares beside a sound, as Claude Desktop lays them out', async () => {
+    show([prompt, ...sent('s23', [`${WORK}/shots/a.png`, `${WORK}/clip.webm`])]);
+    expect((await screen.findByRole('img', { name: 'a.png' })).getAttribute('class')).toContain('max-h-[360px]');
+    cleanup();
+    show([prompt, ...sent('s24', [`${WORK}/shots/b.png`, `${WORK}/note.m4a`])]);
+    expect((await screen.findByRole('img', { name: 'b.png' })).getAttribute('class')).toContain('object-contain');
+  });
+
   it('stays a card Claude meant to attach, read nowhere until it is opened', async () => {
     show([prompt, ...sent('s5', [`${WORK}/shots/dark.png`, `${WORK}/report.md`, `${WORK}/page.html`], { display: 'attach' })]);
     const card = await screen.findByRole('button', { name: 'report.md' });

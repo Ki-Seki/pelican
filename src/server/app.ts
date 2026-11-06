@@ -848,6 +848,12 @@ const SENT_MAX_BYTES = 200 * 1024 * 1024;
 
 const html = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/** Videos and sounds a page plays, by extension: those Claude Desktop plays in place. */
+const MEDIA_TYPES: Record<string, string> = {
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', flac: 'audio/flac', opus: 'audio/ogg', ogg: 'audio/ogg', oga: 'audio/ogg',
+};
+
 /** A page of a line, in Pelican's colours, that runs nothing and is never framed. */
 const NOTE_PAGE = {
   'Content-Type': 'text/html; charset=utf-8',
@@ -923,8 +929,8 @@ app.get('/api/sessions/:id/sent/state', async (c) => {
 
 /**
  * A file Claude sent in this session, by a plain link: a picture as itself, for the page to show;
- * a PDF for the browser's own viewer, in a tab of its own; anything else, and anything asked for
- * with `download`, as an attachment. Read only, as it is on disk when asked for (a file that grows
+ * a video or a sound to play, a part at a time; a PDF for the browser's own viewer, in a tab of its
+ * own; anything else, and anything asked for with `download`, as an attachment. Read only, as it is on disk when asked for (a file that grows
  * meanwhile sends no more), up to 200 MB, never sniffed. One no longer there is Gone (410).
  */
 app.get('/api/sessions/:id/sent/raw', async (c) => {
@@ -939,31 +945,60 @@ app.get('/api/sessions/:id/sent/raw', async (c) => {
   const name = path.basename(file);
   const ext = path.extname(name).slice(1).toLowerCase();
   const picture = typeOf(PICTURE_TYPES, ext);
+  const media = typeOf(MEDIA_TYPES, ext);
   const disposition = (how: 'inline' | 'attachment') => `${how}; filename*=UTF-8''${encodeURIComponent(name)}`;
-  const asked = c.req.query('download') === undefined ? (picture ? 'picture' : ext === 'pdf' ? 'pdf' : 'download') : 'download';
+  const asked = c.req.query('download') !== undefined ? 'download' : picture ? 'picture' : media ? 'media' : ext === 'pdf' ? 'pdf' : 'download';
   const headers: Record<string, string> = asked === 'picture' && picture
     ? { 'Content-Type': picture, 'Cache-Control': KEPT_ASKING, ...INERT }
-    : asked === 'pdf'
-      ? { 'Content-Type': 'application/pdf', 'Content-Disposition': disposition('inline'), 'Cache-Control': 'private, no-store', ...SENT_PDF }
-      : { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition('attachment'), 'Cache-Control': 'private, no-store', ...INERT };
-  if (asked === 'picture') {
-    // Shown again as the conversation scrolls: a browser that has this very version is told so.
+    : asked === 'media' && media
+      ? { 'Content-Type': media, 'Content-Disposition': disposition('inline'), 'Cache-Control': KEPT_ASKING, 'Accept-Ranges': 'bytes', ...SENT_MEDIA }
+      : asked === 'pdf'
+        ? { 'Content-Type': 'application/pdf', 'Content-Disposition': disposition('inline'), 'Cache-Control': 'private, no-store', ...SENT_PDF }
+        : { 'Content-Type': 'application/octet-stream', 'Content-Disposition': disposition('attachment'), 'Cache-Control': 'private, no-store', ...INERT };
+  let tag: string | undefined;
+  if (asked === 'picture' || asked === 'media') {
+    // Shown again as the conversation scrolls, or played a part at a time: a browser that has this
+    // very version is told so.
     const info = await opened.handle.stat();
-    const tag = `"${createHash('sha256').update(`${file}\0${info.ino}\0${info.size}\0${info.mtimeMs}`).digest('base64url').slice(0, 27)}"`;
+    tag = `"${createHash('sha256').update(`${file}\0${info.ino}\0${info.size}\0${info.mtimeMs}`).digest('base64url').slice(0, 27)}"`;
     if (unchanged(c, tag)) {
       await opened.handle.close();
       return c.body(null, 304, { ETag: tag, 'Cache-Control': KEPT_ASKING });
     }
     headers.ETag = tag;
   }
-  headers['Content-Length'] = String(opened.size);
+  // A player asks for the part it needs next, of the version it has (If-Range): Safari plays
+  // nothing from a server that does not answer so.
+  const range = asked === 'media' && (c.req.header('if-range') ?? tag) === tag ? byteRange(c.req.header('range'), opened.size) : undefined;
+  if (range === null) {
+    await opened.handle.close();
+    return c.body(null, 416, { ...headers, 'Content-Range': `bytes */${opened.size}`, 'Content-Length': '0' });
+  }
+  const { start, end } = range ?? { start: 0, end: opened.size - 1 };
+  headers['Content-Length'] = String(end - start + 1);
+  if (range) headers['Content-Range'] = `bytes ${start}-${end}/${opened.size}`;
   // HEAD takes this route too and wants no body: a stream nobody reads would hold the file open.
   if (c.req.method === 'HEAD') {
     await opened.handle.close();
-    return c.body(null, 200, headers);
+    return c.body(null, range ? 206 : 200, headers);
   }
-  return c.body(exactBytes(opened.handle, 0, opened.size), 200, headers);
+  return c.body(exactBytes(opened.handle, start, end - start + 1), range ? 206 : 200, headers);
 });
+
+/**
+ * The one range of bytes a request asks for (`Range: bytes=…`) in a file of `size` bytes: from a
+ * byte on, between two, or the last so many. `undefined` for the whole file (no range, several, or
+ * one not written as a range is), `null` for a range the file does not have.
+ */
+export function byteRange(header: string | undefined, size: number): { start: number; end: number } | null | undefined {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header?.trim() ?? '');
+  if (!match || (!match[1] && !match[2])) return undefined;
+  const [first, last] = [match[1] ? Number(match[1]) : undefined, match[2] ? Number(match[2]) : undefined];
+  if ((first !== undefined && !Number.isSafeInteger(first)) || (last !== undefined && !Number.isSafeInteger(last))) return null;
+  if (first === undefined) return last! > 0 && size > 0 ? { start: Math.max(0, size - last!), end: size - 1 } : null;
+  if (last !== undefined && last < first) return undefined;
+  return first < size ? { start: first, end: Math.min(last ?? size - 1, size - 1) } : null;
+}
 
 app.get('/api/sessions/:id/agents/:agent', async (c) => {
   return c.json({ messages: await loadSubagent(c.req.param('id'), c.req.param('agent')) });
@@ -1046,6 +1081,14 @@ const SENT_PDF = {
   'X-Frame-Options': 'DENY',
   'Cross-Origin-Resource-Policy': 'same-origin',
 };
+
+/**
+ * A video or a sound Claude sent, played in the page, or by the browser's own player in a tab of its
+ * own: itself, never sniffed, nothing more. That player loads it again from the tab, so the tab keeps
+ * Pelican's origin (a sandbox alone makes it none, and the load is refused); with no scripts allowed
+ * and nothing else to load, keeping it lets nothing run.
+ */
+const SENT_MEDIA = { ...INERT, 'Content-Security-Policy': "sandbox allow-same-origin; default-src 'none'; media-src 'self'; frame-ancestors 'self'" };
 
 /**
  * Pictures and files of a conversation: a browser keeps them, but asks the server each time it shows
