@@ -457,7 +457,7 @@ describe('the export, with the files Claude sent', () => {
       claude(text('Here it is.'), { type: 'tool_use', id: 's1', name: 'SendUserFile', input: { files: ['screenshots/settings-dark.png'], caption: 'The settings page in the **dark** theme' } }),
       user([{ type: 'tool_result', tool_use_id: 's1', content: 'Sent 1 file' }], { toolUseResult: { attachments: [{ path: shot, size: 1234, isImage: true }], caption: 'The settings page in the **dark** theme' } }),
       // One that failed, by the name it asked for, a character that turns text around written out as its card writes it.
-      claude({ type: 'tool_use', id: 's2', name: 'SendUserFile', input: { files: ['notes‮txt.sh'], caption: 'Not shown' } }),
+      claude({ type: 'tool_use', id: 's2', name: 'SendUserFile', input: { files: ['notes\u202etxt.sh'], caption: 'Not shown' } }),
       user([{ type: 'tool_result', tool_use_id: 's2', content: 'Failed', is_error: true }]),
       claude(text('Done.')),
     ]);

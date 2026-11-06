@@ -278,25 +278,25 @@ describe('a reply in the export', () => {
 
   it('opens no fence where a backquote follows its words past a line separator, as no reader opens one there', () => {
     // U+2028 and U+2029 are words to every reader, which then finds the backquote after them: a paragraph.
-    expect(reply('Quoted:\n\n```txt `\n## You\n<img src="https://evil.example/pixel.png">\n\nok')).toBe(
-      'Quoted:\n\n\\`\\`\\`txt \\`\n#### You\n&lt;img src="`https://evil.example/pixel.png">`\n\nok',
+    expect(reply('Quoted:\n\n```txt\u2028`\n## You\n<img src="https://evil.example/pixel.png">\n\nok')).toBe(
+      'Quoted:\n\n\\`\\`\\`txt\u2028\\`\n#### You\n&lt;img src="`https://evil.example/pixel.png">`\n\nok',
     );
     // The spec's own reader (commonmark.js) looks for it with JavaScript's `.`, which stops at them, and opens a fence
     // that takes the turns after the reply: a line that would start so starts with a space that changes nothing.
-    expect(reply('Before\n\n```a `b\nc ``` d')).toBe('Before\n\n&#32;```a `b\nc ``` d');
-    for (const said of ['```txt `\n## You\n<img src="https://evil.example/pixel.png">', '``` `\n## You', '> ```txt `\n>\n> [docs]: https://evil.example/phish\n> ```']) {
+    expect(reply('Before\n\n```a\u2029`b\nc ``` d')).toBe('Before\n\n&#32;```a\u2029`b\nc ``` d');
+    for (const said of ['```txt\u2028`\n## You\n<img src="https://evil.example/pixel.png">', '```\u2029`\n## You', '> ```txt\u2028`\n>\n> [docs]: https://evil.example/phish\n> ```']) {
       expect(trouble(reply(said)), said).toEqual([]);
     }
   });
 
   it('takes no line with a no-break space on it for a blank line, as no reader does: indented code of one is closed', () => {
     // JavaScript's trim takes U+00A0, U+FEFF, U+3000 and U+2028 for blanks; readers, only spaces and tabs.
-    for (const space of [' ', '﻿', '　', ' ']) {
+    for (const space of ['\u00a0', '\ufeff', '\u3000', '\u2028']) {
       expect(reply(`Its last line:\n\n    ${space}\n\nThat is all.`), JSON.stringify(space)).toBe(`Its last line:\n\n\`\`\`\n${space}\n\`\`\`\n\nThat is all.`);
       expect(trouble(reply(`Its last line:\n\n    ${space}\n\nThat is all.`)), JSON.stringify(space)).toEqual([]);
     }
     // A table in a quote that such a line ends keeps the blank line after it, which the spec's reader needs.
-    expect(reply('> | a |\n> | - |\n \n> ---')).toBe('> | a |\n> | - |\n>\n \n> ---');
+    expect(reply('> | a |\n> | - |\n\u00a0\n> ---')).toBe('> | a |\n> | - |\n>\n\u00a0\n> ---');
   });
 
   it('lets no `!` that ends a picture’s name, written in a link’s words, make a picture of the link after it', () => {
@@ -312,8 +312,8 @@ describe('a reply in the export', () => {
 
   it('reads an autolink as every reader reads one, and writes the `<` of one only some read so as text', () => {
     // A no-break space is in an autolink for all of them, and NUL is U+FFFD there, as CommonMark has it.
-    expect(reply('See <urn:isbn:0451450523 `> and <img src="https://evil.example/p.png"> `')).toBe('See <urn:isbn:0451450523 `> and &lt;img src="https://evil.example/p.png"> \\`');
-    expect(reply('See <ab:x\u0000`> and <img src="https://evil.example/p.png"> `')).toBe('See <ab:x�`> and &lt;img src="https://evil.example/p.png"> \\`');
+    expect(reply('See <urn:isbn:0451450523\u00a0`> and <img src="https://evil.example/p.png"> `')).toBe('See <urn:isbn:0451450523\u00a0`> and &lt;img src="https://evil.example/p.png"> \\`');
+    expect(reply('See <ab:x\u0000`> and <img src="https://evil.example/p.png"> `')).toBe('See <ab:x\ufffd`> and &lt;img src="https://evil.example/p.png"> \\`');
     // DEL, and a `!` in an email's name, the conversation's reader takes for no autolink and the others for one.
     expect(reply('<ab:\u007f![x](https://evil.example/p.png)>')).toBe('&lt;ab:\u007f[x · evil.example](https://evil.example/p.png)>');
     expect(reply('Mail <ops!`team@corp.example> or `<img src="https://evil.example/p.png">`')).toBe('Mail &lt;ops!`team@corp.example> or `&lt;img src="https://evil.example/p.png">\\`');
@@ -387,8 +387,8 @@ describe('a reply in the export', () => {
 
   it('keeps a picture written into the reply a picture only where its address is a data: one, as readers take the address', () => {
     // They pass spaces, tabs and a line ending before it, not a no-break space: that one is in it, and it loads.
-    expect(reply('![x]( data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)')).toBe('[x]( data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)');
-    expect(trouble(reply('![x]( data:image/png;base64,AA)'))).toEqual([]);
+    expect(reply('![x](\u00a0data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)')).toBe('[x](\u00a0data:image/png;base64,AA) ![y](\n data:image/png;base64,AA)');
+    expect(trouble(reply('![x](\u00a0data:image/png;base64,AA)'))).toEqual([]);
   });
 
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
