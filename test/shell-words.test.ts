@@ -116,6 +116,21 @@ describe('where a shell reads a look-alike space as part of a word', () => {
     }
   });
 
+  it('reads a long command in moments, however its words are made: each character once, each script a few times at most', () => {
+    const n = 1 << 20;
+    for (const [name, command] of [
+      ['brackets', `echo ${'['.repeat(n)} done\u00a0#`],
+      ['braces and commas', `echo {${','.repeat(n)} done\u00a0#`],
+      ['braces and dots', `echo {${'.'.repeat(n)} done\u00a0#`],
+      ["sudo's options", `sudo -${'s'.repeat(n)}1 x\u00a0#`],
+      ['eval after eval', `${'eval '.repeat(70)}${'w a '.repeat(n / 4)}\u00a0#`],
+    ] as const) {
+      const started = performance.now();
+      expect(revealHidden(command, { runs: 'shell' }).hidden, name).toBe(true);
+      expect(performance.now() - started, name).toBeLessThan(2500);
+    }
+  }, 60_000);
+
   it('gives up, and says so in the console, when reading a command goes wrong, so the approval still shows', () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

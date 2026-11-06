@@ -130,6 +130,33 @@ const DECLARES = new Set(['declare', 'typeset', 'local', 'readonly', 'export', '
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 const ARRAY = /^[A-Za-z_][A-Za-z0-9_]*\+?=$/;
 
+/**
+ * Whether a word's unquoted `{`, `}`, `[`, `]`, `*`, `?`, `,` and `.` make a pattern or braces that
+ * may make other words of it: a `*` or a `?`, a `[` with a `]` after it, or a `{` with a `,` or `..`
+ * after it before the `}` that ends it, no other brace between. Read once, left to right: as a
+ * pattern of backtracking, a word of 160,000 `[` took seconds.
+ */
+function opens(specials: string): boolean {
+  if (specials.includes('*') || specials.includes('?')) return true;
+  const bracket = specials.indexOf('[');
+  if (bracket >= 0 && specials.lastIndexOf(']') > bracket) return true;
+  let brace = false;
+  let separated = false;
+  for (let i = 0; i < specials.length; i += 1) {
+    const c = specials[i];
+    if (c === '{') {
+      brace = true;
+      separated = false;
+    } else if (c === '}') {
+      if (brace && separated) return true;
+      brace = false;
+    } else if (brace && (c === ',' || (c === '.' && specials[i + 1] === '.'))) {
+      separated = true;
+    }
+  }
+  return false;
+}
+
 /** What `$'…'` makes of an escape that stands for one character this knows. */
 const ESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\u0007', b: '\b', e: '\u001b', E: '\u001b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
 
@@ -298,7 +325,7 @@ class Reader {
     const endWord = () => {
       if (word === undefined) return;
       // A pattern, or braces with a comma or `..` in them (`{}`, as find -exec has it, is no such).
-      const w = { ...word, text: textOf(word.pieces), open: /[*?]|\[.*\]|\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(word.specials) };
+      const w = { ...word, text: textOf(word.pieces), open: opens(word.specials) };
       word = undefined;
       if (redirect !== undefined) {
         const kind = redirect;
@@ -1155,15 +1182,17 @@ class Reader {
         }
         break;
       }
-      case 'sudo':
+      case 'sudo': {
         // sudo -s or -i runs its command with the user's shell, escaped its own way.
-        if (rest.some((word) => /^-[A-Za-z]*[si][A-Za-z]*$/.test(word.text) || word.text === '--shell' || word.text === '--login')) {
-          const after = rest.findIndex((word) => /^-[A-Za-z]*[si][A-Za-z]*$/.test(word.text) || word.text === '--shell' || word.text === '--login');
+        const shelled = (word: Word) => (/^-[A-Za-z]*$/.test(word.text) && /[si]/.test(word.text)) || word.text === '--shell' || word.text === '--login';
+        if (rest.some(shelled)) {
+          const after = rest.findIndex(shelled);
           if (rest.slice(after + 1).some((word) => !word.text.startsWith('-'))) throw new Lost();
           command.kind = 'shell';
           return;
         }
         break;
+      }
       default:
     }
     let launched = false;
@@ -1556,11 +1585,13 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
   const found = new Set<number>();
   const pieces = [...command.matchAll(/[\s\S]/gu)].map((match) => ({ char: match[0], at: match.index }));
   const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), aliases: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set() };
+  // What all the readings may read, scripts handed on again and again (`eval eval eval …`) among them.
+  let budget = 4 * pieces.length + 200_000;
   try {
     for (const dialect of ['modern', 'bash32'] as const) {
       const shared: Shared = { asked, found, scripts: [pieces], pipelines: [], dialect, depth: 0, across };
       for (let k = 0; k < shared.scripts.length; k += 1) {
-        if (k >= MOST_SCRIPTS) return undefined;
+        if (k >= MOST_SCRIPTS || (budget -= shared.scripts[k]!.length) < 0) return undefined;
         new Reader(shared.scripts[k]!, shared).script();
         for (const pipeline of shared.pipelines.splice(0)) judge(pipeline, shared);
         ranFiles(shared);

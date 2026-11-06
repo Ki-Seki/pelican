@@ -1,4 +1,5 @@
 import { ShieldCheck, TriangleAlert, User } from 'lucide-react';
+import { useMemo } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
 import type { CommandAt } from '../../shared/protocol';
@@ -47,7 +48,8 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
     onDone();
     ask?.answer(choice);
   };
-  const items = (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i]));
+  // Read once per question: a long item takes a while.
+  const items = useMemo(() => (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i])), [ask]);
   return (
     <Sheet
       open={Boolean(ask)}

@@ -1,5 +1,5 @@
 import { CircleHelp, ClipboardList, ExternalLink, Loader2, Plug, ShieldQuestion, TriangleAlert } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden, revealInput } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
@@ -114,9 +114,11 @@ function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
   const phases = meta?.phases ?? [];
   const file = str(input.scriptPath);
   const resumes = str(input.resumeFromRunId);
-  const args = input.args === undefined ? undefined : typeof input.args === 'string' ? revealHidden(input.args) : revealInput(input.args);
-  const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !WORKFLOW_KEYS.has(key)));
-  const other = Object.keys(rest).length > 0 ? revealInput(rest) : undefined;
+  const args = useMemo(() => (input.args === undefined ? undefined : typeof input.args === 'string' ? revealHidden(input.args) : revealInput(input.args)), [input]);
+  const other = useMemo(() => {
+    const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !WORKFLOW_KEYS.has(key)));
+    return Object.keys(rest).length > 0 ? revealInput(rest) : undefined;
+  }, [input]);
   return (
     <div className="space-y-2 text-[13px]">
       {name && <div className="font-mono text-[12px] text-muted">{revealHidden(name).text}</div>}
@@ -187,13 +189,15 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   // A command as its shell reads it: in Bash, a space other than a plain one is written out where the
   // shell takes it as part of a word; PowerShell takes every such space for a space, as it reads,
   // but for what it hands a POSIX shell (src/shared/hidden.ts).
-  const command = request.toolName === 'Bash' ? revealHidden(str(input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(input.command), { runs: 'powershell' }) : undefined;
+  // Read once per approval, not again at each key typed in a note: a long command takes a while.
+  const command = useMemo(() => (request.toolName === 'Bash' ? revealHidden(str(request.input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(request.input.command), { runs: 'powershell' }) : undefined), [request]);
   const target = summary.target ? revealHidden(summary.target, { prose: summary.prose || summary.words }) : undefined;
   const workflow = request.toolName === 'Workflow';
   // Files Claude would send you: each by its path, and its caption, which is words.
   const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption), { prose: true }) : undefined } : undefined;
   // A tool's input, each string by what its key names: words, a shell command (Monitor's), or a name.
-  const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealInput(input) : undefined;
+  const tool = !edit && !command && !workflow && !sending && Object.keys(input).length > 0;
+  const raw = useMemo(() => (tool ? revealInput(request.input) : undefined), [tool, request]);
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
   // saves. Words keep the joiners and selectors their scripts write with; a name or a rule shows
   // every one outside an emoji (src/shared/hidden.ts).
@@ -202,7 +206,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.
   const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent, { prose: true }) : undefined;
   // A workflow's input shows part by part, each with what hides in it shown; it is warned of all the same.
-  const asked = workflow ? revealInput(input) : undefined;
+  const asked = useMemo(() => (workflow ? revealInput(request.input) : undefined), [workflow, request]);
   const hidden = [command, target, raw, asked, head, about, reason, server, always, agent, sending?.caption, ...(sending?.files ?? [])].some((text) => text?.hidden);
   // Claude Code often passes the command's own few words as the request's line too: said once.
   // Files to send are listed below, whole.
