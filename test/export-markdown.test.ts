@@ -328,6 +328,17 @@ describe('a reply in the export', () => {
     expect(asText('Get it from ftp://files.example/pub/4.2')).toBe('Get it from `ftp://files.example/pub/4.2`');
   });
 
+  it('takes code after an address with a control character in it for not sure, as readers part ways on whether it is one', () => {
+    // micromark takes none there, GitHub's reader and commonmark.js take the control character in, markdown-it after a backslash.
+    for (const c of ['\u0001', '\u007f', '\\\u0002']) {
+      expect(reply(`The log is [here](logs/run\`${c}.txt), ending <img src="https://evil.example/l.png"> \`as quoted\`.`), JSON.stringify(c)).toBe(
+        `The log is [here](logs/run\`${c}.txt), ending &lt;img src="https://evil.example/l.png"> \`as quoted\\\`.`,
+      );
+    }
+    // A bare link, GitHub's reader takes on past one.
+    expect(reply('https://a.example/\u0001`x <img src="https://evil.example/b.png"> `')).toBe('https://a.example/\u0001`x &lt;img src="https://evil.example/b.png"> `');
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;

@@ -1595,7 +1595,11 @@ function inline(text: string, { sure, breaks = [], context }: { sure: boolean; b
   // written `&lt;`); and how many backquotes come before each place.
   const stop = new Int32Array(n + 1);
   stop[n] = n;
-  for (let i = n - 1; i >= 0; i -= 1) stop[i] = text.charCodeAt(i) <= 32 ? i : stop[i + 1]!;
+  // GitHub's reader goes on past any other character, a control character or a no-break space.
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const code = text.charCodeAt(i);
+    stop[i] = code === 32 || (code >= 9 && code <= 13) ? i : stop[i + 1]!;
+  }
   const ticks = new Int32Array(n + 1);
   for (let i = 0; i < n; i += 1) ticks[i + 1] = ticks[i]! + (text[i] === '`' ? 1 : 0);
   const quoteIn = (from: number, to: number) => ticks[Math.min(to, n)]! - ticks[from]! > 0;
@@ -1770,7 +1774,13 @@ function linkEnd(text: string, at: number): { end: number | undefined; read: num
       else if (c === ')') {
         if (depth === 0) break;
         depth -= 1;
-      } else if (c <= ' ' || c === '\x7f') break;
+      } else if (c === ' ' || c === '\t' || c === '\n') {
+        break;
+      } else if (c < ' ' || c === '\x7f') {
+        // Another control character: micromark takes it for no address, GitHub's reader and
+        // commonmark.js for more of it, and markdown-it after a backslash.
+        return found(-1);
+      }
     }
     if (i >= limit) return cut();
     if (depth > 32) return found(-1);
