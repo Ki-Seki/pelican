@@ -2,6 +2,28 @@
 
 ## 0.5.0
 
+### Highlights
+
+- **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
+  output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one
+  is open), which opens the side chat with the passage attached, and Quote. On a computer they sit
+  above the selection and ↵ quotes; Quote opens Desktop's note box at the selection: ↵ adds the
+  quote with your note, ⌘↵ sends it at once (a steer while Claude works), Esc lets it go, and a
+  note half written survives a look at another session. ⇧⌘L quotes without a note. On a phone the
+  pair docks just above the message box, clear of the system's menu; Quote puts the passage in the
+  box with "Add a note", and the keyboard comes up only when you tap it. A left swipe on a
+  paragraph, a prompt or a command quotes it.
+- **What goes with your next message, in one place.** Quotes, quotes with notes and line comments
+  wait above the message box as chips, each kind told apart at a glance. Click or tap one to read
+  it whole, change its note, show it where it came from, or remove it. They are kept with your
+  draft, and come back as they were when a message does not go.
+- **Desktop's formats, both ways.** A quote with a note goes as Desktop's `<!-- reply -->` block,
+  one without as an `<!-- attach -->` block (lines of a file with their path and lines), a line
+  comment as "In `path` at line N:" with its code fenced, and Desktop's rules come along: secrets
+  masked, 1,500 characters at most, an `@` that would mention a file defused, 99 quotes with a note
+  in a message. Desktop and the CLI see Pelican's quotes as replies, and Pelican shows Desktop's,
+  and its own older ones, as quiet quotes.
+
 ### Changes in behavior
 
 - Keys are Claude Desktop's, as it takes them in a browser: ⇧⌘K (Ctrl+Shift+K) searches sessions,
@@ -10,6 +32,13 @@
   passes them on, and keys a browser keeps for itself are left to it.
 - The list of keys (⌘/ or Ctrl+/) is Desktop's: in its parts (General, This session, Panes, Message
   box, Quotes and comments), wide on a computer, naming only the keys that work.
+- Line comments go to Claude as Claude Desktop sends them, and wait as chips above the message box
+  with your quotes; the line saying how many go with your next message is gone. Send now in Changes
+  and files sends everything that waits. Inside Changes and files on a phone, where the box is out
+  of sight, its foot says what waits; beside the conversation it is Send now alone.
+- Quotes and line comments kept by an earlier version move into the new list once, notes and all.
+- A session called by a prompt that quotes is called by its words, not its markers, and so is a
+  queued message.
 
 ## 0.4.0
 

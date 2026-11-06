@@ -66,8 +66,9 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   every compaction. When another app is working on one, or waits for you there, Pelican says which
   app; once it is idle, continue it here.
 - **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
-  works, side chats, `!` commands with their output live, `/` commands and skills, `@` files, every
-  model and permission mode, rewind and branch, subagents and background tasks, MCP servers.
+  works, quotes with notes and side chats as in Claude Desktop, `!` commands with their output live,
+  `/` commands and skills, `@` files, every model and permission mode, rewind and branch, subagents
+  and background tasks, MCP servers.
 - **What Claude makes, in place.** Charts and diagrams Claude draws and pages it writes show in the
   conversation, as still pictures until you tap Run.
 - **Changes and files, as in Claude Desktop.** What each turn changed, what is uncommitted, or
