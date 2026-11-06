@@ -15,23 +15,29 @@
  * what a heredoc, a here-string, `echo` or `cat` feeds a shell that reads its commands from its
  * input (`bash <<EOF`, `echo … | sh`, `ssh host 'bash -s' <<EOF`), and a file the command writes
  * with them and then runs or reads as a script (`cat > fix.sh <<'EOF' … EOF`, then `bash fix.sh`,
- * `./fix.sh`, `sh < fix.sh`, or by its name alone where the command sets PATH and makes it a
- * program; found by the last part of its name). In such a script a variable the command sets to
- * plain text stands for that text, and one it does not set, the user's own, for a word of its own.
- * Quoted text with a substitution's start in it (`$(`, `${`, a backquote) counts as in a word too.
+ * `./fix.sh`, `sh < fix.sh`, by its name alone where it makes it a program, a git hook, or what a
+ * shell reads as it starts; found by the last part of its name and of its folder, in any case, as
+ * macOS's file system takes them). In such a script a variable the command sets to plain text
+ * stands for that text, and one it does not set, the user's own, for a word of its own. Quoted text
+ * with a substitution's start in it (`$(`, `${`, a backquote) counts as in a word too. A command's
+ * name counts in any case too: macOS finds `READ` as /usr/bin/read, and `BASH` as /bin/bash.
  *
  * What runs text later, in the shell that reads the command, is not followed, however the text is
  * made (split across quotes, by an expansion, by an escape): a command that uses it counts as one
  * this cannot tell. That is a builtin that runs text or sets a variable whose name the text gives,
  * where a subscript runs (RUNS_LATER: eval, source and `.`, trap, alias, read, mapfile, getopts,
- * let, unset, declare and typeset, zsh's autoload, emulate, zpty and the like), also after
+ * let, unset, declare and typeset, zsh's autoload, emulate, zpty, setopt and the like, and at,
+ * batch and crontab, which keep text to run in a shell of their own), also after
  * `command`, `builtin`, zsh's `exec` and `noglob`, or run by env, sudo or xargs as macOS's
  * /usr/bin/read runs `builtin read`; export, local and readonly with an option or a name that is
- * not plain; printf -v, print -P and -v, set -A, wait -p, hash -p, `[[ ]]`'s -v and -R; a command
- * whose name this does not know, which may be any of them; a variable whose value a shell runs or
+ * not plain; printf -v, print -P and -v, set -A, wait -p, hash -p, `[[ ]]`'s -v and -R, and test's
+ * and `[`'s where a variable may give that operator (`test "$op" "$x"`); set -o and a shell's -o
+ * with an option that may change how text reads (zsh's globsubst); a command whose name this does
+ * not know, which may be any of them; a variable whose value a shell runs or
  * reads as arithmetic (zsh's functions, aliases, commands and options arrays, bash's BASH_ALIASES and
  * BASH_CMDS, a prompt such as PS4, OPTIND and RANDOM set to what is not a number); zsh's parameter
- * flags such as (e), (P) and (%), bash's @P and `${!x}`; and arithmetic (`$(( ))`, a subscript, an
+ * flags such as (e), (P), (%) and `~` (`$~x`, which makes the value a pattern whose qualifiers run
+ * what they say), bash's @P and `${!x}`; and arithmetic (`$(( ))`, a subscript, an
  * offset, the sides of `[[ ]]`'s -eq, and in a script ksh runs those of `test`, printf, shift and
  * ulimit) that reads a variable the command sets to what is not a number, an argument, `$_` or what
  * a substitution writes: arithmetic reads a variable's value as an expression, and a subscript in it
@@ -46,16 +52,21 @@
  * printf, xargs or a filter make); text of the command that may reach a shell's input any other way
  * (through a loop, a function, `exec`, a subshell or a coprocess); a file the command writes and
  * runs as a script with what this does not know in it (from printf, an unquoted heredoc that
- * expands, or added to); and what is nested deeper than it reads.
+ * expands, or added to); a script or a program run by a path that is not plain text (`bash "$t"`,
+ * `"$d/fix.sh"`), from a folder the command writes into other than a file it wrote there, or from
+ * anywhere where it writes files whose names or folders it does not give (tar, a patch, `cp -r`,
+ * `> "$t"`); a file make or npm runs what is in (Makefile, package.json); what is nested deeper than
+ * it reads; and a command longer than MOST_COMMAND, or one whose reading takes more than a budget of
+ * steps and of characters made (Budget), so that no command takes more time or memory than that.
  * Past what bash 3.2 takes for a `$( )` never closed it runs nothing more of that command, so only
  * the others are read there: a commit message in `"$(cat <<'EOF' … EOF)"` with an odd apostrophe is
  * such a one.
  *
  * Not followed: what a program runs in a shell of its own beyond those above (python -c with
- * os.system, node -e, make, git aliases, tmux), a script in a file the command does not write that
- * way (one it copies or edits, or that was there), the output of a `$( )` or a variable, which the
- * shell splits into words but does not read as a command, and where bash 4.0 to 5.1 end a `$( )`
- * (by rules of their own, not checked here).
+ * os.system, node -e, awk's system, make -f -, git aliases, tmux), a script in a file the command
+ * does not write that way (one python or awk writes, or that was there), the output of a `$( )` or
+ * a variable, which the shell splits into words but does not read as a command, and where bash 4.0
+ * to 5.1 end a `$( )` (by rules of their own, not checked here).
  */
 
 /** What an expansion stands for, unknown here. */
@@ -95,18 +106,26 @@ type Command = {
   /** What `echo` writes, or undefined where it is not known here. */
   echoes?: Piece[];
   inputs: Input[];
-  /** Its input is a file, and which, by the last part of its name, where known. */
+  /** Its input is a file, and which (pathOf). */
   fromFile: boolean;
-  from?: string;
+  from?: Path;
   /** Ends a compound command (`)`, `}`, `done`, `fi`, `esac`), or begins one where it is fed. */
   compound: boolean;
   /** Begins a compound command: a loop or a branch, fed when it is not first in its pipeline. */
   opens: boolean;
   /** Holds a command substitution, which reads the input of the command it is in. */
   substitutes: boolean;
-  /** The files its output goes to, by the last part of their names (where known), and whether it adds to them. */
-  writes: Array<{ file?: string; append: boolean }>;
+  /** The files it writes by a redirection (pathOf), whether it adds to them, and whether what goes there is its output (else another descriptor's). */
+  writes: Array<{ path: Path; append: boolean; output: boolean }>;
 };
+
+/**
+ * Where a path a command names is, as this tells files apart: the last part of its name and of its
+ * folder (`.` where it names none, `` for the root), lower case, as macOS's file system takes `Fix.sh`
+ * for `fix.sh`. A part an expansion, braces or a pattern make is not known (undefined); a name is
+ * empty where the path ends in `/`.
+ */
+type Path = { name?: string; folder?: string };
 
 /** A heredoc that waits for its body: the line that ends it, whether tabs before its lines go, whether its body is as it is, and where it goes. */
 type Heredoc = { end: string; tabs: boolean; quoted: boolean; input: Input };
@@ -120,8 +139,8 @@ class Lost extends Error {}
 /** bash 3.2 finds no end to a `$(`: a syntax error to it, so it runs nothing of the command from there. */
 class Unclosed extends Error {}
 
-/** Shells that take a script after `-c`, or read one from their input. `$SHELL` is the user's. */
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'yash', 'posh', 'fish', 'csh', 'tcsh', '$SHELL', '$BASH', '${SHELL}', '${BASH}']);
+/** Shells that take a script after `-c`, or read one from their input, by name in lower case (program). `$SHELL` is the user's. */
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ksh93', 'mksh', 'ash', 'yash', 'posh', 'fish', 'csh', 'tcsh', '$shell', '$bash', '${shell}', '${bash}']);
 
 /** Reserved words after which a command's name may still come. */
 const BEFORE_COMMAND = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', '!', '{', 'time']);
@@ -149,6 +168,10 @@ const RUNS_LATER = new Set([
   'zmodload', 'compgen', 'complete', 'compctl', 'bind', 'fc', 'enable', 'read', 'mapfile', 'readarray', 'getopts', 'let',
   'unset', 'declare', 'typeset', 'integer', 'float', 'private', 'nameref', 'vared', 'zparseopts', 'zformat', 'strftime',
   'zstat', 'sysread', 'zsocket', 'ztcp', 'zselect', 'pcre_match', 'zregexparse', 'getln',
+  // zsh's options change how what follows reads: globsubst makes a variable's value a pattern, whose qualifiers run what they say.
+  'setopt', 'unsetopt',
+  // Programs that keep text to run later, in a shell of their own.
+  'at', 'batch', 'crontab',
 ]);
 
 /**
@@ -165,6 +188,24 @@ const DECLARING = new Set(['export', 'local', 'readonly']);
  */
 const WRAPPED = new Set(['read', 'command', 'getopts', 'jobs', 'wait', 'fc', 'hash', 'alias', 'eval']);
 
+/** Programs that copy, move or link files: what they make holds what this does not know, and may be a program. */
+const COPIES = new Set(['cp', 'mv', 'ln', 'install', 'rsync', 'ditto', 'gcp', 'gmv', 'gln', 'ginstall']);
+
+/** Programs that change or make the files they name, by means of their own: what those hold is not known here. */
+const CHANGES = new Set(['patch', 'ed', 'ex', 'vi', 'vim', 'nano', 'truncate', 'touch', 'unzip', 'tar', 'bsdtar', 'curl', 'wget', 'git']);
+
+/** Files another program runs what is in on its own (make's recipes, npm's scripts), lower case: not followed. */
+const RUN_BY_OTHERS = new Set(['makefile', 'gnumakefile', 'package.json', 'justfile', 'rakefile', '.envrc']);
+
+/** Of CHANGES, those that write each file they name. */
+const EDITORS = new Set(['patch', 'ed', 'ex', 'vi', 'vim', 'nano', 'truncate', 'touch']);
+
+/** Programs that write files whose names the command does not give: anywhere, as far as this can tell. */
+const ANYWHERE = new Set(['tar', 'bsdtar', 'gtar', 'unzip', 'patch', 'cpio', 'pax', '7z', '7za', 'unrar', 'rsync', 'ditto']);
+
+/** What git does that writes the working folder. */
+const GIT_WRITES = new Set(['checkout', 'switch', 'restore', 'reset', 'stash', 'pull', 'merge', 'rebase', 'cherry-pick', 'revert', 'clone', 'mv', 'rm', 'clean', 'worktree', 'submodule', 'read-tree', 'checkout-index']);
+
 /** Programs that run their arguments as a command. */
 const EXEC_RUNNERS = new Set(['env', 'sudo', 'doas', 'nohup', 'timeout', 'gtimeout', 'nice', 'renice', 'setsid', 'stdbuf', 'xargs', 'parallel', 'flock', 'chronic', 'caffeinate', 'unbuffer', 'time', 'ionice', 'chrt', 'taskset', 'numactl', 'strace', 'ltrace', 'valgrind', 'arch', 'xcrun', 'script', 'watch', 'find', 'busybox', 'command', 'builtin', 'exec']);
 
@@ -180,6 +221,13 @@ const MODIFIERS = new Set(['command', 'builtin', 'exec', 'noglob', 'nocorrect', 
 
 /** The operators by which `[[ ]]`, and ksh's `test`, read their sides as arithmetic. */
 const NUMERIC_TEST = /^-(?:eq|ne|lt|le|gt|ge)$/;
+
+/** test's and `[`'s operators: those that take two sides, and any, `!` and parentheses among them. */
+const TEST_BINARY = /^(?:=|==|!=|<|>|-(?:eq|ne|lt|le|gt|ge|nt|ot|ef|a|o))$/;
+const TEST_OPERATOR = /^(?:-[A-Za-z]{1,2}|=|==|!=|<|>|!|\(|\))$/;
+
+/** Options of set, by name, that change nothing of how text reads or runs (lower case, no `_`). */
+const SAFE_OPTIONS = new Set(['errexit', 'nounset', 'pipefail', 'xtrace', 'verbose', 'noclobber', 'noglob', 'errtrace', 'functrace', 'monitor', 'notify', 'allexport', 'ignoreeof', 'nolog', 'noexec', 'emacs', 'vi', 'history', 'braceexpand', 'hashall', 'physical', 'posix', 'privileged', 'interactivecomments', 'nomatch', 'nullglob', 'failglob', 'dotglob']);
 
 
 /**
@@ -252,7 +300,29 @@ const NEWLINE: Piece = { char: '\n', at: -1 };
 const blank = (char: string | undefined) => char === ' ' || char === '\t';
 const breaks = (char: string | undefined) => char === undefined || ' \t\n;&|<>()'.includes(char);
 const textOf = (pieces: readonly Piece[]) => pieces.map((piece) => piece.char).join('');
-const program = (word: Word) => word.text.split('/').pop()!;
+/**
+ * The program a word names, by the last part of its path, lower case: macOS's file system takes no
+ * notice of case, so `READ` runs /usr/bin/read and `BASH` /bin/bash, and a name counts in any case.
+ */
+const lastPart = (text: string) => text.split('/').pop()!.toLowerCase();
+const program = (word: Word) => lastPart(word.text);
+
+/** Where a path written out is (Path). */
+function pathOfText(text: string): Path {
+  const parts = text.toLowerCase().split('/');
+  return { name: parts.at(-1)!, folder: parts.length > 1 ? parts.at(-2)! : '.' };
+}
+
+/** Where a path a word names is (Path): an expansion stands for what is not known. */
+function pathOf(word: Word): Path {
+  if (word.open) return {};
+  const chars = word.pieces.map((piece) => (piece.made ? '\u0000' : piece.char));
+  const slash = chars.lastIndexOf('/');
+  const name = chars.slice(slash + 1).join('');
+  const before = chars.slice(0, Math.max(slash, 0));
+  const folder = slash < 0 ? '.' : before.slice(before.lastIndexOf('/') + 1).join('');
+  return { ...(name.includes('\u0000') ? {} : { name: name.toLowerCase() }), ...(folder.includes('\u0000') ? {} : { folder: folder.toLowerCase() }) };
+}
 
 /** At most this deep in `$( )`, quotes, `${ }` and the like; deeper, every such character counts. */
 const MOST_DEPTH = 48;
@@ -260,10 +330,41 @@ const MOST_DEPTH = 48;
 /** At most this many scripts in one command, those it hands to a shell included; past them, every such character counts. */
 const MOST_SCRIPTS = 64;
 
+/**
+ * The longest command read, in characters: longer, every such character counts. The longest of the
+ * 78,925 commands Claude Code ran on the computer this was measured on is 58 KB.
+ */
+export const MOST_COMMAND = 64 * 1024;
+
+/**
+ * What reading may take, spent as it reads: `steps`, characters read (each script once for each way
+ * it is read, bash 3.2's look for where a `$( )` ends, a heredoc's lines), and `made`, characters it
+ * makes (a script handed to a shell, with a variable's value in each place it stands, what echo
+ * writes). Past either, every such character counts. With MOST_COMMAND they bound the time and the
+ * memory any command takes, whatever it is: no step reads more than a few characters, or makes a
+ * piece the budget does not count.
+ */
+export type Budget = { steps: number; made: number };
+
+/**
+ * What reading one command may take: of the commands above, the costliest read in 175,633 steps,
+ * and another made 17,502 characters; what no command can pass is a few hundred milliseconds of a
+ * phone's time, and tens of megabytes (test/shell-words-budget.test.ts).
+ */
+const MOST_STEPS = 1_000_000;
+const MOST_MADE = 200_000;
+
+/** A budget for one command. Several readings may share one (sharedBudget), each taking at most this much of it. */
+export const commandBudget = (): Budget => ({ steps: MOST_STEPS, made: MOST_MADE });
+
+/** What the commands of one approval's tool input, or of one trust sheet, may take in all: two commands' worth. */
+export const sharedBudget = (): Budget => ({ steps: 2 * MOST_STEPS, made: 2 * MOST_MADE });
+
 /** What the readings of one command share. */
 type Shared = {
   asked: (char: string) => boolean;
   found: Set<number>;
+  budget: Budget;
   /** The scripts to read: the command, then what it hands to a shell. */
   scripts: Piece[][];
   /** The pipelines of the script being read, judged once all of it is (their heredocs too). */
@@ -287,6 +388,21 @@ type Across = {
   path: boolean;
   /** The files the command makes programs (chmod +x, install, cp and the like), by the last part of their names. */
   executables: Set<string>;
+  /** A file it makes a program whose name is not known here: any program run by its name alone may be it. */
+  blindProgram: boolean;
+  /** The folders the command writes into, by the last part of their names (Path), each file it writes there by its folder and name. */
+  folders: Set<string>;
+  written: Set<string>;
+  /** It writes files whose names or folders are not known here (tar, a patch, `cp -r`, a path an expansion makes): anywhere. */
+  anywhere: boolean;
+  /** The files the command runs by a path, as `folder/name` (Path): from a folder it writes into, only one it wrote there is followed. */
+  ranPaths: Array<[folder: string, name: string]>;
+  /** A program run by a variable the command does not set (the user's own), which may name a file it writes where this cannot tell. */
+  ranByVariable: boolean;
+  /** A program run by its name alone, which may be one the command makes a program where this cannot tell (blindProgram). */
+  ranByName: boolean;
+  /** The programs it runs by their names alone: one it writes and makes a program may be among them (ranFiles). */
+  names: Set<string>;
   /** Variables arithmetic reads: their values, as the command sets them, must be numbers. */
   counted: Set<string>;
   /** A ksh runs a script: its `<<#` heredoc, which strips the blanks before its lines, this does not read. */
@@ -356,7 +472,19 @@ class Reader {
     if (piece && piece.at >= 0 && this.shared.asked(piece.char)) this.shared.found.add(piece.at);
   }
 
+  /** Characters read, spent from the budget: past it, every such character counts. */
+  private step(n = 1): void {
+    if ((this.shared.budget.steps -= n) < 0) throw new Lost();
+  }
+
+  /** Characters made, spent from the budget: past it, every such character counts. */
+  private make(n: number): void {
+    if ((this.shared.budget.made -= n) < 0) throw new Lost();
+  }
+
+  /** The character `ahead` of where reading is: each look is a step. */
   private char(ahead = 0): string | undefined {
+    this.step();
     return this.p[this.i + ahead]?.char;
   }
 
@@ -377,6 +505,17 @@ class Reader {
     // After `function`: its name comes next. After a function's name (and its `()`): its body.
     let naming = false;
     let defined = false;
+    // Whether the command's words so far are all reserved words a command may come after: kept as
+    // they come, not read again at each `(`, which a run of them and of `(` made take time with its square.
+    let keywordsOnly = true;
+    let keywordsRead = 0;
+    const onlyKeywords = () => {
+      for (; keywordsRead < command.words.length; keywordsRead += 1) {
+        const w = command.words[keywordsRead]!;
+        keywordsOnly &&= w.plain && BEFORE_COMMAND.has(w.text);
+      }
+      return keywordsOnly;
+    };
     const pending: Heredoc[] = [];
     const top = () => frames.at(-1);
     const inCase = (...stages: Case['stage'][]) => {
@@ -410,15 +549,15 @@ class Reader {
         const kind = redirect;
         redirect = undefined;
         const substituted = w.pieces.some((piece) => piece.made === 'command' || piece.made === 'process');
-        const file = !w.made && !w.open ? w.text.split('/').pop()! : undefined;
         if (kind === 'here') command.inputs.push({ pieces: [...w.pieces, NEWLINE], exact: !w.made });
         else if (kind === 'dup' || (kind === 'in' && substituted)) command.inputs.push({ pieces: [], exact: false });
         else if (kind === 'in') {
           command.fromFile = true;
-          command.from = file;
+          command.from = w.made || w.open ? {} : pathOf(w);
         }
         else if (kind === 'to' && /^(?:\d+|-)$/.test(w.text)) return;
-        else if (descriptor === undefined || descriptor === '1' || descriptor === '&') command.writes.push({ file, append: kind === 'append' });
+        // Another descriptor's too (`2> f.sh`): what goes there is not known here. A device is no file.
+        else if (!/^\/dev\//.test(w.text)) command.writes.push({ path: pathOf(w), append: kind === 'append', output: descriptor === undefined || descriptor === '1' || descriptor === '&' });
         return;
       }
       const frame = top();
@@ -488,6 +627,8 @@ class Reader {
         pipeline.push(command);
       }
       command = newCommand();
+      keywordsOnly = true;
+      keywordsRead = 0;
       atCommand = true;
       assigned = false;
       defined = false;
@@ -646,7 +787,7 @@ class Reader {
           }
         }
       } else if (c === '(') {
-        const keywords = command.words.every((w) => w.plain && BEFORE_COMMAND.has(w.text));
+        const keywords = onlyKeywords();
         if (word !== undefined) {
           const text = textOf(word.pieces);
           const declaring = command.words.length > 0 && DECLARES.has(command.words[0]!.text);
@@ -814,6 +955,7 @@ class Reader {
       // $name: what the command sets it to, or the user's own.
       let end = this.i + 1;
       while (/^[A-Za-z0-9_]$/.test(this.p[end]?.char ?? '')) end += 1;
+      this.step(end - this.i);
       const name = textOf(this.p.slice(this.i + 1, end));
       add({ char: `$${name}`, at: -1, made: 'parameter', name }, false);
       this.i = end;
@@ -822,6 +964,11 @@ class Reader {
       add({ char: `$${next}`, at: -1, made: 'parameter', name: next }, false);
       this.i += 2;
     } else {
+      // zsh's `$~x` takes x's value for a pattern, and a pattern's qualifier (`(e{…})`, `(+f)`) runs
+      // what it says: not followed, however its flags are put (`$=~x`).
+      let flags = this.i + 1;
+      while (flags < this.p.length && PARAMETER.test(this.p[flags]!.char)) if (this.p[flags++]!.char === '~') throw new Lost();
+      this.step(flags - this.i);
       const piece = this.p[this.i]!;
       add(next !== undefined && PARAMETER.test(next) ? { ...piece, made: 'parameter' } : piece, unquoted);
       this.i += 1;
@@ -877,7 +1024,7 @@ class Reader {
         return;
       }
       const start = this.i;
-      const end = bash32End(this.p, start, comments, this.shared.depth);
+      const end = bash32End(this.p, start, comments, this.shared.depth, this.shared.budget);
       new Reader(this.p.slice(start, end), this.shared, true).script();
       this.i = end + 1;
     });
@@ -891,7 +1038,8 @@ class Reader {
    * (`${functions[f]:=…}`). Setting any other variable, its value is not known.
    */
   private expansion(inside: string): void {
-    if (/^[(!]/.test(inside) || /@P$/.test(inside)) throw new Lost();
+    // zsh's flags, `~` among them, which takes the value for a pattern whose qualifiers may run what it says.
+    if (/^[(!]|^[=^~+]*~/.test(inside) || /@P$/.test(inside)) throw new Lost();
     const parts = /^#?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!_-])(?:\[([^\]]*)\])?([\s\S]*)$/.exec(inside);
     if (!parts) return;
     const [, name, subscript, rest] = parts as unknown as [string, string, string | undefined, string];
@@ -936,11 +1084,17 @@ class Reader {
           // A variable, by name (not a digit of `0x1f` or `16#ff`) or as `$name` or `${name}`: its value
           // is read as an expression, whose subscript runs (`n='a[$(…)]'; $(( n ))`), so it counts
           // (Across). What a substitution writes, an argument, or another expansion: not followed.
-          const variable = /^\$?(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/.exec(textOf(this.p.slice(this.i, this.i + 256)));
-          if (!variable || (c !== '$' && variable[0].startsWith('{'))) throw new Lost();
-          this.shared.across.counted.add((variable[1] ?? variable[2])!);
-          for (let n = 0; n < variable[0].length; n += 1) this.flag(this.p[this.i + n]);
-          this.i += variable[0].length;
+          // Its name, read once (`$name`, `${name}` or `name`): anything else after a `$` is not followed.
+          const braced = c === '$' && this.p[this.i + 1]?.char === '{';
+          const from = this.i + (c === '$' ? 1 : 0) + (braced ? 1 : 0);
+          let end = from;
+          while (end < this.p.length && (end > from ? /^[A-Za-z0-9_]$/ : /^[A-Za-z_]$/).test(this.p[end]!.char)) end += 1;
+          if (end === from || (braced && this.p[end]?.char !== '}')) throw new Lost();
+          const after = braced ? end + 1 : end;
+          this.step(after - this.i);
+          this.shared.across.counted.add(textOf(this.p.slice(from, end)));
+          for (let n = this.i; n < after; n += 1) this.flag(this.p[n]);
+          this.i = after;
         } else if (c === '`') {
           throw new Lost();
         } else {
@@ -1090,19 +1244,21 @@ class Reader {
         // A line, with the next joined to it where an unquoted heredoc's line ends in a backslash.
         let at = this.i;
         if (heredoc.tabs) while (this.p[at]?.char === '\t') at += 1;
+        this.step(at - this.i);
         const line: Piece[] = [];
         for (;;) {
           let stop = at;
           while (stop < this.p.length && this.p[stop]!.char !== '\n') stop += 1;
-          const part = this.p.slice(at, stop);
+          this.step(stop + 1 - at);
           let backslashes = 0;
-          while (backslashes < part.length && part[part.length - 1 - backslashes]!.char === '\\') backslashes += 1;
-          if (!heredoc.quoted && stop < this.p.length && backslashes % 2 === 1) {
-            line.push(...part.slice(0, -1));
+          while (backslashes < stop - at && this.p[stop - 1 - backslashes]!.char === '\\') backslashes += 1;
+          const joined = !heredoc.quoted && stop < this.p.length && backslashes % 2 === 1;
+          // Piece by piece: spread into push, a long line takes more of the stack than there is.
+          for (let k = at; k < (joined ? stop - 1 : stop); k += 1) line.push(this.p[k]!);
+          if (joined) {
             at = stop + 1;
             continue;
           }
-          line.push(...part);
           if (stop < this.p.length) line.push(this.p[stop]!);
           this.i = stop < this.p.length ? stop + 1 : stop;
           break;
@@ -1114,7 +1270,7 @@ class Reader {
           ended = true;
           break;
         }
-        body.push(...line);
+        for (const piece of line) body.push(piece);
       }
       // A heredoc whose line never comes: an error to some shells, the rest of the text to others,
       // or a sign this read its line otherwise; but in what bash 3.2 takes for a `$( )`, which may end in it.
@@ -1157,6 +1313,9 @@ class Reader {
     const script: Piece[] = [];
     for (const word of words) {
       if (word.open) throw new Lost();
+      // What it makes is spent from the budget, a value once for each place it stands in: a long
+      // value in many places (`x=…; bash -c "$x $x …"`) made a script of the square of the command's size.
+      this.make(word.pieces.length + 1);
       if (script.length > 0) script.push(SPACE);
       for (const piece of word.pieces) {
         if (!piece.made) {
@@ -1167,6 +1326,7 @@ class Reader {
         if (name === undefined || /^[0-9@*_]$/.test(name) || name === 'IFS') throw new Lost();
         const value = /^[?$!#-]$/.test(name) ? '0' : this.shared.across.values.get(name);
         if (value === null || (value !== undefined && !PLAIN.test(value))) throw new Lost();
+        this.make((value ?? 'x').length);
         for (const char of value ?? 'x') script.push({ char, at: -1 });
       }
     }
@@ -1199,6 +1359,12 @@ class Reader {
     // A command whose name is not known here may be one that runs text later (eval, alias, read):
     // not followed, as such a one is not.
     if (name === undefined) throw new Lost();
+    // A program run by its name alone, where PATH finds it: a file the command writes by that name,
+    // and makes a program, may be it (ranFiles).
+    if (!first.made && !first.open && !first.text.includes('/')) {
+      this.shared.across.names.add(name!);
+      this.shared.across.ranByName = true;
+    }
     const rest = words.slice(k + 1);
     if (name === null) {
       // A program that runs its arguments, named by a variable: they read as eval would read them.
@@ -1217,7 +1383,7 @@ class Reader {
     }
     // A builtin macOS also has as a program (/usr/bin/read), run by a program that runs its arguments (WRAPPED).
     const runsArguments = EXEC_RUNNERS.has(name) && (name !== 'find' || rest.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word.text)));
-    if (runsArguments && rest.some((word) => !word.made && WRAPPED.has(word.text.replace(/^\/usr\/bin\//, '')))) throw new Lost();
+    if (runsArguments && rest.some((word) => !word.made && WRAPPED.has(program(word)))) throw new Lost();
     // What env, or a program, hands a shell it starts in its environment. What env, sudo or doas
     // sets there for the program it runs is not known here.
     const passes = (word: Word) => ['env', 'sudo', 'doas'].includes(program(word));
@@ -1300,6 +1466,16 @@ class Reader {
       default:
     }
     let launched = false;
+    // The first word from each place on that gives su, flock or script a command, or env -S its
+    // string: found once, from the end, not looked for again after each such program.
+    const firstFrom = (test: (word: Word) => boolean) => {
+      const first = new Int32Array(words.length + 1).fill(-1);
+      for (let j = words.length - 1; j >= 0; j -= 1) first[j] = test(words[j]!) ? j : first[j + 1]!;
+      return (from: number) => first[from]!;
+    };
+    let commandOption: ((from: number) => number) | undefined;
+    let commandLong: ((from: number) => number) | undefined;
+    let splitOption: ((from: number) => number) | undefined;
     for (let j = k; j < words.length; j += 1) {
       const word = words[j]!;
       const at = j === k ? name : program(word);
@@ -1311,10 +1487,12 @@ class Reader {
         this.handOff(words.slice(j + 1));
         return;
       } else if (at === 'su' || at === 'flock' || at === 'script') {
-        const option = words.slice(j + 1).findIndex((w) => /^-[A-Za-z]*c$/.test(w.text) || w.text === '--command');
-        const long = words.slice(j + 1).find((w) => w.text.startsWith('--command='));
+        commandOption ??= firstFrom((w) => /^-[A-Za-z]*c$/.test(w.text) || w.text === '--command');
+        commandLong ??= firstFrom((w) => w.text.startsWith('--command='));
+        const option = commandOption(j + 1);
+        const long = words[commandLong(j + 1)];
         if (option >= 0) {
-          const script = words[j + 2 + option];
+          const script = words[option + 1];
           if (script === undefined) throw new Lost();
           command.kind = 'runs';
           this.handOff([script]);
@@ -1335,11 +1513,13 @@ class Reader {
         return;
       } else if (at === 'env') {
         // env -S splits its string into a command, much as a shell reads one.
-        const split = words.slice(j + 1).findIndex((w) => /^-[A-Za-z]*S/.test(w.text) || w.text.startsWith('--split-string'));
+        splitOption ??= firstFrom((w) => /^-[A-Za-z]*S/.test(w.text) || w.text.startsWith('--split-string'));
+        const split = splitOption(j + 1);
         if (split >= 0) {
-          const option = words[j + 1 + split]!;
-          const attached = /^-[A-Za-z]*S(.+)$/.exec(option.text) ?? /^--split-string=(.+)$/.exec(option.text);
-          const string = attached ? { ...option, pieces: option.pieces.slice(option.text.length - attached[1]!.length) } : words[j + 2 + split];
+          const option = words[split]!;
+          // [\s\S], not `.`: a word with a line break in it made `(.+)$` try each `S` again, with the square of its length.
+          const attached = /^-[A-Za-z]*S([\s\S]+)$/.exec(option.text) ?? /^--split-string=([\s\S]+)$/.exec(option.text);
+          const string = attached ? { ...option, pieces: option.pieces.slice(option.text.length - attached[1]!.length) } : words[split + 1];
           if (string === undefined) throw new Lost();
           command.kind = 'runs';
           this.handOff([{ ...string, text: textOf(string.pieces) }]);
@@ -1376,56 +1556,123 @@ class Reader {
 
   /**
    * What a command writes to files: what `cat` reads or `echo` writes, else not known here. Two
-   * things written to one file, or added to it: not known which a script finds there.
+   * things written to one file, or added to it: not known which a script finds there. And the
+   * folders it writes into: a script run from one of them that it did not write there itself may be
+   * one it put there another way, or one that reads what it wrote (inWords).
    */
   private wrote(command: Command): void {
-    const files = this.shared.across.files;
-    const words = command.words.filter((word) => !ASSIGNMENT.test(word.text));
+    const across = this.shared.across;
+    const files = across.files;
+    // Past the assignments before its name: one after it is an argument (dd's `of=f`).
+    let named = 0;
+    while (named < command.words.length && ASSIGNMENT.test(command.words[named]!.text)) named += 1;
+    const words = command.words.slice(named);
     const name = words[0] === undefined ? undefined : program(words[0]);
-    const operands = words.slice(1).filter((word) => !word.text.startsWith('-'));
-    const named = (word: Word) => (!word.made && !word.open ? program(word) : undefined);
+    // An empty word (BSD sed's `-i ''`) names no file.
+    const operands = words.slice(1).filter((word) => word.text !== '' && !word.text.startsWith('-'));
+    /**
+     * A file written, and what goes in it (null: not known here). One `surely` written whose name or
+     * folder is not known (`> "$t"`) may be anywhere; another operand (git's, curl's) is a file
+     * only where it is plain text.
+     */
+    const put = ({ name: file, folder }: Path, content: Input | null, surely = true) => {
+      if (file === undefined || folder === undefined) {
+        if (surely) across.anywhere = true;
+        return;
+      }
+      across.folders.add(folder);
+      if (!file) return;
+      across.written.add(`${folder}/${file}`);
+      // What a program runs on its own once it is there: make's and npm's recipes, not followed; a
+      // git hook, and what a shell reads as it starts (now, or in the user's next one), read as scripts.
+      if (RUN_BY_OTHERS.has(file)) throw new Lost();
+      if (folder === 'hooks' || STARTUP_FILES.includes(file)) across.runs.add(file);
+      // A heredoc's body is read after its line: what went in is compared once the file runs.
+      const known = files.get(file);
+      if (content === null || known === null) files.set(file, null);
+      else if (known === undefined) files.set(file, [content]);
+      else known.push(content);
+    };
+    const writes = command.writes;
     if (name === 'tee') {
-      // What tee reads goes in each file it names: its own heredoc, else not known here.
+      // What tee reads goes in each file it names, and to its output: its own heredoc, else not known here.
       const content = command.inputs.length === 1 && !words.slice(1).some((word) => word.text === '-a' || word.text === '--append') ? command.inputs[0]! : null;
-      for (const word of operands) command.writes.push({ file: named(word), append: content === null });
-      if (content !== null) for (const write of command.writes) if (!write.append && write.file !== undefined) files.set(write.file, [...(files.get(write.file) ?? []), content]);
-      for (const write of command.writes) if (write.append && write.file !== undefined) files.set(write.file, null);
+      for (const word of operands) put(pathOf(word), content);
+      for (const { path, append, output } of writes) put(path, append || !output ? null : content);
       return;
     }
-    // What a file holds once it is copied, moved, linked or edited in place: not known here.
-    const changes = ['cp', 'mv', 'ln', 'install', 'rsync', 'ditto', 'dd'].includes(name ?? '') ? operands.slice(-1)
-      : ['sed', 'perl', 'gsed'].includes(name ?? '') && words.some((word) => /^-[a-zA-Z]*i/.test(word.text) || word.text.startsWith('--in-place')) ? operands
-      : ['patch', 'ed', 'ex', 'vi', 'vim', 'nano', 'truncate', 'touch', 'unzip', 'tar', 'curl', 'wget', 'git'].includes(name ?? '') ? operands
-      : [];
-    for (const word of changes) {
-      const file = named(word);
-      if (file === undefined) continue;
-      files.set(file, null);
-      // A copy, a link or an install may be a program.
-      if (['cp', 'mv', 'ln', 'install', 'rsync', 'ditto'].includes(name ?? '')) this.shared.across.executables.add(file);
+    // What a file holds once it is copied, moved, linked, edited in place or unpacked: not known
+    // here; nor, where an operand is a folder, what lands in it, nor where tar, a patch or a copy of
+    // a folder write, nor what `git apply` writes.
+    const copies = COPIES.has(name ?? '');
+    const inPlace = (name === 'sed' || name === 'gsed' || name === 'perl') && words.some((word) => /^-[a-zA-Z]*i/.test(word.text) || word.text.startsWith('--in-place'));
+    // git's own options that take a value (`git -C dir checkout x`) come before what it does.
+    const gitOperands = name === 'git' ? words.slice(1).filter((word, i) => word.text !== '' && !word.text.startsWith('-') && !/^(?:-[Cc]|--git-dir|--work-tree)$/.test(words[i]!.text)) : [];
+    const subcommand = gitOperands[0] ? program(gitOperands[0]) : '';
+    if (ANYWHERE.has(name ?? '') || (copies && words.some((word) => /^-[a-zA-Z]*[rRa]/.test(word.text) || word.text === '--recursive' || word.text === '--archive'))
+      || (name === 'git' && (subcommand === 'apply' || subcommand === 'am'))) across.anywhere = true;
+    // What writes into the working folder, names aside: what fetches files to it, what git checks out.
+    if ((name === 'curl' && words.some((word) => /^-[a-zA-Z]*[oO]/.test(word.text) || /^--(?:output|remote-name)/.test(word.text))) || name === 'wget'
+      || (name === 'git' && GIT_WRITES.has(subcommand))) across.folders.add('.');
+    if (copies) {
+      // Its target is written, and may be a folder, where the others land by their names; each may be a program.
+      const target = operands.at(-1);
+      if (target !== undefined) {
+        const path = pathOf(target);
+        put(path, null);
+        if (path.name) {
+          across.folders.add(path.name);
+          across.executables.add(path.name);
+        } else if (path.name === undefined) {
+          across.blindProgram = true;
+        }
+        const into = path.name || path.folder;
+        for (const source of operands.slice(0, -1)) {
+          const landed = pathOf(source).name;
+          if (!landed) continue;
+          across.executables.add(landed);
+          if (into !== undefined) across.written.add(`${into}/${landed}`);
+        }
+      }
+    } else {
+      // The files the others change: not sed's or perl's script (after -e or -f, else the first
+      // operand), and of git's only what writes the working folder takes.
+      const scripts = new Set(words.flatMap((word, i) => (/^-[a-zA-Z]*[ef]$/.test(word.text) || /^--(?:expression|file)$/.test(word.text) ? [words[i + 1]] : [])));
+      const changed = name === 'dd' ? operands.filter((word) => word.text.startsWith('of=')).map((word) => ({ ...word, text: word.text.slice(3), pieces: word.pieces.slice(3) }))
+        : inPlace ? operands.filter((word, i) => (scripts.size > 0 ? !scripts.has(word) : i > 0))
+        : name === 'git' ? (GIT_WRITES.has(subcommand) ? gitOperands.slice(1) : [])
+        : CHANGES.has(name ?? '') ? operands : [];
+      for (const word of changed) {
+        const path = pathOf(word);
+        // What an editor or dd writes is written; another's operand, only where it is plain text.
+        put(path, null, name === 'dd' || EDITORS.has(name ?? ''));
+        // An operand may be a folder things land in.
+        if (path.name) across.folders.add(path.name);
+      }
     }
     // What it makes a program: chmod with a mode that sets x.
     if (name === 'chmod' && operands.length > 1 && /x|[1357]/.test(operands[0]!.text)) {
       for (const word of operands.slice(1)) {
-        const file = named(word);
-        if (file !== undefined) this.shared.across.executables.add(file);
+        const file = pathOf(word).name;
+        if (file) across.executables.add(file);
+        else if (file === undefined) across.blindProgram = true;
       }
     }
-    for (const { file, append } of command.writes) {
-      if (file === undefined) continue;
-      const content = append ? null
+    for (const { path, append, output } of writes) {
+      const content = append || !output ? null
         : command.kind === 'cat' && command.inputs.length === 1 ? command.inputs[0]!
         : command.kind === 'echo' && command.echoes ? { pieces: command.echoes, exact: true }
         : null;
-      const known = files.get(file);
-      // A heredoc's body is read after its line: what went in is compared once the file runs.
-      files.set(file, content === null || known === null ? null : [...(known ?? []), content]);
+      put(path, content);
     }
   }
 
-  /** A file the command runs as a script (or reads as one): read once what it writes in it is known. */
+  /**
+   * A file the command runs as a script, or a program, by its path (or reads as one): read once
+   * what it writes in it is known. One whose path is not plain text (`bash "$t"`) is not followed.
+   */
   private runsFile(word: Word | undefined): void {
-    if (word !== undefined && !word.made && !word.open) this.shared.across.runs.add(program(word));
+    if (word !== undefined) ranFrom(word.made || word.open ? {} : pathOf(word), this.shared.across);
   }
 
   /** A word that sets a variable: what to, where it is plain text this knows (no expansion, pattern, quote or the like in it). */
@@ -1471,7 +1718,7 @@ class Reader {
     if (!setting) return;
     const value = word.pieces.slice(setting[0].length);
     if (value.some((piece) => piece.made)) throw new Lost();
-    this.shared.across.runs.add(textOf(value).split('/').pop()!);
+    ranFrom(pathOf({ ...word, pieces: value }), this.shared.across);
   }
 
   /** What the command sets a variable to; set to two things, it is not known which a script sees. */
@@ -1495,14 +1742,20 @@ class Reader {
     if (!word.made && !word.open) return program(word);
     const slash = word.pieces.map((piece) => piece.char).lastIndexOf('/');
     const tail = word.pieces.slice(slash + 1);
-    if (slash >= 0 && !tail.some((piece) => piece.made) && !/[*?[]/.test(textOf(tail))) return textOf(tail);
+    if (slash >= 0 && !tail.some((piece) => piece.made) && !/[*?[]/.test(textOf(tail))) return lastPart(textOf(tail));
     const variable = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(word.text)?.[1] ?? (word.pieces.length === 1 ? word.pieces[0]!.name : undefined);
     if (variable === undefined || /^(?:[1-9@*_]|BASH_COMMAND|BASH_ARGV|BASH_REMATCH|FUNCNAME|REPLY|OPTARG|MAPFILE|MATCH|match)$/.test(variable)) return undefined;
     if (['SHELL', 'BASH', '0', 'ZSH_NAME', 'ZSH_ARGZERO'].includes(variable)) return 'sh';
     const value = this.shared.across.values.get(variable);
-    if (value === undefined) return '';
-    const parts = value?.trim().split(/[ \t]+/).map((part) => part.split('/').pop()!);
+    if (value === undefined) {
+      // The user's own: a program, but one that may be a file the command writes where this cannot tell (inWords).
+      this.shared.across.ranByVariable = true;
+      return '';
+    }
+    const parts = value?.trim().split(/[ \t]+/).map(lastPart);
     if (parts === undefined || parts.some((part) => RUNS_LATER.has(part) || MODIFIERS.has(part) || DECLARING.has(part) || WRAPPED.has(part))) return undefined;
+    // A path the command set it to (`t=./fix.sh; $t`): a file it may have written.
+    if (value!.trim().split(/[ \t]+/)[0]!.includes('/')) ranFrom(pathOfText(value!.trim().split(/[ \t]+/)[0]!), this.shared.across);
     return parts.some((part) => RUNNERS.has(part) || SHELLS.has(part)) ? null : parts[0];
   }
 
@@ -1537,6 +1790,8 @@ class Reader {
       if (!/^[-+][A-Za-z]+$/.test(option)) break;
       if (option.startsWith('-') && option.includes('c')) script = true;
       if (option.startsWith('-') && option.includes('s')) input = true;
+      // An option by name may change how the script reads (`zsh -o globsubst`), as set's (runsLater).
+      if (/o$/.test(option) && !SAFE_OPTIONS.has((args[m + 1]?.text ?? '').toLowerCase().replace(/_/g, ''))) throw new Lost();
       if (/[oO]$/.test(option)) m += 1;
     }
     if (script) {
@@ -1551,8 +1806,8 @@ class Reader {
       command.kind = 'shell';
       return;
     }
-    // A script file made by a substitution has text of the command line; one the command writes, too.
-    if (file.pieces.some((piece) => piece.made === 'command' || piece.made === 'process')) throw new Lost();
+    // A script file whose path is not plain text (`bash "$t"`) may be one the command writes, as one
+    // a substitution makes has text of the command line: not followed (runsFile).
     this.runsFile(file);
   }
 
@@ -1584,7 +1839,13 @@ class Reader {
     // A shell there that reads its commands from its input (`ssh host 'bash -s'`) reads this one's.
     const parts = remote.map((word) => word.text).join(' ').trim().split(/[ \t]+/);
     const options = parts.slice(1);
-    const reads = SHELLS.has(parts[0]!.split('/').pop()!) && options.every((part, i) => /^[-+][A-Za-z]+$/.test(part) ? !/^-[A-Za-z]*c/.test(part) : /^[-+]o$/.test(options[i - 1] ?? '') || options.slice(0, i).some((before) => /^-[A-Za-z]*s/.test(before)));
+    // Its options, in turn: none takes a script (-c); a word that is none follows -o, or comes after -s.
+    let input = false;
+    const reads = SHELLS.has(lastPart(parts[0]!)) && options.every((part, i) => {
+      const fits = /^[-+][A-Za-z]+$/.test(part) ? !/^-[A-Za-z]*c/.test(part) : /^[-+]o$/.test(options[i - 1] ?? '') || input;
+      input ||= /^-[A-Za-z]*s/.test(part);
+      return fits;
+    });
     command.kind = reads ? 'shell' : 'runs';
   }
 }
@@ -1624,13 +1885,19 @@ function runsLater(name: string, first: Word, rest: Word[], ksh: boolean, count:
       const format = args[0];
       // A number it writes (or a width or a precision it takes), from what is not a number.
       const specs = format?.text.replace(/%%/g, '').match(/%[^A-Za-z%]*[A-Za-z(]?/g) ?? [];
-      const numbers = format?.made || specs.some((spec) => !/^%[-+ #0']*[0-9]*(?:\.[0-9]*)?[sbq]$/.test(spec));
+      // A width starts with 1 to 9: with 0 among both the flags and the digits, `%000…` took time with the square of its length.
+      const numbers = format?.made || specs.some((spec) => !/^%[-+ #0']*(?:[1-9][0-9]*)?(?:\.[0-9]*)?[sbq]$/.test(spec));
       return ksh && Boolean(numbers) && args.slice(1).some((word) => !side(word));
     }
     case 'print':
       return options.some((option) => /^-[A-Za-z]*[Pvz]/.test(option));
-    case 'set':
-      return options.some((option) => /^[-+][A-Za-z]*A/.test(option));
+    case 'set': {
+      // zsh's set -A sets an array whose name the text gives; an option set by its name may change
+      // how what follows reads (zsh's globsubst makes a variable's value a pattern, whose qualifiers
+      // run what they say): any but those that change nothing of it.
+      if (options.some((option) => /^[-+][A-Za-z]*A/.test(option))) return true;
+      return rest.some((word, i) => /^[-+][A-Za-z]*o$/.test(word.text) && !SAFE_OPTIONS.has((rest[i + 1]?.text ?? '').toLowerCase().replace(/_/g, '')));
+    }
     case 'wait':
       return options.some((option) => /^-[A-Za-z]*p/.test(option));
     case 'hash':
@@ -1645,9 +1912,29 @@ function runsLater(name: string, first: Word, rest: Word[], ksh: boolean, count:
   if (brackets || name === '[' || name === 'test') {
     const all = [first, ...rest];
     if (all.some((word) => word.text === '-v' || word.text === '-R')) return true;
+    // An operator a variable gives (`op=-v; test "$op" "$x"`), which may be -v: test and `[` take
+    // their operators as the words come, so a word an expansion makes counts as one, but where it
+    // is the only one, or an operator plain in the text comes before it or, one of two sides, after.
+    if (!brackets) {
+      const args = (name === '[' && rest.at(-1)?.text === ']' ? rest.slice(0, -1) : rest);
+      const operator = (word: Word | undefined) => word !== undefined && !word.made && !word.open && TEST_OPERATOR.test(word.text);
+      const binary = (word: Word | undefined) => word !== undefined && !word.made && !word.open && TEST_BINARY.test(word.text);
+      if (args.length > 1 && args.some((word, i) => (word.made || word.open) && !operator(args[i - 1]) && !binary(args[i + 1]))) return true;
+    }
     return (brackets || ksh) && all.some((word, i) => NUMERIC_TEST.test(word.text) && !(side(all[i - 1]) && side(all[i + 1])));
   }
   return false;
+}
+
+/**
+ * A script or a program run by its path (Path): read once what the command writes in it is known
+ * (ranFiles); from a folder the command writes into, one it did not write there is not followed
+ * (inWords). One whose path is not plain text (`bash "$t"`, `"$d/fix.sh"`) is not followed.
+ */
+function ranFrom({ name, folder }: Path, across: Across): void {
+  if (!name || folder === undefined) throw new Lost();
+  across.runs.add(name);
+  across.ranPaths.push([folder, name]);
 }
 
 /**
@@ -1670,7 +1957,7 @@ function judge(pipeline: Command[], shared: Shared): void {
     if (command.kind !== 'shell') return;
     across.readsInput = true;
     // A shell that reads a file the command writes reads what goes in it.
-    if (command.from !== undefined) across.runs.add(command.from);
+    if (command.from !== undefined) ranFrom(command.from, across);
     const script = feeding(pipeline, s);
     if (script !== undefined) shared.scripts.push(script);
   });
@@ -1704,16 +1991,19 @@ function feeding(pipeline: Command[], s: number): Piece[] | undefined {
  */
 function ranFiles(shared: Shared): void {
   const { files, runs } = shared.across;
-  // Where the command sets PATH, a file it writes and makes a program may run by its name alone.
-  if (shared.across.path) for (const file of shared.across.executables) runs.add(file);
+  // A file it writes and makes a program may run by its name alone: by that name, or by any where
+  // the command sets PATH.
+  for (const file of shared.across.executables) if (shared.across.path || shared.across.names.has(file)) runs.add(file);
   for (const file of runs) {
     if (!files.has(file)) continue;
     runs.delete(file);
     const written = files.get(file);
     const content = written?.[0];
-    if (!content || written!.some((each) => !each.exact || textOf(each.pieces) !== textOf(content.pieces))) throw new Lost();
+    if (!content) throw new Lost();
+    const text = textOf(content.pieces);
+    if (written!.some((each) => !each.exact || textOf(each.pieces) !== text)) throw new Lost();
     const shebang = /^#!\s*(\S+)((?:[ \t]+\S+)*)/.exec(textOf(content.pieces.slice(0, 200)).split('\n')[0]!);
-    const named = shebang ? [shebang[1]!, ...shebang[2]!.trim().split(/[ \t]+/)].map((part) => part.split('/').pop()!) : [];
+    const named = shebang ? [shebang[1]!, ...shebang[2]!.trim().split(/[ \t]+/)].map(lastPart) : [];
     const runner = named[0] === 'env' ? named.slice(1).find((part) => part !== '' && !part.startsWith('-')) : named[0];
     if (runner === undefined || SHELLS.has(runner)) shared.scripts.push(content.pieces);
   }
@@ -1732,10 +2022,14 @@ type Comments = 'read' | 'quoted' | 'expanded';
  * `at`: the index of its `)`. It counts parentheses, skips what is quoted or escaped and a comment
  * (Comments), and takes no notice of a heredoc, a case or `${ }`. Never closed: Unclosed.
  */
-function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: number): number {
+function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: number, budget: Budget): number {
   if (depth > MOST_DEPTH) throw new Lost();
   let i = at;
-  const char = (k: number) => p[k]?.char;
+  // Each look is a step, as in Reader.
+  const char = (k: number) => {
+    if ((budget.steps -= 1) < 0) throw new Lost();
+    return p[k]?.char;
+  };
   /** From after an opening quote or backquote to after its close: with `escapes`, a backslash takes the next character. */
   const quoted = (close: string, escapes: boolean, level: number) => {
     if (level > MOST_DEPTH) throw new Lost();
@@ -1746,7 +2040,7 @@ function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: n
       if (c === close) return;
       if (c === '\\' && escapes) i += 1;
       else if (close === '"' && c === '`') quoted('`', true, level + 1);
-      else if (close === '"' && c === '$' && char(i) === '(') i = bash32End(p, i + 1, comments === 'expanded' ? 'expanded' : 'quoted', level + 1) + 1;
+      else if (close === '"' && c === '$' && char(i) === '(') i = bash32End(p, i + 1, comments === 'expanded' ? 'expanded' : 'quoted', level + 1, budget) + 1;
       else if (close === '"' && c === '$' && char(i) === '{') {
         i += 1;
         braced(level + 1);
@@ -1801,19 +2095,39 @@ function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: n
 
 /**
  * Where, of the characters `asked` matches, a shell reads one as part of a word in `command` (their
- * offsets); undefined where this cannot tell, and every one counts (see above).
+ * offsets); undefined where this cannot tell, and every one counts (see above). A command longer
+ * than MOST_COMMAND is not read. With `budget`, shared with other readings (revealInput, the trust
+ * sheet), this one takes at most what one command may (commandBudget) of what is left of it.
  */
-export function inWords(command: string, asked: (char: string) => boolean): Set<number> | undefined {
+export function inWords(command: string, asked: (char: string) => boolean, budget?: Budget): Set<number> | undefined {
+  if (command.length > MOST_COMMAND) return undefined;
+  const own: Budget = budget ? { steps: Math.min(MOST_STEPS, budget.steps), made: Math.min(MOST_MADE, budget.made) } : commandBudget();
+  if (own.steps <= 0 || own.made <= 0) return undefined;
+  const given = { ...own };
+  try {
+    return read(command, asked, own);
+  } finally {
+    // What this reading took, all it was given where it ran out.
+    if (budget) {
+      budget.steps -= given.steps - Math.max(own.steps, 0);
+      budget.made -= given.made - Math.max(own.made, 0);
+    }
+  }
+}
+
+/** inWords, within `budget`. */
+function read(command: string, asked: (char: string) => boolean, budget: Budget): Set<number> | undefined {
   const found = new Set<number>();
   const pieces = [...command.matchAll(/[\s\S]/gu)].map((match) => ({ char: match[0], at: match.index }));
-  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), path: false, executables: new Set(), counted: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set() };
-  // What all the readings may read, scripts handed on again and again (`eval eval eval …`) among them.
-  let budget = 4 * pieces.length + 200_000;
+  const across: Across = {
+    readsInput: false, risky: false, functions: new Set(), fed: new Set(), path: false, executables: new Set(), blindProgram: false, folders: new Set(),
+    written: new Set(), anywhere: false, ranPaths: [], ranByVariable: false, ranByName: false, names: new Set(), counted: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set(),
+  };
   try {
     for (const dialect of ['modern', 'bash32'] as const) {
-      const shared: Shared = { asked, found, scripts: [pieces], pipelines: [], dialect, depth: 0, across };
+      const shared: Shared = { asked, found, budget, scripts: [pieces], pipelines: [], dialect, depth: 0, across };
       for (let k = 0; k < shared.scripts.length; k += 1) {
-        if (k >= MOST_SCRIPTS || (budget -= shared.scripts[k]!.length) < 0) return undefined;
+        if (k >= MOST_SCRIPTS) return undefined;
         new Reader(shared.scripts[k]!, shared).script();
         for (const pipeline of shared.pipelines.splice(0)) judge(pipeline, shared);
         ranFiles(shared);
@@ -1825,6 +2139,8 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
     if (!(error instanceof Lost || error instanceof RangeError)) console.error('Pelican could not read a command for its spaces', error);
     return undefined;
   }
+  // Past the budget, also where what spent it was let go (what echo writes): every such character counts.
+  if (budget.steps < 0 || budget.made < 0) return undefined;
   // Arithmetic reads a variable the command sets to what is not a number (or not known): what that
   // holds may be a subscript, which runs (`n='a[$(…)]'; $(( n ))`), wherever in the command it is set.
   for (const name of across.counted) {
@@ -1837,5 +2153,15 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
   if (across.readsInput && (across.risky || [...across.fed].some((name) => across.functions.has(name)))) return undefined;
   // ksh93 ends a `<<#` heredoc at a line with blanks before its end, which bash, zsh and dash take for its body.
   if (across.ksh && command.includes('<<#')) return undefined;
+  // A script or a program run by its path from a folder the command writes into, but for one it
+  // wrote there (ranFiles reads those): one put there another way (tar, a patch, `cp -r`), or one
+  // that reads what the command wrote. Where the command writes files it does not name (`> "$t"`),
+  // from anywhere, and so a program a variable of the user's own names; where it makes one a
+  // program by a name this does not know, any run by its name alone.
+  for (const [folder, name] of across.ranPaths) {
+    if (!across.written.has(`${folder}/${name}`) && (across.anywhere || across.folders.has(folder))) return undefined;
+  }
+  if (across.anywhere && across.ranByVariable) return undefined;
+  if (across.blindProgram && across.ranByName) return undefined;
   return found;
 }

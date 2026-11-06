@@ -1,8 +1,9 @@
 import { ShieldCheck, TriangleAlert, User } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { revealHidden } from '../../shared/hidden';
+import { revealItem } from '../../shared/hidden';
 import type { CommandAt } from '../../shared/protocol';
+import { sharedBudget } from '../../shared/shell-words';
 import type { TrustChoice } from '../lib/api';
 import { shortPath } from '../lib/format';
 import { Sheet, SheetOption } from './Sheet';
@@ -12,30 +13,6 @@ import { Sheet, SheetOption } from './Sheet';
  * and where in each item a command is.
  */
 export type TrustAsk = { brings: string[]; commands?: CommandAt[][]; answer: (choice: TrustChoice) => void; cancel: () => void };
-
-/**
- * An item with what it may hide written out: its commands as they run (a space other than a plain
- * one where a shell reads it as part of a word, or every one between a program's arguments), the
- * rest as names. Told nothing of its commands, or what cannot be: every such space written out.
- */
-function revealItem(item: string, commands: CommandAt[] | undefined): { text: string; hidden: boolean } {
-  if (commands === undefined) return revealHidden(item, { runs: 'argv' });
-  let text = '';
-  let hidden = false;
-  let at = 0;
-  const add = (shown: { text: string; hidden: boolean }) => {
-    text += shown.text;
-    hidden ||= shown.hidden;
-  };
-  for (const [from, to, runs] of commands) {
-    if (from < at || to < from || to > item.length) return revealHidden(item, { runs: 'argv' });
-    add(revealHidden(item.slice(at, from)));
-    add(revealHidden(item.slice(from, to), { runs }));
-    at = to;
-  }
-  add(revealHidden(item.slice(at)));
-  return { text, hidden };
-}
 
 /**
  * Asked before Claude Code first starts in a folder nobody has trusted, as the CLI's trust dialog
@@ -48,8 +25,13 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
     onDone();
     ask?.answer(choice);
   };
-  // Read once per question: a long item takes a while.
-  const items = useMemo(() => (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i])), [ask]);
+  // Read once per question, every item's commands within one budget (src/shared/hidden.ts): past
+  // it, every space but a plain one in what is left is written out. The server read them first
+  // within as much, and marked any it could not read, so this reads no more than it did.
+  const items = useMemo(() => {
+    const budget = sharedBudget();
+    return (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i], budget));
+  }, [ask]);
   return (
     <Sheet
       open={Boolean(ask)}

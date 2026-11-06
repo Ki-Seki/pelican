@@ -34,12 +34,14 @@
  * bash, zsh, dash and macOS's bash 3.2 read the command and the scripts it hands to a shell in the
  * ways that file lists; where it cannot tell, every one is, as in a command that uses what runs text
  * later in its own shell (eval, source, an alias, read, arithmetic on a variable it sets and the
- * like, which that file lists). A quoted screenshot's name, or a commit
- * message with a full-width space in Claude Code's `"$(cat <<'EOF' … EOF)"`, shows as it is. What
- * that file does not follow shows as it is too: a quoted string that a program other than those
- * runs in a shell of its own (python's os.system, make), a script in a file the command does not
- * write itself, and the output of a `$( )` that the shell splits into words (there such a space
- * can only join two arguments).
+ * like), runs a script by a path that is not plain text or from a folder it writes into, is longer
+ * than 64 KB, or takes more than a fixed budget to read (which that file lists): no command takes
+ * more time or memory than that, and a tool's input with many, or a trust sheet's items, share one
+ * such budget. A quoted screenshot's name, or a commit message with a full-width space in Claude
+ * Code's `"$(cat <<'EOF' … EOF)"`, shows as it is. What that file does not follow shows as it is
+ * too: a quoted string that a program other than those runs in a shell of its own (python's
+ * os.system, make), a script in a file the command does not write itself, and the output of a
+ * `$( )` that the shell splits into words (there such a space can only join two arguments).
  *
  * Shown joined by spaces, a program's arguments (`runs: 'argv'`) write out every one, as nothing
  * tells it from the space between two arguments. A PowerShell command (`runs: 'powershell'`) keeps
@@ -72,7 +74,8 @@
  * The repository's check of its own files (test/hidden-characters.test.ts) is a separate list, for
  * code hygiene: there spaces and private-use characters are escapes too.
  */
-import { inWords } from './shell-words';
+import type { CommandAt } from './protocol';
+import { type Budget, inWords, sharedBudget } from './shell-words';
 
 /**
  * An emoji as the conversation shows it, with the invisible characters that are part of it: a
@@ -132,6 +135,12 @@ export type Reading = {
   prose?: boolean;
   /** What runs: a shell command, a program and its arguments shown joined by spaces, or a PowerShell command. */
   runs?: 'shell' | 'argv' | 'powershell';
+  /**
+   * What reading a shell command may take, shared with the others read with it (a tool's input, a
+   * trust sheet's items): past it, or past what one command may take, every such space is written
+   * out (src/shared/shell-words.ts).
+   */
+  budget?: Budget;
 };
 
 /** A PowerShell command that names a POSIX shell, or ssh: it hands that a script, which reads a space otherwise. */
@@ -145,10 +154,16 @@ const isSpace = (char: string) => SPACE.test(char);
  * input by default, words with `prose`, a shell command, a program's arguments or a PowerShell
  * command with `runs`.
  */
-export function revealHidden(text: string, { prose = false, runs }: Reading = {}): { text: string; hidden: boolean } {
+export function revealHidden(text: string, reading: Reading = {}): { text: string; hidden: boolean } {
+  const { text: shown, hidden } = revealRead(text, reading);
+  return { text: shown, hidden };
+}
+
+/** revealHidden, and whether a shell command's spaces were read (`read`), not all written out because the reading could not tell. */
+function revealRead(text: string, { prose = false, runs, budget }: Reading): { text: string; hidden: boolean; read: boolean } {
   let hidden = false;
   // Where a shell reads a space as part of a word; undefined: everywhere, as when it cannot tell.
-  const inWord = runs === 'shell' && SPACE.test(text) ? inWords(text, isSpace) : undefined;
+  const inWord = runs === 'shell' && SPACE.test(text) ? inWords(text, isSpace, budget) : undefined;
   const keepsSpaces = runs === undefined || (runs === 'powershell' && !POSIX_SHELL.test(text));
   const shown = text.replace(PARTS, (char: string, emoji: string | undefined, at: number) => {
     if (emoji !== undefined) return emoji;
@@ -162,7 +177,37 @@ export function revealHidden(text: string, { prose = false, runs }: Reading = {}
     hidden = true;
     return `⟨U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`;
   });
-  return { text: shown, hidden };
+  return { text: shown, hidden, read: !(runs === 'shell' && SPACE.test(text)) || inWord !== undefined };
+}
+
+/**
+ * An item of what a folder brings (its trust sheet), with what it may hide written out: its
+ * commands as they run (CommandAt), the rest as names; told nothing of its commands, or what
+ * cannot be, every space but a plain one written out. The items of one sheet share `budget`: a
+ * shell command not read (past it, or past what the reading follows) has every such space written
+ * out, as a program's arguments do, and `commands` says so ('argv'), so that the sheet, reading the
+ * items as the server did, reads no more than it did, and shows what it judged.
+ */
+export function revealItem(item: string, commands: readonly CommandAt[] | undefined, budget?: Budget): { text: string; hidden: boolean; commands?: CommandAt[] } {
+  if (commands === undefined) return revealHidden(item, { runs: 'argv' });
+  let text = '';
+  let hidden = false;
+  let at = 0;
+  const read: CommandAt[] = [];
+  const add = (shown: { text: string; hidden: boolean }) => {
+    text += shown.text;
+    hidden ||= shown.hidden;
+  };
+  for (const [from, to, runs] of commands) {
+    if (from < at || to < from || to > item.length) return revealHidden(item, { runs: 'argv' });
+    add(revealHidden(item.slice(at, from)));
+    const shown = revealRead(item.slice(from, to), { runs, ...(budget ? { budget } : {}) });
+    add(shown);
+    read.push([from, to, shown.read ? runs : 'argv']);
+    at = to;
+  }
+  add(revealHidden(item.slice(at)));
+  return { text, hidden, commands: read };
 }
 
 /** Keys of a tool's input whose strings are words: a search, a message, what a task or an agent is to do. */
@@ -182,8 +227,10 @@ const DEEPEST_INPUT = 32;
  */
 export function revealInput(input: unknown): { text: string; hidden: boolean } {
   let hidden = false;
+  // Its shell commands, however many, share what reading them may take: past it, every such space is written out.
+  const budget = sharedBudget();
   const reveal = (text: string, reading: Reading) => {
-    const shown = revealHidden(text, reading);
+    const shown = revealHidden(text, { ...reading, budget });
     hidden ||= shown.hidden;
     return JSON.stringify(shown.text);
   };

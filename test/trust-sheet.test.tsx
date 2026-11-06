@@ -175,4 +175,17 @@ describe('a space other than a plain one in what a folder runs', () => {
     expect(items()).toEqual(['Memory folder: ~/Notes\u00a0Old']);
     expect(screen.queryByText(WARNING)).toBeNull();
   });
+
+  it('in hooks that take long to read, is read within one budget for the sheet: past it, written out wherever it is', () => {
+    // A hook of 60 KB that takes long to read, its space quoted: twenty of them took seconds, and more.
+    const hook = `SessionStart hook: echo 'a\u00a0b' ${'$(echo $(a)) '.repeat(4600)}`;
+    const commands: CommandAt[][] = Array.from({ length: 20 }, () => [[19, hook.length, 'shell']]);
+    const started = performance.now();
+    sheet(Array.from({ length: 20 }, () => hook), commands);
+    expect(performance.now() - started).toBeLessThan(10_000);
+    const shown = items();
+    expect(shown[0]).toContain("'a\u00a0b'");
+    expect(shown.at(-1)).toContain("'a⟨U+00A0⟩b'");
+    expect(screen.queryByText(WARNING)).toBeTruthy();
+  }, 60_000);
 });

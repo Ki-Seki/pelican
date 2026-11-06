@@ -111,6 +111,27 @@ const CASES: Array<[string, string, string]> = [
   ["a variable bash reads as arithmetic, OPTIND", `x='a[$'"(w done${N}# ; p PWNED)]"; OPTIND=x`, 'bash'],
   ["a variable set by ${n:=…}", `: \${n:='a[$'"(w done${N}# ; p PWNED)]"}; w $((n))`, 'bash'],
   ['a file it makes a program, found on the PATH it sets', `printf 'w a${N}# ; p PWNED\\n' > t; chmod +x t; PATH=.:$PATH t`, 'zsh'],
+  // A script run by a path that is not plain text: the file it names may be one the command wrote.
+  ['a script in a file a variable names', `t=$(mktemp ./t.XXXXXX); cat > "$t" <<'EOF'\nw done${N}# ; p PWNED\nEOF\nbash "$t"`, 'zsh'],
+  ['a script in a folder a variable names', `d=$(mktemp -d ./d.XXXXXX); cat > "$d/fix.sh" <<'EOF'\nw done${N}# ; p PWNED\nEOF\nsh "$d/fix.sh"`, 'sh'],
+  ['a program run by a path a variable makes', `d=.; printf 'w done${N}# ; p PWNED\\n' > lz; chmod +x lz; "$d/lz"`, 'zsh'],
+  // What the command writes some other way, then runs from where it landed.
+  ['a script dd writes', `dd of=f status=none <<< 'w lint${N}# ; p PWNED'; sh f`, 'sh'],
+  ['a script it writes from another descriptor', `sh -c "echo 'w done${N}# ; p PWNED' >&2" 2> f.sh; sh f.sh`, 'sh'],
+  ['a program unpacked, run from where it landed', `printf '#!/bin/sh\\nw done${N}# ; p PWNED\\n' > x.sh; chmod +x x.sh; tar cf a.tar x.sh; rm x.sh; mkdir u; tar xf a.tar -C u; u/x.sh`, 'sh'],
+  ['a git hook it writes', `git init -q . && cat > .git/hooks/pre-commit <<'EOF'\n#!/bin/sh\nw done${N}# ; p PWNED\nEOF\nchmod +x .git/hooks/pre-commit && git -c user.email=a@b -c user.name=n commit -q --allow-empty -m x`, 'sh'],
+  // A name in any case: macOS's file system takes READ for /usr/bin/read, which runs `builtin read`.
+  ['read named in capitals', `x='a[$'"(w done${N}# ; p PWNED)]"; READ -r "$x" < /dev/null`, 'zsh'],
+  ['read named in capitals, by its path', `x='a[$'"(w done${N}# ; p PWNED)]"; /usr/bin/READ -r "$x" < /dev/null`, 'sh'],
+  ['read named in capitals, run by env', `env READ -r 'a[$'"(w done${N}# ; p PWNED)]" < /dev/null`, 'sh'],
+  // zsh's patterns from a variable's value, whose qualifiers run what they say.
+  ["zsh's $~", `setopt extendedglob; x='/(#qe{w lint${N}# ; p PWNED})'; w $~x >/dev/null`, 'zsh'],
+  ["zsh's \${~x}", `setopt extendedglob; x='/(#qe{w lint${N}# ; p PWNED})'; w \${~x} >/dev/null`, 'zsh'],
+  ["zsh's globsubst, as zsh -o sets it", `zsh -o globsubst -o extendedglob -c "x='/(#qe{w lint${N}# ; p PWNED})'; w \\$x >/dev/null"`, 'sh'],
+  // test and [ take their operator as the words come: a variable can give -v.
+  ['test with an operator a variable gives', `op=-v; x='a[$'"(w done${N}# ; p PWNED)]"; test "$op" "$x"`, 'bash5'],
+  ['[ with an operator a variable gives', `op=-v; x='a[$'"(w done${N}# ; p PWNED)]"; [ "$op" "$x" ]`, 'bash5'],
+  ['test with an operator a default gives', `x='a[$'"(w done${N}# ; p PWNED)]"; test "\${op:--v}" "$x"`, 'bash5'],
 ];
 
 describe('quoted text a shell runs later', () => {
@@ -118,8 +139,10 @@ describe('quoted text a shell runs later', () => {
     it(`${what}: the card writes each such space out, and warns`, () => {
       expect(revealHidden(command, { runs: 'shell' })).toEqual({ text: command.replaceAll(N, '\u27e8U+00A0\u27e9'), hidden: true });
     });
-    // bash has @P from 4.4: macOS's /bin/bash is 3.2. ksh may not be there.
-    const missing = !existsSync(SHELLS[shell]!.file) || (command.includes('@P') && !/^(?:4\.[4-9]|[5-9])/.test(spawnSync(SHELLS[shell]!.file, ['-c', 'echo $BASH_VERSION'], { encoding: 'utf8' }).stdout));
+    // bash has @P from 4.4: macOS's /bin/bash is 3.2. ksh may not be there. READ is read only where
+    // the file system takes no notice of case, as macOS's does.
+    const missing = !existsSync(SHELLS[shell]!.file) || (command.includes('@P') && !/^(?:4\.[4-9]|[5-9])/.test(spawnSync(SHELLS[shell]!.file, ['-c', 'echo $BASH_VERSION'], { encoding: 'utf8' }).stdout))
+      || (command.includes('READ') && !existsSync('/usr/bin/READ'));
     it.skipIf(missing)(`${what}: the space changes what runs, in ${shell}`, () => {
       expect(logged(shell, command)).toContain('PWNED');
       expect(logged(shell, command.replaceAll(N, ' '))).not.toContain('PWNED');
@@ -140,6 +163,11 @@ describe('quoted text a shell runs later', () => {
       `n=0; for d in */; do n=$((n+1)); done; w "$n" 'a${N}b'`, `for i in 1 2 3; do w $((i*2)) 'a${N}b'; done`,
       `[[ $n -gt 2 ]] && w 'a${N}b'`, `export PATH="$HOME/bin:$PATH" LANG=C; w 'a${N}b'`, `f() { local x=1; w "$x" 'a${N}b'; }; f`,
       `K='timeout 9 kubectl'; $K get pods; w 'a${N}b'`, `echo hi > out.txt; PATH=/opt/bin:$PATH w 'a${N}b'`, `grep -r read src; w 'a${N}b'`,
+      // Beside what is now not followed: a script it writes and runs by its name, a write to a
+      // variable's file, a commit before running a script, test and [ with their operators as text.
+      `cat > fix.sh <<'EOF'\nw 'a${N}b'\nEOF\nbash fix.sh`, `T=$(mktemp); w 'a${N}b' > "$T"; cat "$T"`, `git commit -qm x && ./deploy.sh 'a${N}b'`,
+      `[ -f "$x" ] && w 'a${N}b'`, `[ "$a" = "$b" ] || test -n "$c" && w 'a${N}b'`, `set -euo pipefail; READ_ME=1 w 'a${N}b'`,
+      `cp ~/Desktop/'Shot 1${N}AM.png' docs/ && open docs/'Shot 1${N}AM.png'`, `sed -i '' 's/a/b/' x.txt && w 'a${N}b'`,
     ]) {
       expect(revealHidden(command, { runs: 'shell' }), command).toEqual({ text: command, hidden: false });
     }
