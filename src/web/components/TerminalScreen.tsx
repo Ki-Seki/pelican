@@ -365,7 +365,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       events: {
         ready: (screen) => {
           // In the order the output came: what the last connection left is drawn, then all is
-          // reset (ESC c, scrollback too), sized as the server's copy was, and its copy drawn.
+          // reset (ESC c, scrollback too), sized as the server's copy was, and reset again, as
+          // xterm keeps room it made for an earlier size, which would move what comes later; then
+          // its copy drawn, which puts back what ESC c leaves (colors, the cursor shown).
           t.write('\x1bc');
           t.write('', () => {
             const size = clampSize(screen.cols, screen.rows);
@@ -373,7 +375,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
             t.resize(size.cols, size.rows);
           });
           // Its cursor drawn, though the screen has not had the keys (a phone's never does).
-          t.write(screen.snapshot, () => showCursor(t));
+          t.write(`\x1bc${screen.snapshot}`, () => showCursor(t));
           events.current.onProgram(id, screen.program);
           if (screen.exit) ended(screen.exit);
         },

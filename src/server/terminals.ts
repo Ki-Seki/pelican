@@ -18,7 +18,7 @@ import { refreshAuth } from './auth.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
 import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
-import { screenSnapshot } from './terminal-snapshot.js';
+import { colorReport, screenSnapshot } from './terminal-snapshot.js';
 
 /**
  * Terminals: a shell on this computer per terminal, shown on any number of pages (up to
@@ -195,11 +195,7 @@ function drawnColor(colors: TerminalColors | undefined, index: number): [number,
 }
 
 /** A color's report, as xterm.js gives one: `OSC 11 ; rgb:fafa/fafa/fafa ST`. */
-export function colorReport(index: number, [r, g, b]: [number, number, number]): string {
-  const channel = (value: number) => value.toString(16).padStart(2, '0').repeat(2);
-  const ident = index === COLOR_INDEX.foreground ? '10' : index === COLOR_INDEX.background ? '11' : index === COLOR_INDEX.cursor ? '12' : `4;${index}`;
-  return `\x1b]${ident};rgb:${channel(r)}/${channel(g)}/${channel(b)}\x1b\\`;
-}
+export { colorReport };
 
 type Viewer = {
   ws: WebSocket;
@@ -466,7 +462,8 @@ class Term {
     if (due.length === 0) return;
     // What is still gathering joins what the pages hold, so all that follows the cut is there.
     this.flush();
-    const snapshot = screenSnapshot(this.screen, TERMINAL_LIMITS.scrollback);
+    // The colors a program set go with it: a page that saw them draws in them.
+    const snapshot = screenSnapshot(this.screen, TERMINAL_LIMITS.scrollback, this.setColors);
     // The end goes with the screen only once the copy has all the output before it.
     const final = this.exit && this.parsed === this.received ? this.exit : undefined;
     for (const viewer of due) {

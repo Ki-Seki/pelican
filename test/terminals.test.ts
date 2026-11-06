@@ -311,10 +311,11 @@ describe('a page that comes back', () => {
   it('reads what xterm keeps of those modes, as it did when this was written', async () => {
     const screen = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true });
     // Rows 3 to 20 scroll, and with origin mode the cursor's row counts from the first of them.
-    await new Promise<void>((done) => screen.write('\u001b[?1016h\u001b[?25l\u001b[3;20r\u001b[?6h\u001b[2;5H\u001b[4 q', done));
+    await new Promise<void>((done) => screen.write('\u001b[?1016h\u001b[?25l\u001b[3;20r\u001b[?6h\u001b[2;5H\u001b[4 q\u001b[?12h\u001b[20h\u001b[?2026h', done));
     // The rows said with origin mode off, then the cursor back last, and a NUL, so nothing joins what came before.
-    expect(modesBeyondSnapshot(screen)).toBe('\u001b[?1016h\u001b[?6l\u001b[3;20r\u001b[?6h\u001b[4 q\u001b[?25l\u001b[0m\u001b[2;5H\u0000');
-    expect(modesBeyondSnapshot(new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true }))).toBe('\u0000');
+    expect(modesBeyondSnapshot(screen)).toBe('\u001b[?1016h\u001b[?6l\u001b[3;20r\u001b[?6h\u001b[4 q\u001b[?25l\u001b[?12h\u001b[20h\u001b[?2026h\u001b[0m\u001b[2;5H\u0000');
+    // A cursor that shows and does not blink is said too: a page's terminal keeps either through ESC c.
+    expect(modesBeyondSnapshot(new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true }))).toBe('\u001b[?25h\u001b[?12l\u0000');
   });
 
   it('comes once its time is up, every time, while a program left a sequence open and prints nothing more', async () => {

@@ -13,8 +13,11 @@
  * before it; a line xterm kept longer than the screen after a resize wrapped onto lines of its
  * own; and the alternate screen's empty cells took the colors a program last printed in, while
  * the normal screen lost its rows that scroll, tab stops and saved cursor. What the serializer
- * leaves out follows it (modesBeyondSnapshot). test/terminal-snapshot.test.ts compares, over
- * random output, a page that comes back with one that saw it all, and lists what neither carries.
+ * leaves out follows it (modesBeyondSnapshot), and what a page's terminal keeps through the reset
+ * (ESC c) it writes before the screen: its colors (a program's set again), whether the cursor shows
+ * or blinks, and LNM. test/terminal-snapshot.test.ts compares, over random output, a page that
+ * comes back, a fresh one or one that showed another terminal before, with one that saw it all, and
+ * lists what neither carries.
  *
  * Copyright (c) 2019 The xterm.js authors (the serializer). MIT.
  */
@@ -33,7 +36,10 @@ type ScreenBuffer = {
 
 type ScreenCore = {
   coreMouseService?: { activeEncoding?: string };
-  coreService?: { isCursorHidden?: boolean; modes?: { insertMode?: boolean }; decPrivateModes?: { origin?: boolean; cursorStyle?: 'block' | 'underline' | 'bar'; cursorBlink?: boolean } };
+  coreService?: {
+    isCursorHidden?: boolean; modes?: { insertMode?: boolean };
+    decPrivateModes?: { origin?: boolean; cursorStyle?: 'block' | 'underline' | 'bar'; cursorBlink?: boolean; synchronizedOutput?: boolean };
+  };
   buffer?: ScreenBuffer;
   _bufferService?: { buffers: { normal: ScreenBuffer } };
   _inputHandler?: { _curAttrData?: Attributes; _parser?: { precedingJoinState?: number } };
@@ -42,11 +48,19 @@ type ScreenCore = {
 
 const coreOf = (screen: Screen) => (screen as unknown as { _core?: ScreenCore })._core;
 
+/**
+ * Underlined by SGR 4, which is all of underlining the screen carries: xterm says a link's cells
+ * are underlined too (links are not carried), and an underline style it brings back with DECRC,
+ * which keeps none, once a link starts or ends (xterm's own quirk, which no page that comes back
+ * could build again). xterm keeps the bit in its attributes' first word.
+ */
+const underlined = (a: Attributes) => ((a as unknown as { fg: number }).fg & 0x10000000) !== 0;
+
 // The serializer, as xterm's.
 
 const equalFg = (a: Attributes, b: Attributes) => a.getFgColorMode() === b.getFgColorMode() && a.getFgColor() === b.getFgColor();
 const equalBg = (a: Attributes, b: Attributes) => a.getBgColorMode() === b.getBgColorMode() && a.getBgColor() === b.getBgColor();
-const equalFlags = (a: Attributes, b: Attributes) => a.isInverse() === b.isInverse() && a.isBold() === b.isBold() && a.isUnderline() === b.isUnderline()
+const equalFlags = (a: Attributes, b: Attributes) => a.isInverse() === b.isInverse() && a.isBold() === b.isBold() && underlined(a) === underlined(b)
   && a.isOverline() === b.isOverline() && a.isBlink() === b.isBlink() && a.isInvisible() === b.isInvisible() && a.isItalic() === b.isItalic()
   && a.isDim() === b.isDim() && a.isStrikethrough() === b.isStrikethrough();
 
@@ -84,7 +98,7 @@ function diffStyle(cell: Attributes, old: Attributes): number[] {
       if (cell.isBold() && !old.isBold()) sgr.push(1);
       if (cell.isDim() && !old.isDim()) sgr.push(2);
     }
-    if (cell.isUnderline() !== old.isUnderline()) sgr.push(cell.isUnderline() ? 4 : 24);
+    if (underlined(cell) !== underlined(old)) sgr.push(underlined(cell) ? 4 : 24);
     if (cell.isOverline() !== old.isOverline()) sgr.push(cell.isOverline() ? 53 : 55);
     if (cell.isBlink() !== old.isBlink()) sgr.push(cell.isBlink() ? 5 : 25);
     if (cell.isInvisible() !== old.isInvisible()) sgr.push(cell.isInvisible() ? 8 : 28);
@@ -281,7 +295,7 @@ const RGB = 0x3000000;
 /** The SGR that sets exactly these attributes, the color's mode included. */
 function sgrOf(a: Attributes): string {
   const params = ['0'];
-  const flags: Array<[() => number, string]> = [[a.isBold, '1'], [a.isDim, '2'], [a.isItalic, '3'], [a.isUnderline, '4'], [a.isBlink, '5'], [a.isInverse, '7'], [a.isInvisible, '8'], [a.isStrikethrough, '9'], [a.isOverline, '53']];
+  const flags: Array<[() => number, string]> = [[a.isBold, '1'], [a.isDim, '2'], [a.isItalic, '3'], [() => Number(underlined(a)), '4'], [a.isBlink, '5'], [a.isInverse, '7'], [a.isInvisible, '8'], [a.isStrikethrough, '9'], [a.isOverline, '53']];
   for (const [is, param] of flags) if (is.call(a)) params.push(param);
   const color = (mode: number, value: number, base: number) => {
     if (mode === RGB) params.push(`${base + 8};2;${(value >>> 16) & 255};${(value >>> 8) & 255};${value & 255}`);
@@ -351,9 +365,12 @@ function placeCursor(screen: Screen, shown: IBuffer, { moved, origin, top, joini
  * What a program set that the serializer leaves out of a screen, as sequences to follow it: how
  * mouse reports are written (SGR, which lazygit, htop and less --mouse ask for), where the cursor
  * was saved (DECSC), the tab stops and the rows that scroll (apt keeps its progress bar under
- * them), the cursor's shape (neovim's bar while it inserts) and a hidden cursor; then the cursor,
- * which those moved, as the serializer's own origin mode does (placeCursor). xterm keeps these to
- * itself; the version is pinned, and test/terminal-snapshot.test.ts fails should they move.
+ * them), the cursor's shape (neovim's bar while it inserts), whether it shows (htop hides it) and
+ * blinks, LNM, and an update the program has yet to finish (synchronized output); then the cursor,
+ * which those moved, as the serializer's own origin mode does (placeCursor). Whether the cursor
+ * shows or blinks, and LNM, are said either way: a page's terminal keeps them through ESC c. xterm
+ * keeps these to itself; the version is pinned, and test/terminal-snapshot.test.ts fails should
+ * they move.
  */
 export function modesBeyondSnapshot(screen: Screen): string {
   const core = coreOf(screen);
@@ -373,7 +390,10 @@ export function modesBeyondSnapshot(screen: Screen): string {
     const shape = { block: 1, underline: 3, bar: 5 }[modes.cursorStyle];
     more += `\x1b[${modes.cursorBlink ? shape : shape + 1} q`;
   }
-  if (core?.coreService?.isCursorHidden) more += '\x1b[?25l';
+  more += core?.coreService?.isCursorHidden ? '\x1b[?25l' : '\x1b[?25h';
+  more += screen.options.cursorBlink ? '\x1b[?12h' : '\x1b[?12l';
+  if (screen.options.convertEol) more += '\x1b[20h';
+  if (modes?.synchronizedOutput) more += '\x1b[?2026h';
   const moved = Boolean(modes?.origin) || state !== '';
   if (moved) more += sgrOf(current);
   return more + placeCursor(screen, screen.buffer.active, {
@@ -382,12 +402,27 @@ export function modesBeyondSnapshot(screen: Screen): string {
   });
 }
 
-/** The screen, its `scrollback` lines above included, as output that draws it again. */
-export function screenSnapshot(screen: Screen, scrollback: number): string {
+/** A color (xterm's index: 0 to 255, then 256 the text, 257 the background, 258 the cursor) as xterm.js reports one, which sets it too: `OSC 11 ; rgb:fafa/fafa/fafa ST`. */
+export function colorReport(index: number, [r, g, b]: readonly [number, number, number]): string {
+  const channel = (value: number) => value.toString(16).padStart(2, '0').repeat(2);
+  const ident = index === 256 ? '10' : index === 257 ? '11' : index === 258 ? '12' : `4;${index}`;
+  return `\x1b]${ident};rgb:${channel(r)}/${channel(g)}/${channel(b)}\x1b\\`;
+}
+
+/**
+ * The screen, its `scrollback` lines above included, as output that draws it again in a terminal
+ * reset with ESC c, which leaves the colors as they were: they are put back first (OSC 104, 110,
+ * 111, 112), then those a program set (`colors`, by xterm's index) are set again, and LNM is off
+ * while the screen is drawn.
+ */
+export function screenSnapshot(screen: Screen, scrollback: number, colors: ReadonlyMap<number, readonly [number, number, number]> = new Map()): string {
   const core = coreOf(screen);
   const normal = screen.buffer.normal;
   const length = normal.length;
-  let content = serializeRows(normal, screen, Math.max(0, length - Math.min(length, scrollback + screen.rows)), length - 1);
+  let content = '\x1b]104\x1b\\\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\';
+  for (const [index, rgb] of colors) content += colorReport(index, rgb);
+  content += '\x1b[20l';
+  content += serializeRows(normal, screen, Math.max(0, length - Math.min(length, scrollback + screen.rows)), length - 1);
   const normalState = core?._bufferService?.buffers.normal;
   const current = core?._inputHandler?._curAttrData;
   if (screen.buffer.active.type === 'alternate' && normalState && current) {
