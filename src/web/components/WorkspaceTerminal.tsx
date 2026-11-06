@@ -819,7 +819,9 @@ function ScreenText({ text, title, onClose, onQuote }: { text?: ScreenTextParts;
         </div>
       )}
     >
-      <pre ref={body} className="px-2 pb-2 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap select-text">
+      {/* Room above the first line for the bar a phone puts over what is selected (Copy, Share, Select */}
+      {/* all), which otherwise lay over Quote and Copy here: selecting there, they could not be reached. */}
+      <pre ref={body} className="px-2 pt-14 pb-2 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap select-text">
         {text?.before ? `${text.before}\n` : ''}
         <span ref={shown}>{text?.screen}</span>
         {text?.after ? `\n${text.after}` : ''}
