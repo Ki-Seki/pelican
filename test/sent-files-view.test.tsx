@@ -265,6 +265,25 @@ describe('a file Claude sent', () => {
     expect(screen.queryByRole('link', { name: 'Download build.zip' })).toBeNull();
   });
 
+  it('still shows the start of a text file too large to serve, with nothing to save', async () => {
+    states[`${WORK}/report.md`] = 'large';
+    show([prompt, ...sent('s21', [`${WORK}/report.md`])]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Week 45' })).toBeTruthy());
+    expect(screen.getByText('Larger than Pelican serves (200 MB), so it can’t be downloaded here')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Download report.md' })).toBeNull();
+  });
+
+  it('asks afresh about a file Claude sends again under the same name', async () => {
+    states[`${WORK}/report.md`] = 'gone';
+    const shown = show([prompt, ...sent('s22', [`${WORK}/report.md`])]);
+    await waitFor(() => expect(screen.getByText('No longer on this computer')).toBeTruthy());
+    states[`${WORK}/report.md`] = 'there';
+    shown.again([prompt, ...sent('s22', [`${WORK}/report.md`]), ...sent('s23', [`${WORK}/report.md`])]);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Week 45' })).toBeTruthy());
+    expect(screen.getAllByText('No longer on this computer')).toHaveLength(1);
+    expect(vi.mocked(api.sentStates)).toHaveBeenCalledTimes(2);
+  });
+
   it('shows a call’s files once it knows which are still there, asking once for them all, and loads none before', async () => {
     let found: (state: SentState) => void = () => {};
     states[`${WORK}/shots/dark.png`] = new Promise<SentState>((resolve) => { found = resolve; });

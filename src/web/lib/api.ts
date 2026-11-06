@@ -43,10 +43,10 @@ export const appBase = new URL('./', location.href);
 
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
-/** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
 /** Whether a file Claude sent can be had: still there, gone from where it was sent, or past what Pelican serves. */
 export type SentState = 'there' | 'gone' | 'large';
 
+/** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
 export class ApiError extends Error {
   constructor(
     message: string,

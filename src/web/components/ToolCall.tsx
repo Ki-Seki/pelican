@@ -258,11 +258,12 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
   const { data, error, isLoading } = useQuery({
     queryKey: ['sent', sessionId, file.path],
     queryFn: () => api.sent(sessionId, file.path),
-    enabled: needsData && state !== 'gone' && state !== 'large',
+    // Past what Pelican serves, a text file still shows its start; nothing else of it comes.
+    enabled: needsData && state !== 'gone' && (state !== 'large' || kind === 'text'),
     staleTime: 60_000,
   });
   const gone = state === 'gone' || (error instanceof ApiError && error.status === 410);
-  if (gone || state === 'large') return <Unavailable name={name} size={file.size} why={gone ? GONE : TOO_LARGE} square={layout.square} />;
+  if (gone || (state === 'large' && kind !== 'text')) return <Unavailable name={name} size={file.size} why={gone ? GONE : TOO_LARGE} square={layout.square} />;
   const failure = error ? <div className="px-3 pb-2 text-[12px] text-danger">{(error as Error).message}</div> : null;
 
   // On the site, a picture too large to come as data has nothing to show it from.
@@ -377,7 +378,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
           <Label name={name} size={file.size} />
           {!unshowable && (isLoading ? <Loader2 className="size-3.5 shrink-0 animate-spin text-faint" /> : <ChevronRight className={`size-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />)}
         </button>
-        <Save sessionId={sessionId} file={file.path} />
+        {state !== 'large' && <Save sessionId={sessionId} file={file.path} />}
       </div>
       {open && failure}
       {(broken || noData) && <div className="px-3 pb-2 text-[12px] text-faint">{kind === 'video' ? 'This video can’t be played here' : kind === 'audio' ? 'This audio can’t be played here' : 'This picture can’t be shown here'}</div>}
@@ -387,6 +388,7 @@ function SentFile({ sessionId, file, open: startOpen, layout, state }: { session
           {data.text !== undefined ? <TextBody text={data.text} markdown={/\.(md|markdown)$/i.test(name)} truncated={data.truncated} /> : <div className="px-3 py-2 text-[12px] text-faint">A binary file; nothing to show here</div>}
         </div>
       )}
+      {state === 'large' && <div className="px-3 pb-2 text-[12px] text-faint">{TOO_LARGE}, so it can’t be downloaded here</div>}
     </div>
   );
 }
@@ -412,7 +414,8 @@ function SentFiles({ call }: { call: ToolCall }) {
   // files that have since moved. Should nobody be able to say, they show as they would.
   const paths = [...new Set(files.map((file) => file.path))].slice(0, 50);
   const states = useQuery({
-    queryKey: ['sent-state', sessionId, ...paths],
+    // Per call: a file Claude sends again under the same name is asked about afresh.
+    queryKey: ['sent-state', sessionId, call.id, ...paths],
     queryFn: () => api.sentStates(sessionId!, paths),
     enabled: Boolean(sessionId),
     staleTime: 60_000,
