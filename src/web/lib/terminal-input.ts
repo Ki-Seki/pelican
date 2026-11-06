@@ -189,3 +189,41 @@ export function insertedText(field: HTMLElement, take: (text: string) => void): 
     for (const [type, listener] of listeners) field.removeEventListener(type, listener);
   };
 }
+
+/** As many lines as xterm's screen reader mode reads out of the output after a key (its own bound). */
+const READ_OUT_LINES = 20;
+
+/** What xterm's screen reader mode keeps of the output to read out (AccessibilityManager). */
+type ReadOut = { _handleChar(char: string): void; _clearLiveRegion(): void; _liveRegionLineCount: number };
+
+/**
+ * Bounds what xterm's screen reader mode reads out of the output: each character printed since the
+ * last key, which it stops taking after 20 lines; output with no line feed in it (a progress bar
+ * drawn over and over, a full-screen program, one long line) went on filling the page. Past as many
+ * characters as 20 full lines hold it stops the same way, saying there is too much to read out.
+ * xterm keeps this to itself; the version is pinned, and test/terminal-inserted.test.ts fails
+ * should it move. Whether it could.
+ */
+export function boundReadOut(t: { readonly cols: number }): boolean {
+  const readOut = (t as unknown as { _core?: { _accessibilityManager?: { value?: ReadOut } } })._core?._accessibilityManager?.value;
+  if (typeof readOut?._handleChar !== 'function' || typeof readOut._clearLiveRegion !== 'function') return false;
+  const take = readOut._handleChar.bind(readOut);
+  const clear = readOut._clearLiveRegion.bind(readOut);
+  let taken = 0;
+  readOut._clearLiveRegion = () => {
+    taken = 0;
+    clear();
+  };
+  readOut._handleChar = (char) => {
+    taken += 1;
+    const most = READ_OUT_LINES * t.cols;
+    if (taken < most) take(char);
+    else if (taken === most && readOut._liveRegionLineCount <= READ_OUT_LINES) {
+      // As xterm ends once 20 lines came: a line feed, and that there is too much to read out.
+      readOut._liveRegionLineCount = READ_OUT_LINES;
+      take('\n');
+    }
+  };
+  return true;
+}
+

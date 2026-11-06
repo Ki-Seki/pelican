@@ -16,7 +16,7 @@ import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { showCursor } from '../lib/terminal-cursor';
 import {
-  asksForSecret, bufferText, cleanPaste, cleanPastes, colorQuery, insertedText, keySequence, lineBeforeCursor, themeColors, viewportText,
+  asksForSecret, boundReadOut, bufferText, cleanPaste, cleanPastes, colorQuery, insertedText, keySequence, lineBeforeCursor, themeColors, viewportText,
 } from '../lib/terminal-input';
 import { type Connection, TerminalConnection } from '../lib/terminal-socket';
 
@@ -237,8 +237,9 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     // A tap gives the screen the keys, never a phone's keyboard.
     if (touch) t.textarea?.setAttribute('inputmode', 'none');
     // Text a computer puts in without keys (an emoji picker, dictation), which xterm in screen
-    // reader mode leaves in its field.
+    // reader mode leaves in its field; and what it reads out of the output, bounded.
     const stopInserting = !touch && t.textarea ? insertedText(t.textarea, (text) => t.input(text, true)) : () => undefined;
+    if (!touch) boundReadOut(t);
     const stopRows = touch ? rowsAsText(el, t) : () => undefined;
 
     t.onData((data) => {

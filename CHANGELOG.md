@@ -58,10 +58,11 @@ A terminal beside the conversation, as Claude Desktop has one.
   the shell's paste early and run without Enter.
 - What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, at
   most 16 combining marks on a character, whatever a program prints between them, the latest 2,048
-  links (the computer keeps none) and no title; a sequence that repeats a character, scrolls,
-  inserts or deletes lines or moves by tab stops does so at most a screen's worth of times (REP a
-  line's), however large a count it gives, and the computer's copy takes output in a little at a
-  time; so no output grows Pelican's memory, or a phone's, without bound, or holds the rest of
+  links (the computer keeps none), no title, and at most 20 lines' worth of output for a screen
+  reader to read out, also of output with no line feed in it; a sequence that repeats a character,
+  scrolls, inserts or deletes lines or moves by tab stops does so at most a screen's worth of times
+  (REP a line's), however large a count it gives, and the computer's copy takes output in a little
+  at a time; so no output grows Pelican's memory, or a page's, without bound, or holds the rest of
   Pelican up for more than a moment; and output xterm throws on stops neither Pelican nor a page's
   screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
