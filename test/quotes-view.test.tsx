@@ -213,6 +213,44 @@ describe('text selected with a mouse', () => {
     expect(waitingOf('chat')).toEqual([]);
   });
 
+  it('stays inside the conversation when its passage is scrolled out of view, never over the header or the box', () => {
+    const frameRect = HTMLElement.prototype.getBoundingClientRect;
+    const { getClientRects, getBoundingClientRect } = Range.prototype;
+    // The conversation's frame runs from 60 to 520; the passage is wherever `at` says.
+    let at = 300;
+    const line = () => ({ x: 10, y: at, top: at, left: 10, bottom: at + 18, right: 200, width: 190, height: 18, toJSON: () => ({}) }) as DOMRect;
+    HTMLElement.prototype.getBoundingClientRect = function frameOrNot(this: HTMLElement) {
+      return this.dataset.testid === 'frame' ? ({ x: 0, y: 60, top: 60, left: 0, bottom: 520, right: 800, width: 800, height: 460, toJSON: () => ({}) } as DOMRect) : frameRect.call(this);
+    };
+    Range.prototype.getClientRects = () => [line()] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = line;
+    try {
+      render(<Conversation target={target} />);
+      drag(screen.getByTestId('reply'), 53, 75);
+      wait(SETTLE_MS);
+      fireEvent.keyDown(document.body, { key: 'Enter' });
+      const top = () => noteBox()!.style.top;
+      expect(top()).toBe('326px');
+      // Scrolled up: the passage is below the frame, the box at its foot.
+      at = 700;
+      act(() => {
+        window.dispatchEvent(new Event('scroll'));
+      });
+      wait(20);
+      expect(top()).toBe('508px');
+      // Scrolled down: the passage is above it, under the header; the box at its top.
+      at = 20;
+      act(() => {
+        window.dispatchEvent(new Event('scroll'));
+      });
+      wait(20);
+      expect(top()).toBe('72px');
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = frameRect;
+      Object.assign(Range.prototype, { getClientRects, getBoundingClientRect });
+    }
+  });
+
   it('a click outside closes the note box only while its note is empty', () => {
     render(<Conversation target={target} />);
     drag(screen.getByTestId('reply'), 53, 75);

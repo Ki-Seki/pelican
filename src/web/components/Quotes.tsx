@@ -440,8 +440,11 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
         return;
       }
       const below = lines.last.bottom + GAP;
-      const top = below + height <= area.bottom - EDGE ? below : Math.max(area.top + EDGE, lines.first.top - GAP - height);
-      setPlace({ left: centred(lines.last, width, area), top: Math.round(top) });
+      const top = below + height <= area.bottom - EDGE ? below : lines.first.top - GAP - height;
+      // Scrolled out of view, the passage leaves the box at the conversation's edge, never over the
+      // header or what sits above the message box.
+      const inside = Math.max(area.top + EDGE, Math.min(top, area.bottom - height - EDGE));
+      setPlace({ left: centred(lines.last, width, area), top: Math.round(inside) });
     };
     update();
     const soon = () => {
