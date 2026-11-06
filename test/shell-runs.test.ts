@@ -252,6 +252,8 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     try {
       // A gigabyte or more a second: before, every bit of it was held until the next look.
       const shell = startShell(sessionId, folder, 'yes "a fairly long line of output, to fill the pipe as fast as it goes ..........."');
+      // Three seconds of it from its first line: a busy computer can be slow to start a login shell.
+      await until(() => events.some((e) => e.type === 'shell_output' && e.id === shell.id), 10_000);
       await settle(3000);
       expect(liveShells(sessionId)[0]).toMatchObject({ id: shell.id, truncated: true });
       expect(liveShells(sessionId)[0]!.output.length).toBe(MAX_OUTPUT);

@@ -57,8 +57,10 @@ describe.skipIf(process.platform === 'win32')('! commands when Pelican shuts dow
     const tidy = path.join(dir, 'tidy');
     const tidied = path.join(dir, 'tidied');
     // A program that tidies up for three seconds when asked, after the shell that started it has
-    // gone: longer than Claude Code's 1.5 and Stop's 2 seconds.
-    startShell(SESSION, dir, `echo $$ > ${tidy}; sh -c "trap 'sleep 3; echo done > ${tidied}; exit 0' TERM; while :; do sleep 0.1; done"; true`);
+    // gone: longer than Claude Code's 1.5 and Stop's 2 seconds. Only once it can be asked does it
+    // write down the group: its shell's `$$`, filled in before it starts (the double quotes). A
+    // busy computer can be slow to start it.
+    startShell(SESSION, dir, `sh -c "trap 'sleep 3; echo done > ${tidied}; exit 0' TERM; echo $$ > ${tidy}; while :; do sleep 0.1; done"; true`);
     const group = await groupOf(tidy);
     await settle(200);
     const started = Date.now();
@@ -80,7 +82,7 @@ describe.skipIf(process.platform === 'win32')('! commands when Pelican shuts dow
 
   it('are made to end once the time is up, also one that ignores the asking', async () => {
     const stubborn = path.join(dir, 'stubborn');
-    startShell(SESSION, dir, `echo $$ > ${stubborn}; trap '' TERM; sleep 60`);
+    startShell(SESSION, dir, `trap '' TERM; echo $$ > ${stubborn}; sleep 60`);
     const group = await groupOf(stubborn);
     await settle(200);
     const started = Date.now();
@@ -91,7 +93,7 @@ describe.skipIf(process.platform === 'win32')('! commands when Pelican shuts dow
 
   it('end at once when Pelican is told again, as by a second Ctrl+C', async () => {
     const stubborn = path.join(dir, 'stubborn-again');
-    startShell(SESSION, dir, `echo $$ > ${stubborn}; trap '' TERM; sleep 60`);
+    startShell(SESSION, dir, `trap '' TERM; echo $$ > ${stubborn}; sleep 60`);
     const group = await groupOf(stubborn);
     await settle(200);
     const started = Date.now();
@@ -154,7 +156,7 @@ startShell(${JSON.stringify(SESSION)}, ${JSON.stringify(dir)}, ${JSON.stringify(
 
   it('end with Pelican at once when it is told twice, even one that ignores the asking', async () => {
     const ready = path.join(dir, 'served-stubborn');
-    const { child, exited, pgid } = await pelicanWith(`echo $$ > ${ready}; trap '' TERM; sleep 60`, ready);
+    const { child, exited, pgid } = await pelicanWith(`trap '' TERM; echo $$ > ${ready}; sleep 60`, ready);
     const started = Date.now();
     child.kill('SIGTERM');
     await settle(500);
