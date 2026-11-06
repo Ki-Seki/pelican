@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, Plus, Search, Settings, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, type LucideIcon, Pin, PinOff, Plus, Search, Settings, X } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
@@ -7,6 +7,7 @@ import { api, isUnreachable } from '../lib/api';
 import { type Entry, fold, foldKey, isActive } from '../lib/fold';
 import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { composing, MOD_ARIA } from '../lib/keyboard';
+import { changed, changeWords, type ListChange, makeChange, undoOf } from '../lib/list-changes';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { defaultStart, type Start } from '../lib/start';
 import { statusLabel } from '../lib/status';
@@ -147,19 +148,25 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
 const REVEAL = 104;
 const COMMIT = 0.4;
 
+/** What a row can do without opening its session: Pin (Unpin), or Archive (Unarchive). */
+type RowAction = { label: string; icon: LucideIcon; act: () => void };
+
 /**
- * A row with one action, Archive (Unarchive once archived), reached without opening the session.
- * Under a finger the row slides left, as in Mail: far enough, it acts when let go; less far, the
- * button stays showing. With a mouse or the keyboard the action is a button on the row, shown on
- * hover or focus.
+ * A row with its actions, reached without opening the session: Pin, shown from the left, and
+ * Archive, from the right (Unpin and Unarchive once done). Under a finger the row slides, as in
+ * Mail: right for Pin, left for Archive; far enough, it acts when let go; less far, the button
+ * stays showing. With a mouse or the keyboard the actions are buttons on the row, shown on hover
+ * or focus.
  */
-function Swipeable({ name, archived, compact, selected, onAction, children }: {
-  /** The session's title, so each row's button says which session it acts on. */
+function Swipeable({ name, start, end, compact, selected, children }: {
+  /** The session's title, so each row's buttons say which session they act on. */
   name: string;
-  archived: boolean;
+  /** Pin or Unpin, under a slide to the right; none for an archived session. */
+  start?: RowAction;
+  /** Archive or Unarchive, under a slide to the left. */
+  end: RowAction;
   compact: boolean;
   selected: boolean;
-  onAction: () => void;
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -167,8 +174,9 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
   const swallowClicksUntil = useRef(0);
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const label = archived ? 'Unarchive' : 'Archive';
-  const Icon = archived ? ArchiveRestore : Archive;
+  // Only a row with something to show on its left slides right.
+  const bounded = (x: number) => (start ? x : Math.min(0, x));
+  const shown = offset > 0 ? start : offset < 0 ? end : undefined;
 
   // A row left open closes at the next touch anywhere else, as rows in Mail do.
   useEffect(() => {
@@ -180,11 +188,11 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
     return () => document.removeEventListener('pointerdown', close, true);
   }, [offset, dragging]);
 
-  const act = () => {
-    setOffset(-(box.current?.offsetWidth ?? 0));
-    // The row slides out of sight, then leaves the list; if the change fails it comes back closed.
+  const act = (action: RowAction, toward: 1 | -1) => {
+    setOffset(toward * (box.current?.offsetWidth ?? 0));
+    // The row slides out of sight, then leaves its place in the list; if the change fails it comes back closed.
     window.setTimeout(() => {
-      onAction();
+      action.act();
       setOffset(0);
     }, reducedMotion() ? 0 : 180);
   };
@@ -210,7 +218,7 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
       setDragging(true);
     }
     d.dx = dx;
-    setOffset(Math.min(0, d.from + dx));
+    setOffset(bounded(d.from + dx));
   };
   const onPointerEnd = (e: React.PointerEvent, cancelled: boolean) => {
     const d = drag.current;
@@ -220,11 +228,12 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
     setDragging(false);
     // Some browsers follow a slide with a click on the row: it was not a tap.
     swallowClicksUntil.current = Date.now() + 400;
-    const at = Math.min(0, d.from + d.dx);
+    const at = bounded(d.from + d.dx);
     const width = box.current?.offsetWidth ?? 1;
     if (cancelled) setOffset(d.from);
-    else if (-at > width * COMMIT) act();
-    else setOffset(-at > REVEAL / 2 ? -REVEAL : 0);
+    else if (at > width * COMMIT && start) act(start, 1);
+    else if (-at > width * COMMIT) act(end, -1);
+    else setOffset(Math.abs(at) > REVEAL / 2 ? Math.sign(at) * REVEAL : 0);
   };
   const onClickCapture = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-row-action]')) return;
@@ -236,6 +245,19 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
     }
   };
 
+  const button = (action: RowAction) => (
+    <button
+      type="button"
+      data-row-action
+      aria-label={`${action.label}: ${name}`}
+      title={action.label}
+      onClick={action.act}
+      className={`grid size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg ${selected ? 'bg-chip' : 'bg-hover'}`}
+    >
+      <action.icon className="size-4" />
+    </button>
+  );
+
   return (
     <div
       ref={box}
@@ -246,17 +268,17 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
       onPointerCancel={(e) => onPointerEnd(e, true)}
       onClickCapture={onClickCapture}
     >
-      {(offset !== 0 || dragging) && (
-        <div className="absolute inset-0 flex justify-end overflow-hidden rounded-xl bg-fg">
+      {shown && (
+        <div className={`absolute inset-0 flex overflow-hidden rounded-xl bg-fg ${offset > 0 ? 'justify-start' : 'justify-end'}`}>
           <button
             type="button"
             data-row-action
-            onClick={act}
+            onClick={() => act(shown, offset > 0 ? 1 : -1)}
             className="flex h-full shrink-0 items-center justify-center gap-1.5 text-[14px] font-medium text-bg"
-            style={{ width: Math.max(REVEAL, -offset) }}
+            style={{ width: Math.max(REVEAL, Math.abs(offset)) }}
           >
-            <Icon className="size-4 shrink-0" />
-            {label}
+            <shown.icon className="size-4 shrink-0" />
+            {shown.label}
           </button>
         </div>
       )}
@@ -265,25 +287,25 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
-        <button
-          type="button"
-          data-row-action
-          aria-label={`${label}: ${name}`}
-          title={label}
-          onClick={onAction}
-          className={`absolute right-1.5 hidden size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg pointer-fine:grid ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'} ${selected ? 'bg-chip' : 'bg-hover'}`}
-        >
-          <Icon className="size-4" />
-        </button>
+        <div className={`absolute right-1.5 hidden gap-0.5 pointer-fine:flex ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'}`}>
+          {start && button(start)}
+          {button(end)}
+        </div>
       </div>
     </div>
   );
 }
 
-const ListRow = memo(function ListRow({ session, compact, onArchive, ...row }: RowProps & { compact: boolean; onArchive: (session: SessionSummary, archived: boolean) => void }) {
+const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: RowProps & { compact: boolean; onChange: (session: SessionSummary, change: ListChange) => void }) {
   const Row = compact ? CompactRow : DetailedRow;
+  const pin: RowAction = session.pinned
+    ? { label: 'Unpin', icon: PinOff, act: () => onChange(session, { pinned: false }) }
+    : { label: 'Pin', icon: Pin, act: () => onChange(session, { pinned: true }) };
+  const archive: RowAction = session.archived
+    ? { label: 'Unarchive', icon: ArchiveRestore, act: () => onChange(session, { archived: false }) }
+    : { label: 'Archive', icon: Archive, act: () => onChange(session, { archived: true }) };
   return (
-    <Swipeable name={session.title} archived={Boolean(session.archived)} compact={compact} selected={row.selected} onAction={() => onArchive(session, !session.archived)}>
+    <Swipeable name={session.title} {...(session.archived ? {} : { start: pin })} end={archive} compact={compact} selected={row.selected}>
       <Row session={session} {...row} />
     </Swipeable>
   );
@@ -387,8 +409,8 @@ function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
-/** What was just archived or brought back, for Undo; or why it could not be. */
-type Done = { session: SessionSummary; archived: boolean; error?: string; at: number };
+/** What was just pinned or archived, or brought back, for Undo; or why it could not be. */
+type Done = { session: SessionSummary; change: ListChange; error?: string; at: number };
 
 export function SessionList({
   machine,
@@ -433,19 +455,10 @@ export function SessionList({
   });
   const openSession = useCallback((id: string) => openRef.current(id), []);
 
-  // Archived at once in the list, then on the server; put back if the server says no.
-  const setArchived = useCallback((session: SessionSummary, archived: boolean, undoable = true) => {
-    const mark = (to: boolean) => queryClient.setQueryData<SessionSummary[]>(['sessions'], (list) =>
-      list?.map((s) => (s.id === session.id ? { ...s, archived: to } : s)));
-    void queryClient.cancelQueries({ queryKey: ['sessions'] });
-    mark(archived);
-    setDone(undoable ? { session, archived, at: Date.now() } : undefined);
-    api.archive(session.id, archived)
-      .catch((err: Error) => {
-        mark(!archived);
-        setDone({ session, archived, error: err.message, at: Date.now() });
-      })
-      .finally(() => void queryClient.invalidateQueries({ queryKey: ['sessions'] }));
+  // Pinned or archived at once in the list, then on the server; put back if the server says no.
+  const change = useCallback((session: SessionSummary, to: ListChange, undoable = true) => {
+    setDone(undoable ? { session, change: to, at: Date.now() } : undefined);
+    makeChange(queryClient, session, to).catch((err: Error) => setDone({ session, change: to, error: err.message, at: Date.now() }));
   }, [queryClient]);
   useEffect(() => {
     if (!done) return undefined;
@@ -663,7 +676,7 @@ export function SessionList({
                     unread={session.id !== selectedId && session.status !== 'running' && isUnread(session.id, session.lastActivity)}
                     showProject={!byProject || group.key === PINNED}
                     onOpen={openSession}
-                    onArchive={setArchived}
+                    onChange={change}
                   />
                 );
                 if (earlier.length === 0) return row(s);
@@ -707,11 +720,11 @@ export function SessionList({
       <div role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
         {done && (
           <div className="animate-fade pointer-events-auto mb-2 flex min-h-11 max-w-sm items-center gap-2 rounded-2xl bg-fg py-1 pr-1 pl-4 text-[14px] leading-snug text-bg shadow-lg">
-            <span className="min-w-0 py-1.5">{done.error ?? (done.archived ? 'Archived' : 'Unarchived')}</span>
+            <span className="min-w-0 py-1.5">{done.error ?? changeWords(done.change)}</span>
             {done.error ? (
               <button type="button" aria-label="Dismiss" onClick={() => setDone(undefined)} className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-bg/15"><X className="size-4" /></button>
             ) : (
-              <button type="button" onClick={() => setArchived(done.session, !done.archived, false)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
+              <button type="button" onClick={() => change(changed(done.session, done.change), undoOf(done.session, done.change), false)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
             )}
           </div>
         )}

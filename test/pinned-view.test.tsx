@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionSummary } from '../src/shared/protocol';
@@ -12,7 +12,7 @@ const session = (id: string, title: string, extra: Partial<SessionSummary> = {})
   ({ id, title, cwd: '/code/app', project: 'app', lastActivity: now - MIN, status: 'idle', ...extra });
 const docs = { cwd: '/code/docs', project: 'docs' };
 
-/** The sessions as the server has them. */
+/** The sessions as the server has them; pin and archive change them as the server would. */
 let server: SessionSummary[] = [];
 const initial = (): SessionSummary[] => [
   session('a1', 'Add a dark theme', { status: 'running', lastActivity: now - MIN }),
@@ -25,6 +25,25 @@ const initial = (): SessionSummary[] => [
   session('p1', 'Release notes', { ...docs, pinned: true, lastActivity: now - 26 * HOUR }),
   session('o1', 'Old idea', { archived: true, lastActivity: now - 5 * 24 * HOUR }),
 ];
+const serverSets = (id: string, change: { pinned?: boolean; archived?: boolean }) => {
+  server = server.map((s) => {
+    if (s.id !== id) return s;
+    const { pinned: _p, archived: _a, ...rest } = s;
+    const pinned = change.pinned ?? (Boolean(s.pinned) && !change.archived);
+    const archived = change.archived ?? (Boolean(s.archived) && !change.pinned);
+    return { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}) };
+  });
+};
+
+const pin = vi.fn(async (id: string, pinned: boolean) => {
+  serverSets(id, { pinned });
+  return { ok: true };
+});
+const archive = vi.fn(async (id: string, archived: boolean) => {
+  serverSets(id, { archived });
+  return { ok: true };
+});
+
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
   return {
@@ -33,6 +52,8 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       // Newest first, as the server lists them.
       sessions: async () => [...server].sort((a, b) => b.lastActivity - a.lastActivity),
+      pin: (id: string, pinned: boolean) => pin(id, pinned),
+      archive: (id: string, archived: boolean) => archive(id, archived),
     },
   };
 });
@@ -45,6 +66,9 @@ beforeAll(() => {
     ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
   });
+  // What a phone's layout would give: rows this wide, and a finger's pointer kept by the row.
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 360 });
+  HTMLElement.prototype.setPointerCapture = () => {};
 });
 
 const { SessionList } = await import('../src/web/components/SessionList');
@@ -52,6 +76,8 @@ const { setPrefs } = await import('../src/web/lib/prefs');
 
 beforeEach(() => {
   server = initial();
+  pin.mockClear();
+  archive.mockClear();
   setPrefs({ listGroup: 'time', listDensity: 'detailed' });
 });
 afterEach(cleanup);
@@ -136,6 +162,87 @@ describe('pinned sessions in the list', () => {
     fireEvent.change(search, { target: { value: 'docs' } });
     expect(groups().map((g) => g.heading)).toEqual(['Pinned', 'Today']);
     expect(titles('Today')).toEqual(['Tidy the docs']);
+  });
+
+  it('are pinned and unpinned at once from a row’s button, and put back when the server says no', async () => {
+    list();
+    await screen.findByText('Pinned');
+    fireEvent.click(screen.getByRole('button', { name: 'Pin: Tidy the docs' }));
+    expect(titles('Pinned')).toContain('Tidy the docs');
+    expect(titles('Today')).toBeUndefined();
+    expect(pin).toHaveBeenCalledWith('t1', true);
+    expect(screen.getByRole('status').textContent).toContain('Pinned');
+
+    pin.mockRejectedValueOnce(new Error('The disk is full'));
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin: Release notes' }));
+    expect(titles('Yesterday')).toEqual(['Release notes']);
+    await waitFor(() => expect(titles('Pinned')).toContain('Release notes'));
+    expect(screen.getByRole('status').textContent).toContain('The disk is full');
+  });
+
+  it('are unpinned by archiving, which Undo takes back, pin and all', async () => {
+    list();
+    await screen.findByText('Pinned');
+    fireEvent.click(screen.getByRole('button', { name: 'Archive: Release notes' }));
+    expect(titles('Pinned')).not.toContain('Release notes');
+    expect(archive).toHaveBeenCalledWith('p1', true);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Archived\s*2$/ })).toBeTruthy());
+    expect(screen.getByRole('status').textContent).toContain('Archived');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(pin).toHaveBeenCalledWith('p1', true);
+    expect(titles('Pinned')).toContain('Release notes');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Archived\s*1$/ })).toBeTruthy());
+  });
+
+  it('offer no pin for an archived session, under Archived: it is brought back first', async () => {
+    list();
+    await screen.findByText('Pinned');
+    fireEvent.click(screen.getByRole('button', { name: /^Archived/ }));
+    expect(screen.getByRole('button', { name: 'Unarchive: Old idea' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Pin: / })).toBeNull();
+  });
+});
+
+describe('a finger on a row', () => {
+  const slide = async (title: string, dx: number) => {
+    const row = screen.getByRole('link', { name: new RegExp(`^${title}`) });
+    const at = { pointerType: 'touch', isPrimary: true, pointerId: 1, clientY: 100 };
+    fireEvent.pointerDown(row, { ...at, clientX: 180 });
+    for (const step of [0.25, 0.5, 0.75, 1]) fireEvent.pointerMove(row, { ...at, clientX: 180 + dx * step });
+    fireEvent.pointerUp(row, { ...at, clientX: 180 + dx });
+  };
+
+  it('pins it with a slide to the right, as far as Archive’s slide to the left', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await act(() => slide('Tidy the docs', 200));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
+    expect(titles('Pinned')).toContain('Tidy the docs');
+    await act(() => slide('Release notes', 200));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('p1', false));
+    await act(() => slide('Fix the login test', -200));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('p2', true));
+  });
+
+  it('a shorter slide shows the button and leaves it to a tap', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await act(() => slide('Tidy the docs', 80));
+    expect(pin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
+  });
+
+  it('an archived row slides only left, to Unarchive', async () => {
+    list();
+    await screen.findByText('Pinned');
+    fireEvent.click(screen.getByRole('button', { name: /^Archived/ }));
+    await act(() => slide('Old idea', 200));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(pin).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
+    await act(() => slide('Old idea', -200));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('o1', false));
   });
 });
 

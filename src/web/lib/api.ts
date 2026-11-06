@@ -219,8 +219,10 @@ export const api = {
   fork: (id: string, options: { before?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
   remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
-  /** Put the session away from the list (true) or bring it back (false); nothing else changes. */
+  /** Put the session away from the list (true), unpinned, or bring it back (false); nothing else changes. */
   archive: (id: string, archived: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/archive`, { archived }),
+  /** Keep the session at the top of the list (true) or let it go back (false); a pin brings an archived session back. */
+  pin: (id: string, pinned: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/pin`, { pinned }),
   exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
   models: () => request<{ models: ModelOption[]; signedIn: boolean | null; account?: Account }>('models'),
   completions: (cwd: string) => request<{ commands: Command[]; agents: Agent[] }>(`commands?cwd=${encodeURIComponent(cwd)}`),
