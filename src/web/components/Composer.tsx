@@ -215,7 +215,7 @@ function takeKeys(box: HTMLTextAreaElement | null, put: () => void): void {
 /**
  * Text to put in the box, a new `key` each time: a prompt to edit, a suggestion. `append` adds it
  * after what is written; `block` too, on lines of its own (a request to Claude). `back`: a message
- * that did not go, given back with its quotes and files (givenBack).
+ * that did not go, given back with its files (givenBack); what waited with it the chat gives back.
  */
 export type ComposerDraft = { text: string; key: number; append?: boolean; block?: boolean; back?: boolean; attachments?: Attachment[] };
 
@@ -396,18 +396,17 @@ export function Composer({
   useEffect(() => {
     if (!draft || taken.has(draft)) return;
     taken.add(draft);
-    // What waited with a message given back is back above the box already (Chat gives it back).
-    const given = { text: draft.text };
+    // What waited with a message given back is above the box again already: the chat gives it back.
     const files = draft.attachments ?? [];
-    const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: given.text, files: files.length > 0 }, !side) : undefined;
+    const back = draft.back ? givenBack({ text, files: uploads.some((u) => !u.error) }, { text: draft.text, files: files.length > 0 }, !side) : undefined;
     const next = draft.block ? withQuote(text, draft.text)
       : draft.append ? `${text}${text && !/\s$/.test(text) ? ' ' : ''}${draft.text}`
         : back ? back.text
-          : given.text;
+          : draft.text;
     setText(next);
     // Its files come back too: waiting with its words, or beside any added since.
     if (back?.held) {
-      const waiting: Held = { text: given.text, ...(files.length > 0 ? { attachments: files } : {}) };
+      const waiting: Held = { text: draft.text, ...(files.length > 0 ? { attachments: files } : {}) };
       setHeld((list) => (list.some((h) => sameHeld(h, waiting)) ? list : [...list, waiting]));
     } else if (files.length > 0) {
       setUploads((list) => withFiles(list, files));

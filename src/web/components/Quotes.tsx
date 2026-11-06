@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { announce } from '../lib/announce';
 import { addWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
-import { composing, isKey, keyText } from '../lib/keyboard';
+import { ariaKeys, composing, isKey, keyText } from '../lib/keyboard';
 import { fromElement, fromRange, paint, rangeOf, sourceOf } from '../lib/passages';
 import { enterSends } from '../lib/prefs';
 import { useSwipeLeft } from '../lib/press';
@@ -323,7 +323,7 @@ function Pill({ picked, bounds, sideLabel, onSideChat, onQuote, onGone }: {
       )}
       {sideLabel && onQuote && <span aria-hidden className="h-4 w-px shrink-0 bg-line" />}
       {onQuote && (
-        <button type="button" onClick={onQuote} aria-keyshortcuts="Enter" className={`${PART} gap-1.5 pr-3 ${sideLabel ? 'pl-2.5' : 'pl-3'}`}>
+        <button type="button" onClick={onQuote} aria-keyshortcuts={ariaKeys('quote')} className={`${PART} gap-1.5 pr-3 ${sideLabel ? 'pl-2.5' : 'pl-3'}`}>
           <TextQuote className="size-3.5 text-muted" />
           Quote
           {quoteKey && <span aria-hidden className="ml-0.5 text-[11.5px] font-normal text-faint">{quoteKey}</span>}
@@ -532,11 +532,11 @@ function NoteBox({ noting, bounds, canSend, onNote, onAdd, onSend, onClose }: {
         {full && <p role="alert" className="mt-2 text-[12.5px] leading-snug text-danger">{TOO_MANY_REPLIES}</p>}
         <div className="mt-2 flex items-center justify-end gap-1.5">
           {canSend && (
-            <button type="button" onClick={send} disabled={!ready} aria-keyshortcuts={sendKey ? 'Meta+Enter Control+Enter' : undefined} className="flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent">
+            <button type="button" onClick={send} disabled={!ready} aria-keyshortcuts={ariaKeys('noteSend')} className="flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40 disabled:hover:bg-transparent">
               Send now{sendKey && <span aria-hidden className="text-[11.5px] text-faint">{sendKey}</span>}
             </button>
           )}
-          <button type="button" onClick={add} className="flex h-8 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg">
+          <button type="button" onClick={add} aria-keyshortcuts={ariaKeys('noteAdd')} className="flex h-8 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg">
             Add{addKey && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{addKey}</span>}
           </button>
         </div>

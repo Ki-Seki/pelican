@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 import { api } from '../lib/api';
 import { useWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
-import { closesPane, composing, isKey, keyText } from '../lib/keyboard';
+import { ariaKeys, closesPane, composing, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments, useCommentsChat } from '../lib/review';
@@ -258,7 +258,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         </span>
       )}
       {onSendComments && (
-        <button type="button" onClick={onSendComments} aria-keyshortcuts="Meta+Enter Control+Enter" title={`Send now (${SEND_KEYS})`} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
+        <button type="button" onClick={onSendComments} aria-keyshortcuts={ariaKeys('commentsSend')} title={`Send now (${SEND_KEYS})`} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
           Send now
           {docked && SEND_KEYS && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{SEND_KEYS}</span>}
         </button>
