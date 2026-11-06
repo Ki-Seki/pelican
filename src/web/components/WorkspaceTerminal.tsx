@@ -9,7 +9,7 @@ import { baseName } from '../lib/format';
 import { composing } from '../lib/keyboard';
 import { terminalQuote } from '../lib/quote';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
-import { controlCharacter, keySequence, type RowKey } from '../lib/terminal-input';
+import { cleanPaste, controlCharacter, keySequence, type RowKey } from '../lib/terminal-input';
 import type { Connection } from '../lib/terminal-socket';
 import { isShell, takeTerminalAsks, takeTerminalFocus, useTerminalAsks, useTerminalFocusWanted, within } from '../lib/terminals';
 import { Sheet } from './Sheet';
@@ -380,14 +380,14 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const canPaste = typeof navigator !== 'undefined' && Boolean(navigator.clipboard?.readText);
 
   const send = (text: string) => screen.current?.input(text);
-  /** What the field holds goes to the shell first, without Enter. */
+  /** What the field holds goes to the shell first, without Enter (and without a control character pasted into it). */
   const flush = () => {
     const f = field.current;
     if (!f?.value) return;
     const value = f.value;
     f.value = '';
     setTyped(false);
-    send(value);
+    send(cleanPaste(value));
   };
   const key = (seq: string) => {
     flush();
@@ -396,7 +396,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   };
   const enter = () => {
     const f = field.current;
-    const line = f?.value ?? '';
+    const line = cleanPaste(f?.value ?? '');
     if (f) f.value = '';
     setTyped(false);
     setCtrl(false);
@@ -446,7 +446,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
     if (modeNow.current.direct && f.value) {
       const value = f.value;
       f.value = '';
-      send(value);
+      send(cleanPaste(value));
     }
     setTyped(Boolean(f.value));
   };

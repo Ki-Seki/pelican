@@ -118,3 +118,26 @@ export function colorQuery(ident: number, data: string): { asks: boolean; sets?:
   });
   return asks ? { asks, ...(sets.length > 0 ? { sets: sets.join('') } : {}) } : { asks };
 }
+
+/**
+ * Pasted text as a terminal takes it: without the control characters (C0 but tab, newline and
+ * carriage return; DEL; C1) a web page can put on the clipboard as you copy from it. In a paste
+ * they would act as keys, and ESC [201~ would end the shell's bracketed paste early, so the rest
+ * ran without Enter. xterm (the X11 one), kitty and Windows Terminal leave them out too.
+ */
+export const cleanPaste = (text: string): string => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
+
+/**
+ * Takes a paste into the screen inside `el` before xterm does (its own handler passes the text on
+ * as it is), and hands it on cleaned. Returns what stops it.
+ */
+export function cleanPastes(el: HTMLElement, paste: (text: string) => void): () => void {
+  const onPaste = (event: ClipboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const text = cleanPaste(event.clipboardData?.getData('text/plain') ?? '');
+    if (text) paste(text);
+  };
+  el.addEventListener('paste', onPaste, { capture: true });
+  return () => el.removeEventListener('paste', onPaste, { capture: true });
+}

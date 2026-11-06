@@ -47,6 +47,9 @@ A terminal beside the conversation, as Claude Desktop has one.
   as in any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is
   written to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service
   install`) starts Pelican without them.
+- A paste into a terminal, and the phone's line, leave out control characters, as xterm, kitty
+  and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
+  the shell's paste early and run without Enter.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.

@@ -230,6 +230,10 @@ describe('the Terminal tab on a phone', () => {
     fireEvent.submit(field().form!);
     expect(typed).toEqual(['ls -la\r']);
     expect(field().value).toBe('');
+    // A control character pasted into the field goes nowhere.
+    fireEvent.input(field(), { target: { value: 'echo hi\u001b[201~' } });
+    fireEvent.submit(field().form!);
+    expect(typed.splice(1)).toEqual(['echo hi[201~\r']);
     fireEvent.input(field(), { target: { value: 'git sta' } });
     fireEvent.click(screen.getByRole('button', { name: 'Tab' }));
     expect(typed.slice(1)).toEqual(['git sta', '\t']);

@@ -11,7 +11,9 @@ import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../s
 import { api, checkSignedIn } from '../lib/api';
 import { isApple, togglesTerminal } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
-import { asksForSecret, bufferText, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText } from '../lib/terminal-input';
+import {
+  asksForSecret, bufferText, cleanPaste, cleanPastes, colorQuery, keySequence, lineBeforeCursor, themeColors, viewportText,
+} from '../lib/terminal-input';
 import { type Connection, TerminalConnection } from '../lib/terminal-socket';
 
 /** The output as text, around the rows on screen. */
@@ -186,6 +188,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       connection.current?.input(data);
     });
     t.onBinary((data) => connection.current?.input(Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff)));
+    // A paste goes in without the control characters a page may have put on the clipboard.
+    const stopCleaning = cleanPastes(el, (text) => t.paste(text));
     t.onSelectionChange(() => {
       if (!touch) setSelection(t.hasSelection() ? t.getSelection() : '');
     });
@@ -244,6 +248,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
     return () => {
       detachTouch();
+      stopCleaning();
       resized.disconnect();
       themed.disconnect();
       scheme.removeEventListener('change', recolor);
@@ -357,7 +362,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     },
     paste: (text) => {
       reclaim();
-      term.current?.paste(text);
+      term.current?.paste(cleanPaste(text));
     },
     text: () => {
       const t = term.current;
