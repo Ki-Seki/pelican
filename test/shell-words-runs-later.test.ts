@@ -24,6 +24,7 @@ const SHELLS: Record<string, { file: string; args: (command: string) => string[]
   zsh: { file: '/bin/zsh', args: (command) => ['-c', `setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && eval ${quoted(command)}`] },
   bash: { file: '/bin/bash', args: (command) => ['-c', `shopt -s expand_aliases && eval ${quoted(command)} < /dev/null`] },
   sh: { file: '/bin/sh', args: (command) => ['-c', command] },
+  ksh: { file: '/bin/ksh', args: (command) => ['-c', command] },
 };
 /** What `p` logged of the command, run in the shell. */
 function logged(shell: string, command: string): string {
@@ -56,6 +57,8 @@ const CASES: Array<[string, string, string]> = [
   ['a file ENV names', `echo 'w done${N}# ; p PWNED' > e.sh; env ENV=./e.sh sh -i -c : </dev/null`, 'sh'],
   ["bash's --rcfile", `echo 'w done${N}# ; p PWNED' > r.sh; bash --rcfile r.sh -i -c : </dev/null`, 'sh'],
   ['a function bash imports from the environment', `env 'BASH_FUNC_f%%=() { w done${N}# ; p PWNED; }' bash -c f`, 'sh'],
+  // ksh93's `<<#` ends its heredoc at a line with blanks before its end: the line after it runs.
+  ["ksh's <<# heredoc", `ksh -c 'cat <<#E\n  x\n  E\nw a${N}# ; p PWNED\n#E'`, 'ksh'],
 ];
 
 describe('quoted text a shell runs later', () => {

@@ -183,6 +183,8 @@ type Across = {
   fed: Set<string>;
   /** Names given to an alias: where one is a command's name, what it stands for is not known here, and may run its arguments. */
   aliases: Set<string>;
+  /** A ksh runs a script: its `<<#` heredoc, which strips the blanks before its lines, this does not read. */
+  ksh: boolean;
   /** What the command sets a variable to: its text, or null where it is not known here. */
   values: Map<string, string | null>;
   /** The files the command writes, by the last part of their names: what goes in (as each reading has it), or null where it is not known here. */
@@ -1212,6 +1214,7 @@ class Reader {
         }
       } else if (SHELLS.has(at)) {
         if (launched) throw new Lost();
+        if (at === 'ksh' || at === 'ksh93') this.shared.across.ksh = true;
         this.shell(command, words.slice(j + 1));
         return;
       }
@@ -1552,7 +1555,7 @@ function bash32End(p: readonly Piece[], at: number, comments: Comments, depth: n
 export function inWords(command: string, asked: (char: string) => boolean): Set<number> | undefined {
   const found = new Set<number>();
   const pieces = [...command.matchAll(/[\s\S]/gu)].map((match) => ({ char: match[0], at: match.index }));
-  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), aliases: new Set(), values: new Map(), files: new Map(), runs: new Set() };
+  const across: Across = { readsInput: false, risky: false, functions: new Set(), fed: new Set(), aliases: new Set(), ksh: false, values: new Map(), files: new Map(), runs: new Set() };
   try {
     for (const dialect of ['modern', 'bash32'] as const) {
       const shared: Shared = { asked, found, scripts: [pieces], pipelines: [], dialect, depth: 0, across };
@@ -1571,5 +1574,7 @@ export function inWords(command: string, asked: (char: string) => boolean): Set<
   }
   // A shell reads its input, and something may hand it text of the command line this does not follow.
   if (across.readsInput && (across.risky || [...across.fed].some((name) => across.functions.has(name)))) return undefined;
+  // ksh93 ends a `<<#` heredoc at a line with blanks before its end, which bash, zsh and dash take for its body.
+  if (across.ksh && command.includes('<<#')) return undefined;
   return found;
 }
