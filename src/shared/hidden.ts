@@ -52,12 +52,12 @@
  *
  * A command, a path, a name, a rule or a tool's input (the default) writes out every other joiner
  * and variation selector: there one makes two names look alike, and a run of them carries what no
- * one sees. Words (`prose`), such as what Claude says a command does or the caption of a file it
- * sends, keep those their scripts are written with: a joiner or non-joiner after a
+ * one sees. Words (`prose`), such as what Claude says a command does, a web search or the caption
+ * of a file it sends, keep those their scripts are written with: a joiner or non-joiner after a
  * letter or mark beyond ASCII (Persian, Arabic, the Indic scripts), and one variation selector after
  * a character that takes it (VS1 to VS14 after a math symbol, an ideograph or a Myanmar, Phags-pa,
  * Manichaean or Egyptian letter, VS17 to VS256 after an ideograph, Mongolian's own after a
- * Mongolian letter). A tool's input reads its `command` as a shell command (revealInput).
+ * Mongolian letter). A tool's input shows each of its strings by what its key names (revealInput).
  *
  * The repository's check of its own files (test/hidden-characters.test.ts) is a separate list, for
  * code hygiene: there spaces and private-use characters are escapes too.
@@ -118,7 +118,7 @@ function written(char: string, before: string | undefined): boolean {
 
 /** How a text is read, which decides what of it is written out (above). */
 export type Reading = {
-  /** Words: what Claude says a command does, a caption. */
+  /** Words: what Claude says a command does, a search, a caption. */
   prose?: boolean;
   /** What runs: a shell command, or a program and its arguments shown joined by spaces. */
   runs?: 'shell' | 'argv';
@@ -150,9 +150,15 @@ export function revealHidden(text: string, { prose = false, runs }: Reading = {}
   return { text: shown, hidden };
 }
 
+/** Keys of a tool's input whose strings are words: a search, a message, what a task or an agent is to do. */
+const WORDS = /^(?:texts?|messages?|body|content|query|prompt|title|subject|description|summary|comments?|notes?|caption|questions?|reason|plan|activeForm)$/i;
+
+/** Whether a tool's input holds words under `key` (WORDS). */
+export const holdsWords = (key: string) => WORDS.test(key);
+
 /**
- * A tool's input as JSON, as `JSON.stringify(input, null, 2)` writes it, each string shown as a
- * name, but a `command`, shown as a shell command (Monitor's). Keys are names.
+ * A tool's input as JSON, as `JSON.stringify(input, null, 2)` writes it, each string shown as what
+ * its key names: words (WORDS), a shell command (`command`), or else a name. Keys are names.
  */
 export function revealInput(input: unknown): { text: string; hidden: boolean } {
   let hidden = false;
@@ -170,7 +176,7 @@ export function revealInput(input: unknown): { text: string; hidden: boolean } {
     }
     if (value !== null && typeof value === 'object') {
       const fields = Object.entries(value).flatMap(([key, item]) => {
-        const shown = write(item, key === 'command' ? { runs: 'shell' } : {}, inner);
+        const shown = write(item, WORDS.test(key) ? { prose: true } : key === 'command' ? { runs: 'shell' } : {}, inner);
         return shown === undefined ? [] : [`${inner}${reveal(key, {})}: ${shown}`];
       });
       return fields.length === 0 ? '{}' : `{\n${fields.join(',\n')}\n${indent}}`;

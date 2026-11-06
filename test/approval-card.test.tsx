@@ -215,3 +215,32 @@ describe('a space other than a plain one in a command', () => {
   });
 });
 
+describe('words on an approval, read as words', () => {
+  const cases: Array<[string, PermissionRequest, string]> = [
+    ['a web search in Sinhala, the name of Sri Lanka written with a joiner', ask('WebSearch', { query: '\u0dc1\u0dca\u200d\u0dbb\u0dd3 \u0dbd\u0d82\u0d9a\u0dcf weather' }), '\u0dc1\u0dca\u200d\u0dbb\u0dd3 \u0dbd\u0d82\u0d9a\u0dcf weather'],
+    ['a web search in Persian, with non-joiners', ask('WebSearch', { query: '\u06a9\u062a\u0627\u0628\u200c\u0647\u0627\u06cc \u0628\u0631\u0646\u0627\u0645\u0647\u200c\u0646\u0648\u06cc\u0633\u06cc' }), '\u06a9\u062a\u0627\u0628\u200c\u0647\u0627\u06cc'],
+    ['what an agent is to do, in Persian', ask('Agent', { description: '\u0628\u0631\u0631\u0633\u06cc \u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627', prompt: '\u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627 \u0631\u0627 \u0627\u062c\u0631\u0627 \u06a9\u0646', subagent_type: 'Explore' }), '\u0628\u0631\u0631\u0633\u06cc \u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627'],
+    ['a message in Hindi, as an MCP tool’s input', ask('mcp__slack__send_message', { channel: 'C1', text: '\u091f\u0947\u0938\u094d\u200d\u091f \u0939\u094b \u0917\u090f' }), '"text": "\u091f\u0947\u0938\u094d\u200d\u091f \u0939\u094b \u0917\u090f"'],
+    ['a task in Persian', ask('TaskCreate', { subject: '\u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627', description: '\u0647\u0645\u0647 \u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627' }), '\u0622\u0632\u0645\u0648\u0646\u200c\u0647\u0627'],
+  ];
+  for (const [name, request, shown] of cases) {
+    it(name, () => {
+      show(request);
+      expect(text()).toContain(shown);
+      expect(text()).not.toContain('⟨U+');
+      expect(text()).not.toContain(WARNING);
+    });
+  }
+
+  it('still shows, in a search, what turns it around or hides in it', () => {
+    show(ask('WebSearch', { query: 'weather \u202enodnol\u200d\u200d' }));
+    expect(text()).toContain('weather ⟨U+202E⟩nodnol⟨U+200D⟩⟨U+200D⟩');
+    expect(text()).toContain(WARNING);
+  });
+
+  it('shows why Claude Code asks, with what hides in it written out', () => {
+    show(ask('Read', { file_path: '/etc/hosts' }, { reason: 'Outside the project\u202e' }));
+    expect(text()).toContain('Outside the project⟨U+202E⟩');
+    expect(text()).toContain(WARNING);
+  });
+});
