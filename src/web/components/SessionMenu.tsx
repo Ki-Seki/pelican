@@ -185,9 +185,11 @@ export function SessionMenu({
   };
 
   // At once, as in the list, and put back if the server says no.
-  const pin = (listed: SessionSummary, to: ListChange) => {
+  const pin = (pinned: boolean) => {
+    if (!session) return;
+    const to: ListChange = { pinned };
     setError(undefined);
-    makeChange(queryClient, listed, to).then(() => announce(changeWords(to)), (err: Error) => setError(err.message));
+    makeChange(queryClient, session, to).then(() => announce(changeWords(to)), (err: Error) => setError(err.message));
   };
 
   const copy = (what: string, text: string) => {
@@ -283,8 +285,8 @@ export function SessionMenu({
       {/* An archived session is brought back first; then it can be pinned. */}
       {session && !session.archived && (
         session.pinned
-          ? <SheetOption icon={<PinOff className="size-4" />} label="Unpin" onSelect={() => pin(session, { pinned: false })} />
-          : <SheetOption icon={<Pin className="size-4" />} label="Pin" onSelect={() => pin(session, { pinned: true })} />
+          ? <SheetOption icon={<PinOff className="size-4" />} label="Unpin" onSelect={() => pin(false)} />
+          : <SheetOption icon={<Pin className="size-4" />} label="Pin" onSelect={() => pin(true)} />
       )}
       {session?.archived ? (
         <SheetOption
