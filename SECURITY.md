@@ -9,10 +9,11 @@ can read your sessions and have Claude run commands as you, so treat access to i
   token, kept in `~/.config/pelican/token.json` (readable only by you), and prints a link with it,
   the way Jupyter does. Opening that link signs the browser in; `pelican token` prints it again and
   `pelican token --reset` replaces it, signing every browser out at once, the connections and
-  terminals it has open included (a running Pelican notices within a second). Other accounts and programs on the computer, containers and VMs that can reach
-  `127.0.0.1` included, get nowhere without it. The link is printed only on a terminal, never into
-  a log (a service's output file), and is never put on a command line: on macOS `--open` hands it
-  to the browser through a file only you can read; elsewhere `--open` opens the sign-in page.
+  terminals it has open included (a running Pelican notices within a second). Other accounts and
+  programs on the computer, containers and VMs that can reach `127.0.0.1` included, get nowhere
+  without it. The link is printed only on a terminal, never into a log (a service's output file),
+  and is never put on a command line: on macOS `--open` hands it to the browser through a file only
+  you can read; elsewhere `--open` opens the sign-in page.
 - **A phone signs in with a one-time code**, never the token: the QR codes of `pelican phone`, of
   the start banner and of Settings carry a code that works once and for two minutes, and a new
   token or password voids the codes made before it. `pelican phone` talks only to the Pelican

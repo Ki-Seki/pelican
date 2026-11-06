@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { type ClientEvent, type RunState, type ServerEvent, SIGNED_OUT_CLOSE } from '../shared/protocol.js';
 import { TERMINAL_LIMITS } from '../shared/terminal.js';
 import { app } from './app.js';
-import { loadAuth, signedIn } from './auth.js';
+import { loadAuth, refreshAuth, signedIn } from './auth.js';
 import { config } from './config.js';
 import { connect, subscribe } from './feed.js';
 import { keepDays, sweepUploads } from './files.js';
@@ -76,6 +76,8 @@ function keepSignedIn(ws: WebSocket, stillSignedIn: () => boolean): void {
   ws.once('close', () => sockets.delete(ws));
   if (checkingSignIn) return;
   checkingSignIn = setInterval(() => {
+    // The sign-in files read again now, not up to a second from now: a reset closes them within one.
+    refreshAuth(Date.now(), true);
     for (const [socket, still] of sockets) {
       if (still()) continue;
       sockets.delete(socket);

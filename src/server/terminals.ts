@@ -13,6 +13,7 @@ import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
   type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalServerMessage,
 } from '../shared/terminal.js';
+import { refreshAuth } from './auth.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
 import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
@@ -764,6 +765,8 @@ let checkingSignIns: NodeJS.Timeout | undefined;
 function checkSignIns(): void {
   if (checkingSignIns) return;
   checkingSignIns = setInterval(() => {
+    // The sign-in files read again now, not up to a second from now: a reset lets go within one.
+    refreshAuth(Date.now(), true);
     for (const term of terminals.values()) term.letGoOfSignedOut();
     if ([...terminals.values()].some((term) => term.viewers.size > 0)) return;
     clearInterval(checkingSignIns);
