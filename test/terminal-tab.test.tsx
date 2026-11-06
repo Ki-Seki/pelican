@@ -251,11 +251,21 @@ describe('the Terminal tab', () => {
     expect(opened.at(-1)).toEqual({ cwd: CWD, cols: 90, rows: 30, trust: 'user-only' });
   });
 
-  it('says what stopped a terminal from starting', async () => {
-    refuse = () => new ApiError('At most 10 terminals run at once. Close one to open another.', 429);
+  it('says what stopped a terminal from starting, and with as many running as may, lists those elsewhere to end one', async () => {
+    list.terminals = Array.from({ length: 10 }, (_, n) => terminal(`t${n + 1}`, { cwd: `/code/other-${n + 1}` }));
+    refuse = () => (list.terminals.length >= 10 ? new ApiError('At most 10 terminals run at once. Close one to open another.', 429) : undefined);
     tab();
     expect(await screen.findByText(/At most 10 terminals/)).toBeTruthy();
     expect(opened).toHaveLength(1);
+    const elsewhere = screen.getByRole('list', { name: 'Terminals in other folders' });
+    expect(elsewhere.textContent).toContain('zsh · other-1');
+    expect(elsewhere.querySelectorAll('li')).toHaveLength(10);
+    // Ending one of them makes room: the folder's terminal starts.
+    fireEvent.click(screen.getByRole('button', { name: 'End zsh in other-3' }));
+    await waitFor(() => expect(closed).toEqual(['t3']));
+    await waitFor(() => expect(tabs()).toEqual(['zsh']));
+    expect(opened).toHaveLength(2);
+    expect(screen.queryByText(/At most 10 terminals/)).toBeNull();
   });
 
   it('opens a terminal asked for elsewhere: in a folder (Open in terminal), running a command (Run in terminal)', async () => {

@@ -288,6 +288,8 @@ class Term {
   exit?: TerminalExit;
   /** When it was last shown, typed into or printed something. */
   lastActive = Date.now();
+  /** Whether anything was ever typed into it, or run in it (Run in terminal): one never used makes room for another. */
+  used = false;
   closed = false;
   /** The server's copy of the screen. */
   private readonly screen: Screen;
@@ -601,6 +603,7 @@ class Term {
       const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
       this.pty.write(bytes);
       this.keyed = true;
+      this.used = true;
       this.lastActive = Date.now();
       // Enter may start a program that prints nothing for a while.
       if (bytes.includes(13)) this.lookAtProgramSoon();
@@ -668,6 +671,7 @@ class Term {
    * one, as if pasted: its lines go in together, and run with the Enter after them.
    */
   typeWhenReady(command: string): void {
+    this.used = true;
     let done = false;
     let quiet: NodeJS.Timeout | undefined;
     const type = () => {
@@ -784,7 +788,7 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
 /**
  * Starts the user's shell, as a login shell, in `cwd` (checked by the caller, with launchFor's
  * `env`), and types `command` into it once it is ready. An ended terminal makes room when as many
- * run as may; otherwise TooManyTerminals.
+ * run as may, else one never used (unused); otherwise TooManyTerminals.
  */
 export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string; colors?: TerminalColors } = {}): Promise<TerminalInfo> {
   const refused = refusal();
@@ -792,10 +796,11 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
   const spawn = await loadPty();
   const file = testShell.file ?? (await loginShell());
   const args = testShell.file ? (testShell.args ?? []) : ['-l'];
-  if (terminals.size >= TERMINAL_LIMITS.terminals) {
-    const ended = [...terminals.values()].find((t) => t.exit);
-    if (!ended) throw new TooManyTerminals(`At most ${TERMINAL_LIMITS.terminals} terminals run at once. Close one to open another.`);
-    ended.close();
+  // Looked at again after each wait: another terminal may have opened meanwhile.
+  while (terminals.size >= TERMINAL_LIMITS.terminals) {
+    const room = [...terminals.values()].find((t) => t.exit) ?? (await unused());
+    if (!room) throw new TooManyTerminals(`At most ${TERMINAL_LIMITS.terminals} terminals run at once. Close one to open another.`);
+    room.close();
   }
   const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
   const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
@@ -806,6 +811,20 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
     sweeping.unref();
   }
   return term.info();
+}
+
+/**
+ * The terminal that has waited longest of those nobody ever typed into or ran a command in, that
+ * no page shows, and where nothing runs: a shell the Terminal tab started by itself, in a folder
+ * looked at once. It makes room, as an ended one does, rather than leave a folder with none.
+ */
+async function unused(): Promise<Term | undefined> {
+  const idle = [...terminals.values()].filter((t) => !t.used && !t.closed && t.viewers.size === 0).sort((a, b) => a.lastActive - b.lastActive);
+  if (idle.length === 0) return undefined;
+  const parents = await processParents();
+  if (!parents) return undefined;
+  const busy = new Set(parents.values());
+  return idle.find((t) => !t.used && !t.closed && t.viewers.size === 0 && !busy.has(t.pid));
 }
 
 /** Closes a terminal, hanging its shell up; false when there is no such terminal. */

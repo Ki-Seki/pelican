@@ -144,6 +144,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string>();
+  /** The problem is that as many terminals run as may: those elsewhere are listed, to end one. */
+  const [full, setFull] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   // A new terminal starts by itself only the first time: not after the last was ended here, or the
   // folder's trust was not given.
@@ -177,6 +179,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     opening.current = true;
     setStarting(true);
     setProblem(undefined);
+    setFull(false);
     setByHand(false);
     try {
       let trust: TrustChoice | undefined;
@@ -200,6 +203,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
             setByHand(true);
             return;
           }
+          setFull(error instanceof ApiError && error.status === 429);
           setProblem(error instanceof Error ? error.message : String(error));
           return;
         }
@@ -271,6 +275,20 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     else setByHand(true);
     void forget(terminal);
   };
+  /** A terminal of another folder, ended from the list shown when as many run as may; then one can start here. */
+  const endElsewhere = async (terminal: TerminalInfo) => {
+    try {
+      await api.closeTerminal(terminal.id);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) {
+        setProblem(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
+    patch(terminal.id, () => undefined);
+    setProblem(undefined);
+    setFull(false);
+  };
   const startAgain = (terminal: TerminalInfo) => {
     // Its place is taken by the one started here, not by one starting by itself meanwhile.
     setByHand(true);
@@ -283,6 +301,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   if (list.data && !list.data.available) return <Centered><p className="max-w-xs"><Reason text={list.data.reason ?? 'There is no terminal here.'} /></p></Centered>;
 
   const shownRuns = Boolean(shown && !shown.exit && !shownLost);
+  const elsewhere = (list.data?.terminals ?? []).filter((t) => !within(t.cwd, cwd));
   const ended = shown && !shownRuns;
   const crowded = connection?.kind === 'crowded';
   const label = (t: TerminalInfo) => (t.cwd === cwd ? t.program : `${t.program} · ${baseName(t.cwd)}`);
@@ -361,6 +380,23 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
           <span className="min-w-0 flex-1">{problem}</span>
           <button type="button" onClick={() => setProblem(undefined)} className="shrink-0 text-faint hover:text-fg">Dismiss</button>
         </div>
+      )}
+      {problem && full && elsewhere.length > 0 && (
+        <ul aria-label="Terminals in other folders" className="mx-4 mb-2 shrink-0 border-y border-line">
+          {elsewhere.map((t) => (
+            <li key={t.id} className="flex h-10 items-center gap-2 text-[12.5px]">
+              <span title={t.cwd} className="min-w-0 flex-1 truncate font-mono text-muted">{t.program} · {baseName(t.cwd)}</span>
+              <button
+                type="button"
+                aria-label={`End ${t.program} in ${baseName(t.cwd)}`}
+                onClick={() => void endElsewhere(t)}
+                className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-10"
+              >
+                End
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
 
       {/* Always there, also before the first terminal starts: a terminal starts at the size it has. */}

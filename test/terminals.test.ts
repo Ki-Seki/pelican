@@ -724,17 +724,33 @@ describe('who gets a terminal', () => {
     expect((await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 })).status).toBe(503);
   });
 
-  it('at most 10 at once, an ended one making room, and 8 pages each', async () => {
+  it('at most 10 at once: an ended one makes room, else one nobody used that no page shows; and 8 pages each', async () => {
+    const ids = async () => ((await api('GET', '/api/terminals')).body as TerminalList).terminals.map((t) => t.id);
     const terminals: TerminalInfo[] = [];
     for (let n = 0; n < 10; n += 1) terminals.push(await open());
+    // Each typed into, then left: none makes room.
+    for (const terminal of terminals) {
+      const used = await atPrompt(terminal.id);
+      used.type('true\r');
+      await used.sees(/true\r\n/);
+      await used.close();
+    }
+    await until(() => terminals.every((t) => terminalState(t.id)!.viewers.length === 0), 5000, 'the pages to go');
     const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 });
     expect(refused.status).toBe(429);
     expect(refused.body.error).toMatch(/^At most 10 terminals run at once/);
     const first = await atPrompt(terminals[0]!.id);
     first.type('exit\r');
     await until(() => first.messages.some((m) => m.type === 'exit'));
-    await open();
-    expect((await api('GET', '/api/terminals')).body.terminals.map((t: TerminalInfo) => t.id)).not.toContain(terminals[0]!.id);
+    const untouched = await open();
+    expect(await ids()).not.toContain(terminals[0]!.id);
+    // One nobody typed into (a folder's Terminal tab looked at once) makes room, unless a page shows it.
+    const looking = await atPrompt(untouched.id);
+    expect((await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 })).status).toBe(429);
+    await looking.close();
+    await until(() => terminalState(untouched.id)!.viewers.length === 0, 5000, 'the page to go');
+    const next = await open();
+    expect(await ids()).toEqual([...terminals.slice(1).map((t) => t.id), next.id]);
 
     const pages = Array.from({ length: 8 }, () => page(terminals[1]!.id));
     await Promise.all(pages.map((p) => p.readied()));

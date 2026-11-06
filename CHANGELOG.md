@@ -26,7 +26,9 @@ A terminal beside the conversation, as Claude Desktop has one.
   you come back the page connects again by itself and shows the screen as it was, scrollback and
   a program such as vim included. A shell that ends keeps its last screen, with Start again; so
   does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
-  hours with nothing running in it closes on its own. Its output comes over a connection of its
+  hours with nothing running in it closes on its own, and one nobody typed into that no page
+  shows makes room when 10 run; with 10 in use, the Terminal tab lists those in other folders,
+  to end one. Its output comes over a connection of its
   own, so it never holds up an approval, and while a phone on a slow link catches up the shell
   waits for it, so Ctrl+C gets through at once.
 - **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or
