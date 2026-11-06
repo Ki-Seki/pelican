@@ -142,8 +142,12 @@ command hides; and what the reviews of 0.4.0 left.
   whose lines end with a carriage return alone, which Claude Code's YAML breaks at, hid its
   allowed-tools and hooks. A hook's or a server's YAML shows with its lines as written, so a second
   line that runs curl no longer reads as part of a `#` comment on the first, and the sheet says
-  where an escape such as `\n` reads otherwise than it is written. Frontmatter of 480 KB held the
-  server for 47 seconds; each line is read once.
+  where an escape such as `\n` reads otherwise than it is written. A folder's files are read in time
+  that grows with their size, not with its square: frontmatter of 480 KB held the server for 47
+  seconds, as did a command of a megabyte whose ```! block or frontmatter never ends. The sheet
+  lists from a file up to 200 items and 256 KB of them, and from a folder up to 1,000 and 1 MB, more
+  than any project brings; past that it says there is more than it shows, and the folder is asked
+  about as before.
 - A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
   recommends; other tags after a black flag, which can spell anything unseen, are left out. The
   repository's check for hidden characters holds the docs to the same three.

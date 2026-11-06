@@ -59,11 +59,67 @@ const real = (folder: string) => realpath(folder).catch(() => path.resolve(folde
 const MAX_READ = 16 * 1024 * 1024;
 
 /**
+ * More than any project's file brings, or than the sheet can show: at most this many items, and
+ * this much of their text, from one file (a repository's git config counts as one), and from a
+ * whole folder. Past them one item says there is more, and the folder is asked about all the same:
+ * a hostile file could otherwise make an answer too large for the phone, or the server, to take.
+ */
+const FILE_ITEMS = 200;
+const FILE_TEXT = 256 * 1024;
+const FOLDER_ITEMS = 1000;
+const FOLDER_TEXT = 1024 * 1024;
+
+/**
+ * Items, each once, up to a number of them and of their text; the first that does not fit makes
+ * them `full`, and no more are taken but what is added `always` (a short note). An item said twice
+ * with its commands in other places has every space but a plain one written out.
+ */
+class Items {
+  private readonly kept = new Map<string, CommandAt[]>();
+  private size = 0;
+  full = false;
+
+  constructor(private readonly most: number, private readonly chars: number) {}
+
+  add({ text, commands }: Item, always = false): void {
+    const known = this.kept.get(text);
+    if (known !== undefined) {
+      if (JSON.stringify(known) !== JSON.stringify(commands)) this.kept.set(text, [[0, text.length, 'argv']]);
+      return;
+    }
+    if (!always && (this.full || this.kept.size >= this.most || this.size + text.length > this.chars)) {
+      this.full = true;
+      return;
+    }
+    this.kept.set(text, commands);
+    this.size += text.length;
+  }
+
+  get list(): Item[] {
+    return [...this.kept].map(([text, commands]) => ({ text, commands }));
+  }
+}
+
+/** What one file brings (Items), read only as far as fits: past it, `more` says there is more. */
+function capped(items: Iterable<Item>, more: string): Item[] {
+  const kept = new Items(FILE_ITEMS, FILE_TEXT);
+  for (const item of items) {
+    kept.add(item);
+    if (kept.full) {
+      kept.add(said(more), true);
+      break;
+    }
+  }
+  return kept.list;
+}
+
+/**
  * A file's text, read only when it is a regular file of a sane size (`odd` when something else is
  * there): a named pipe in its place would hold one of Node's few file threads until someone wrote
- * to it, and a folder from a tarball can bring one.
+ * to it, and a folder from a tarball can bring one. With a budget, a file larger than what is left
+ * of it is not read, and spends it.
  */
-async function readText(file: string): Promise<{ text?: string; odd?: true }> {
+async function readText(file: string, budget?: Budget): Promise<{ text?: string; odd?: true }> {
   let handle: Awaited<ReturnType<typeof openRegular>>;
   try {
     handle = await openRegular(file);
@@ -72,7 +128,9 @@ async function readText(file: string): Promise<{ text?: string; odd?: true }> {
     return code === 'ENOENT' || code === 'ENOTDIR' ? {} : { odd: true };
   }
   try {
-    if ((await handle.stat()).size > MAX_READ) return { odd: true };
+    const { size } = await handle.stat();
+    if (size > MAX_READ) return { odd: true };
+    if (budget && (budget.bytes -= size) < 0) return {};
     return { text: decoded(await handle.readFile()) };
   } catch {
     return { odd: true };
@@ -281,117 +339,156 @@ const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v 
 /** Settings that run a command of the folder's choosing, as Claude Code's trust dialog lists them. */
 const HELPERS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh', 'otelHeadersHelper', 'proxyAuthHelper'];
 
-function fromSettings(settings: unknown): Item[] {
-  if (!isObject(settings)) return [];
-  const found: Item[] = [];
+function* fromSettings(settings: unknown): Generator<Item> {
+  if (!isObject(settings)) return;
   if (isObject(settings.hooks)) {
     for (const [event, groups] of Object.entries(settings.hooks)) {
       for (const group of Array.isArray(groups) ? groups : []) {
         for (const hook of isObject(group) && Array.isArray(group.hooks) ? group.hooks : []) {
           if (!isObject(hook)) continue;
           if (typeof hook.command !== 'string') {
-            found.push(said(`${event} hook: ${typeof hook.url === 'string' ? hook.url : String(hook.type ?? 'hook')}`));
+            yield said(`${event} hook: ${typeof hook.url === 'string' ? hook.url : String(hook.type ?? 'hook')}`);
           } else if (Array.isArray(hook.args)) {
             // Its exec form: the program, run with these arguments and no shell.
-            found.push(runs(`${event} hook: `, [hook.command, ...hook.args.map(String)].join(' '), 'argv'));
+            yield runs(`${event} hook: `, [hook.command, ...hook.args.map(String)].join(' '), 'argv');
           } else {
             // Run by a shell, or by PowerShell, which takes every space for one (but in what it hands a POSIX shell).
-            found.push(runs(`${event} hook: `, hook.command, hook.shell === 'powershell' ? 'powershell' : 'shell'));
+            yield runs(`${event} hook: `, hook.command, hook.shell === 'powershell' ? 'powershell' : 'shell');
           }
         }
       }
     }
   }
-  for (const name of HELPERS) if (typeof settings[name] === 'string') found.push(runs(`${name}: `, settings[name] as string, 'shell'));
-  if (isObject(settings.env) && Object.keys(settings.env).length > 0) found.push(said(`Environment variables: ${Object.keys(settings.env).join(', ')}`));
+  for (const name of HELPERS) if (typeof settings[name] === 'string') yield runs(`${name}: `, settings[name] as string, 'shell');
+  if (isObject(settings.env) && Object.keys(settings.env).length > 0) yield said(`Environment variables: ${Object.keys(settings.env).join(', ')}`);
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
-  if (strings(permissions.allow).length > 0) found.push(said(`Allowed without asking: ${strings(permissions.allow).join(', ')}`));
-  if (strings(permissions.additionalDirectories).length > 0) found.push(said(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`));
+  if (strings(permissions.allow).length > 0) yield said(`Allowed without asking: ${strings(permissions.allow).join(', ')}`);
+  if (strings(permissions.additionalDirectories).length > 0) yield said(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`);
   if (typeof permissions.defaultMode === 'string' && !['default', 'plan', 'dontAsk'].includes(permissions.defaultMode)) {
-    found.push(said(`Permission mode: ${permissions.defaultMode}`));
+    yield said(`Permission mode: ${permissions.defaultMode}`);
   }
   const plugins = isObject(settings.enabledPlugins) ? Object.entries(settings.enabledPlugins).filter(([, on]) => on).map(([name]) => name) : [];
-  if (plugins.length > 0) found.push(said(`Plugins: ${plugins.join(', ')}`));
+  if (plugins.length > 0) yield said(`Plugins: ${plugins.join(', ')}`);
   if (isObject(settings.extraKnownMarketplaces) && Object.keys(settings.extraKnownMarketplaces).length > 0) {
-    found.push(said(`Plugin marketplaces: ${Object.keys(settings.extraKnownMarketplaces).join(', ')}`));
+    yield said(`Plugin marketplaces: ${Object.keys(settings.extraKnownMarketplaces).join(', ')}`);
   }
-  if (typeof settings.autoMemoryDirectory === 'string') found.push(said(`Memory folder: ${settings.autoMemoryDirectory}`));
-  return found;
+  if (typeof settings.autoMemoryDirectory === 'string') yield said(`Memory folder: ${settings.autoMemoryDirectory}`);
 }
 
-function fromMcp(file: unknown): Item[] {
-  if (!isObject(file) || !isObject(file.mcpServers)) return [];
-  return Object.entries(file.mcpServers).map(([name, server]) => {
-    if (!isObject(server)) return said(`MCP server ${name}`);
+function* fromMcp(file: unknown): Generator<Item> {
+  if (!isObject(file) || !isObject(file.mcpServers)) return;
+  for (const [name, server] of Object.entries(file.mcpServers)) {
+    if (!isObject(server)) {
+      yield said(`MCP server ${name}`);
+      continue;
+    }
     // A server's program starts with its arguments and no shell; its headers helper runs in one.
     const command = typeof server.command === 'string' ? [server.command, ...strings(server.args)].join(' ') : undefined;
     const target = command ?? (typeof server.url === 'string' ? server.url : undefined);
     const item = target === undefined ? said(`MCP server ${name}`) : command === undefined ? said(`MCP server ${name}: ${target}`) : runs(`MCP server ${name}: `, command, 'argv');
-    if (typeof server.headersHelper !== 'string') return item;
+    if (typeof server.headersHelper !== 'string') {
+      yield item;
+      continue;
+    }
     const helper = runs(`${item.text} (headersHelper: `, server.headersHelper, 'shell', ')');
-    return { text: helper.text, commands: [...item.commands, ...helper.commands] };
-  });
+    yield { text: helper.text, commands: [...item.commands, ...helper.commands] };
+  }
 }
 
 /** Frontmatter keys that give a command, skill or agent powers of its own (Claude Code reads them in any case and with `_` for `-`). */
 const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|permission[-_]?mode)["']?[ \t]*:(.*)$/i;
 
 /**
+ * The frontmatter of a command, a skill or an agent, found as Claude Code finds it (its
+ * /^---\s*\n([\s\S]*?)---\s*\n?/): after `---` and blanks that end in a line break, to the next
+ * `---`, which may end a line rather than stand on its own. Read once, left to right: as that
+ * pattern, a file of line breaks after its `---` took seconds.
+ */
+function frontmatter(text: string): string | undefined {
+  const open = /^\uFEFF?---/.exec(text);
+  if (!open) return undefined;
+  let start = -1;
+  for (let i = open[0].length; i < text.length && /\s/.test(text[i]!); i += 1) if (text[i] === '\n') start = i + 1;
+  if (start < 0) return undefined;
+  const end = text.indexOf('---', start);
+  return end < 0 ? undefined : text.slice(start, end);
+}
+
+/** What each ```! block runs, as Claude Code finds them (/```!\s*\n?([\s\S]*?)\n?```/g), read once. */
+function* fenced(text: string): Generator<string> {
+  for (let at = text.indexOf('```!'); at >= 0; ) {
+    const end = text.indexOf('```', at + 4);
+    if (end < 0) return;
+    yield text.slice(at + 4, end).trim();
+    at = text.indexOf('```!', end + 3);
+  }
+}
+
+/**
  * What a project's command, skill or agent may run without asking: tools its frontmatter allows,
  * hooks, MCP servers, a permission mode; and for a command or a skill, the shell it runs as it
- * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them.
+ * starts (`!` and a command in backticks, or a ```! block), as Claude Code finds them. Each line is
+ * read at most twice, so it takes time in proportion to the file, and capped() takes no more of it
+ * than fits.
  */
-function fromMarkdown(what: string, text: string, shell: boolean): Item[] {
-  const found: Item[] = [];
-  // Found as Claude Code finds it: the closing --- may end a line rather than stand on its own. Its
-  // YAML ends a line at a carriage return alone too.
-  const front = /^\uFEFF?---\s*\n([\s\S]*?)---\s*\n?/.exec(text.replace(/\r\n?/g, '\n'))?.[1];
+function* fromMarkdown(what: string, text: string, shell: boolean): Generator<Item> {
+  // Its YAML ends a line at a carriage return alone too.
+  const front = frontmatter(text.replace(/\r\n?/g, '\n'));
   const lines = front?.split('\n') ?? [];
   const indent = (line: string) => /^[ \t]*/.exec(line)![0].length;
+  const comment = (line: string) => line.trimStart().startsWith('#');
+  // Only spaces and tabs end a line in YAML: another space is part of what it says.
+  const trimEnd = (line: string) => line.replace(/[ \t]+$/, '');
   // Keys of the frontmatter itself, not of a map inside it.
-  const top = indent(lines.find((line) => line.trim() && !line.trim().startsWith('#')) ?? '');
-  const under = (line: string) => !line.trim() || indent(line) > top || (indent(line) === top && line.trim().startsWith('-'));
-  lines.forEach((line, i) => {
+  const top = indent(lines.find((line) => line.trim() && !comment(line)) ?? '');
+  // Under a key: a blank line, one further in, or a list's item or a comment as far in.
+  const under = (line: string) => !line.trim() || indent(line) > top || (indent(line) === top && /^[ \t]*[-#]/.test(line));
+  let powers = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
     const power = POWERS.exec(line);
-    if (!power || (indent(line) !== top && !line.includes('{'))) return;
+    if (!power || comment(line)) continue;
     // A key of the frontmatter's with the lines under it (a list, a map, a block of text), as they
     // are written, each on its line: YAML reads a line break in a block as one, and a line that
-    // went on from a `#` would read as a comment. Up to the next key, so each line is read once. A
-    // flow map's line inside another value is that line alone.
-    const block = [line.slice(indent(line)).trimEnd()];
-    if (indent(line) === top) {
-      for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) block.push(lines[j]!.slice(Math.min(top, indent(lines[j]!))).trimEnd());
-      while (block.length > 1 && !block.at(-1)!.trim()) block.pop();
+    // went on from a `#` would read as a comment. Up to the next key, so each line is in one key's
+    // block. Any other line that names a power (a flow map's line in another value, a list's item
+    // as far in as the keys, which YAML does not take for one) is that line alone, as it was.
+    const key = indent(line) === top && !under(line);
+    if (!key && indent(line) !== top && !line.includes('{')) continue;
+    const block = [trimEnd(line.slice(indent(line)))];
+    if (key) {
+      for (let j = i + 1; j < lines.length && under(lines[j]!); j += 1) block.push(trimEnd(lines[j]!.slice(Math.min(top, indent(lines[j]!)))));
+      while (block.length > 1 && (!block.at(-1)!.trim() || comment(block.at(-1)!))) block.pop();
     }
     const mode = [power[2]!, ...block.slice(1)].map((part) => part.trim()).filter(Boolean).join(' ').replace(/^["']|["']$/g, '');
-    if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) return;
+    if (/^permission/i.test(power[1]!) && ['default', 'plan', 'dontAsk'].includes(mode)) continue;
     // Hooks and MCP servers hold commands in YAML: shown as written, every space but a plain one written out.
     const shown = block.join('\n');
-    found.push(/^(?:hooks|mcp)/i.test(power[1]!) ? runs(`${what}: `, shown, 'argv') : said(`${what}: ${shown}`));
-  });
+    powers += 1;
+    yield /^(?:hooks|mcp)/i.test(power[1]!) ? runs(`${what}: `, shown, 'argv') : said(`${what}: ${shown}`);
+  }
   // YAML says the same thing in more ways than a line scan reads (escapes, ? keys, tags, flow maps):
   // frontmatter that uses them and names a power anywhere is asked about, and says so beside what
   // was read of it, as an escape such as `\n` reads otherwise than it is written.
-  if (front && /allowed|hook|mcp|permission/i.test(front) && (/\\|^[ \t]*\?|!!/m.test(front) || (found.length === 0 && front.includes('{')))) {
-    found.push(said(`${what}: settings Pelican cannot read in full`));
+  if (front && /allowed|hook|mcp|permission/i.test(front) && (/\\|^[ \t]*\?|!!/m.test(front) || (powers === 0 && front.includes('{')))) {
+    yield said(`${what}: settings Pelican cannot read in full`);
   }
   if (shell) {
-    for (const block of text.matchAll(/```!\s*\n?([\s\S]*?)\n?```/g)) found.push(runs(`${what} runs: `, block[1]!.trim(), 'shell'));
-    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) found.push(runs(`${what} runs: `, inline[1]!, 'shell'));
+    for (const command of fenced(text)) yield runs(`${what} runs: `, command, 'shell');
+    for (const inline of text.matchAll(/(?<=^|\s)!`([^`]+)`/g)) yield runs(`${what} runs: `, inline[1]!, 'shell');
   }
-  return found;
 }
 
 /** Where Claude Code finds a project's commands, skills and agents in each folder's `.claude`. */
 const MARKDOWN = [['commands', 'Command'], ['skills', 'Skill'], ['agents', 'Agent']] as const;
 
 /**
- * More than any project has: past this many files (or entries looked at), the folder is asked
- * about instead of being read without end.
+ * More than any project has: past this many files (or entries looked at, or bytes of them read),
+ * the folder is asked about instead of being read without end.
  */
-type Budget = { files: number; entries: number };
-const budgetFor = (): Budget => ({ files: 500, entries: 10_000 });
-const spent = (budget: Budget) => budget.files < 0 || budget.entries < 0;
+type Budget = { files: number; entries: number; bytes: number };
+const budgetFor = (): Budget => ({ files: 500, entries: 10_000, bytes: 32 * 1024 * 1024 });
+const spent = (budget: Budget) => budget.files < 0 || budget.entries < 0 || budget.bytes < 0;
 
 /** The Markdown files in a folder and its subfolders, as Claude Code finds them (through links too). */
 async function markdownIn(root: string, budget: Budget): Promise<string[]> {
@@ -413,25 +510,26 @@ async function markdownIn(root: string, budget: Budget): Promise<string[]> {
   return files;
 }
 
-/** What a folder's own commands, skills and agents bring (see fromMarkdown). */
-async function fromClaudeFolder(dir: string, from: string, budget: Budget): Promise<Item[]> {
-  const found: Item[] = [];
+/** What a folder's own commands, skills and agents bring (see fromMarkdown), to `found` while it takes more. */
+async function fromClaudeFolder(dir: string, from: string, budget: Budget, found: Items): Promise<void> {
   for (const [kind, what] of MARKDOWN) {
     const root = path.join(dir, '.claude', kind);
     for (const file of await markdownIn(root, budget)) {
+      if (found.full) return;
       const skill = /^skill\.md$/i.test(path.basename(file));
       // A skill is its SKILL.md; the other files in its folder are documents Claude may read.
       if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
-      const { text, odd } = await readText(file);
+      const { text, odd } = await readText(file, budget);
+      if (spent(budget)) return;
       if (odd || text === undefined) {
-        found.push(said(`Cannot be read: ${path.relative(from, file)}`));
+        found.add(said(`Cannot be read: ${path.relative(from, file)}`));
         continue;
       }
       const name = path.relative(root, skill ? path.dirname(file) : file.slice(0, -'.md'.length)) || path.basename(root);
-      found.push(...fromMarkdown(`${what} ${kind === 'commands' ? '/' : ''}${name}`, text, kind !== 'agents'));
+      const named = `${what} ${kind === 'commands' ? '/' : ''}${name}`;
+      for (const item of capped(fromMarkdown(named, text, kind !== 'agents'), `${named}: more than Pelican shows`)) found.add(item);
     }
   }
-  return found;
 }
 
 /** A setting of a git config as git reads it: its name in git's spelling, its value, the file it is in. */
@@ -452,6 +550,9 @@ const isInclude = (entry: GitEntry) => entry.name === 'include.path' || /^includ
 
 /** git found no repository there: nothing of a repository's config can run. */
 class NoRepository extends Error {}
+
+/** More includes than any repository's config has. */
+const MAX_INCLUDES = 100;
 
 /**
  * Settings of a git config, as git itself reads them: `git config` starts no filter, hook or
@@ -513,7 +614,7 @@ async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
     // off, --worktree reads the same file as --local, or refuses where there are several worktrees.
     const seen = new Set(entries.map((e) => e.file));
     try {
-      entries.push(...(await gitConfig(top, ['--worktree'])).filter((e) => !seen.has(e.file)));
+      for (const entry of await gitConfig(top, ['--worktree'])) if (!seen.has(entry.file)) entries.push(entry);
     } catch (error) {
       if (!/worktreeConfig is enabled|extension worktreeConfig/i.test(String((error as Error).message))) throw error;
     }
@@ -524,8 +625,14 @@ async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
   const repo: GitConfig = { entries, includes: [], unread: false };
   const read = new Set(entries.map((e) => e.file));
   const pending = entries.filter(isInclude);
-  while (pending.length > 0) {
-    const include = pending.shift()!;
+  // Taken in turn (shift() would take time with the square of their number), and no more than any
+  // repository has: past them, the config is not read in full.
+  for (let next = 0; next < pending.length; next += 1) {
+    if (next >= MAX_INCLUDES) {
+      repo.unread = true;
+      break;
+    }
+    const include = pending[next]!;
     repo.includes.push(include.value);
     const file = includeTarget(include.value, include.file);
     if (!file) repo.unread = true;
@@ -543,8 +650,8 @@ async function repositoryConfig(top: string): Promise<GitConfig | undefined> {
     for (const entry of more) {
       if (isInclude(entry)) pending.push(entry);
       read.add(entry.file);
+      repo.entries.push(entry);
     }
-    repo.entries.push(...more);
   }
   return repo;
 }
@@ -566,29 +673,27 @@ function gitRuns(): Promise<boolean> {
 const UNREAD_GIT = 'Git config that git could not read';
 
 /** Programs the repository's git config makes git start on its own, even for `git status`. */
-function gitPrograms(repo: GitConfig): Item[] {
-  const found: Item[] = [];
+function* gitPrograms(repo: GitConfig): Generator<Item> {
   for (const entry of repo.entries) {
     const { section, subsection, key } = nameParts(entry.name);
     if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key) && entry.value) {
-      found.push(runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell'));
+      yield runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell');
     } else if (section === 'core' && key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
-      found.push(runs('Git fsmonitor: ', entry.value, 'shell'));
+      yield runs('Git fsmonitor: ', entry.value, 'shell');
     } else if (section === 'core' && key === 'hookspath' && entry.value) {
-      found.push(said(`Git hooks folder: ${entry.value}`));
+      yield said(`Git hooks folder: ${entry.value}`);
     }
   }
   // An included file can change (another branch, a pull), and with it what git runs.
-  for (const include of repo.includes) found.push(said(`Git config includes: ${include}`));
-  if (repo.unread) found.push(said(UNREAD_GIT));
-  return found;
+  for (const include of repo.includes) yield said(`Git config includes: ${include}`);
+  if (repo.unread) yield said(UNREAD_GIT);
 }
 
 /** What git would run of the repository's own config, also when git could not read it all. */
 async function gitBrings(top: string): Promise<Item[]> {
   try {
     const repo = await repositoryConfig(top);
-    return repo ? gitPrograms(repo) : [];
+    return repo ? capped(gitPrograms(repo), 'More git config than Pelican shows') : [];
   } catch {
     return [said(UNREAD_GIT)];
   }
@@ -604,31 +709,36 @@ export async function whatFolderBrings(folder: string): Promise<Brings> {
   const dir = await real(folder);
   const homes = new Set([os.homedir(), await real(os.homedir())]);
   const top = await gitRoot(dir);
-  const found: Item[] = [];
+  // Every item, each whole: the part of a command that matters can come after any amount of
+  // padding, or after any number of harmless items (the sheet scrolls). Once each (Items), and as
+  // many as fit, which is more than any project brings: past them the sheet says there is more.
+  const found = new Items(FOLDER_ITEMS, FOLDER_TEXT);
+  const add = (items: Iterable<Item>) => {
+    for (const item of items) found.add(item);
+  };
   // A file of the folder's that is not a regular file, or not JSON, is asked about instead.
   const json = async (file: string): Promise<unknown> => {
     const { value, odd, unparsed } = await readJsonFile(file);
-    if (odd || unparsed) found.push(said(`Cannot be read: ${path.relative(dir, file)}`));
+    if (odd || unparsed) found.add(said(`Cannot be read: ${path.relative(dir, file)}`));
     return value;
   };
   const budget = budgetFor();
   for (let d = dir; !homes.has(d); d = path.dirname(d)) {
-    for (const name of ['settings.json', 'settings.local.json']) found.push(...fromSettings(await json(path.join(d, '.claude', name))));
-    found.push(...fromMcp(await json(path.join(d, '.mcp.json'))));
-    found.push(...(await fromClaudeFolder(d, dir, budget)));
+    for (const name of ['settings.json', 'settings.local.json']) {
+      const file = path.join(d, '.claude', name);
+      add(capped(fromSettings(await json(file)), `More than Pelican shows: ${path.relative(dir, file)}`));
+    }
+    const mcp = path.join(d, '.mcp.json');
+    add(capped(fromMcp(await json(mcp)), `More than Pelican shows: ${path.relative(dir, mcp)}`));
+    await fromClaudeFolder(d, dir, budget, found);
+    if (found.full) break;
     if (d === top || path.dirname(d) === d) break;
   }
-  if (spent(budget)) found.push(said('More commands, skills and agents than Pelican reads'));
-  if (top) found.push(...(await gitBrings(top)));
-  // Every item, each whole: the part of a command that matters can come after any amount of
-  // padding, or after any number of harmless items (the sheet scrolls). Once each: an item said
-  // twice with its commands in other places has every space but a plain one written out.
-  const items = new Map<string, CommandAt[]>();
-  for (const { text, commands } of found) {
-    const known = items.get(text);
-    items.set(text, known === undefined || JSON.stringify(known) === JSON.stringify(commands) ? commands : [[0, text.length, 'argv']]);
-  }
-  return { brings: [...items.keys()], commands: [...items.values()] };
+  if (spent(budget)) found.add(said('More commands, skills and agents than Pelican reads'));
+  if (top && !found.full) add(await gitBrings(top));
+  if (found.full) found.add(said('More than Pelican shows'), true);
+  const items = found.list;
+  return { brings: items.map((item) => item.text), commands: items.map((item) => item.commands) };
 }
 
 /** What the folder brings (whatFolderBrings), item by item. */
