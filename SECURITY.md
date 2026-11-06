@@ -109,7 +109,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
   formats, each a regular file whose real path, links followed, is inside the session's own folder
-  next to its transcript, and within a size. An agent's steps come a page at a time, at most 768 KB
+  next to its transcript, and within a size. An Agent call's steps are read the same way, from its
+  subagent's own transcript in that folder. An agent's steps come a page at a time, at most 768 KB
   of them (a message larger than 128 KB has its parts cut, saying how many were left out), and its
   pictures are left out.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask

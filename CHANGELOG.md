@@ -15,6 +15,10 @@
   emails in prompts and Claude Code's notes stay text, as code, where a reader would link them.
 - Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
   the message boxes; it sat 2px lower.
+- An Agent call's steps come a page at a time, the newest first, with Show earlier, as a workflow
+  agent's do: a long subagent's transcript, tens of megabytes, no longer reaches the phone whole.
+  A step too large to show says what was left out of it, and the transcript is read only from the
+  session's own folder.
 
 ## 0.4.0
 

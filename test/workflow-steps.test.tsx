@@ -216,3 +216,34 @@ describe('an agent’s row', () => {
     expect(screen.getByText(label).className).toContain('break-words');
   });
 });
+
+describe('an Agent call’s steps', () => {
+  const agentCall: ChatMessage = { uuid: 'a-ag', role: 'assistant', blocks: [{ type: 'tool_use', id: 'toolu_ag', name: 'Agent', input: { description: 'Look around', prompt: 'Look around the shop.' } }], timestamp: at };
+  const agentDone: ChatMessage = { uuid: 'r-ag', role: 'user', timestamp: at + 1000, blocks: [{ type: 'tool_result', tool_use_id: 'toolu_ag', content: 'All clear.\nagentId: ag1' }] };
+
+  it('come a page at a time, the newest first, saying when earlier ones are left to show', async () => {
+    // 100 steps (200 messages), as the server pages them: 60 messages at most.
+    const all = stepsOf(0, 99);
+    const pages = vi.spyOn(api, 'subagent').mockImplementation(async (_s, _a, before) => {
+      const end = before ?? all.length;
+      const offset = Math.max(0, end - 60);
+      return { messages: all.slice(offset, end), total: all.length, offset };
+    });
+    // Verbose: the call is open, with its instructions, its steps and its answer.
+    show([agentCall, agentDone]);
+    fireEvent.click(await screen.findByText('Steps it took'));
+    await screen.findByText('Last 30 steps');
+    expect(pages).toHaveBeenCalledWith(SESSION, 'ag1');
+    expect(shown(99) && shown(70) && !shown(69)).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('Last 60 steps');
+    expect(pages).toHaveBeenLastCalledWith(SESSION, 'ag1', 140);
+    expect(shown(40) && !shown(39)).toBe(true);
+    // All of it shown: no word of more.
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('100 steps');
+    expect(screen.queryByRole('button', { name: 'Show earlier' })).toBeNull();
+    expect(shown(0)).toBe(true);
+  });
+});

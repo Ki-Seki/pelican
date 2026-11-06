@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Block, ChatMessage, ToolResultBlock, ToolUseBlock, Workflow, WorkflowAgent, WorkflowAgentPage, WorkflowPhase, WorkflowStatus } from '../shared/protocol.js';
+import type { Block, ChatMessage, MessagesPage, ToolResultBlock, ToolUseBlock, Workflow, WorkflowAgent, WorkflowAgentPage, WorkflowPhase, WorkflowStatus } from '../shared/protocol.js';
 import { addPhase, agentTokens, launchOf, parseMeta, parseTaskNotice, RUN_ID, type TaskNotice, unframedPrompt, workflowOf } from '../shared/workflows.js';
 import { readHistory } from './history.js';
 import { liveProcesses } from './live.js';
@@ -753,7 +753,7 @@ export async function workflowView(sessionId: string, callId: string, live?: Wor
   return { workflow, tag: tagOf(workflow) };
 }
 
-// ---- A workflow agent's own transcript --------------------------------------------------------
+// ---- An agent's own transcript, a page at a time ---------------------------------------------
 
 /** How many of an agent's messages a page holds at most, and how many bytes of them. */
 const PAGE_MAX = 300;
@@ -863,6 +863,50 @@ function onPage(message: ChatMessage): { message: ChatMessage; size: number } {
   return out;
 }
 
+/**
+ * A page of an agent's messages, as a phone should load them: its last `limit` before message
+ * `before` (default: the end), or with `after`, those from that message on; fewer when they come
+ * to more than PAGE_BYTES, and each one cut to MESSAGE_MAX (onPage), saying what was left out.
+ */
+function pageOf(all: ChatMessage[], { before, after, limit = 60 }: { before?: number; after?: number; limit?: number }): MessagesPage {
+  const wanted = Math.max(1, Math.min(limit, PAGE_MAX));
+  let offset: number;
+  let end: number;
+  if (after !== undefined) {
+    // From `after` on, as far as a page goes.
+    offset = Math.min(after, all.length);
+    end = offset;
+    for (let bytes = 0; end < all.length && end - offset < wanted; end += 1) {
+      const { size } = onPage(all[end]!);
+      if (end > offset && bytes + size > PAGE_BYTES) break;
+      bytes += size;
+    }
+  } else {
+    end = Math.min(before ?? all.length, all.length);
+    offset = end;
+    for (let bytes = 0; offset > 0 && end - offset < wanted; offset -= 1) {
+      const { size } = onPage(all[offset - 1]!);
+      if (end - offset > 0 && bytes + size > PAGE_BYTES) break;
+      bytes += size;
+    }
+  }
+  return { messages: all.slice(offset, end).map((m) => onPage(m).message), total: all.length, offset };
+}
+
+/**
+ * A page of an Agent call's subagent's own transcript, `subagents/agent-<id>.jsonl` in the
+ * session's folder, as a workflow agent's is paged: its last `limit` messages before `before`, so
+ * a phone never gets the whole of a long one (they come to tens of megabytes). Undefined when the
+ * session has no such agent.
+ */
+export async function subagentPage(sessionId: string, agentId: string, { before, limit }: { before?: number; limit?: number }): Promise<MessagesPage | undefined> {
+  if (!AGENT_ID.test(agentId)) return undefined;
+  const where = await sessionDir(sessionId);
+  const file = where && await inside(where.dir, path.join(where.dir, 'subagents', `agent-${agentId}.jsonl`));
+  if (!file) return undefined;
+  return pageOf(await readHistory(file, { sidechain: true }), { ...(before !== undefined ? { before } : {}), ...(limit !== undefined ? { limit } : {}) });
+}
+
 /** An agent's messages over its two files, the run folder's first: the second goes on where the first stopped. */
 const joined = new WeakMap<ChatMessage[], { rest: ChatMessage[]; all: ChatMessage[] }>();
 function joinParts(parts: ChatMessage[][]): ChatMessage[] {
@@ -918,36 +962,13 @@ export async function workflowAgentPage(
   if (!agent && !entry) return undefined;
   const files = await agentFiles(where.dir, runId, agentId);
   const all = joinParts(await Promise.all(files.map((file) => readHistory(file, { sidechain: true }))));
-  const wanted = Math.max(1, Math.min(limit, PAGE_MAX));
-  let offset: number;
-  let end: number;
-  if (after !== undefined) {
-    // From `after` on, as far as a page goes.
-    offset = Math.min(after, all.length);
-    end = offset;
-    for (let bytes = 0; end < all.length && end - offset < wanted; end += 1) {
-      const { size } = onPage(all[end]!);
-      if (end > offset && bytes + size > PAGE_BYTES) break;
-      bytes += size;
-    }
-  } else {
-    end = Math.min(before ?? all.length, all.length);
-    offset = end;
-    for (let bytes = 0; offset > 0 && end - offset < wanted; offset -= 1) {
-      const { size } = onPage(all[offset - 1]!);
-      if (end - offset > 0 && bytes + size > PAGE_BYTES) break;
-      bytes += size;
-    }
-  }
   const prompt = promptOf(all) ?? agent?.promptPreview ?? fromRecord?.promptPreview;
   const result = entry?.state === 'done' ? entry.result : undefined;
   const shown = result ?? agent?.resultPreview ?? fromRecord?.resultPreview;
   // Done by its run's word while the journal has it only started: its result follows there.
   const coming = !shown && agent?.state === 'done' && entry?.state === 'started';
   const page: WorkflowAgentPage = {
-    messages: all.slice(offset, end).map((m) => onPage(m).message),
-    total: all.length,
-    offset,
+    ...pageOf(all, { ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), limit }),
     ...(prompt ? { prompt: clip(prompt, PROMPT_MAX) } : {}),
     ...(shown ? { result: shown } : {}),
     ...(coming ? { resultComing: true } : {}),
