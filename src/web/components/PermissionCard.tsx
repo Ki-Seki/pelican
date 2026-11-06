@@ -125,7 +125,7 @@ function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
             {phases.map((phase, i) => (
               <li key={i} className="flex gap-2">
                 <span className="w-3.5 shrink-0 text-right text-faint tabular-nums">{i + 1}.</span>
-                <span className="min-w-0">{revealHidden(phase.title).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail).text}</span>}</span>
+                <span className="min-w-0">{revealHidden(phase.title, { prose: true }).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail, { prose: true }).text}</span>}</span>
               </li>
             ))}
           </ol>
@@ -177,13 +177,15 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
     ? { before: str(input.old_string), after: str(input.new_string) }
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
-  const target = summary.target ? revealHidden(summary.target) : undefined;
+  const target = summary.target ? revealHidden(summary.target, { prose: summary.prose }) : undefined;
   const workflow = request.toolName === 'Workflow';
   const raw = !edit && !command && !workflow && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
-  // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
-  const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
+  // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
+  // saves. Words keep their emoji whole; a name or a rule shows every hidden character.
+  const [head, about] = [headline(request, cwd), request.description].map((text) => (text ? revealHidden(text, { prose: true }) : undefined));
+  const [server, always] = [request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
   // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.
-  const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent) : undefined;
+  const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent, { prose: true }) : undefined;
   // A workflow's input shows part by part, each with what hides in it shown; it is warned of all the same.
   const asked = workflow ? revealHidden(JSON.stringify(input)) : undefined;
   const hidden = [command, target, raw, asked, head, about, server, always, agent].some((text) => text?.hidden);

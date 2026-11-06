@@ -74,3 +74,40 @@ describe('an approval a workflow agent asks for', () => {
     expect(text()).toContain(`From the ${'x'.repeat(199)}… agent`);
   });
 });
+
+describe('a command asking to run', () => {
+  /** Tag characters spelling `letters`: invisible, and able to spell anything. */
+  const tags = (letters: string) => [...letters].map((letter) => String.fromCodePoint(0xe0000 + letter.codePointAt(0)!)).join('');
+
+  it('shows every character that does not show as what it is, a tag among them, and warns of them', () => {
+    // A file other than build.sh runs: its name ends in a tag the card would otherwise show as nothing.
+    show(ask('Bash', { command: `./build.sh${tags('x')}` }));
+    expect(text()).toContain('./build.sh⟨U+E0078⟩');
+    expect(text()).toContain(WARNING);
+    cleanup();
+    const unseen: Array<[string, string]> = [
+      ['\ufe0f', 'FE0F'], ['\u{e0100}', 'E0100'], ['\u00ad', '00AD'], ['\u3164', '3164'], ['\u115f', '115F'], ['\u034f', '034F'],
+      ['\u180e', '180E'], ['\u00a0', '00A0'], ['\u2800', '2800'], ['\ufffc', 'FFFC'], ['\u001b', '001B'], ['\u2028', '2028'], ['\ue000', 'E000'],
+    ];
+    for (const [char, code] of unseen) {
+      show(ask('Bash', { command: `rm -rf ./build${char}/` }));
+      expect(text(), code).toContain(`rm -rf ./build⟨U+${code}⟩/`);
+      expect(text(), code).toContain(WARNING);
+      cleanup();
+    }
+  });
+
+  it('keeps an emoji whole in the words that say what it does, and shows a tag after one', () => {
+    show(ask('Bash', { command: 'npm test' }, { description: 'Run the tests \u26a0\ufe0f, as \u{1f469}\u200d\u{1f4bb} asked' }));
+    expect(text()).toContain('Run the tests \u26a0\ufe0f, as \u{1f469}\u200d\u{1f4bb} asked');
+    expect(text()).not.toContain(WARNING);
+    cleanup();
+    show(ask('Bash', { command: 'npm test' }, { description: `Run the tests \u{1f3f4}${tags('pwned')}\u{e007f}` }));
+    expect(text()).toContain('Run the tests \u{1f3f4}⟨U+E0070⟩⟨U+E0077⟩⟨U+E006E⟩⟨U+E0065⟩⟨U+E0064⟩⟨U+E007F⟩');
+    expect(text()).toContain(WARNING);
+    cleanup();
+    // In the command itself, an emoji's own invisible characters are shown too.
+    show(ask('Bash', { command: 'git commit -m "Done \u2705\ufe0f"' }));
+    expect(text()).toContain('git commit -m "Done \u2705⟨U+FE0F⟩"');
+  });
+});
