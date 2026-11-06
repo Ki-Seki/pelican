@@ -19,8 +19,8 @@
   to send you a file" and lists it, instead of the call's raw input.
 - A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
   this computer" before you tap anything, the same for every type, with its name and size and
-  nothing to tap; one past 200 MB says it is larger than Pelican serves. A browser tab that opens
-  one anyway says so in a page, not in JSON.
+  nothing to tap; one past 200 MB says it is larger than Pelican serves, and a text file that large
+  still shows its start. A browser tab that opens one anyway says so in a page, not in JSON.
 - A character in a sent file's name that hides or turns text around shows as ⟨U+202E⟩, with the
   approval's warning, on its card, in the step that sends it and in the name it is saved under: a
   script named to read as a picture no longer does.
@@ -34,6 +34,11 @@
 - A file whose extension names what every JavaScript object has, such as `.constructor`, opens as a
   file: sent by Claude it failed with a server error, in Changes and files it showed as a broken
   picture, and as an upload it would not open.
+- A step Claude is still writing keeps its icon and its verb at their size beside a long command.
+- Behind a tunnel or a proxy that cannot reach Pelican, a 502, 503 or 504 shows the quiet "Can't
+  reach" line, which keeps trying, instead of the error.
+- A conversation shows its day above its first message too, and above the first prompt of each new
+  day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
 
 ## 0.4.0
 
