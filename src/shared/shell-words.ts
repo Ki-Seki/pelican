@@ -120,6 +120,9 @@ const CLOSES = new Set(['}', 'fi', 'done', 'esac']);
  */
 const CODE_VARIABLES = /^(?:(?:dis_)?(?:functions|aliases|galiases|saliases)(?:_source)?|PS[0-4]|PROMPT[0-4]?|RPROMPT2?|RPS[12]|SPROMPT|PROMPT_COMMAND)$/;
 
+/** What bash, zsh, ksh, sh and csh read as they start, by name. */
+const STARTUP_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.kshrc', '.mkshrc', '.shrc', '.cshrc', '.tcshrc', '.login'];
+
 /** Commands whose `name=(…)` is an array. */
 const DECLARES = new Set(['declare', 'typeset', 'local', 'readonly', 'export', 'integer', 'float']);
 
@@ -1053,6 +1056,8 @@ class Reader {
       return;
     }
     const rest = words.slice(k + 1);
+    // What env, or a program, hands a shell it starts in its environment.
+    for (const word of rest) this.startsWith(word);
     // A script the command may have written, run by its path (`./fix.sh`).
     if (first.text.includes('/')) this.runsFile(first);
     // What sets a variable to what this does not follow: read, for, mapfile, printf -v and the like.
@@ -1264,9 +1269,25 @@ class Reader {
     // A function or an alias of zsh's, made by setting its arrays, or a prompt, which bash and zsh
     // expand (PS4 at each command set -x traces): what the value runs, this does not follow.
     if (CODE_VARIABLES.test(name)) throw new Lost();
+    this.startsWith(word);
     const value = textOf(word.pieces.slice(equals + 1));
     // An element of an array, or what adds to the value: not known.
     this.sets(name, !word.made && !word.open && PLAIN.test(value) && equals === name.length ? value : null);
+  }
+
+  /**
+   * A setting a shell reads as it starts, wherever it is (`BASH_ENV=./f.sh bash -c …`, or among
+   * env's arguments): the file BASH_ENV or ENV names is a script it runs, read once what the command
+   * writes in it is known; ZDOTDIR's .zshenv is among the files every shell started reads (shell).
+   * A function bash takes from the environment (`BASH_FUNC_f%%=() { … }`) runs what it holds.
+   */
+  private startsWith(word: Word): void {
+    if (/^BASH_FUNC_[^=]*(?:%%|\(\))=/.test(word.text)) throw new Lost();
+    const setting = /^(?:BASH_ENV|ENV)=/.exec(word.text);
+    if (!setting) return;
+    const value = word.pieces.slice(setting[0].length);
+    if (value.some((piece) => piece.made)) throw new Lost();
+    this.shared.across.runs.add(textOf(value).split('/').pop()!);
   }
 
   /** What the command sets a variable to; set to two things, it is not known which a script sees. */
@@ -1298,6 +1319,9 @@ class Reader {
   private shell(command: Command, args: Word[]): void {
     // Braces or a pattern may make `-c` and a script of what shows as one word.
     if (args.some((word) => word.open)) throw new Lost();
+    // The files a shell reads as it starts, in the home folder or where ZDOTDIR says: scripts it
+    // runs, should the command write one.
+    for (const file of STARTUP_FILES) this.shared.across.runs.add(file);
     let script = false;
     let input = false;
     let m = 0;
@@ -1314,6 +1338,8 @@ class Reader {
         break;
       }
       if (option.startsWith('--')) {
+        // The file it reads as it starts is a script it runs.
+        if (['--rcfile', '--init-file'].includes(option)) this.runsFile(args[m + 1]);
         if (['--rcfile', '--init-file', '--emulate'].includes(option)) m += 1;
         continue;
       }

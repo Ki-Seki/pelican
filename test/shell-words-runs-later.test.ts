@@ -50,6 +50,12 @@ const CASES: Array<[string, string, string]> = [
   ['an alias for eval, used in eval', `alias run=eval; eval "run 'w done${N}# ; p PWNED'"`, 'zsh'],
   ['an alias that stands for trap', `alias later=trap\nlater 'w done${N}# ; p PWNED' EXIT`, 'sh'],
   ["zsh's global alias", `alias -g Y='| sh'; eval "echo 'w done${N}# ; p PWNED' Y"`, 'zsh'],
+  // What a shell reads as it starts: a file the command writes and names, a function in its environment.
+  ['a file BASH_ENV names', `echo 'w done${N}# ; p PWNED' > f.sh; BASH_ENV=./f.sh bash -c :`, 'zsh'],
+  ['a .zshenv ZDOTDIR names', `echo 'w done${N}# ; p PWNED' > .zshenv; ZDOTDIR=. zsh -c :`, 'zsh'],
+  ['a file ENV names', `echo 'w done${N}# ; p PWNED' > e.sh; env ENV=./e.sh sh -i -c : </dev/null`, 'sh'],
+  ["bash's --rcfile", `echo 'w done${N}# ; p PWNED' > r.sh; bash --rcfile r.sh -i -c : </dev/null`, 'sh'],
+  ['a function bash imports from the environment', `env 'BASH_FUNC_f%%=() { w done${N}# ; p PWNED; }' bash -c f`, 'sh'],
 ];
 
 describe('quoted text a shell runs later', () => {
