@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 
 import { api } from '../lib/api';
 import { baseName } from '../lib/format';
-import { closesPane, composing, isApple } from '../lib/keyboard';
+import { closesPane, composing, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { useComments, useCommentsChat } from '../lib/review';
@@ -24,8 +24,8 @@ const DOCKS = '(min-width: 1024px)';
 const ROOMY = '(min-width: 1280px)';
 
 /** The keys that show and hide the pane, and that send line comments, as this computer writes them. */
-export const PANE_KEYS = isApple ? '⌘⇧D' : 'Ctrl+Shift+D';
-const SEND_KEYS = isApple ? '⌘↵' : 'Ctrl+Enter';
+export const PANE_KEYS = keyText('changes') ?? '';
+const SEND_KEYS = keyText('commentsSend') ?? '';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
@@ -65,12 +65,11 @@ export function useWorkspacePane(available: boolean) {
   useEffect(() => {
     if (!available) return undefined;
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.repeat) return;
-      const key = e.key.toLowerCase();
-      if (e.shiftKey && key === 'd') {
+      if (e.repeat) return;
+      if (isKey(e, 'changes')) {
         e.preventDefault();
         setOpen(!open);
-      } else if (!e.shiftKey && key === 'k' && open && dockable && !roomy) {
+      } else if (isKey(e, 'searchSessions') && open && dockable && !roomy) {
         // Finding a session needs the list, which the pane has folded away: it goes, and the list
         // comes back for the search (App focuses it).
         hide();

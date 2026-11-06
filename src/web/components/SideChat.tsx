@@ -5,7 +5,7 @@ import type { ChatMessage, RunSettings, SendMode } from '../../shared/protocol';
 import { api, isDemoNote, isUnreachable } from '../lib/api';
 import { clearDraft } from '../lib/drafts';
 import { newId } from '../lib/ids';
-import { closesPane, composing, hasKeyboard, isApple } from '../lib/keyboard';
+import { closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
@@ -22,7 +22,7 @@ const BESIDE = '(min-width: 1024px)';
 const ROOMY = '(min-width: 1280px)';
 
 /** The keys that open and close it, as in Claude Desktop. */
-export const SIDE_CHAT_KEYS = isApple ? '⌘;' : 'Ctrl+;';
+export const SIDE_CHAT_KEYS = keyText('sideChat') ?? '';
 
 /** What the side chat says it does, under its title. */
 const READS = 'Reads this session · changes nothing';
@@ -143,15 +143,14 @@ export function useSideChat(available: boolean, pane: Pane, keysBack?: () => voi
   useEffect(() => {
     if (!available) return undefined;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      const mod = isApple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-      if (!mod || e.altKey || e.repeat) return;
-      if (e.key.toLowerCase() === 'k' && !e.shiftKey && docked && !roomy) {
+      if (e.repeat) return;
+      if (isKey(e, 'searchSessions') && docked && !roomy) {
         // Finding a session needs the list, which the side chat has folded away: it goes, and the
         // list comes back for the search (App focuses it).
         toggle(false);
         return;
       }
-      if (e.key !== ';') return;
+      if (!isKey(e, 'sideChat')) return;
       // A sheet that is open keeps the keys, unless it is the side chat's own.
       if (!open && document.querySelector('dialog[open]')) return;
       e.preventDefault();

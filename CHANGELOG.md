@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+### Changes in behavior
+
+- Keys are Claude Desktop's, as it takes them in a browser: ⇧⌘K (Ctrl+Shift+K) searches sessions,
+  ⇧⌘O (Ctrl+Shift+O) starts one, ⇧⌘, (Ctrl+Shift+,) opens Settings, and ⌃⇧D shows or hides
+  Changes and files on a Mac too. ⌘K still searches; ⌘, and ⌘⇧D work as well where a browser
+  passes them on, and keys a browser keeps for itself are left to it.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

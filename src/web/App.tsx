@@ -16,7 +16,7 @@ import { announce } from './lib/announce';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
 import { forgetDrafts } from './lib/drafts';
-import { withMod } from './lib/keyboard';
+import { isKey } from './lib/keyboard';
 import { retried } from './lib/load';
 import { useMedia } from './lib/media';
 import {
@@ -211,16 +211,19 @@ function Main() {
     said.current = offline;
   }, [offline, info?.machine]);
 
-  // ⌘K finds a session (on a phone the list comes first); ⌘/ lists the keys.
+  // Desktop's keys for the whole page: ⇧⌘K finds a session (on a phone the list comes first), ⇧⌘O
+  // starts one, ⇧⌘, opens Settings, ⌘/ lists the keys. A sheet that is open keeps the others.
   const chatOpen = Boolean(sessionId || isNew);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!withMod(e) || e.repeat) return;
-      const key = e.key.toLowerCase();
-      if (key === '/') {
+      if (e.repeat) return;
+      if (isKey(e, 'shortcuts')) {
         e.preventDefault();
         showShortcuts(!shortcutsShown());
-      } else if (key === 'k' && !document.querySelector('dialog[open]')) {
+        return;
+      }
+      if (document.querySelector('dialog[open]')) return;
+      if (isKey(e, 'searchSessions')) {
         e.preventDefault();
         if (!wide && chatOpen) navigate('');
         setTimeout(() => {
@@ -230,11 +233,17 @@ function Main() {
             search.select();
           }
         }, 0);
+      } else if (isKey(e, 'newSession')) {
+        e.preventDefault();
+        navigate(newSessionQuery(defaultStart(queryClient.getQueryData<SessionSummary[]>(['sessions']) ?? [])));
+      } else if (isKey(e, 'settings')) {
+        e.preventDefault();
+        setSettingsOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [wide, chatOpen, navigate]);
+  }, [wide, chatOpen, navigate, queryClient]);
 
   const toggleNotifications = () => {
     const next = notifications === 'on' ? disableNotifications() : enableNotifications();
