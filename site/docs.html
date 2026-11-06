@@ -74,7 +74,7 @@
       <pre><code>npm install -g pelican-cc
 pelican</code></pre>
       <p>Pelican prints a link, <code>http://localhost:7860/?token=…</code>. Open it: it signs this browser in, and your sessions are there already. <code>pelican token</code> prints it again, and <code>pelican --open</code> opens Pelican in this computer’s browser.</p>
-      <p>The install is about 150 MB, most of it the copy of Claude Code that the Agent SDK brings. The command is also called <code>pelican-cc</code>, for computers where Python’s Pelican already has <code>pelican</code>; if npm stops with <code>EEXIST</code> on <code>bin/pelican</code>, use <code>npx pelican-cc</code>, or install into another prefix.</p>
+      <p>The install is about 150 MB to download and under 400 MB on disk, most of it the copy of Claude Code that the Agent SDK brings. The command is also called <code>pelican-cc</code>, for computers where Python’s Pelican already has <code>pelican</code>; if npm stops with <code>EEXIST</code> on <code>bin/pelican</code>, use <code>npx pelican-cc</code>, or install into another prefix.</p>
       <p>To look first, open the <a href="demo/">live demo</a>, which needs nothing installed, or run <code>npx pelican-cc --demo</code> for the same made-up sessions on this computer (the same 150 MB download, the first time). To run Pelican from a clone instead: <code>git clone https://github.com/Ki-Seki/pelican && cd pelican && npm ci && npm run build && npm link</code>.</p>
 
       <h3 id="claude-code">Which Claude Code runs</h3>
@@ -360,7 +360,7 @@ pelican phone</code></pre>
         <dt>Does it send my code anywhere, or phone home?</dt>
         <dd>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browsers and to Claude Code on the same computer and, if you turn notifications on, to your browser’s push service, with the content encrypted. Claude Code talks to Anthropic, or your provider, as it always does.</dd>
         <dt>Why is the install about 150 MB?</dt>
-        <dd>The official Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code; Pelican itself is under 1 MB. The <a href="demo/">live demo</a> needs no install at all.</dd>
+        <dd>The official Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code, for your computer alone: about 150 MB to download, under 400 MB on disk. Pelican itself is about 2 MB to download and 6 MB on disk. The <a href="demo/">live demo</a> needs no install at all.</dd>
         <dt>How does Pelican keep up with Claude Code?</dt>
         <dd>Each release moves to the newest Agent SDK, and the Claude Code it brings, once Pelican’s tests pass with it. <a href="#coverage">Claude Code coverage</a> says what Pelican does of Claude Code’s features, and <a href="#claude-code">Which Claude Code runs</a> how to run your own.</dd>
         <dt>Does it work with an API key, Bedrock or Google Cloud?</dt>

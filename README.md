@@ -44,9 +44,9 @@ pelican
 ```
 
 On the computer where you use Claude Code, with Node 22.12 or newer and Claude Code signed in, on
-macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB,
-most of it the copy of Claude Code that the Agent SDK brings. The command is also called
-`pelican-cc`, for computers where Python's Pelican has `pelican`.
+macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB
+to download and under 400 MB on disk, most of it the copy of Claude Code that the Agent SDK brings.
+The command is also called `pelican-cc`, for computers where Python's Pelican has `pelican`.
 
 ## On your phone
 
