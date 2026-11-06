@@ -65,6 +65,8 @@ beforeAll(() => {
   window.matchMedia = ((query: string) => ({
     matches: query.includes('coarse') ? coarse : false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
+  // jsdom draws nothing, so scrolls nothing: the screen as text scrolls to where the screen was.
+  Element.prototype.scrollIntoView ??= () => undefined;
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
     this.setAttribute('open', '');
   };
