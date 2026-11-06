@@ -146,23 +146,30 @@ export function cleanPastes(el: HTMLElement, paste: (text: string) => void): () 
  * Text put into the screen's field without a key: the macOS Emoji and Symbols picker, the Windows
  * emoji panel, some dictation and handwriting input. xterm in screen reader mode sends what keys
  * type and what input methods compose, and leaves such text in its field, unsent: this hands it
- * to `take`. Text that comes while a key is down, or with a composition, is xterm's to send.
- * Returns what stops it.
+ * to `take`. What xterm sends itself is left to it: the text of a key press (a keypress since the
+ * key went down, until it is up), of a key an input method takes (keyCode 229, read from the field),
+ * and of a composition. A key held that types nothing, such as Shift, takes nothing away. Returns
+ * what stops it.
  */
 export function insertedText(field: HTMLElement, take: (text: string) => void): () => void {
-  let keyDown = false;
+  /** The key down now types the text that comes, which xterm sends. */
+  let typing = false;
   let composing = false;
   /** When the last composition ended: the text it puts in comes after, and is xterm's too. */
   let composed = Number.NEGATIVE_INFINITY;
   const listeners: Array<[string, (event: Event) => void]> = [
-    ['keydown', () => {
-      keyDown = true;
+    ['keydown', (event) => {
+      // A key an input method takes: xterm reads what it puts in the field.
+      typing = (event as KeyboardEvent).keyCode === 229;
+    }],
+    ['keypress', () => {
+      typing = true;
     }],
     ['keyup', () => {
-      keyDown = false;
+      typing = false;
     }],
     ['blur', () => {
-      keyDown = false;
+      typing = false;
     }],
     ['compositionstart', () => {
       composing = true;
@@ -173,7 +180,7 @@ export function insertedText(field: HTMLElement, take: (text: string) => void): 
     }],
     ['input', (event) => {
       const { inputType, data, isComposing } = event as InputEvent;
-      if (inputType !== 'insertText' || !data || keyDown || composing || isComposing || performance.now() - composed < 50) return;
+      if (inputType !== 'insertText' || !data || typing || composing || isComposing || performance.now() - composed < 50) return;
       take(data);
     }],
   ];
