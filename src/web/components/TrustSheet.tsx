@@ -15,9 +15,10 @@ export type TrustAsk = { brings: string[]; commands?: CommandAt[][]; answer: (ch
 /**
  * An item with what it may hide written out: its commands as they run (a space other than a plain
  * one where a shell reads it as part of a word, or every one between a program's arguments), the
- * rest as names. Commands out of order or out of the item: every such space written out.
+ * rest as names. Told nothing of its commands, or what cannot be: every such space written out.
  */
-function revealItem(item: string, commands: CommandAt[] = []): { text: string; hidden: boolean } {
+function revealItem(item: string, commands: CommandAt[] | undefined): { text: string; hidden: boolean } {
+  if (commands === undefined) return revealHidden(item, { runs: 'argv' });
   let text = '';
   let hidden = false;
   let at = 0;
