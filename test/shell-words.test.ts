@@ -77,17 +77,21 @@ describe('where a shell reads a look-alike space as part of a word', () => {
   });
 });
 
-/** The shells on this computer, each once: bash and zsh as Claude Code runs commands, sh and dash as hooks run. */
+/**
+ * The shells on this computer, each version once: bash and zsh as Claude Code runs commands, sh and
+ * dash as hooks run (an sh that is a bash already here is left out).
+ */
 function shells(): Array<[string, string]> {
   const found = new Map<string, string>();
   for (const name of ['bash', '/bin/bash', 'zsh', 'sh', 'dash']) {
     const where = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
     if (!where) continue;
-    const real = realpathSync(where);
-    const version = spawnSync(real, ['-c', 'echo ${BASH_VERSION:-}${ZSH_VERSION:-}'], { encoding: 'utf8' }).stdout.trim();
-    if (![...found.values()].includes(`${real} ${version}`)) found.set(`${name} ${version}`.trim(), `${real} ${version}`);
+    const version = spawnSync(where, ['-c', 'echo ${BASH_VERSION:-}${ZSH_VERSION:-}'], { encoding: 'utf8' }).stdout.trim();
+    if (![...found.keys()].some((known) => known.endsWith(` ${version}`) && version !== '') && ![...found.values()].includes(realpathSync(where))) {
+      found.set(`${name} ${version}`.trim(), realpathSync(where));
+    }
   }
-  return [...found].map(([name, real]) => [name, real.split(' ')[0]!]);
+  return [...found];
 }
 
 describe('against the shells themselves', () => {
@@ -113,10 +117,10 @@ describe('against the shells themselves', () => {
     child.stdin.end();
   });
 
-  /** Each in turn, a few at a time. */
+  /** Each in turn, a few at a time: other tests time what they start. */
   async function each<T>(items: T[], check: (item: T) => Promise<void>) {
     let next = 0;
-    await Promise.all(Array.from({ length: 6 }, async () => {
+    await Promise.all(Array.from({ length: 3 }, async () => {
       while (next < items.length) await check(items[next++]!);
     }));
   }
@@ -127,13 +131,15 @@ describe('against the shells themselves', () => {
     const misread: string[] = [];
     const needless: string[] = [];
     const bash32 = found.some(([name]) => /^\S+ 3\./.test(name));
-    const commands = [...IN_WORDS, ...AS_TEXT, ...LOST, ...IN_WORDS_BASH_32].flatMap((template) => ['\u00a0', '\u3000'].map((space) => ({ template, ...made(template, space) })));
+    // Every shell reads each of these spaces the same way (the cases above), so one does here.
+    const commands = [...IN_WORDS, ...AS_TEXT, ...LOST, ...IN_WORDS_BASH_32].map((template) => ({ template, ...made(template, '\u00a0') }));
     await each(commands, async ({ template, command }) => {
       const words = inWords(command, isSpace);
       // As read: each space the card leaves as it is, a plain one.
       const read = command.split('').map((char, i) => (isSpace(char) && words !== undefined && !words.has(i) ? ' ' : char)).join('');
       for (const [name, shell] of found) {
-        const [runs, reads] = await Promise.all([run(shell, command), run(shell, read)]);
+        const runs = await run(shell, command);
+        const reads = await run(shell, read);
         if (runs !== reads) misread.push(`${name}: ${JSON.stringify(command)} runs ${JSON.stringify(runs)}, reads ${JSON.stringify(reads)}`);
       }
       if (words === undefined || (IN_WORDS_BASH_32.includes(template) && !bash32)) return;
@@ -141,7 +147,8 @@ describe('against the shells themselves', () => {
         const plain = `${command.slice(0, at)} ${command.slice(at + 1)}`;
         let differs = false;
         for (const [, shell] of found) {
-          const [runs, reads] = await Promise.all([run(shell, command), run(shell, plain)]);
+          const runs = await run(shell, command);
+          const reads = await run(shell, plain);
           if (runs !== reads) {
             differs = true;
             break;
