@@ -696,8 +696,8 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
             type="button"
             aria-label={k.name}
             aria-pressed={k.key === 'ctrl' ? ctrl : undefined}
-            // The keyboard stays as it is, up or down: the field keeps the keys.
-            onPointerDown={(e) => e.preventDefault()}
+            // The keyboard stays as it is, up or down: the field keeps the keys. Held on mousedown,
+            // where a tap moves the focus; a touch's pointerdown held back, WebKit gives no click.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => tap(k.key)}
             className={`grid h-9 shrink-0 place-items-center rounded-lg font-mono text-[12.5px] ${k.wide ? 'min-w-11 flex-[1.45]' : 'min-w-9 flex-1'} ${k.key === 'ctrl' && ctrl ? 'bg-fg text-bg' : 'bg-chip text-muted active:bg-hover'}`}
@@ -742,7 +742,6 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
         <button
           type="button"
           aria-label="Enter"
-          onPointerDown={(e) => e.preventDefault()}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => (mode.direct ? key('\r') : enter())}
           className={`grid size-10 shrink-0 place-items-center rounded-full ${typed ? 'bg-fg text-bg' : 'bg-chip text-muted'}`}
@@ -794,9 +793,10 @@ function ScreenText({ text, title, onClose, onQuote }: { text?: ScreenTextParts;
       header={(
         <div className="flex items-center gap-1 pb-1.5">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">{count === 0 ? 'The screen' : count === 1 ? '1 line selected' : `${count} lines selected`}</span>
+          {/* What is selected stays while the button is pressed (on mousedown, as for the keys). */}
           <button
             type="button"
-            onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               onQuote(target);
               onClose();
@@ -807,7 +807,7 @@ function ScreenText({ text, title, onClose, onQuote }: { text?: ScreenTextParts;
           </button>
           <button
             type="button"
-            onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => void navigator.clipboard?.writeText(target).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1200);
