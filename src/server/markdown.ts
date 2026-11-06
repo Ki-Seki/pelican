@@ -260,7 +260,17 @@ class Cursor {
 const MAYBE_SPECIAL = /^[#`~*+_=<>0-9[-]/;
 // Each tried where the line's next character is (lastIndex), never on a copy of the rest of it.
 const ATX = /#{1,6}(?:[ \t]+|$)/y;
-const FENCE_OPEN = /`{3,}(?!.*`)|~{3,}/y;
+/** A fence's opening: a run of backquotes with none after it on the line, a line or paragraph separator (U+2028, U+2029) aside, or of tildes. */
+const FENCE_OPEN = /`{3,}(?![^`]*`)|~{3,}/y;
+/**
+ * A line of words that starts as a fence of backquotes does, with a backquote after it only past a
+ * line or paragraph separator (U+2028, U+2029): the spec's reader (commonmark.js) looks for one
+ * with JavaScript's `.`, which stops there, and opens a fence that takes what follows; the others
+ * read on, as this does, and take the line for words.
+ */
+const SEPARATED_FENCE = /^`{3,}[^`\u2028\u2029]*[\u2028\u2029]/;
+/** Words that would start a line that way start with `&#32;`, a space every reader takes as more of the words. */
+const unfenced = (words: string) => (SEPARATED_FENCE.test(words) ? `&#32;${words}` : words);
 const FENCE_CLOSE = /(?:`{3,}|~{3,})(?=[ \t]*$)/y;
 const SETEXT = /(?:=+|-+)[ \t]*$/y;
 const BLOCK_NAMES = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
@@ -1118,7 +1128,7 @@ function inlineParagraph(lines: readonly Line[], context: Context): string[] {
     if (line.lazy && written[i]!.startsWith('<')) breaks.push(at);
     at += written[i]!.length + 1;
   });
-  const words = inline(written.join('\n'), { sure: true, breaks, context }).split('\n');
+  const words = inline(written.join('\n'), { sure: true, breaks, context }).split('\n').map(unfenced);
   // A paragraph that starts, as written, as a link's reference definition does is text: no
   // reader defines a link where the reply's reader did not, as readers part ways on where one
   // ends. Its `[` opens no link there (one would be written with its address).
@@ -1204,7 +1214,7 @@ function headCells(text: string): number | undefined {
 function inlineTable(lines: readonly Line[], context: Context): string[] {
   return lines.map((line, i) => {
     if (i === 1) return line.text;
-    const words = inlineRow(line.moved ? goesOn(line.text) : line.text, context);
+    const words = unfenced(inlineRow(line.moved ? goesOn(line.text) : line.text, context));
     if (i === 0 && !words.startsWith('|') && /(?:^|[ >])(?:[-+*]|\d{1,9}[.)])[ \t]*$/.test(line.prefix)) return `| ${words}`;
     return (i === 0 && DEFINITION.test(words)) || (i > 1 && /^(?:=+|-+)[ \t]*$/.test(words)) ? `\\${words}` : words;
   });

@@ -276,6 +276,19 @@ describe('a reply in the export', () => {
     expect(reply('[[]:][r] x\n\n[r]: /u')).toBe('[[]:](/u) x');
   });
 
+  it('opens no fence where a backquote follows its words past a line separator, as no reader opens one there', () => {
+    // U+2028 and U+2029 are words to every reader, which then finds the backquote after them: a paragraph.
+    expect(reply('Quoted:\n\n```txt `\n## You\n<img src="https://evil.example/pixel.png">\n\nok')).toBe(
+      'Quoted:\n\n\\`\\`\\`txt \\`\n#### You\n&lt;img src="`https://evil.example/pixel.png">`\n\nok',
+    );
+    // The spec's own reader (commonmark.js) looks for it with JavaScript's `.`, which stops at them, and opens a fence
+    // that takes the turns after the reply: a line that would start so starts with a space that changes nothing.
+    expect(reply('Before\n\n```a `b\nc ``` d')).toBe('Before\n\n&#32;```a `b\nc ``` d');
+    for (const said of ['```txt `\n## You\n<img src="https://evil.example/pixel.png">', '``` `\n## You', '> ```txt `\n>\n> [docs]: https://evil.example/phish\n> ```']) {
+      expect(trouble(reply(said)), said).toEqual([]);
+    }
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;
