@@ -44,6 +44,9 @@ export const appBase = new URL('./', location.href);
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
 /** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
+/** Whether a file Claude sent can be had: still there, gone from where it was sent, or past what Pelican serves. */
+export type SentState = 'there' | 'gone' | 'large';
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -269,7 +272,22 @@ export const api = {
   usageStats: (range: UsageRange) => request<{ summary: UsageSummary }>(`usage/stats?range=${range}`).then((r) => r.summary),
   /** One session's usage, for its menu (null: no transcript yet). */
   sessionUsage: (id: string) => request<{ usage: SessionUsage | null }>(`sessions/${encodeURIComponent(id)}/usage`).then((r) => r.usage),
+  /** A file Claude sent in the session, to show: its text, or a picture as data. */
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
+  /** The address of a file Claude sent in the session: a picture or a PDF as itself, or (`download`) to save. */
+  sentUrl: (id: string, path: string, download = false) =>
+    apiUrl(`sessions/${encodeURIComponent(id)}/sent/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`),
+  /**
+   * Whether files Claude sent (one call's, at most 50) are still there to have, asked once for their
+   * cards, before any tap: `gone` once one is not where Claude Code delivered it, `large` past what
+   * Pelican serves. A file Claude did not send in the session is not in the answer. The site's demo
+   * has every file it shows.
+   */
+  sentStates: async (id: string, paths: string[]): Promise<Map<string, SentState>> => {
+    if (STATIC_DEMO) return new Map(paths.map((path) => [path, 'there']));
+    const answer = await request<Record<SentState, string[]>>(`sessions/${encodeURIComponent(id)}/sent/state?${paths.map((path) => `p=${encodeURIComponent(path)}`).join('&')}`);
+    return new Map((['there', 'gone', 'large'] as const).flatMap((state) => (answer[state] ?? []).map((path) => [path, state] as const)));
+  },
   /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
   git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
   /** One file's diff; `from`, a renamed file's old path, so it shows what changed rather than a new file. */

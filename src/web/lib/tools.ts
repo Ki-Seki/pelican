@@ -10,6 +10,7 @@ import {
   Globe,
   ListChecks,
   type LucideIcon,
+  Paperclip,
   Plug,
   Search,
   SquareTerminal,
@@ -17,6 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 
+import { revealHidden } from '../../shared/hidden';
 import { todosOf } from '../../shared/tasks';
 import { workflowOf } from '../../shared/workflows';
 
@@ -32,6 +34,9 @@ export type ToolSummary = {
   prose?: boolean;
   /** Extra detail after the target, e.g. "lines 10–40". */
   note?: string;
+  /** What the step says while it runs, and once it failed, where Claude Desktop has words of its own for them. */
+  running?: string;
+  failed?: string;
 };
 
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
@@ -101,6 +106,13 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
       return { icon: ClipboardList, verb: 'Proposed a plan' };
     case 'Skill':
       return { icon: Wrench, verb: 'Skill', target: str(input.skill) ?? str(input.command) };
+    case 'SendUserFile': {
+      // In Claude Desktop's words; each file by its name (the approval shows where it is), with any
+      // character that hides or turns text around shown as such.
+      const files = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
+      const target = files.map((f) => f.split('/').pop()).filter(Boolean).map((f) => revealHidden(f!).text).join(', ');
+      return { icon: Paperclip, verb: 'Send file', running: 'Sending file', failed: 'Failed to send', ...(target ? { target } : {}) };
+    }
     case 'Workflow': {
       // As Claude Code names it: the script's description, else its name, never the script itself.
       const { name, description } = workflowOf(input);

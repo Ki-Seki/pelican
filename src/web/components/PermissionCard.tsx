@@ -6,12 +6,16 @@ import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { workflowOf } from '../../shared/workflows';
 import { api } from '../lib/api';
-import { describeTool } from '../lib/tools';
+import { describeTool, relPath } from '../lib/tools';
 import { fenced } from '../lib/workflows';
 import { Diff } from './Diff';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
+
+/** The files a SendUserFile call names: a list, or one as a bare string, as Claude Code takes it. */
+const filesIn = (input: Record<string, unknown>): string[] =>
+  typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
 
 /**
  * Whether a click on an approval is meant for it. For a moment after the card appears, and after
@@ -85,6 +89,10 @@ function headline(request: PermissionRequest, cwd: string | undefined): string {
   if (request.title) return request.title;
   if (request.toolName === 'EnterPlanMode') return 'Claude wants to plan before it changes anything';
   if (request.toolName === 'Workflow') return 'Claude wants to run a dynamic workflow';
+  if (request.toolName === 'SendUserFile') {
+    const count = filesIn(request.input).length;
+    return count > 1 ? `Claude wants to send you ${count} files` : 'Claude wants to send you a file';
+  }
   const { verb } = describeTool(request.toolName, request.input, cwd);
   const plain = ['Read', 'Edit', 'Write', 'Run', 'Search', 'Find', 'Fetch', 'Search the web', 'Edit notebook'].includes(verb);
   return `Claude wants to ${plain ? verb.toLowerCase() : `use ${verb}`}`;
@@ -179,16 +187,19 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
   const target = summary.target ? revealHidden(summary.target) : undefined;
   const workflow = request.toolName === 'Workflow';
-  const raw = !edit && !command && !workflow && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
+  // Files Claude would send you: each by its path, and its caption.
+  const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption)) : undefined } : undefined;
+  const raw = !edit && !command && !workflow && !sending && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
   // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
   const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
   // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.
   const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent) : undefined;
   // A workflow's input shows part by part, each with what hides in it shown; it is warned of all the same.
   const asked = workflow ? revealHidden(JSON.stringify(input)) : undefined;
-  const hidden = [command, target, raw, asked, head, about, server, always, agent].some((text) => text?.hidden);
+  const hidden = [command, target, raw, asked, head, about, server, always, agent, sending?.caption, ...(sending?.files ?? [])].some((text) => text?.hidden);
   // Claude Code often passes the command's own few words as the request's line too: said once.
-  const shownTarget = target && (summary.prose || !command) ? target : undefined;
+  // Files to send are listed below, whole.
+  const shownTarget = target && !sending && (summary.prose || !command) ? target : undefined;
   const repeats = (text?: string) => Boolean(about && text && plainWords(about.text) === plainWords(text));
   const aboutShown = about && !repeats(shownTarget?.text) && !repeats(command?.text.split('\n')[0]) ? about : undefined;
 
@@ -211,6 +222,13 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
           <Diff before={edit.before} after={edit.after} maxLines={160} />
         ) : workflow ? (
           <WorkflowAsk input={input} />
+        ) : sending ? (
+          <div className="space-y-1.5 text-[13px]">
+            {sending.caption && <div className="text-muted">{sending.caption.text}</div>}
+            <ul className="space-y-0.5 rounded-lg bg-chip px-3 py-2">
+              {sending.files.map((file, i) => <li key={i} className="font-mono text-[12px] break-all">{file.text}</li>)}
+            </ul>
+          </div>
         ) : command ? (
           <pre className="rounded-lg bg-chip px-3 py-2 font-mono text-[12.5px] whitespace-pre-wrap break-words">{command.text}</pre>
         ) : raw ? (

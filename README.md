@@ -68,8 +68,10 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
 - **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
   works, side chats, `!` commands with their output live, `/` commands and skills, `@` files, every
   model and permission mode, rewind and branch, subagents and background tasks, MCP servers.
-- **What Claude makes, in place.** Charts and diagrams Claude draws and pages it writes show in the
-  conversation, as still pictures until you tap Run.
+- **What Claude makes, in place.** Charts and diagrams Claude draws, pages it writes and files it
+  sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
+  Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
+  anything else to download.
 - **Changes and files, as in Claude Desktop.** What each turn changed, what is uncommitted, or
   everything since your branch split, with diffs. Search and read the folder; a path in a reply
   opens the file at its line. Comment on a line or quote it, and Create PR asks Claude.

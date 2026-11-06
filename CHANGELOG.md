@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.1
+
+- **Files Claude sends you, as in Claude Desktop.** In the sessions Pelican runs, Claude can send
+  you files (Claude Code's SendUserFile): Pelican now tells Claude Code it shows them, the way
+  Claude Code expects of an app that does, which turns that tool on and nothing else. Before, the
+  call failed with "SendUserFile is still listed for this conversation but is switched off in this
+  session right now". A file shows where Claude sent it, as it is sent and after a reload, read
+  from where Claude Code delivered it, under the words Claude sends with it, which read as a reply
+  does, Markdown and all: pictures in place, side by side at their own size when they come alone and
+  as small squares beside other files, larger on a tap; a video or a sound in a player, a part at a
+  time, so it plays in Safari too; a page or an SVG as the still preview, with Run; text to read,
+  Markdown as it reads, folded when long; a PDF in your browser's own viewer, in a tab of its own;
+  anything else as a card to download, with its type, name and size. A file Claude meant you to
+  save stays a card until you open it. While the call runs its step says "Sending file", and
+  "Failed to send" if it fails, in Claude Desktop's words, and sent files are never folded away
+  among steps. Asked to send one from outside the session's folder, the approval says "Claude wants
+  to send you a file" and lists it, instead of the call's raw input.
+- A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
+  this computer" before you tap anything, the same for every type, with its name and size and
+  nothing to tap; one past 200 MB says it is larger than Pelican serves. A browser tab that opens
+  one anyway says so in a page, not in JSON.
+- A character in a sent file's name that hides or turns text around shows as ⟨U+202E⟩, with the
+  approval's warning, on its card, in the step that sends it and in the name it is saved under: a
+  script named to read as a picture no longer does.
+- Files Claude sent in Claude Desktop show from Claude Code's record of what it delivered, so one
+  Claude named by a relative path shows too; a file Claude Code did not deliver never shows.
+- The demo, and the live demo on the website, have a file Claude sent: in "Try the dark theme on my
+  phone", a screenshot of the settings page in dark.
+- A download, of a file Claude sent or from Changes and files, sends the file as it was when you
+  asked for it: one that grew meanwhile, such as a log still being written, went on past the size it
+  had announced, and past the 200 MB limit. One cut short meanwhile breaks the download off.
+- A file whose extension names what every JavaScript object has, such as `.constructor`, opens as a
+  file: sent by Claude it failed with a server error, in Changes and files it showed as a broken
+  picture, and as an upload it would not open.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

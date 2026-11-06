@@ -1,6 +1,6 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
-// sheets, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
+// sheets and the files Claude sent there, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
 // published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
@@ -406,6 +406,56 @@ async function checkSideChat(browser, base, sessions) {
 }
 
 /**
+ * The files Claude sent, in the sessions where Claude Code recorded one delivered (`answer` asks the
+ * demo for a session's messages, or reads the answer the site saved), on a phone and wide, light
+ * and dark: each shows, a picture loaded, with a way to save it, and a picture opens large.
+ */
+async function checkSentFiles(browser, base, sessions, answer) {
+  const sending = [];
+  for (const session of sessions) {
+    const page = await answer(`sessions/${encodeURIComponent(session.id)}/messages?limit=120`).catch(() => undefined);
+    const sent = (page?.messages ?? []).flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result' && b.delivered?.files?.length);
+    if (sent.length > 0) sending.push(session);
+  }
+  if (sending.length === 0) problems.push('the demo has no session where Claude sent a file');
+  for (const [size, options] of Object.entries(SIZES)) {
+    for (const scheme of ['light', 'dark']) {
+      const context = await browser.newContext({ ...options, colorScheme: scheme });
+      const page = await context.newPage();
+      let at = '';
+      watch(page, () => `app, sent files, ${size}, ${scheme}, ${at}`);
+      for (const session of sending) {
+        at = `session ${session.id}`;
+        await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+        const group = page.locator('[role="group"][aria-label^="Sent "]').first();
+        if (!(await group.waitFor({ timeout: 5000 }).then(() => true, () => false))) {
+          problems.push(`app, sent files, ${size}, ${scheme}, ${at}: the file Claude sent does not show`);
+          continue;
+        }
+        await group.scrollIntoViewIfNeeded();
+        await page.waitForLoadState('networkidle');
+        const found = await group.evaluate((el) => {
+          const out = [];
+          for (const img of el.querySelectorAll('img')) if (!img.complete || img.naturalWidth === 0) out.push(`the picture ${img.alt} does not load`);
+          if (!el.querySelector('a[download]')) out.push('there is no way to save the file');
+          const box = el.getBoundingClientRect();
+          if (box.right > innerWidth + 1) out.push(`it ends ${Math.round(box.right - innerWidth)}px past the window`);
+          return out;
+        });
+        problems.push(...found.map((problem) => `app, sent files, ${size}, ${scheme}, ${at}: ${problem}`));
+        const open = group.getByRole('button', { name: /^Open / }).first();
+        if (await open.count()) {
+          await open.click();
+          if (!(await page.getByRole('dialog', { name: 'Image' }).waitFor({ timeout: 3000 }).then(() => true, () => false))) problems.push(`app, sent files, ${size}, ${scheme}, ${at}: the picture does not open large`);
+          await page.keyboard.press('Escape');
+        }
+      }
+      await context.close();
+    }
+  }
+}
+
+/**
  * Settings > Usage and activity, on a phone and wide, light and dark, in each range: it fills in
  * from the demo's transcripts, and nothing on it ends past the window.
  */
@@ -520,6 +570,7 @@ try {
     const sessions = await savedSessions(site);
     const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
+    await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
@@ -530,6 +581,7 @@ try {
     await driveApp(browser, demo.base, sessions ?? [], await walkable(sessions ?? [], asked));
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
+    await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkUsage(browser, demo.base);
   }
 } finally {
