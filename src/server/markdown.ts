@@ -1627,6 +1627,11 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
   const ticks = new Int32Array(n + 1);
   for (let i = 0; i < n; i += 1) ticks[i + 1] = ticks[i]! + (text[i] === '`' ? 1 : 0);
   const quoteIn = (from: number, to: number) => ticks[Math.min(to, n)]! - ticks[from]! > 0;
+  // And how many brackets: a bare link that takes one in (`http://x/![p](u`) takes a link or a
+  // picture apart, and a backquote in its title is free to start code after it.
+  const squares = new Int32Array(n + 1);
+  for (let i = 0; i < n; i += 1) squares[i + 1] = squares[i]! + (text[i] === '[' || text[i] === ']' ? 1 : 0);
+  const bracketIn = (from: number, to: number) => squares[Math.min(to, n)]! - squares[from]! > 0;
 
   /** How much the looks ahead below may read in all: twice the words. */
   let looking = 2 * n + 2000;
@@ -1801,7 +1806,10 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
           continue;
         }
         BARE_START.lastIndex = i;
-        if (BARE_START.test(text)) looked(i, { end: stop[i], read: 0 });
+        if (BARE_START.test(text)) {
+          looked(i, { end: stop[i], read: 0 });
+          if (bracketIn(i, stop[i]!)) sure = false;
+        }
       }
       i += 1;
     }

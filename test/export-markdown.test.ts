@@ -391,6 +391,13 @@ describe('a reply in the export', () => {
     expect(trouble(reply('![x](\u00a0data:image/png;base64,AA)'))).toEqual([]);
   });
 
+  it('takes code after a bare link that takes a bracket in for not sure, as the link may take a link or a picture apart', () => {
+    // GitHub's readers take `![p` into the link: the title's backquote then starts code, and the picture after it is one.
+    const said = 'http://h.example/x![p](u "t`")`![q](https://evil.example/p.png "t`")';
+    expect(reply(said)).toBe('http://h.example/x[p](u "t`")`\\![q](https://evil.example/p.png "t`")');
+    expect(trouble(reply(said))).toEqual([]);
+  });
+
   it('gives no reader a heading, HTML, a picture or what follows it, among thousands of replies made of the pieces that try', () => {
     // A seeded generator of replies: containers, leaves and words that readers take apart.
     let seed = 7;
