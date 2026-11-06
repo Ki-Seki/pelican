@@ -252,7 +252,7 @@ function Swipeable({ name, start, end, compact, selected, children }: {
       aria-label={`${action.label}: ${name}`}
       title={action.label}
       onClick={action.act}
-      className={`grid size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg ${selected ? 'bg-chip' : 'bg-hover'}`}
+      className={`grid size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 group-has-focus-visible/actions:opacity-100 hover:text-fg ${selected ? 'bg-chip' : 'bg-hover'}`}
     >
       <action.icon className="size-4" />
     </button>
@@ -287,7 +287,8 @@ function Swipeable({ name, start, end, compact, selected, children }: {
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
-        <div className={`absolute right-1.5 hidden gap-0.5 pointer-fine:flex ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'}`}>
+        {/* Shown together, on hover or when the keyboard reaches either. */}
+        <div className={`group/actions absolute right-1.5 hidden gap-0.5 pointer-fine:flex ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'}`}>
           {start && button(start)}
           {button(end)}
         </div>
