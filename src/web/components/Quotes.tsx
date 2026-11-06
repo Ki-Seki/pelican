@@ -37,6 +37,10 @@ const GAP = 8;
 const EDGE = 12;
 /** A pill whose selection scrolled this far has gone with it. */
 const SCROLLED_AWAY = 100;
+/** Fields that take what is typed. */
+const TYPING = 'input, textarea, select, [contenteditable="true"]';
+/** What ↵ presses, or types into, when it has the keys. */
+const CONTROL = `${TYPING}, a[href], button, summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]`;
 
 type Picked = {
   range: Range;
@@ -194,9 +198,12 @@ export function SelectionActions({ within, dockTo, onDock }: {
         return;
       }
       if (!picked || picked.mode !== 'pill' || noting) return;
-      const typing = e.target instanceof HTMLElement && e.target.matches('input, textarea, select, [contenteditable="true"]');
-      if (typing) return;
-      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && picked.from) {
+      const at = e.target instanceof Element ? e.target : null;
+      if (at?.matches(TYPING)) return;
+      // ↵ is what has the keys': a button or a link Tab moved to presses. It quotes only with the
+      // keys on the page, or in the conversation's text.
+      const free = !at || at === document.body || at === document.documentElement || (Boolean((dockTo ?? within).current?.contains(at)) && !at.closest(CONTROL));
+      if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && picked.from && free) {
         e.preventDefault();
         quote(picked);
       } else if (e.key === 'Escape') {

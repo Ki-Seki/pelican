@@ -137,6 +137,29 @@ describe('text selected with a mouse', () => {
     expect(pill()).toBeNull();
   });
 
+  it('↵ on a button or a link that has the keys presses it, and quotes nothing', () => {
+    render(
+      <>
+        <Conversation target={target} />
+        <button type="button">Allow</button>
+        <a href="#docs">Docs</a>
+      </>,
+    );
+    drag(screen.getByTestId('reply'), 53, 75);
+    wait(SETTLE_MS);
+    for (const control of [screen.getByRole('button', { name: 'Allow' }), screen.getByRole('link', { name: 'Docs' })]) {
+      control.focus();
+      // Not taken: the browser presses what has the keys.
+      expect(fireEvent.keyDown(control, { key: 'Enter' })).toBe(true);
+      expect(noteBox()).toBeNull();
+      expect(pill()).not.toBeNull();
+    }
+    // With the keys back on the page, ↵ quotes.
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(noteBox()).not.toBeNull();
+  });
+
   it('the note box: ↵ adds the quote with its note, where it is from kept to show it again', () => {
     render(<Conversation target={target} />);
     drag(screen.getByTestId('reply'), 53, 75);
