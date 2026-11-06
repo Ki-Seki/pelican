@@ -61,6 +61,8 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
 | `src/server/terminals.ts`, `pty.ts` | Terminals: the shell in a PTY, the server's copy of its screen, its socket and flow control, and the optional PTY package |
+| `src/web/components/WorkspaceTerminal.tsx`, `TerminalScreen.tsx` | The Terminal tab: its terminals, the phone's key row and line field, and the screen (xterm.js, loaded only by the tab) |
+| `src/web/lib/terminal-socket.ts`, `terminal-input.ts`, `terminals.ts` | A page's connection to a terminal, what its keys send, and Open, Run in terminal and Ctrl+` from the rest of the app |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |

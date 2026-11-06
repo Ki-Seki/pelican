@@ -6,16 +6,34 @@ A terminal beside the conversation, as Claude Desktop has one.
 
 ### Highlights
 
-- **Terminal.** Your login shell on the computer, in the session's folder, with the environment
-  Claude Code has there, as in Claude Desktop: `npm test` and `git status` see the files Claude is
-  editing, and git by hand goes there. It keeps running when you close the page or your phone
-  sleeps, and when you come back it shows the screen as it was, scrollback and a program such as
-  vim included, and goes on from there. Closing it hangs its shell up, as closing a window does;
-  one unused for 12 hours with nothing running in it closes on its own, and all end when Pelican
-  stops. Its output comes over a connection of its own, so it never holds up an approval, and while
-  a phone on a slow link catches up the shell waits for it, so Ctrl+C gets through at once. Claude
-  sees nothing of a terminal unless you put it in a message; `!` commands go into the conversation
-  as before.
+- **Terminal.** A Terminal tab beside Changes and Files runs your login shell on the computer, in
+  the session's folder, with the environment Claude Code has there, as in Claude Desktop:
+  `npm test` and `git status` see the files Claude is editing, and git by hand goes there.
+  Ctrl+\` shows it, as in Desktop, and hides it again from inside it. Each terminal is a tab
+  named after the program in front (zsh, npm, vim); + opens another, Open in terminal at the top
+  of a folder in Files opens one there, and End hangs the shown one up, as closing a window does,
+  asking first while a program runs in it. On a computer you type straight into it, select to
+  Quote or Copy, and Ctrl and the wheel sets the text size. Its colors and font are Pelican's,
+  light or dark.
+- **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the
+  screen with your phone's own keyboard, so dictation and input methods such as Chinese pinyin
+  work, and Enter sends it; a row of keys has what a phone lacks: esc, tab, ctrl, the arrows,
+  `|` `~` `/` `-` and paste, and a key there sends what you typed first, so tab completes it. A
+  full-screen program such as vim or htop gets every key as you type it, a password prompt hides
+  what you type, a swipe scrolls back, a pinch sets the size, and a long press opens the screen as
+  text, to select from, quote or copy.
+- **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when
+  you come back the page connects again by itself and shows the screen as it was, scrollback and
+  a program such as vim included. A shell that ends keeps its last screen, with Start again; so
+  does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
+  hours with nothing running in it closes on its own. Its output comes over a connection of its
+  own, so it never holds up an approval, and while a phone on a slow link catches up the shell
+  waits for it, so Ctrl+C gets through at once.
+- **Run in terminal and Quote.** A shell command in a reply (a `bash`, `sh`, `zsh` or `fish`
+  block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
+  session's folder. Quote puts what you selected in the terminal, or its screen, in your message
+  as a code block, at most its last 200 lines: Claude sees a terminal only that way. `!` commands
+  go into the conversation as before.
 
 ### Security
 
@@ -33,8 +51,11 @@ A terminal beside the conversation, as Claude Desktop has one.
 
 ### Site, docs and project
 
-- The docs describe the terminal: where it runs, what it keeps and when it ends, `--no-terminal`,
-  and its security.
+- The docs describe the terminal: the tab and its keys, on a computer and a phone, where it runs,
+  what it keeps and when it ends, `--no-terminal`, and its security. The coverage table has "A
+  terminal beside the conversation" as done.
+- The demo and the site's live demo show the Terminal tab, which says calmly that nothing runs
+  there.
 
 ## 0.4.0
 
