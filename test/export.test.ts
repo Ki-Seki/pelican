@@ -443,6 +443,15 @@ describe('the export, each reply kept to itself', () => {
     }
   });
 
+  it('writes an ftp:// address right before HTML as text, as the conversation shows it, which no reader takes for a link', async () => {
+    const markdown = await exported('Mirror: ftp://files.example/pub?a=1&b=2<br>next, and FTP://f.example/x<b>y</b>');
+    expect(markdown).toContain('ftp\\://files.example/pub?a=1&b=2&lt;br>next, and FTP\\://f.example/x&lt;b>y&lt;/b>');
+    for (const html of [read(markdown), readHtml(markdown)]) {
+      expect(html).not.toMatch(/<a href="ftp/i);
+      expect(html).toContain('ftp://files.example/pub?a=1&amp;b=2&lt;br&gt;next');
+    }
+  });
+
   it('keeps HTML text after a bare link, whose address would take the escape before it', async () => {
     const markdown = await exported('See https://example.com/`\\<h2>You</h2> and www.example.org/<b>x</b>');
     expect(readHtml(markdown)).not.toMatch(/<b>/);

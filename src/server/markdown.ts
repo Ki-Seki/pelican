@@ -1679,13 +1679,8 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
   let resources: Uint8Array | undefined;
   let trimming = 2 * n + 100;
   const tags = text.includes('<');
-  const bareBeforeTag = (at: number): number | undefined => {
-    if (!tags) return undefined;
-    MICROMARK_BARE.lastIndex = at;
-    const start = MICROMARK_BARE.exec(text);
-    if (!start) return undefined;
-    const previous = text[at - 1];
-    if (previous !== undefined && (/^w/i.test(start[0]) ? !/[\s(*_[\]~]/.test(previous) : /[A-Za-z]/.test(previous))) return undefined;
+  /** The next blank or `<` from each place, and what bareBeforeTag reads with it: made once, when first asked for. */
+  const edges = () => {
     if (!edge) {
       // The next blank or `<` from each place, and the `(`s, `)`s and `[`s less `]`s before it.
       edge = new Int32Array(n + 1);
@@ -1701,9 +1696,23 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
       resources = new Uint8Array(n);
       for (const [start, end] of whole) resources.fill(1, start, end);
     }
-    if (resources![at]) return undefined;
-    const tag = edge[at]!;
-    if (text[tag] !== '<' || reading.addresses.has(tag) || matchAt(AUTOLINK, text, tag) || !(matchAt(HTML_START, text, tag) || matchAt(AUTOLINK_SOME, text, tag))) return undefined;
+    return edge;
+  };
+  /** Whether what starts at `at`, outside a link's address, runs into HTML the export writes as `&lt;`: the `<` where it does. */
+  const intoTag = (at: number): number | undefined => {
+    const tag = edges()[at]!;
+    if (resources![at] || text[tag] !== '<' || reading.addresses.has(tag) || matchAt(AUTOLINK, text, tag) || !(matchAt(HTML_START, text, tag) || matchAt(AUTOLINK_SOME, text, tag))) return undefined;
+    return tag;
+  };
+  const bareBeforeTag = (at: number): number | undefined => {
+    if (!tags) return undefined;
+    MICROMARK_BARE.lastIndex = at;
+    const start = MICROMARK_BARE.exec(text);
+    if (!start) return undefined;
+    const previous = text[at - 1];
+    if (previous !== undefined && (/^w/i.test(start[0]) ? !/[\s(*_[\]~]/.test(previous) : /[A-Za-z]/.test(previous))) return undefined;
+    const tag = intoTag(at);
+    if (tag === undefined) return undefined;
     if (opens![3 * at + 2]! > 0) return undefined;
     // What GitHub's rules leave out at its end: these, a `)` it did not open, a `&name;`.
     let end = tag;
@@ -1834,6 +1843,13 @@ function inline(text: string, { sure, breaks = [], context, task = false }: { su
         if (end !== undefined) {
           // Written in `<…>`, it ends where the conversation ends it, as no `&lt;` would.
           i = put(i, `<${c === 'w' || c === 'W' ? 'http://' : ''}${text.slice(i, end)}>`, end);
+          continue;
+        }
+        // An ftp:// address, which the conversation does not link, running into HTML: markdown-it
+        // (VS Code's preview) would take the `&lt;` into a link to it, a broken one. With its `:`
+        // escaped, no reader links it, and every one shows it as the conversation does.
+        if ((c === 'f' || c === 'F') && tags && /^ftp:\/\//i.test(text.slice(i, i + 6)) && intoTag(i) !== undefined) {
+          i = put(i, `${text.slice(i, i + 3)}\\:`, i + 4);
           continue;
         }
         BARE_START.lastIndex = i;
