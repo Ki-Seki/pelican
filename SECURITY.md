@@ -148,9 +148,11 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.
-- **What gets installed is what was tested.** The package ships `npm-shrinkwrap.json`, so npm
-  installs the exact dependency tree CI tested, with integrity hashes, and the Agent SDK, with the
-  Claude Code it bundles, is pinned to one version.
+- **What gets installed is what was tested.** The packages Pelican's server uses are built into
+  it, as CI tested them, and npm installs one: the Agent SDK, pinned to one version, with the
+  Claude Code it bundles for your computer, each checked against the registry's integrity hash.
+  Beside it npm installs the packages the SDK lists as its peers, which Pelican never loads. The
+  package ships no `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
