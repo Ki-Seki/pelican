@@ -284,7 +284,7 @@ describe('the Terminal tab', () => {
     tab();
     await waitFor(() => expect(shows()).toBe('t1'));
     const button = screen.getByRole('button', { name: 'Screen as text' });
-    expect(button.className).toMatch(/\bsr-only\b/);
+    expect(button.className).toMatch(/\bopacity-0\b.*\bfocus-visible:opacity-100\b/);
     fireEvent.click(button);
     const sheet = await screen.findByRole('dialog');
     expect(sheet.textContent).toContain('line two');

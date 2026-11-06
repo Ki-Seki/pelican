@@ -368,7 +368,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
             <button
               type="button"
               onClick={longPress}
-              className="sr-only h-8 shrink-0 rounded-full px-3 text-[13px] whitespace-nowrap text-muted hover:bg-hover hover:text-fg focus-visible:not-sr-only"
+              className="pointer-events-none absolute h-8 shrink-0 rounded-full px-3 text-[13px] whitespace-nowrap text-muted opacity-0 hover:bg-hover hover:text-fg focus-visible:pointer-events-auto focus-visible:static focus-visible:opacity-100"
             >
               Screen as text
             </button>
