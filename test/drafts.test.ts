@@ -88,6 +88,10 @@ describe('drafts', () => {
     expect(again.loadDraft('s1')).toMatchObject({ text: '', items: [quote('q1', 'Why CSS variables?', 'Say why, briefly')] });
     again.setWaiting('s1', []);
     expect(again.loadDraft('s1')).toBeUndefined();
+    // A quote of a terminal keeps its tab and what its header calls it.
+    const terminal = { id: 't1', kind: 'quote' as const, text: '14 passed', from: { what: 'terminal' as const }, tab: '2', label: 'zsh' };
+    again.addWaiting('s2', terminal);
+    expect((await reload()).waitingOf('s2')).toEqual([terminal]);
   });
 
   it('give what waits to one message at a time, and take it back, before anything added meanwhile, when it does not go', () => {

@@ -79,8 +79,13 @@ export type WaitingItem = {
   side?: 'add' | 'del' | 'same';
   /** A folder attached, not a file. */
   folder?: boolean;
-  /** The terminal tab a quote of output is from. */
+  /**
+   * The terminal tab a quote of output is from, and what its header calls it (the tab's title, as
+   * Desktop names it; "Terminal" when it has none): `<!-- attach: zsh | tab:2 -->`. A label also
+   * keeps what a header read back from a message said, when it is not lines of a file.
+   */
   tab?: string;
+  label?: string;
 };
 
 /** A quote with a note: a reply, in Desktop's word. */
@@ -99,7 +104,7 @@ export function preparePassage(text: string, lines = false): string {
 }
 
 /** A quote of `text`, or nothing for one shorter than two characters (Desktop's least). */
-export function quoteItem(text: string, from: QuoteFrom, extra: Partial<Pick<WaitingItem, 'note' | 'path' | 'lines' | 'tab'>> = {}): WaitingItem | undefined {
+export function quoteItem(text: string, from: QuoteFrom, extra: Partial<Pick<WaitingItem, 'note' | 'path' | 'lines' | 'tab' | 'label'>> = {}): WaitingItem | undefined {
   const passage = preparePassage(text, Boolean(extra.lines));
   if (passage.trim().length < 2 && !extra.lines) return undefined;
   if (!passage.trim()) return undefined;
@@ -123,9 +128,10 @@ export function attachHeader(label?: string, tab?: string): string {
 /** A label for lines of a file: `src/app.ts:7-8`, or `src/app.ts:12` for one. */
 export const linesLabel = (path: string, lines?: [number, number]): string => (lines ? `${path}:${lines[0] === lines[1] ? lines[0] : `${lines[0]}-${lines[1]}`}` : path);
 
-/** A quote with no note, as context: Desktop's attach block. */
+/** A quote with no note, as context: Desktop's attach block, its header naming lines of a file, or a terminal tab. */
 export function attachBlock(item: WaitingItem): string {
-  return `${attachHeader(item.path ? linesLabel(item.path, item.lines) : undefined, item.tab)}\n${quotedLines(item.text)}`;
+  const label = item.path ? linesLabel(item.path, item.lines) : item.label ?? (item.tab ? 'Terminal' : undefined);
+  return `${attachHeader(label, item.tab)}\n${quotedLines(item.text)}`;
 }
 
 /** Lines in a note that read as a reply marker are written `&lt;!-- reply…`; three line breaks or more become two. */
@@ -202,15 +208,19 @@ export function readMessage(text: string): { items: WaitingItem[]; text: string 
     else if (part.kind === 'comment') {
       items.push({ id: newId(), kind: 'comment', text: part.code ?? '', note: part.note, path: part.path, lines: part.lines, side: part.removed ? 'del' : 'same', from: { what: 'diff' } });
     } else {
-      const numbered = part.label ? NUMBERS.exec(part.label) : null;
+      // A terminal's header names its tab, never lines of a file; one that names only a tab had no title.
+      const lone = part.tab ? undefined : /^tab:(\S+)$/.exec(part.label ?? '')?.[1];
+      const numbered = part.label && !part.tab && !lone ? NUMBERS.exec(part.label) : null;
+      const tab = part.tab ?? lone;
       items.push({
         id: newId(),
         kind: 'quote',
         text: part.text,
-        from,
+        from: tab ? { what: 'terminal' } : from,
         ...(part.note ? { note: part.note } : {}),
         ...(numbered ? { path: numbered[1]!, lines: [Number(numbered[2]), Number(numbered[3] ?? numbered[2])] as [number, number] } : {}),
-        ...(part.tab ? { tab: part.tab } : {}),
+        ...(part.label && !numbered && !lone ? { label: part.label } : {}),
+        ...(tab ? { tab } : {}),
       });
     }
   }

@@ -378,6 +378,26 @@ describe('both ways: Desktop reads what Pelican writes, and Pelican reads what D
     ]);
   });
 
+  it('a quote of a terminal names its tab, by its title or as Terminal, and comes back as it went', () => {
+    const output = '$ npm test\n14 passed';
+    const titled = messageWith([quoteItem(output, { what: 'terminal' }, { tab: '2', label: 'server:3000' })!], 'why?');
+    expect(titled).toBe('<!-- attach: server:3000 | tab:2 -->\n> $ npm test\n> 14 passed\n\nwhy?');
+    const untitled = messageWith([quoteItem(output, { what: 'terminal' }, { tab: '2' })!], 'why?');
+    expect(untitled).toBe('<!-- attach: Terminal | tab:2 -->\n> $ npm test\n> 14 passed\n\nwhy?');
+    expect(desktop.read(untitled).snippets).toEqual([{ text: output, label: 'Terminal', tab: '2' }]);
+    for (const message of [titled, untitled]) {
+      const back = readMessage(message);
+      expect(back.items).toMatchObject([{ kind: 'quote', tab: '2', from: { what: 'terminal' } }]);
+      expect(back.items[0]!.path).toBeUndefined();
+      expect(messageWith(back.items, back.text)).toBe(message);
+    }
+    // A tab with no title, as Desktop writes one, is a tab, not lines of a file called "tab".
+    const lone = readMessage('<!-- attach: tab:2 -->\n> npm test\n\nwhy?').items[0]!;
+    expect(lone).toMatchObject({ kind: 'quote', tab: '2' });
+    expect(lone.path).toBeUndefined();
+    expect(itemTitle(lone)).toBe('Quote from the terminal');
+  });
+
   it('give a title or a preview their words, else the first note, else the first quote', () => {
     expect(promptGist(message)).toBe('And the rest.');
     expect(promptGist(messageWith([quote('a passage', 'the note')], ''))).toBe('the note');

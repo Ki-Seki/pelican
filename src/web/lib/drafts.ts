@@ -105,6 +105,7 @@ function itemOf(value: unknown): WaitingItem | undefined {
     ...(typeof v.side === 'string' && SIDES.has(v.side) ? { side: v.side as WaitingItem['side'] } : {}),
     ...(v.folder === true ? { folder: true } : {}),
     ...(typeof v.tab === 'string' ? { tab: v.tab } : {}),
+    ...(typeof v.label === 'string' ? { label: v.label } : {}),
   };
   if (item.kind !== 'quote' && !item.path) return undefined;
   if (item.kind === 'comment' && (!item.lines || !item.note?.trim())) return undefined;
