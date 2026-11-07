@@ -1057,8 +1057,10 @@ export function Chat({
   useEffect(() => {
     const el = root.current;
     if (!asking || !el || !window.matchMedia('(max-height: 380px)').matches) return;
+    // Its start at the top, its foot above the message box: as much of it as there is room for.
     requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
+      const card = el.querySelector('[data-dock] section');
+      if (card) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
     });
   }, [asking]);
   useEffect(() => {
