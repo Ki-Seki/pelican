@@ -101,14 +101,15 @@ function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready
   // Its menu is the button's own: a right-click on it opens none of the page's.
   const own = (e: MouseEvent) => e.stopPropagation();
   const title = (label: string) => (hasKeyboard() ? `${label} (${MOD}-click: in the message box first)` : undefined);
-  const pill = 'flex h-11 items-center gap-2 rounded-full border border-line bg-bg text-[14px] text-fg hover:bg-hover pointer-fine:h-9 pointer-fine:text-[13.5px]';
+  // Drawn with a ring, outside their box: each is a finger's 44 px tall on a phone, its border included.
+  const pill = 'flex h-11 items-center gap-2 rounded-full bg-bg text-[14px] text-fg ring-1 ring-line hover:bg-hover pointer-fine:h-9 pointer-fine:text-[13.5px]';
   const kindEntries: MenuEntry[] = [
     { id: 'ready', label: 'Create PR', checked: prKind !== 'draft', run: () => setPrefs({ prKind: 'ready' }) },
     { id: 'draft', label: 'Create draft PR', checked: prKind === 'draft', run: () => setPrefs({ prKind: 'draft' }) },
   ];
   if (!commit && !prText) return null;
   return (
-    <div data-requests className="mx-3 mt-2 flex flex-wrap gap-2 border-t border-line pt-3">
+    <div data-requests className="mx-3 mt-2 flex flex-wrap gap-2.5 border-t border-line px-px pt-3">
       {commit && (
         <button type="button" {...commitPress} onContextMenu={(e) => { commitPress.onContextMenu(e); own(e); }} onClick={click(commit)} title={title('Commit changes')} className={`${pill} px-4 ${commitPress.className}`}>
           <GitCommitHorizontal className="size-4 shrink-0 text-muted" />
@@ -116,7 +117,7 @@ function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready
         </button>
       )}
       {prText && (
-        <div className="flex h-11 items-center rounded-full border border-line bg-bg pointer-fine:h-9">
+        <div className="flex h-11 items-center rounded-full bg-bg ring-1 ring-line pointer-fine:h-9">
           <button type="button" {...prPress} onContextMenu={(e) => { prPress.onContextMenu(e); own(e); }} onClick={click(prText)} title={title(prLabel)} className={`flex h-full items-center gap-2 rounded-l-full pr-3 pl-4 text-[14px] text-fg hover:bg-hover pointer-fine:text-[13.5px] ${prPress.className}`}>
             <GitPullRequest className="size-4 shrink-0 text-muted" />
             {prLabel}
@@ -240,7 +241,7 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
           <span className="min-w-0 truncate font-mono">{git.branch ?? 'detached'}</span>
           {Boolean(git.ahead) && <span className="shrink-0 text-faint">· {git.ahead} ahead</span>}
           {Boolean(git.behind) && <span className="shrink-0 text-faint">· {git.behind} behind</span>}
-          <button type="button" aria-label="Refresh" onClick={() => void status.refetch()} className="-my-1.5 ml-auto grid size-10 shrink-0 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg">
+          <button type="button" aria-label="Refresh" onClick={() => void status.refetch()} className="-my-2 ml-auto grid size-11 shrink-0 place-items-center rounded-full text-faint hover:bg-hover hover:text-fg pointer-fine:-my-1.5 pointer-fine:size-10">
             <RefreshCw className={`size-3.5 ${status.isFetching ? 'animate-spin' : ''}`} />
           </button>
         </div>
@@ -251,7 +252,7 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
           onClick={(e) => setPicking({ at: e.currentTarget, keys: e.detail === 0 })}
           aria-haspopup="menu"
           aria-expanded={Boolean(picking)}
-          className="mx-1 mb-1 flex min-h-10 max-w-[calc(100%-0.5rem)] items-center gap-1 rounded-lg px-2 text-left text-[13px] hover:bg-hover"
+          className="mx-1 mb-1 flex min-h-11 max-w-[calc(100%-0.5rem)] items-center gap-1 rounded-lg px-2 text-left text-[13px] hover:bg-hover pointer-fine:min-h-10"
         >
           <span className="shrink-0 text-faint">Show:</span>
           <span className="min-w-0 truncate">{label}</span>
