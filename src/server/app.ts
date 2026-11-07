@@ -33,7 +33,7 @@ import { exactBytes } from './open.js';
 import { pullRequestStatus } from './pull-requests.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
+import { ClaudeNotAnswering, getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
 import { checkRewind, promptBack, RewindRefusal, rewindTo, undoRewind } from './rewind.js';
 import { liveCut } from './rewound.js';
 import { savedOutputPage } from './shell.js';
@@ -167,6 +167,8 @@ app.route('/api/update', updateRoutes);
 app.onError((error, c) => {
   // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
   if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings, commands: error.commands, more: error.more }, 409);
+  // Claude Code did not answer in time as it was given a message's settings: the message did not go, which is said as it is.
+  if (error instanceof ClaudeNotAnswering) return c.json({ error: error.message }, 504);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });

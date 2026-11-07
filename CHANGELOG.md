@@ -166,7 +166,10 @@ settings; and updates from Settings.
   message (also after a SessionStart hook's context), and one before a compaction, can go back in
   code only. A rewind, Undo rewind and a message go one at a time: one sent from another page
   while a rewind starts Claude again goes after the cut, and a second rewind meanwhile says Claude
-  is working. A rewind leaves the session's name as it was.
+  is working. A message waits at most a minute for Claude Code to take the settings it goes with:
+  where Claude does not answer, stuck or stopped, it does not go, and says so, rather than hold up
+  every message from another page until that Claude ends. A rewind leaves the session's name as it
+  was.
 - **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
   message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
   A turn in Changes ends with its prompt's Rewind to here.
