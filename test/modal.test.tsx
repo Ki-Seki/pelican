@@ -57,6 +57,14 @@ describe('sheets', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('are clipped, never scrolled: what takes focus as a sheet slides in cannot leave it settled above the bottom edge', () => {
+    render(<Page onClose={() => {}} />);
+    act(() => screen.getByText('Settings').click());
+    const dialog = screen.getByRole('dialog', { name: 'Settings' });
+    expect(dialog.className.split(' ')).toContain('overflow-clip');
+    expect(dialog.className.split(' ')).not.toContain('overflow-hidden');
+  });
+
   it('close one at a time: Esc goes to the topmost only, and focus lands on the picked option', () => {
     const onClose = vi.fn();
     render(<Page onClose={onClose} />);
