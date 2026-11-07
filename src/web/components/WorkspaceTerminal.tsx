@@ -740,9 +740,11 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
           The browser did not let Pelican read the clipboard. Allow it in the browser’s site settings, or touch and hold the line, then Paste.
         </p>
       )}
-      {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. Where the */}
-      {/* keyboard leaves room for the line alone (a phone on its side), they make way for it (styles.css). */}
-      <div data-makes-room="tiny" className="no-scrollbar flex gap-1 overflow-x-auto px-2" role="toolbar" aria-label="Keys">
+      {/* On a phone on its side the keys and the line share one row, which its keyboard leaves room for. */}
+      <div className="[@media(orientation:landscape)_and_(pointer:coarse)]:flex [@media(orientation:landscape)_and_(pointer:coarse)]:items-center">
+      {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. Where an */}
+      {/* upright phone's keyboard leaves room for the line alone, they make way for it (styles.css). */}
+      <div data-makes-room="tiny" className="no-scrollbar flex gap-1 overflow-x-auto px-2 [@media(orientation:landscape)_and_(pointer:coarse)]:min-w-0 [@media(orientation:landscape)_and_(pointer:coarse)]:flex-1 [@media(orientation:landscape)_and_(pointer:coarse)]:pr-0" role="toolbar" aria-label="Keys">
         {ROW.filter((k) => k.key !== 'paste' || canPaste).map((k) => (
           <button
             key={k.key}
@@ -760,7 +762,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
         ))}
       </div>
       <form
-        className="flex items-center gap-1.5 px-2 pt-1.5"
+        className="flex items-center gap-1.5 px-2 pt-1.5 [@media(orientation:landscape)_and_(pointer:coarse)]:w-[min(26rem,44%)] [@media(orientation:landscape)_and_(pointer:coarse)]:shrink-0 [@media(orientation:landscape)_and_(pointer:coarse)]:pt-0"
         onSubmit={(e) => {
           e.preventDefault();
           if (modeNow.current.direct) key('\r');
@@ -802,6 +804,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
           <CornerDownLeft className="size-4" />
         </button>
       </form>
+      </div>
     </div>
   );
 }
