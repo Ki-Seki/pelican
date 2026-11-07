@@ -22,8 +22,8 @@ import { LABEL } from '../src/server/service';
 import { startServer } from '../src/server/server';
 import { closeAllTerminals, testShell } from '../src/server/terminals';
 import {
-  fileInTar, integrityHolds, nodeSatisfies, npmBeside, npmSaid, type Ran, type RunningSources, servedBy, shellWord, type UpdateContext, updateInfo, updateTiming,
-  useRunningSources, useUpdateContext,
+  fileInTarball, integrityHolds, nodeSatisfies, npmBeside, npmSaid, type Ran, READ_LIMITS, type RunningSources, servedBy, shellWord, TarReader, type UpdateContext,
+  updateInfo, updateTiming, useRunningSources, useUpdateContext,
 } from '../src/server/update';
 
 const CURRENT = pkg.version;
@@ -38,26 +38,30 @@ const timing = { ...updateTiming };
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** A ustar header for an entry of `size` bytes, of `type` ('0' a file, 'x' a pax header). */
+function tarHeader(name: string, size: number, type = '0'): Buffer {
+  const header = Buffer.alloc(512);
+  header.write(name.slice(0, 100), 0);
+  header.write('0000755\0', 100);
+  header.write('0000000\0', 108);
+  header.write('0000000\0', 116);
+  header.write(`${size.toString(8).padStart(11, '0')}\0`, 124);
+  header.write('00000000000\0', 136);
+  header.write('        ', 148);
+  header.write(type, 156);
+  header.write('ustar\0', 257);
+  header.write('00', 263);
+  header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148);
+  return header;
+}
+
+/** A tar entry: its header, its body, and the padding to a whole block. */
+const tarEntry = (name: string, body: Buffer, type = '0') => Buffer.concat([tarHeader(name, body.length, type), body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
+
 /** A .tgz as npm pack writes one: ustar entries under package/. */
 function tgz(files: Record<string, string>): Buffer {
-  const blocks: Buffer[] = [];
-  for (const [name, text] of Object.entries(files)) {
-    const body = Buffer.from(text);
-    const header = Buffer.alloc(512);
-    header.write(`package/${name}`, 0);
-    header.write('0000755\0', 100);
-    header.write('0000000\0', 108);
-    header.write('0000000\0', 116);
-    header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124);
-    header.write('00000000000\0', 136);
-    header.write('        ', 148);
-    header.write('0', 156);
-    header.write('ustar\0', 257);
-    header.write('00', 263);
-    header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148);
-    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512));
-  }
-  return gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+  const entries = Object.entries(files).map(([name, text]) => tarEntry(`package/${name}`, Buffer.from(text)));
+  return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]));
 }
 
 const integrity = (data: Buffer) => `sha512-${createHash('sha512').update(data).digest('base64')}`;
@@ -69,10 +73,10 @@ const standInScript = (version: string, broken = false) => broken
 
 const CHANGELOG = (versions: string[]) => `# Changelog\n\n${versions.map((v) => `## ${v}\n\nWhat ${v} brings, in a paragraph.\n\n### Highlights\n\n- **One thing.** Of ${v}.\n`).join('\n')}`;
 
-/** A release of the package, as npm pack makes it. */
-const release = (version: string, { broken = false, changelog = true } = {}) => tgz({
+/** A release of the package, as npm pack makes it; `changelog`: none, or this one instead of the usual. */
+const release = (version: string, { broken = false, changelog = true as boolean | string } = {}) => tgz({
   'package.json': JSON.stringify({ name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' }, engines: { node: '>=22.12' } }),
-  ...(changelog ? { 'CHANGELOG.md': CHANGELOG([version, CURRENT, '0.4.1']) } : {}),
+  ...(changelog ? { 'CHANGELOG.md': typeof changelog === 'string' ? changelog : CHANGELOG([version, CURRENT, '0.4.1']) } : {}),
   'dist/server/index.js': standInScript(version, broken),
 });
 
@@ -376,15 +380,49 @@ describe('versions and what changed', () => {
     expect(changesBetween('# Changelog\r\n\r\n## v1.0.0\r\n\r\nWindows lines.\r\n', '0.9.0', '1.0.0')).toBe('## v1.0.0\n\nWindows lines.');
   });
 
-  it('reads a file out of a tarball, and checks a tarball against its integrity', () => {
+  it('reads a file out of a tarball as it unpacks, and checks a tarball against its integrity', async () => {
     const data = release(NEXT);
     expect(integrityHolds(data, integrity(data))).toBe(true);
     expect(integrityHolds(data, `${integrity(Buffer.from('x'))} sha1-abc`)).toBe(false);
     expect(integrityHolds(data, 'sha1-abc')).toBe(false);
-    const tar = gunzipSync(data);
-    expect(fileInTar(tar, 'package/CHANGELOG.md')?.toString()).toContain(`## ${NEXT}`);
-    expect(fileInTar(tar, 'package/missing.md')).toBeUndefined();
+    const limits = { unpacked: READ_LIMITS.unpacked, file: READ_LIMITS.changelog };
+    expect((await fileInTarball(data, 'package/CHANGELOG.md', limits))?.toString()).toContain(`## ${NEXT}`);
+    expect(await fileInTarball(data, 'package/missing.md', limits)).toBeUndefined();
+    // A long name, as pax writes one, read in blocks of any size; of a file past what is kept, its start.
+    const long = `package/${'folder/'.repeat(20)}CHANGELOG.md`;
+    const record = ` path=${long}\n`;
+    const pax = gzipSync(Buffer.concat([
+      tarEntry('package/PaxHeader', Buffer.from(`${record.length + String(record.length + 2).length}${record}`), 'x'),
+      tarEntry(long.slice(0, 100), Buffer.from('x'.repeat(3000))),
+      Buffer.alloc(1024),
+    ]));
+    expect((await fileInTarball(pax, long, { unpacked: 1 << 20, file: 1000 }))?.toString()).toBe('x'.repeat(1000));
+    expect((await fileInTarball(pax, long, { unpacked: 1 << 20, file: 1 << 20 }))?.toString()).toBe('x'.repeat(3000));
+    const tar = gunzipSync(pax);
+    for (const size of [1, 7, 511, 513, 4096]) {
+      const reader = new TarReader(long, 1 << 20);
+      for (let at = 0; at < tar.length && !reader.push(tar.subarray(at, at + size)); at += size);
+      expect(reader.file?.toString(), `in pieces of ${size}`).toBe('x'.repeat(3000));
+    }
+    // Not gzip: no file.
+    await expect(fileInTarball(Buffer.from('not a tarball'), 'package/CHANGELOG.md', limits)).rejects.toThrow();
   });
+
+  it('unpacks a tarball only as far as it allows: a gzip bomb before the changelog is given up on early', async () => {
+    // 200 MB of an entry's zeros before CHANGELOG.md, in a few hundred KB: gzip members, one after the other.
+    const zeros = gzipSync(Buffer.alloc(1024 * 1024));
+    const bomb = Buffer.concat([
+      gzipSync(tarHeader('package/padding.bin', 200 * 1024 * 1024)),
+      ...Array.from({ length: 200 }, () => zeros),
+      gzipSync(Buffer.concat([tarEntry('package/CHANGELOG.md', Buffer.from(CHANGELOG([NEXT]))), Buffer.alloc(1024)])),
+    ]);
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    const start = Date.now();
+    expect(await fileInTarball(bomb, 'package/CHANGELOG.md', { unpacked: 8 * 1024 * 1024, file: READ_LIMITS.changelog })).toBeUndefined();
+    expect(Date.now() - start).toBeLessThan(5000);
+    // Allowed that much, it is read: the members are one archive.
+    expect((await fileInTarball(bomb, 'package/CHANGELOG.md', { unpacked: 256 * 1024 * 1024, file: READ_LIMITS.changelog }))?.toString()).toContain(`## ${NEXT}`);
+  }, 30_000);
 
   it('says in a line what npm said went wrong', () => {
     const refused = [
@@ -779,6 +817,49 @@ describe('the check', () => {
     } finally {
       await new Promise((resolve) => elsewhere.close(resolve));
     }
+  }, 30_000);
+
+  it('sends Settings at most so much of what changed, with where the rest is', async () => {
+    const line = '- A change, in a line long enough to fill a section of a changelog quickly.\n';
+    registry.tarballs.set(NEXT, release(NEXT, { changelog: `# Changelog\n\n## ${NEXT}\n\nWhat ${NEXT} brings.\n\n${line.repeat(20_000)}\n## ${CURRENT}\n\nThe running one.\n` }));
+    useUpdateContext(context(await globalInstall(prefix())));
+    const answer = await fetch(`${origin()}/api/update?check=1`, { headers: { 'x-pelican': '1', ...signedIn() } });
+    const text = await answer.text();
+    const info = JSON.parse(text) as UpdateInfo;
+    expect(info.changes!.length).toBeLessThanOrEqual(READ_LIMITS.changes + 200);
+    expect(info.changes).toMatch(new RegExp(`^## ${NEXT.replace(/\./g, '\\.')}\n\nWhat .* brings\.\n\n- A change`));
+    expect(info.changes!.endsWith(`- A change, in a line long enough to fill a section of a changelog quickly.\n\nThe rest is in [CHANGELOG.md](https://github.com/Ki-Seki/pelican/blob/v${NEXT}/CHANGELOG.md).`)).toBe(true);
+    expect(text.length).toBeLessThan(READ_LIMITS.changes + 4096);
+  }, 30_000);
+
+  it('gives up on a tarball that unpacks to too much, and downloads one it could not read only once until the registry answers again', async () => {
+    // 200 MB of zeros before CHANGELOG.md, in a few hundred KB.
+    const zeros = gzipSync(Buffer.alloc(1024 * 1024));
+    registry.tarballs.set(NEXT, Buffer.concat([
+      gzipSync(tarHeader('package/padding.bin', 200 * 1024 * 1024)),
+      ...Array.from({ length: 200 }, () => zeros),
+      gzipSync(Buffer.concat([tarEntry('package/CHANGELOG.md', Buffer.from(CHANGELOG([NEXT, CURRENT]))), Buffer.alloc(1024)])),
+    ]));
+    let now = Date.now();
+    useUpdateContext(context(await globalInstall(prefix()), { now: () => now }));
+    const downloads = () => registry.requests.filter((request) => request.endsWith('.tgz')).length;
+    expect(await updateInfo(true)).toMatchObject({ latest: NEXT, notes: `https://github.com/Ki-Seki/pelican/releases/tag/v${NEXT}` });
+    expect(downloads()).toBe(1);
+    // Each look after: what it found, and no download.
+    for (let i = 0; i < 3; i += 1) expect((await updateInfo(true)).changes).toBeUndefined();
+    expect(downloads()).toBe(1);
+    // The registry asked again, a few minutes on: once more.
+    now += updateTiming.settingsMs + 1000;
+    await updateInfo(true);
+    await updateInfo(true);
+    expect(downloads()).toBe(2);
+    // One read is read once.
+    registry.tarballs.set(NEXT, release(NEXT));
+    now += updateTiming.settingsMs + 1000;
+    expect((await updateInfo(true)).changes).toContain(`What ${NEXT} brings`);
+    now += updateTiming.settingsMs + 1000;
+    expect((await updateInfo(true)).changes).toContain(`What ${NEXT} brings`);
+    expect(downloads()).toBe(3);
   }, 30_000);
 
   it('asks nothing in the demo', async () => {

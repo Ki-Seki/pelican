@@ -4,7 +4,7 @@ import { constants, existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { createGunzip } from 'node:zlib';
 
 import { type Context, Hono, type Next } from 'hono';
 
@@ -120,6 +120,7 @@ export function useUpdateContext(next?: UpdateContext): void {
   checking = undefined;
   loading = undefined;
   changelogs.clear();
+  unread.clear();
   cancelWaiting();
   claimed = false;
   state = undefined;
@@ -411,6 +412,19 @@ async function bodyOf(response: Response, limit: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/**
+ * How much Pelican reads of what the registry sends, and keeps of it: pelican-cc's document, a
+ * tarball (2.9 MB for 0.5.0), as downloaded and as unpacked (8.4 MB) as far as its CHANGELOG.md,
+ * that file, and what Settings is sent of it, the sections since the running version.
+ */
+export const READ_LIMITS = {
+  document: 16 * 1024 * 1024,
+  tarball: 32 * 1024 * 1024,
+  unpacked: 64 * 1024 * 1024,
+  changelog: 2 * 1024 * 1024,
+  changes: 64 * 1024,
+};
+
 /** What the registry says is newest, as a Release; throws when it says nothing usable. */
 async function askRegistry(base: string): Promise<Release | undefined> {
   const response = await ctx().fetch(new URL(PACKAGE_NAME, base), {
@@ -418,7 +432,7 @@ async function askRegistry(base: string): Promise<Release | undefined> {
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`the registry answered ${response.status}`);
-  const document = JSON.parse((await bodyOf(response, 16 * 1024 * 1024)).toString('utf8')) as {
+  const document = JSON.parse((await bodyOf(response, READ_LIMITS.document)).toString('utf8')) as {
     'dist-tags'?: { latest?: unknown };
     versions?: Record<string, { dist?: { tarball?: unknown; integrity?: unknown }; engines?: { node?: unknown } }>;
   };
@@ -450,6 +464,9 @@ export async function checkForUpdate({ settings = false } = {}): Promise<Checked
       if (checked && checked.registry !== base) checked = undefined;
       const latest = await askRegistry(base);
       checked = { at: tried, registry: base, ...(latest ? { latest } : {}) };
+      // A changelog that could not be read is tried again, once, with the registry's new answer.
+      for (const key of unread) changelogs.delete(key);
+      unread.clear();
       await mkdir(config.stateDir, { recursive: true });
       await writeFile(stored(), JSON.stringify(checked));
     } catch {
@@ -488,52 +505,163 @@ export function integrityHolds(data: Buffer, integrity: string): boolean {
   return wanted.length > 0 && wanted.includes(digest);
 }
 
-/** A file of a tar archive (npm's tarballs: ustar, perhaps with pax or GNU long names), by its name. */
-export function fileInTar(tar: Buffer, name: string): Buffer | undefined {
-  let at = 0;
-  let long: string | undefined;
-  while (at + 512 <= tar.length) {
-    const header = tar.subarray(at, at + 512);
-    if (header.every((byte) => byte === 0)) return undefined;
+/**
+ * One file of a tar stream (npm's tarballs: ustar, perhaps with pax or GNU long names), read as its
+ * blocks come, keeping nothing else: at most `max` bytes of it, from its start.
+ */
+export class TarReader {
+  /** The file, once read: whole, or its first `max` bytes. */
+  file: Buffer | undefined;
+  /** Nothing more is to be read: the file was, the archive ended, or it is no tar archive. */
+  over = false;
+  private header: Buffer[] = [];
+  private headerSize = 0;
+  /** The entry under way: its type, what of it is kept, its bytes still to come and the padding after them. */
+  private type = '';
+  private keep: 'file' | 'name' | undefined;
+  private left = 0;
+  private padding = 0;
+  private kept: Buffer[] = [];
+  private keptSize = 0;
+  /** The name a pax or GNU header gave the entry after it. */
+  private long: string | undefined;
+
+  constructor(private readonly name: string, private readonly max: number) {}
+
+  /** Reads the next bytes; true once nothing more is to be read. */
+  push(chunk: Buffer): boolean {
+    for (let at = 0; at < chunk.length && !this.over;) {
+      if (this.left > 0) {
+        const part = chunk.subarray(at, at + this.left);
+        at += part.length;
+        this.left -= part.length;
+        if (this.keep) this.hold(part);
+        if (this.left === 0 || (this.keep === 'file' && this.keptSize >= this.max)) this.ended();
+      } else if (this.padding > 0) {
+        const part = Math.min(this.padding, chunk.length - at);
+        at += part;
+        this.padding -= part;
+      } else {
+        const part = chunk.subarray(at, at + 512 - this.headerSize);
+        at += part.length;
+        this.header.push(part);
+        this.headerSize += part.length;
+        if (this.headerSize === 512) this.begin(Buffer.concat(this.header));
+      }
+    }
+    return this.over;
+  }
+
+  private begin(header: Buffer): void {
+    this.header = [];
+    this.headerSize = 0;
     const field = (start: number, length: number) => header.subarray(start, start + length).toString('utf8').replace(/\0[\s\S]*$/, '');
     const size = Number.parseInt(field(124, 12).trim() || '0', 8);
-    if (!Number.isFinite(size) || size < 0) return undefined;
-    const type = header[156] === 0 ? '0' : String.fromCharCode(header[156]!);
+    if (header.every((byte) => byte === 0) || !Number.isFinite(size) || size < 0) {
+      this.over = true;
+      return;
+    }
+    this.type = header[156] === 0 ? '0' : String.fromCharCode(header[156]!);
     const prefix = field(345, 155);
-    const entry = long ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
-    long = undefined;
-    const body = tar.subarray(at + 512, at + 512 + size);
-    if (type === 'x') long = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'))?.[1];
-    else if (type === 'L') long = body.toString('utf8').replace(/\0[\s\S]*$/, '');
-    else if (type === '0' && entry === name) return Buffer.from(body);
-    at += 512 + Math.ceil(size / 512) * 512;
+    const entry = this.long ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
+    this.long = undefined;
+    this.keep = this.type === 'x' || this.type === 'L' ? 'name' : this.type === '0' && entry === this.name ? 'file' : undefined;
+    this.left = size;
+    this.padding = (512 - (size % 512)) % 512;
+    if (size === 0) this.ended();
   }
-  return undefined;
+
+  /** Keeps what is wanted of an entry, as far as it may hold: the file up to `max`, a name up to 64 KB. */
+  private hold(part: Buffer): void {
+    const room = (this.keep === 'file' ? this.max : 64 * 1024) - this.keptSize;
+    if (room <= 0) return;
+    const kept = Buffer.from(part.subarray(0, room));
+    this.kept.push(kept);
+    this.keptSize += kept.length;
+  }
+
+  private ended(): void {
+    const body = Buffer.concat(this.kept);
+    this.kept = [];
+    this.keptSize = 0;
+    if (this.keep === 'file') {
+      this.file = body;
+      this.over = true;
+    } else if (this.keep === 'name') {
+      this.long = this.type === 'x' ? /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'))?.[1] : body.toString('utf8').replace(/\0[\s\S]*$/, '');
+    }
+    this.keep = undefined;
+  }
+}
+
+/**
+ * A file of a gzipped tar archive (npm's tarballs), unpacked as it is read and kept alone: at most
+ * `limits.file` bytes of it; none when it is not there, or when the archive unpacks to more than
+ * `limits.unpacked` bytes on the way to it.
+ */
+export async function fileInTarball(tgz: Buffer, name: string, limits: { unpacked: number; file: number }): Promise<Buffer | undefined> {
+  const tar = new TarReader(name, limits.file);
+  const gunzip = createGunzip();
+  gunzip.end(tgz);
+  let unpacked = 0;
+  try {
+    for await (const chunk of gunzip as AsyncIterable<Buffer>) {
+      unpacked += chunk.length;
+      if (unpacked > limits.unpacked) return undefined;
+      if (tar.push(chunk)) break;
+    }
+  } finally {
+    gunzip.destroy();
+  }
+  return tar.file;
+}
+
+/**
+ * What changed, as Settings is sent it at every look: at most READ_LIMITS.changes characters, cut
+ * after the last section or line that fits, and where the rest is.
+ */
+function shortened(changes: string, version: string): string {
+  if (changes.length <= READ_LIMITS.changes) return changes;
+  const head = changes.slice(0, READ_LIMITS.changes);
+  const section = head.lastIndexOf('\n## ');
+  const line = head.lastIndexOf('\n');
+  const kept = head.slice(0, section > 0 ? section : line > 0 ? line : head.length).trimEnd();
+  return `${kept}\n\nThe rest is in [CHANGELOG.md](https://github.com/Ki-Seki/pelican/blob/v${version}/CHANGELOG.md).`;
 }
 
 const changelogs = new Map<string, Promise<string | undefined>>();
+/** Releases whose changelog could not be read: not asked for again until the registry answers again. */
+const unread = new Set<string>();
 
 /**
  * What changed from the running version to `release`, from the CHANGELOG.md in its tarball on the
  * registry (the very file npm would install, its integrity checked), downloaded only from the
- * registry's own origin, read once per version.
+ * registry's own origin, once per release; one that could not be read is not downloaded again
+ * until the registry answers again, and Settings links to the release notes meanwhile.
  */
 function changesTo(release: Release, base: string): Promise<string | undefined> {
-  let changes = changelogs.get(release.version);
+  const key = `${release.version} ${release.integrity}`;
+  let changes = changelogs.get(key);
   if (!changes) {
     changes = (async () => {
       if (!onRegistry(release.tarball, base)) return undefined;
       const response = await ctx().fetch(release.tarball, { signal: AbortSignal.timeout(60_000) });
-      if (!response.ok) return undefined;
-      const data = await bodyOf(response, 64 * 1024 * 1024);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      const data = await bodyOf(response, READ_LIMITS.tarball);
       if (!integrityHolds(data, release.integrity)) return undefined;
-      const changelog = fileInTar(gunzipSync(data, { maxOutputLength: 256 * 1024 * 1024 }), 'package/CHANGELOG.md');
-      return changelog ? changesBetween(changelog.toString('utf8'), pkg.version, release.version) : undefined;
+      const file = await fileInTarball(data, 'package/CHANGELOG.md', { unpacked: READ_LIMITS.unpacked, file: READ_LIMITS.changelog });
+      if (!file) return undefined;
+      // Cut at the limit, it ends at its last whole line.
+      const text = file.toString('utf8');
+      const changes = changesBetween(file.length < READ_LIMITS.changelog ? text : text.slice(0, text.lastIndexOf('\n') + 1), pkg.version, release.version);
+      return changes === undefined ? undefined : shortened(changes, release.version);
     })().catch(() => undefined);
-    changelogs.set(release.version, changes);
-    // One that could not be read is tried again next time.
+    changelogs.set(key, changes);
     void changes.then((text) => {
-      if (text === undefined && changelogs.get(release.version) === changes) changelogs.delete(release.version);
+      if (text === undefined && changelogs.get(key) === changes) unread.add(key);
     });
   }
   return changes;
