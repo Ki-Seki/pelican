@@ -14,7 +14,7 @@ import { announce, announcement, askedFor, type ChatMoment } from '../lib/announ
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
 import { commandOf, SESSION_ACTIONS } from '../lib/actions';
-import { addWaiting, clearDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
+import { addWaiting, clearDraft, loadDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
@@ -1127,7 +1127,10 @@ export function Chat({
       .then(async ({ sessionId: id, prompt: back }) => {
         const { items: waiting, text } = readMessage(back.text);
         const fill = (view: string) => {
-          saveDraft(view, text, back.attachments);
+          // What was typed there and not sent stays, the prompt's words after it, as words added to a box go.
+          const kept = loadDraft(view);
+          const words = kept?.text.trim() ? `${kept.text.replace(/\s+$/, '')}\n\n${text}` : text;
+          saveDraft(view, words, [...(kept?.attachments ?? []), ...back.attachments], kept?.held ?? []);
           putBackWaiting(view, waiting);
         };
         const next = await branchSettings();
