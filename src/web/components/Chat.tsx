@@ -640,14 +640,14 @@ export function Chat({
   // A side chat has none of its own; Changes and files and it take turns beside the conversation,
   // one on screen at a time.
   const composer = useRef<ComposerHandle>(null);
-  const side = useSideChat(Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
+  const side = useSideChat(sessionId, Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
   /** The side chat's message box, where a passage taken for it waits for the question. */
   const sideBox = sessionId ? `side:${sessionId}` : undefined;
   // Quotes taken in the conversation go to this chat's message box; Send now in the note box sends
   // one at once, a steer while Claude works; Start a side chat takes one to the side chat.
   const sendReply = useRef<(item: WaitingItem) => void>(() => {});
   sendReply.current = (item) => void send(sendNowMessage(item.text, item.note ?? ''), [], 'steer', { reply: item });
-  const { open: sideOpen, show: showSide } = side;
+  const { open: sideOpen, show: showSide, start: startSide } = side;
   // Asked for from the session's row in the list.
   const showSideNow = useCallback(() => showSide(), [showSide]);
   useSideChatAsked(sideChat ? undefined : sessionId, showSideNow);
@@ -655,16 +655,8 @@ export function Chat({
     chat: viewId,
     sendNow: (item) => sendReply.current(item),
     focusBox: () => composer.current?.focus(),
-    ...(sideBox && !sideChat ? {
-      sideChat: {
-        open: sideOpen,
-        start: (item: WaitingItem) => {
-          addWaiting(sideBox, item);
-          showSide();
-        },
-      },
-    } : {}),
-  }), [viewId, sideBox, sideChat, sideOpen, showSide]);
+    ...(sideBox && !sideChat ? { sideChat: { open: sideOpen, start: startSide } } : {}),
+  }), [viewId, sideBox, sideChat, sideOpen, startSide]);
   const paneShown = workspace.open && !side.docked;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.

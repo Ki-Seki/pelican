@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, GitStatus, RunSettings, SessionChanges } from '../src/shared/protocol';
+import type { ChatMessage, GitStatus, RunSettings, SessionChanges, SessionSummary } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const SIDE = '55555555-2222-4333-8444-555555555555';
@@ -17,6 +17,8 @@ const server = vi.hoisted(() => ({
   after: [] as ChatMessage[],
   /** The side chat's transcript: the copy of the session's conversation, then its own. */
   sideMessages: [] as ChatMessage[],
+  /** Other side chats' own conversations, after their copies of the session's. */
+  sideOwn: {} as Record<string, ChatMessage[]>,
   git: { repo: false } as GitStatus,
   /** The turns Claude Code's record says changed files. */
   turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }] as SessionChanges['turns'],
@@ -26,6 +28,10 @@ const server = vi.hoisted(() => ({
   refuse: false,
   /** Holds the next side question's answer until it settles. */
   hold: undefined as Promise<void> | undefined,
+  /** The session list the computer gives every page: side chats among the sessions, with what they copy and their first question. */
+  sessions: [] as SessionSummary[],
+  /** The side chat the next side question makes, when not SIDE. */
+  nextSide: undefined as string | undefined,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -40,19 +46,22 @@ vi.mock('../src/web/lib/api', async (original) => {
       defaults: async () => (await import('./start-defaults')).BUILT_IN,
       completions: async () => ({ commands: [], agents: [] }),
       git: async () => server.git,
+      sessions: async () => server.sessions,
       tree: async () => [],
       exists: async (_cwd: string, paths: string[]) => paths,
       file: async (_cwd: string, path: string) => ({ path, size: 24, text: 'const key = user.id;\nexport { key };\n' }),
       changes: async () => ({ turns: server.turns, lines: {} }),
       turnDiff: async () => '',
       session: async (id: string) => ({
-        session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...(id === SIDE ? { title: 'Side chat', sideChatOf: SESSION } : {}) },
+        session: server.sessions.find((s) => s.id === id)
+          ?? { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle', ...(id === SIDE ? { title: 'Side chat', sideChatOf: SESSION } : {}) },
         run: null,
         tasks: [],
         settings: {},
       }),
       messages: async (id: string) => {
-        const messages = id === SIDE ? [prompt, ...server.after, ...server.sideMessages] : [prompt, ...server.after];
+        const own = id === SIDE ? server.sideMessages : server.sideOwn[id];
+        const messages = own ? [prompt, ...server.after, ...own] : [prompt, ...server.after];
         return { messages, total: messages.length, offset: 0 };
       },
       send: async (id: string, body: { text: string }) => {
@@ -66,7 +75,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         server.hold = undefined;
         await held;
         if (server.drop) throw new actual.ApiError('Can’t reach studio', 0);
-        return { sessionId: SIDE };
+        return { sessionId: server.nextSide ?? SIDE };
       },
     },
   };
@@ -97,6 +106,7 @@ beforeAll(() => {
 });
 
 const { Chat } = await import('../src/web/components/Chat');
+const { forgetSideChats } = await import('../src/web/components/SideChat');
 const { forgetLastTab } = await import('../src/web/components/Workspace');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
@@ -110,13 +120,15 @@ afterEach(async () => {
   cleanup();
   const { setWaiting } = await import('../src/web/lib/drafts');
   for (const chat of [SESSION, `side:${SESSION}`]) setWaiting(chat, []);
+  // What this page made and picked of the side chats goes with it.
+  forgetSideChats();
   localStorage.clear();
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
   // Each test a page of its own: the view opens on Changes, nothing asked for yet.
   forgetLastTab();
-  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, refuse: false, hold: undefined });
+  Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, refuse: false, hold: undefined, sessions: [], sideOwn: {}, nextSide: undefined });
   history.replaceState(null, '', '/');
 });
 
@@ -141,6 +153,38 @@ function type(label: string, text: string) {
   fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
 }
 
+/** Cmd/Ctrl+;, which opens the side chat, closes it, or brings it in front of the pane. */
+const toggle = () => act(() => {
+  fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+});
+const changesPane = () => screen.queryByRole('complementary', { name: 'Changes and files' });
+/** The side chat's heading, by its name as a screen reader says it: "Side chat", and its first question once it asked one ("Side chat · Why?"). */
+const named = (where: HTMLElement, name: string) => within(where).queryByRole('heading', { name });
+
+const EARLIER = '66666666-2222-4333-8444-555555555555';
+const OTHER = '77777777-2222-4333-8444-555555555555';
+/** A side chat as the computer lists it among the sessions: the session it copies, its first question, and the message its own conversation starts at. */
+const listedSideChat = (id: string, of: string, question: string | undefined, start: string | undefined, minutesAgo: number, extra: Partial<SessionSummary> = {}): SessionSummary => ({
+  id, title: question ?? 'Side chat', cwd: CWD, project: 'app', lastActivity: Date.now() - minutesAgo * 60_000, status: 'idle', sideChatOf: of,
+  ...(question ? { sideQuestion: question } : {}), ...(start ? { sideStart: start } : {}), ...extra,
+});
+const asked = (uuid: string, text: string, minutesAgo: number): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now() - minutesAgo * 60_000 });
+const answer = (uuid: string, text: string, minutesAgo = 0.5): ChatMessage => ({ uuid, role: 'assistant', blocks: [{ type: 'text', text }], timestamp: Date.now() - minutesAgo * 60_000 });
+/**
+ * Two side chats of the session's on the computer, the latest asked with a passage, and one of
+ * another session's, with their own conversations after their copies of their sessions'.
+ */
+function twoSideChats() {
+  server.sessions = [
+    listedSideChat(SIDE, SESSION, 'Why not per project?', 'q2', 2),
+    listedSideChat(EARLIER, SESSION, 'What does the build cache hold?', 'q1', 20),
+    listedSideChat(OTHER, '88888888-2222-4333-8444-555555555555', 'Someone else’s question', 'q9', 1),
+    listedSideChat('99999999-2222-4333-8444-555555555555', SESSION, 'Put away', 'q8', 1, { archived: true }),
+  ];
+  server.sideMessages = [asked('q2', '<!-- attach -->\n> per user\n\nWhy not per project?', 2), answer('a2', 'A project’s users would read each other’s builds.')];
+  server.sideOwn = { [EARLIER]: [asked('q1', 'What does the build cache hold?', 20), answer('a1', 'The compiled bundles, per user.', 19)] };
+}
+
 describe('the side chat', () => {
   it('opens with /btw and its question, beside the conversation, and the session gets nothing', async () => {
     computer(1280);
@@ -151,7 +195,9 @@ describe('the side chat', () => {
     expect(server.side[0]).toMatchObject({ id: SESSION, question: 'why is the cache key per user?' });
     expect(server.sent).toEqual([]);
     expect(pane()).not.toBeNull();
-    expect(within(pane()!).getByText('why is the cache key per user?')).toBeTruthy();
+    // Named by its question as soon as it has gone, which its conversation shows too.
+    expect(await within(pane()!).findByRole('heading', { name: 'Side chat · why is the cache key per user?' })).toBeTruthy();
+    expect(within(pane()!).getAllByText('why is the cache key per user?')).toHaveLength(2);
     // Only its own conversation: the copy of the session's is not shown again.
     expect(within(pane()!).queryByText('Clean up the build')).toBeNull();
   });
@@ -230,16 +276,22 @@ describe('the side chat', () => {
     expect(server.side).toHaveLength(1);
   });
 
-  it('opens from the session menu, and New starts another from the session as it is now', async () => {
+  it('opens from the session menu, and New side chat, under its name’s ▾, starts another from the session as it is now', async () => {
     computer(1280);
     session();
     await loaded();
     fireEvent.click(sessionMenu());
     fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     await waitFor(() => expect(pane()).not.toBeNull());
+    // Nothing asked yet, nothing earlier: no ▾.
+    expect(within(pane()!).queryByRole('button', { name: /^Side chat/ })).toBeNull();
     type('Side question', 'Which step is slowest?');
     await waitFor(() => expect(server.side).toHaveLength(1));
-    fireEvent.click(within(pane()!).getByRole('button', { name: 'New side chat' }));
+    fireEvent.click(await within(pane()!).findByRole('button', { name: 'Side chat · Which step is slowest?' }));
+    const menu = await screen.findByRole('menu', { name: 'Side chats' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['New side chat']);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'New side chat' }));
+    await waitFor(() => expect(named(pane()!, 'Side chat')).not.toBeNull());
     type('Side question', 'Where are the logs?');
     await waitFor(() => expect(server.side).toHaveLength(2));
     expect(server.sent).toEqual([]);
@@ -384,16 +436,12 @@ describe('the side chat', () => {
   });
 
   describe('asked for a file or a turn’s changes', () => {
-    const answer = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'assistant', blocks: [{ type: 'text', text }], timestamp: Date.now() - 30_000 });
     const changes = () => screen.queryByRole('complementary', { name: 'Changes and files' });
     const file = () => screen.queryByRole('group', { name: 'The text of src/cache.ts' });
-    /** Side chat open with its first question answered, as it is remembered in this tab. */
+    /** The session's side chat, its first question answered, as the computer lists it. */
     const answered = () => {
-      server.sideMessages = [
-        { uuid: 'q1', role: 'user', blocks: [{ type: 'text', text: 'Where is the key made?' }], timestamp: Date.now() - 20_000 },
-        answer('a2', 'In `src/cache.ts:1`, from the user.'),
-      ];
-      sessionStorage.setItem('pelican:side-chats', JSON.stringify({ [SESSION]: { id: SIDE, first: 'q1' } }));
+      server.sessions = [listedSideChat(SIDE, SESSION, 'Where is the key made?', 'q1', 1)];
+      server.sideMessages = [asked('q1', 'Where is the key made?', 1), answer('a2', 'In `src/cache.ts:1`, from the user.')];
     };
 
     it('in the conversation, while the side chat sits in the pane’s place: the side chat makes way', async () => {
@@ -450,11 +498,11 @@ describe('the side chat', () => {
       await loaded();
       fireEvent.click(sessionMenu());
       fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
-      const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
+      const sheet = await screen.findByRole('dialog', { name: 'Side chat · Where is the key made?' });
       fireEvent.click(await within(sheet).findByRole('link', { name: 'src/cache.ts:1' }));
       // While the sheet plays its way out it holds the page: the view waits for it.
       expect(screen.queryByRole('region', { name: 'Changes and files' })).toBeNull();
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull());
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Side chat/ })).toBeNull());
       const view = await screen.findByRole('region', { name: 'Changes and files' });
       await waitFor(() => expect(within(view).getByRole('group', { name: 'The text of src/cache.ts' })).toBeTruthy(), LAZY);
       expect(location.search).toContain('w=files');
@@ -517,6 +565,172 @@ describe('the side chat', () => {
   });
 });
 
+describe('a session’s side chats, as the computer lists them', () => {
+  const rect = { x: 10, y: 40, top: 40, left: 10, bottom: 60, right: 200, width: 190, height: 20, toJSON: () => ({}) } as DOMRect;
+  /** A mouse's selection of `words` in the conversation, and the pill's side chat action, by its name. */
+  async function select(words: string, action: RegExp) {
+    Range.prototype.getClientRects = () => [rect] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => rect;
+    const text = (await screen.findAllByText(words, { exact: false })).find((el) => !pane()?.contains(el))!.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, text.textContent!.indexOf(words));
+    range.setEnd(text, text.textContent!.indexOf(words) + words.length);
+    fireEvent.pointerDown(text.parentElement!, { pointerType: 'mouse' });
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+    fireEvent.pointerUp(text.parentElement!, { pointerType: 'mouse' });
+    const pill = await screen.findByRole('toolbar', { name: 'Selected text' }, { timeout: 1000 });
+    fireEvent.click(within(pill).getByRole('button', { name: action }));
+    getSelection()!.removeAllRanges();
+  }
+  /** The ▾ beside the side chat's name, and what it lists. */
+  async function sideChatsMenu() {
+    fireEvent.click(await within(pane() ?? screen.getByRole('dialog', { name: /^Side chat/ })).findByRole('button', { name: /^Side chat/ }));
+    const menu = await screen.findByRole('menu', { name: 'Side chats' });
+    return { menu, items: within(menu).getAllByRole('menuitem').map((item) => item.textContent) };
+  }
+
+  it('come from the server per session: it opens on the latest, named by its first question, its own conversation alone, and its ▾ has the session’s others and New side chat', async () => {
+    computer(1280);
+    twoSideChats();
+    session();
+    await loaded();
+    toggle();
+    expect(await within(pane()!).findByRole('heading', { name: 'Side chat · Why not per project?' })).toBeTruthy();
+    expect(await within(pane()!).findByText('A project’s users would read each other’s builds.')).toBeTruthy();
+    // The passage it was asked with shows as a quote above the question.
+    expect(within(pane()!).getAllByText('per user').length).toBeGreaterThan(0);
+    expect(within(pane()!).queryByText('Clean up the build')).toBeNull();
+    // The session's other side chat, the latest first (another session's and one put away are not its own), then New side chat.
+    const { menu, items } = await sideChatsMenu();
+    expect(items).toEqual(['What does the build cache hold?', 'New side chat']);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /^What does the build cache hold\?/ }));
+    expect(await within(pane()!).findByRole('heading', { name: 'Side chat · What does the build cache hold?' })).toBeTruthy();
+    // Picked, its box has the keys, for the next question.
+    await waitFor(() => expect(document.activeElement).toBe(within(pane()!).getByLabelText('Side question')));
+    expect(await within(pane()!).findByText('The compiled bundles, per user.')).toBeTruthy();
+    expect(within(pane()!).queryByText('A project’s users would read each other’s builds.')).toBeNull();
+    // A question goes to the side chat shown.
+    type('Side question', 'And how big does it get?');
+    await waitFor(() => expect(server.sent).toEqual([{ id: EARLIER, text: 'And how big does it get?' }]));
+    expect(server.side).toEqual([]);
+    // Nothing of it is kept in this tab: the computer's list is what every page reads.
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('opens on the latest also after a reload, or on a phone: the list is the computer’s, not this page’s', async () => {
+    media = {};
+    twoSideChats();
+    session();
+    await loaded();
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Side chat · Why not per project?' });
+    expect(await within(sheet).findByText('A project’s users would read each other’s builds.')).toBeTruthy();
+    expect(within(sheet).getByText('Reads this session · changes nothing')).toBeTruthy();
+    // Its ▾ is a sheet of its own on a phone.
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Side chat · Why not per project?' }));
+    const menu = await screen.findByRole('dialog', { name: 'Side chats' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['What does the build cache hold?', 'New side chat']);
+  });
+
+  it('a question asked in a new one names it at once, and makes it the latest, before the computer lists it', async () => {
+    computer(1440);
+    twoSideChats();
+    session();
+    await loaded();
+    toggle();
+    await within(pane()!).findByRole('heading', { name: 'Side chat · Why not per project?' });
+    server.nextSide = 'abababab-2222-4333-8444-555555555555';
+    fireEvent.click(within((await sideChatsMenu()).menu).getByRole('menuitem', { name: 'New side chat' }));
+    await waitFor(() => expect(within(pane()!).getByRole('heading', { name: 'Side chat' })).toBeTruthy());
+    type('Side question', 'Where are the logs?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    expect(server.side[0]).toMatchObject({ id: SESSION, question: 'Where are the logs?' });
+    expect(await within(pane()!).findByRole('heading', { name: 'Side chat · Where are the logs?' })).toBeTruthy();
+    expect((await sideChatsMenu()).items).toEqual(['Why not per project?', 'What does the build cache hold?', 'New side chat']);
+  });
+
+  it('Start a side chat on a selection starts a new one, from the session as it is now, the others under its ▾; Send to side chat goes to the one open', async () => {
+    computer(1440);
+    twoSideChats();
+    server.nextSide = 'abababab-2222-4333-8444-555555555555';
+    server.after = [answer('a1', 'The cache key is per user, so one user never reads another’s build.', 0.8)];
+    session();
+    await loaded();
+    await select('per user', /^Start a side chat$/);
+    expect(pane()).not.toBeNull();
+    expect(within(pane()!).getByRole('heading', { name: 'Side chat' })).toBeTruthy();
+    expect(within(pane()!).getByRole('button', { name: 'Quote “per user”' })).toBeTruthy();
+    expect((await sideChatsMenu()).items).toEqual(['Why not per project?', 'What does the build cache hold?']);
+    fireEvent.keyDown(screen.getByRole('menu', { name: 'Side chats' }), { key: 'Escape' });
+    document.querySelector('dialog')?.dispatchEvent(new Event('cancel', { cancelable: true }));
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Side chats' })).toBeNull());
+    expect(pane()).not.toBeNull();
+    type('Side question', 'Why not per team?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    expect(server.side[0]!.question).toBe('<!-- attach -->\n> per user\n\nWhy not per team?');
+    // Open now: the passage goes to it, and so does the question.
+    await within(pane()!).findByRole('heading', { name: 'Side chat · Why not per team?' });
+    await select('one user never reads', /^Send to side chat$/);
+    expect(within(pane()!).getByRole('button', { name: 'Quote “one user never reads”' })).toBeTruthy();
+    type('Side question', 'Even across machines?');
+    await waitFor(() => expect(server.sent).toEqual([{ id: 'abababab-2222-4333-8444-555555555555', text: '<!-- attach -->\n> one user never reads\n\nEven across machines?' }]));
+    expect(server.side).toHaveLength(1);
+  });
+
+  it('/btw with a question, while it is closed, asks in a new one; while it is open, in the one shown', async () => {
+    computer(1280);
+    twoSideChats();
+    server.nextSide = 'abababab-2222-4333-8444-555555555555';
+    session();
+    await loaded();
+    type('Message Claude', '/btw why not a ring buffer?');
+    await waitFor(() => expect(server.side).toHaveLength(1));
+    expect(server.side[0]!.question).toBe('why not a ring buffer?');
+    await within(pane()!).findByRole('heading', { name: 'Side chat · why not a ring buffer?' });
+    type('Message Claude', '/btw and a bounded one?');
+    await waitFor(() => expect(server.sent).toEqual([{ id: 'abababab-2222-4333-8444-555555555555', text: 'and a bounded one?' }]));
+    expect(server.side).toHaveLength(1);
+  });
+
+  it('opened from a side chat’s row in the list, is its session’s side chat, on that one', async () => {
+    computer(1440);
+    twoSideChats();
+    const { askSideChat } = await import('../src/web/components/SideChat');
+    askSideChat(SESSION, EARLIER);
+    session();
+    await loaded();
+    expect(await within(await screen.findByRole('complementary', { name: 'Side chat' })).findByRole('heading', { name: 'Side chat · What does the build cache hold?' })).toBeTruthy();
+    expect(await within(pane()!).findByText('The compiled bundles, per user.')).toBeTruthy();
+  });
+
+  it('on a phone is a sheet that Back closes, the session left as it was; Back closes its ▾ first', async () => {
+    media = {};
+    twoSideChats();
+    history.replaceState(null, '', `/?s=${SESSION}`);
+    session();
+    await loaded();
+    const back = () => act(async () => {
+      history.back();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Side chat · Why not per project?' });
+    await waitFor(() => expect(history.state?.pelicanSheet).toBeDefined());
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Side chat · Why not per project?' }));
+    await screen.findByRole('dialog', { name: 'Side chats' });
+    await back();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Side chats' })).toBeNull());
+    expect(screen.getByRole('dialog', { name: 'Side chat · Why not per project?' })).toBeTruthy();
+    await back();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Side chat/ })).toBeNull());
+    expect(location.search).toBe(`?s=${SESSION}`);
+    expect(screen.getByLabelText('Message Claude')).toBeTruthy();
+  });
+});
+
 describe('a side question that did not go', () => {
   const question = 'why is the cache key per user?';
   const sideBox = () => screen.getByLabelText('Side question') as HTMLTextAreaElement;
@@ -569,7 +783,7 @@ describe('a side question that did not go', () => {
     expect(sideBox().value).toBe('what does the build cache hold?');
   });
 
-  it('on a phone, comes back once to the sheet’s box, closed with Done and opened again', async () => {
+  it('on a phone, comes back once to the sheet’s box, closed with its × and opened again', async () => {
     media = {};
     server.drop = true;
     session();
@@ -582,7 +796,7 @@ describe('a side question that did not go', () => {
     const sheet = await open();
     ask(question);
     await waitFor(() => expect(sideBox().value).toBe(question));
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Done' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull());
     await open();
     await settled();
@@ -649,7 +863,7 @@ describe('a quote sent at once from the side chat’s note box that does not go'
 
   it('waits again in the side chat’s box, its note with it', async () => {
     computer(1280);
-    sessionStorage.setItem('pelican:side-chats', JSON.stringify({ [SESSION]: { id: SIDE, first: 'u2' } }));
+    server.sessions = [listedSideChat(SIDE, SESSION, 'What does the cache do?', 'u2', 1)];
     server.sideMessages = [
       { uuid: 'u2', role: 'user', blocks: [{ type: 'text', text: 'What does the cache do?' }], timestamp: Date.now() - 40_000 },
       { uuid: 'a2', role: 'assistant', blocks: [{ type: 'text', text: 'It caches the build output, per user.' }], timestamp: Date.now() - 30_000 },

@@ -12,13 +12,15 @@ const FLICK = 0.5;
  * phone its top can be dragged down to close it, as the sheets there can.
  */
 export function Sheet({
-  open, onClose, title, children, done, size = 'normal', header, behind,
+  open, onClose, title, children, done, size = 'normal', header, behind, trailing,
 }: {
   open: boolean;
   onClose: () => void;
   title: ReactNode;
   children: ReactNode;
   done?: boolean;
+  /** Beside the title, at its end, outside it: a sheet's own way out (the side chat's ×), in place of Done. */
+  trailing?: ReactNode;
   /** large: nearly the whole screen on a phone, wide on a computer, for reading files and diffs. */
   size?: 'normal' | 'large';
   /** Shown under the title, outside the scrolling part. */
@@ -93,7 +95,8 @@ export function Sheet({
             >
               <div className="mx-auto mb-2 h-1 w-9 rounded-full bg-line sm:hidden" />
               <div className="flex min-h-8 items-center">
-                <h2 id={titleId} className="flex-1 text-[13px] font-medium text-muted">{title}</h2>
+                <h2 id={titleId} className="min-w-0 flex-1 text-[13px] font-medium text-muted">{title}</h2>
+                {trailing}
                 {done && (
                   <button type="button" onClick={onClose} className="-my-1 h-8 rounded-full px-3 text-[14px] font-medium hover:bg-hover">
                     Done
