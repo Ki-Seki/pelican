@@ -32,11 +32,64 @@ export function place(at: MenuAnchor | null | undefined, width: number, height: 
   return { left: Math.min(maxLeft, Math.max(EDGE, left)), top: Math.min(maxTop, Math.max(EDGE, top)) };
 }
 
+/**
+ * Places a panel by its size: at once, and again at the next frame where it had none yet (the
+ * dialog it is in is shown after its children are laid out). Gives back what cancels the wait.
+ */
+function measured(el: HTMLElement | null, then: (el: HTMLElement) => void): (() => void) | undefined {
+  if (!el) return undefined;
+  then(el);
+  if (el.offsetHeight > 0) return undefined;
+  const frame = requestAnimationFrame(() => then(el));
+  return () => cancelAnimationFrame(frame);
+}
+
 /** A submenu beside the row it opens from, on the side with room. */
 function besideRow(row: Element, width: number, height: number): Place {
   const r = row.getBoundingClientRect();
   const left = r.right + 4 + width > innerWidth - EDGE ? r.left - 4 - width : r.right + 4;
   return { left: Math.max(EDGE, left), top: Math.min(Math.max(EDGE, innerHeight - height - EDGE), Math.max(EDGE, r.top - 4)) };
+}
+
+/**
+ * A panel of its own at an element on a computer (the context ring's), as a menu opens: Esc, a
+ * click or a scroll outside it closes it, and focus goes back where it was.
+ */
+export function Popover({ open, onClose, at, label, children, className = '' }: { open: boolean; onClose: () => void; at: Element | null; label: string; children: ReactNode; className?: string }) {
+  const panel = useRef<HTMLDivElement>(null);
+  const outside = useRef(false);
+  const [where, setWhere] = useState<Place>();
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    return measured(panel.current, (el) => setWhere(place(at, el.offsetWidth, el.offsetHeight)));
+  }, [open, at]);
+  return (
+    <Modal open={open} onClose={onClose} label={label}>
+      <div
+        className="absolute inset-0"
+        onPointerDown={() => {
+          outside.current = true;
+        }}
+        onClick={() => outside.current && onClose()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        onWheel={onClose}
+      />
+      <div
+        ref={panel}
+        role="dialog"
+        aria-label={label}
+        tabIndex={-1}
+        data-autofocus
+        style={where ?? { visibility: 'hidden', left: 0, top: 0 }}
+        className={`animate-fade fixed max-h-[calc(100%-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-line bg-panel shadow-xl outline-none transition-opacity duration-100 group-data-closing/modal:opacity-0 ${className}`}
+      >
+        {children}
+      </div>
+    </Modal>
+  );
 }
 
 const items = (menu: HTMLElement | null) => [...(menu?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])];
@@ -102,10 +155,18 @@ function Lifted({ element }: { element: Element }) {
     // Something with no color of its own (a row, a step) gets a little room round it on its card.
     const bare = /^(transparent|rgba\(0, 0, 0, 0\))$/.test(getComputedStyle(element).backgroundColor);
     const [x, y] = bare ? [8, 4] : [0, 0];
-    Object.assign(el.style, { left: `${r.left - x}px`, top: `${r.top - y}px`, width: `${r.width + 2 * x}px`, height: `${r.height + 2 * y}px`, padding: `${y}px ${x}px` });
+    const height = r.height + 2 * y;
+    Object.assign(el.style, { left: `${r.left - x}px`, top: `${r.top - y}px`, width: `${r.width + 2 * x}px`, height: `${height}px`, padding: `${y}px ${x}px` });
     el.replaceChildren(copy);
+    // Where the sheet rising over it would cover it, it rises above the sheet's top with it, as iOS
+    // lifts what a long press is on (measured once the sheet is laid out).
+    const frame = requestAnimationFrame(() => {
+      const sheet = el.nextElementSibling instanceof HTMLElement ? el.nextElementSibling.offsetTop : 0;
+      if (sheet > 0 && r.top - y + height > sheet - 12) el.style.top = `${Math.max(8, sheet - 12 - height)}px`;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [element]);
-  return <div ref={box} aria-hidden inert className="pointer-events-none fixed overflow-hidden rounded-2xl bg-panel shadow-xl ring-1 ring-line transition-opacity duration-200 group-data-closing/modal:opacity-0" />;
+  return <div ref={box} aria-hidden inert className="pointer-events-none fixed overflow-hidden rounded-2xl bg-panel shadow-xl ring-1 ring-line transition-[top,opacity] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-closing/modal:opacity-0 motion-reduce:transition-none" />;
 }
 
 /**
@@ -143,8 +204,11 @@ export function ActionMenu({
   keys?: boolean;
   /** Opened from the keyboard: the first action has focus, ready for the arrows. */
   focusFirst?: boolean;
-  /** Above the actions: the panes' tiles at the top of a phone's session menu. */
-  header?: ReactNode;
+  /**
+   * Above the actions: the panes' tiles at the top of a phone's session menu. As a function, it is
+   * given what an action is picked with, so a tile closes the menu as an action does.
+   */
+  header?: ReactNode | ((pick: (run: () => void) => void) => ReactNode);
   /** Under the actions, quietly: a turn's figures, a session's start and ID. */
   footer?: ReactNode;
   /** On a phone, the thing a long press opened it for, raised over the dim while it is open. */
@@ -162,6 +226,12 @@ export function ActionMenu({
   }
   const [kind] = useState(() => as ?? (hasKeyboard() ? 'menu' : 'sheet'));
   const menu = (as ?? kind) === 'menu';
+  // On its way out it shows what it showed while open, as a sheet does: a caller may give an empty list once closed.
+  const kept = useRef({ entries, at, lift });
+  if (open) kept.current = { entries, at, lift };
+  const shownList = open ? entries : kept.current.entries;
+  const shownAt = open ? at : kept.current.at;
+  const shownLift = open ? lift : kept.current.lift;
 
   const pick = (run: () => void) => {
     const back = opener.current;
@@ -171,19 +241,20 @@ export function ActionMenu({
     run();
   };
 
-  if (gone || (entries.length === 0 && !header && !footer)) return null;
+  if (gone || (shownList.length === 0 && !header && !footer)) return null;
+  const top = typeof header === 'function' ? header(pick) : header;
   if (menu) {
     return (
       <Modal open={open} onClose={onClose} label={label}>
-        <PointerMenu label={label} entries={entries} at={at} keys={keys} focusFirst={focusFirst} header={header} footer={footer} onClose={onClose} pick={pick} />
+        <PointerMenu label={label} entries={shownList} at={shownAt} keys={keys} focusFirst={focusFirst} header={top} footer={footer} onClose={onClose} pick={pick} />
       </Modal>
     );
   }
   return (
-    <Sheet open={open} onClose={onClose} title={title ?? label} behind={lift ? <Lifted element={lift} /> : undefined}>
-      {header}
+    <Sheet open={open} onClose={onClose} title={title ?? label} behind={shownLift ? <Lifted element={shownLift} /> : undefined}>
+      {top}
       <div role="menu" aria-label={label}>
-        {entries.map((entry) => <SheetEntry key={entry.id} entry={entry} pick={pick} />)}
+        {shownList.map((entry) => <SheetEntry key={entry.id} entry={entry} pick={pick} />)}
       </div>
       {footer && <div className="mx-3 mt-1 border-t border-line pt-2.5 pb-1 text-[12.5px] leading-snug text-faint">{footer}</div>}
     </Sheet>
@@ -212,15 +283,14 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
   pick: (run: () => void) => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  // A click outside closes it; the button let go of from the press that opened it is no click.
+  const outside = useRef(false);
   const [where, setWhere] = useState<Place>();
   const [sub, setSub] = useState<{ id: string; row: HTMLElement; focus: boolean }>();
   const subPanel = useRef<HTMLDivElement>(null);
   const [subWhere, setSubWhere] = useState<Place>();
 
-  useLayoutEffect(() => {
-    const el = panel.current;
-    if (el) setWhere(place(at, el.offsetWidth, el.offsetHeight));
-  }, [at, entries.length]);
+  useLayoutEffect(() => measured(panel.current, (el) => setWhere(place(at, el.offsetWidth, el.offsetHeight))), [at, entries.length]);
   useLayoutEffect(() => {
     const el = subPanel.current;
     if (!sub || !el) {
@@ -262,7 +332,10 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
       {/* Anywhere outside the menu closes it, as a click, a right-click or a scroll does a menu's. */}
       <div
         className="absolute inset-0"
-        onClick={onClose}
+        onPointerDown={() => {
+          outside.current = true;
+        }}
+        onClick={() => outside.current && onClose()}
         onContextMenu={(e) => {
           e.preventDefault();
           onClose();
@@ -314,9 +387,9 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
                 className={`${ROW} ${entry.danger ? 'text-danger' : ''} ${sub?.id === entry.id ? 'bg-hover' : ''}`}
               >
                 <span className={ICON(entry.danger)}>{entry.icon && <entry.icon className="size-3.5" />}</span>
-                <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                <span className="min-w-0 flex-1 truncate">{entry.label}{entry.detail && <span className="ml-2 text-faint">{entry.detail}</span>}</span>
                 <KeyHint entry={entry} keys={keys} />
-                {'items' in entry && <ChevronRight className="size-3.5 shrink-0 text-faint" />}
+                {('items' in entry || entry.opens) && <ChevronRight className="size-3.5 shrink-0 text-faint" />}
               </button>
             )}
           </div>
@@ -394,7 +467,8 @@ function SheetEntry({ entry, pick }: { entry: MenuEntry; pick: (run: () => void)
   return (
     <button type="button" role="menuitem" onClick={() => 'run' in entry && pick(entry.run)} className={`${SHEET_ROW} ${entry.danger ? 'text-danger' : ''}`}>
       {icon}
-      <span className="min-w-0 flex-1">{entry.label}</span>
+      <span className="min-w-0 flex-1">{entry.label}{entry.detail && <span className="ml-2 text-[14px] text-faint">{entry.detail}</span>}</span>
+      {entry.opens && <ChevronRight className="size-4 shrink-0 text-faint" />}
     </button>
   );
 }

@@ -1,6 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Archive, ArchiveRestore, BarChart3, CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, Cpu, Download, FileDiff, Folder,
+  Gauge, GitBranch, GitFork, Info, ListChecks, Loader2, type LucideIcon, MessagesSquare, Pencil, Pin, PinOff, Plug, Plus, ShieldCheck, SquareTerminal, TriangleAlert, X, Zap,
+} from 'lucide-react';
+import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
@@ -10,14 +13,17 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunS
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
-import { addWaiting, clearDraft, moveDraft, putBackWaiting, takeWaiting, waitingOf } from '../lib/drafts';
+import { addWaiting, clearDraft, moveDraft, putBackWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { composing, hasKeyboard, isKey } from '../lib/keyboard';
+import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
+import { type CommandItem, useCommandContext, useCommandPart } from '../lib/commands';
+import { changeListed } from '../lib/list-changes';
+import { retried } from '../lib/load';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { defaultChange, forModel, modeNote, modelNote } from '../lib/defaults';
-import { getPrefs, markSeen, markTipSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { getPrefs, markSeen, markTipSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, VIEW_OPTIONS, viewMode, viewOf } from '../lib/prefs';
 import { messageWith, olderQuote, promptGist, readMessage, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { CommentsChat } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
@@ -42,6 +48,8 @@ import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
 import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
+import { ContextPanel, ContextRing } from './ContextPanel';
+import { McpSheet, useMcpServers } from './McpSheet';
 import { MessageList } from './MessageList';
 import { modelOf, SavedForNewSessions } from './ModelSheet';
 import { StartIn } from './NewSession';
@@ -50,12 +58,15 @@ import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { StatusBadge } from './SessionList';
-import { SessionMenu } from './SessionMenu';
+import { showCommandMenu } from './CommandMenu';
+import { exportSession, type MenuProblem, RenameSheet, SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
-import { SideChat, useSideChat } from './SideChat';
+import { SideChat, useSideChat, useSideChatAsked } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
-import { PANE_KEYS, shownTab, useWorkspacePane, Workspace } from './Workspace';
+import { shownTab, useWorkspacePane, Workspace } from './Workspace';
+import type { WorkspaceTab } from '../lib/workspace-route';
+import { usePlanLimits } from './PlanLimits';
 import { prefetchWorkspace } from './WorkspaceTabs';
 
 /**
@@ -79,26 +90,61 @@ function localMessage(uuid: string, text: string, attachments: Attachment[]): Ch
   return { uuid, role: 'user', blocks, timestamp: Date.now(), pending: true };
 }
 
-/** How full the context window is: a ring that warns as it fills. */
-function ContextMeter({ context, onClick }: { context: NonNullable<RunState['context']>; onClick: () => void }) {
-  const percent = Math.max(0, Math.min(100, context.percent));
-  const r = 7;
-  const circumference = 2 * Math.PI * r;
-  const tone = percent >= 90 ? 'text-danger' : percent >= 75 ? 'text-wait' : 'text-muted';
+// Usage and activity loads when it is first opened, from Context.
+const UsageSheet = lazy(() => retried(() => import('./Usage')).then((m) => ({ default: m.UsageSheet })));
+
+/** The lines changed in the session's folder, as git counts them: "+31 −2". */
+function Lines({ added, removed }: { added: number; removed: number }) {
+  return (
+    <span className="font-mono text-[12px] tabular-nums">
+      {added > 0 && <span className="text-add">+{added}</span>}
+      {added > 0 && removed > 0 && ' '}
+      {removed > 0 && <span className="text-del">−{removed}</span>}
+    </span>
+  );
+}
+
+/** A pane's quiet button in the header on a computer: Changes, Files, Terminal, with its name and key in its tooltip. */
+function PaneButton({ icon: Icon, label, keyId, pressed, onClick, children, ref }: {
+  icon: LucideIcon;
+  label: string;
+  keyId: KeyId;
+  pressed: boolean;
+  onClick: () => void;
+  children?: ReactNode;
+  ref?: React.Ref<HTMLButtonElement>;
+}) {
   return (
     <button
+      ref={ref}
       type="button"
+      aria-label={label}
+      aria-pressed={pressed}
+      aria-keyshortcuts={ariaKeys(keyId)}
+      title={withKey(label, keyId)}
       onClick={onClick}
-      aria-label={`Context ${percent}% full`}
-      title={`Context ${percent}% full: ${Math.round(context.tokens / 1000)}k of ${Math.round(context.max / 1000)}k tokens`}
-      className={`relative flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] tabular-nums after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover ${tone}`}
+      className={`relative flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 after:absolute after:-inset-y-0.5 after:inset-x-0 hover:bg-hover hover:text-fg ${pressed ? 'bg-hover text-fg' : 'text-muted'}`}
     >
-      <svg viewBox="0 0 18 18" className="size-[18px] -rotate-90">
-        <circle cx="9" cy="9" r={r} fill="none" stroke="var(--line)" strokeWidth="2.5" />
-        <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={`${(percent / 100) * circumference} ${circumference}`} />
-      </svg>
-      <span>{percent}%</span>
+      <Icon className="size-[18px] shrink-0" />
+      {children}
     </button>
+  );
+}
+
+/** On a phone, the panes as tiles at the top of the title's menu, the first menu a newcomer opens. */
+function PaneTiles({ lines, onPick }: { lines?: { added: number; removed: number }; onPick: (tab: WorkspaceTab) => void }) {
+  const tile = (tab: WorkspaceTab, Icon: LucideIcon, label: string, extra?: ReactNode) => (
+    <button type="button" onClick={() => onPick(tab)} className="flex min-h-16 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl bg-chip px-2 py-2 text-[14px] active:bg-hover">
+      <Icon className="size-[18px] text-muted" />
+      <span className="flex max-w-full items-baseline gap-1.5 truncate">{label}{extra}</span>
+    </button>
+  );
+  return (
+    <div className="flex gap-2 px-1 pt-1 pb-2">
+      {tile('changes', FileDiff, 'Changes', lines && (lines.added > 0 || lines.removed > 0) ? <Lines {...lines} /> : undefined)}
+      {tile('files', Folder, 'Files')}
+      {tile('terminal', SquareTerminal, 'Terminal')}
+    </div>
   );
 }
 
@@ -362,8 +408,8 @@ export function Chat({
   wide: boolean;
   onBack: () => void;
   onOpen: (id: string, replace?: boolean) => void;
-  /** Opens a new, empty session somewhere else, in place of this one. */
-  onStartIn: (start: Start) => void;
+  /** Opens a new, empty session somewhere else, in place of this one (`push`: after it, Back comes back here). */
+  onStartIn: (start: Start, push?: boolean) => void;
 }) {
   const viewId = sessionId ?? `new:${scratch ? 'scratch' : newCwd}`;
   const view = useSessionView(viewId);
@@ -402,7 +448,17 @@ export function Chat({
   const [sendError, setSendError] = useState<{ text: string; note: boolean }>();
   const failed = (error: unknown) => setSendError({ text: (error as Error).message, note: isDemoNote(error) || isUnreachable(error) });
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // The title's menu, opened under the title (from the keyboard: its first action has focus).
+  const [menu, setMenu] = useState<{ keys: boolean }>();
+  const titleButton = useRef<HTMLButtonElement>(null);
+  const [contextAt, setContextAt] = useState<Element | null>();
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  // While Claude runs here its MCP servers are known at once: a failed one says so above the box.
+  const mcp = useMcpServers(sessionId, Boolean(view.run) && !sideChat);
+  const failedMcp = useMemo(() => (mcp.data?.live ? mcp.data.servers.filter((server) => server.status === 'failed').map((server) => server.name) : []), [mcp.data]);
+  const [mcpSeen, setMcpSeen] = useState<string>();
+  const [usageOpen, setUsageOpen] = useState(false);
   const [rewinding, setRewinding] = useState<string>();
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   const [modeSeen, setModeSeen] = useState<string>();
@@ -617,6 +673,9 @@ export function Chat({
   const sendReply = useRef<(item: WaitingItem) => void>(() => {});
   sendReply.current = (item) => void send(sendNowMessage(item.text, item.note ?? ''), [], 'steer', { reply: item });
   const { open: sideOpen, show: showSide } = side;
+  // Asked for from the session's row in the list.
+  const showSideNow = useCallback(() => showSide(), [showSide]);
+  useSideChatAsked(sideChat ? undefined : sessionId, showSideNow);
   const quoteTarget = useMemo<QuoteTarget>(() => ({
     chat: viewId,
     sendNow: (item) => sendReply.current(item),
@@ -741,12 +800,22 @@ export function Chat({
   // at their line; a turn's line its changes. The side chat makes way first, wherever it is.
   const { show: showWorkspace } = workspace;
   const { makeWay } = side;
+  const terminalsHere = useTerminalsAvailable();
   const links = useMemo<PathLinks | undefined>(() => cwd ? {
     cwd,
     openFile: (path, line) => makeWay(() => showWorkspace({ tab: 'files', path, ...(line ? { line } : {}) })),
+    openChanges: (path) => makeWay(() => showWorkspace({ tab: 'changes', path })),
+    ...(git?.repo ? { changed: new Set(git.files.map((f) => f.path)) } : {}),
+    ...(terminalsHere ? {
+      openTerminal: (folder: string) => {
+        askForTerminal(folder ? `${cwd.replace(/\/$/, '')}/${folder.replace(/\/$/, '')}` : cwd);
+        wantTerminalFocus();
+        makeWay(() => showWorkspace({ tab: 'terminal' }));
+      },
+    } : {}),
     openTurn: (uuid) => makeWay(() => showWorkspace({ tab: 'changes', scope: uuid })),
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
-  } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
+  } : undefined, [cwd, showWorkspace, makeWay, turnChanges, terminalsHere, git]);
 
   // Ctrl+` shows the terminal and gives it the keys, as in Claude Desktop; pressed in the terminal,
   // it hides it and the message box has them again. Ctrl+Shift+` opens a new terminal in the
@@ -894,7 +963,22 @@ export function Chat({
     if (sessionId) void loadLatest(sessionId);
   };
   const context = view.run?.context;
-  const meter = context ? <ContextMeter context={context} onClick={() => setMenuOpen(true)} /> : undefined;
+  // By Send once a turn has run, as in Desktop: on a phone faint and without its number below 60%.
+  const ring = context && sessionId ? <ContextRing context={context} quiet={!wide && context.percent < 60} onClick={(at) => setContextAt(at)} /> : undefined;
+  // What git counts as changed in the folder, in lines: the Changes button's "+31 −2".
+  const lines = useMemo(() => {
+    if (!git?.repo) return undefined;
+    const added = git.files.reduce((sum, f) => sum + (f.added ?? 0), 0);
+    const removed = git.files.reduce((sum, f) => sum + (f.removed ?? 0), 0);
+    return { added, removed, files: git.files.length };
+  }, [git]);
+  const showPane = (tab: WorkspaceTab) => {
+    if (tab === 'terminal') wantTerminalFocus();
+    makeWay(() => showWorkspace({ tab }));
+  };
+  /** A pane's button: shows its tab, or hides the pane when that tab is what it shows. */
+  const togglePane = (tab: WorkspaceTab) => (paneShown && paneTab === tab ? workspace.setOpen(false) : showPane(tab));
+  const { bars: planBars } = usePlanLimits(usageOpen);
 
   const subtitle = useMemo(() => (cwd ? shortPath(cwd, home) : scratch ? 'A new folder in ~/scratch' : ''), [cwd, home, scratch]);
   const refresh = () => {
@@ -917,6 +1001,145 @@ export function Chat({
     onStartIn(start);
   };
 
+  // This session's, by Claude Code's names, for the / list and ⌘K, and their keys (lib/commands).
+  const fork = () => {
+    if (!sessionId) return;
+    api.fork(sessionId)
+      .then((id) => {
+        if (!id) return;
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+        // A fork is new work: it carries this session's settings, except Bypass.
+        return branchSettings().then((next) => {
+          saveSessionChoice(id, next);
+          onOpen(id);
+        });
+      })
+      .catch((error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
+  };
+  const archive = (archived: boolean) => {
+    if (!session) return;
+    void changeListed(queryClient, session, { archived }).catch(() => undefined);
+    // Archived, it leaves for the list, which offers Undo.
+    if (archived) onBack();
+  };
+  const rename = (words: string) => {
+    if (!sessionId) return;
+    if (!words) {
+      setRenaming(true);
+      return;
+    }
+    api.rename(sessionId, words).then(refresh, (error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
+  };
+  // Fork from here, on a prompt: a new session up to just before it, the prompt's words in its box
+  // (its quotes waiting above it), as Desktop's Fork from here does. The first prompt has nothing
+  // before it: a new session in the same folder, with them.
+  const forkFrom = (prompt: Extract<Item, { kind: 'user' }>) => {
+    if (!sessionId) return;
+    const { items: waiting, text } = readMessage(prompt.text);
+    const fill = (view: string) => {
+      saveDraft(view, text);
+      putBackWaiting(view, waiting);
+    };
+    api.fork(sessionId, { before: prompt.key })
+      .then(async (id) => {
+        const next = await branchSettings();
+        if (id) {
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+          saveSessionChoice(id, next);
+          fill(id);
+          onOpen(id);
+        } else if (cwd) {
+          carried.set(`new:${cwd}`, next);
+          fill(`new:${cwd}`);
+          onStartIn({ cwd }, true);
+        }
+      })
+      .catch((error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
+  };
+  // Fork from here, on a reply: a new session up to the end of it.
+  const forkReply = (upTo: string) => {
+    if (!sessionId) return;
+    api.fork(sessionId, { upTo })
+      .then(async (id) => {
+        if (!id) return;
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+        saveSessionChoice(id, await branchSettings());
+        onOpen(id);
+      })
+      .catch((error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
+  };
+  const showContext = () => setContextAt(root.current?.querySelector('[data-context-ring]') ?? null);
+  const act = useRef({ fork, archive, rename, showPane, togglePane, showContext, send, settings: shown, models });
+  act.current = { fork, archive, rename, showPane, togglePane, showContext, send, settings: shown, models };
+  const linesWords = lines ? [lines.added > 0 ? `+${lines.added}` : '', lines.removed > 0 ? `−${lines.removed}` : ''].filter(Boolean).join(' ') : '';
+  const contextWords = context ? `${context.percent}%` : '';
+  const pinned = Boolean(session?.pinned);
+  const archived = Boolean(session?.archived);
+  const commandItems = useMemo<CommandItem[]>(() => {
+    if (!sessionId) return [];
+    const mine: CommandItem[] = [];
+    const add = (item: CommandItem) => mine.push(item);
+    if (!sideChat) add({ id: 'side-chat', group: 'session', label: 'Side chat', icon: MessagesSquare, name: 'btw', description: 'Ask in side chat', key: 'sideChat', needsWords: true, run: (words) => side.show(words) });
+    add({ id: 'fork', group: 'session', label: 'Fork', icon: GitFork, name: 'branch', description: 'Fork from here · new session', key: 'fork', run: () => act.current.fork() });
+    add({ id: 'rename', group: 'session', label: 'Rename', icon: Pencil, name: 'rename', description: 'Rename this session', key: 'rename', run: (words) => act.current.rename(words) });
+    add({ id: 'export', group: 'session', label: 'Export', icon: Download, name: 'export', description: 'Export', run: () => exportSession(sessionId, session?.title) });
+    if (cwd) add({ id: 'changes', group: 'session', label: 'Changes', icon: FileDiff, name: 'diff', description: linesWords ? `Changes · ${linesWords}` : 'Changes', key: 'changes', run: () => act.current.showPane('changes') });
+    add({ id: 'context', group: 'session', label: 'Context', icon: Gauge, name: 'context', description: contextWords ? `Context · ${contextWords}` : 'Context', run: () => act.current.showContext() });
+    if (!sideChat) {
+      add({ id: 'mcp', group: 'session', label: 'MCP servers', icon: Plug, name: 'mcp', description: 'MCP servers', run: () => setMcpOpen(true) });
+      add({ id: 'model', group: 'session', label: 'Model', icon: Cpu, name: 'model', description: 'Model, effort and speed', key: 'model', run: () => composer.current?.openSheet('model') });
+      add({ id: 'effort', group: 'session', label: 'Effort', icon: Gauge, name: 'effort', description: 'Effort', key: 'effort', run: () => composer.current?.openSheet('model') });
+      add({
+        id: 'fast', group: 'session', label: 'Fast mode', icon: Zap, name: 'fast', description: 'Fast mode on or off', key: 'fastMode',
+        run: () => {
+          const { settings: now, models: offered } = act.current;
+          if (modelOf(offered, now)?.supportsFast) changeSettings({ ...now, fast: !now.fast });
+          else composer.current?.openSheet('model');
+        },
+      });
+      add({ id: 'mode', group: 'session', label: 'Mode', icon: ShieldCheck, description: 'Permission mode', key: 'mode', run: () => composer.current?.openSheet('mode') });
+    }
+    add({ id: 'usage', group: 'session', label: 'Usage and activity', icon: BarChart3, name: 'usage', description: 'Usage and activity', run: () => setUsageOpen(true) });
+    if (session) {
+      add({ id: 'pin', group: 'pelican', label: pinned ? 'Unpin' : 'Pin', icon: pinned ? PinOff : Pin, run: () => void changeListed(queryClient, session, { pinned: !pinned }).catch(() => undefined) });
+      add({ id: 'archive', group: 'pelican', label: archived ? 'Unarchive' : 'Archive', icon: archived ? ArchiveRestore : Archive, key: 'archive', run: () => act.current.archive(!archived) });
+    }
+    if (cwd) {
+      add({ id: 'files', group: 'pelican', label: 'Files', icon: Folder, key: 'files', run: () => act.current.showPane('files') });
+      add({ id: 'terminal', group: 'pelican', label: 'Terminal', icon: SquareTerminal, key: 'terminal', run: () => act.current.showPane('terminal') });
+    }
+    if (cwd && !sideChat) {
+      add({
+        id: 'new-session', group: 'pelican', label: 'New session', icon: Plus, name: 'new', aliases: ['clear', 'reset'], description: 'New session in this folder', key: 'newSession',
+        run: () => void act.current.send('/new', [], 'steer', 'chat'),
+      });
+    }
+    return mine;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, sideChat, cwd, session?.title, linesWords, contextWords, pinned, archived, Boolean(session)]);
+  useCommandPart('chat', commandItems);
+  const commandContext = useMemo(() => ({ ...(cwd ? { cwd } : {}), putInBox: (text: string) => composer.current?.putText(text) }), [cwd]);
+  useCommandContext(commandContext);
+
+  // Desktop's keys for this session: ⌥⌘R renames it, ⌥⌘O forks it, ⌥⌘A archives it, ⇧⌘F shows its
+  // files, while no sheet or menu is open.
+  const archivedNow = useRef(archived);
+  archivedNow.current = archived;
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]:not([data-closing])')) return;
+      if (isKey(e, 'rename')) act.current.rename('');
+      else if (isKey(e, 'fork')) act.current.fork();
+      else if (isKey(e, 'archive')) act.current.archive(!archivedNow.current);
+      else if (isKey(e, 'files') && cwd) act.current.togglePane('files');
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sessionId, cwd]);
+
   return (
     <PathLinksContext.Provider value={links}>
     <RunInTerminal.Provider value={runInTerminal}>
@@ -929,43 +1152,49 @@ export function Chat({
             <ChevronLeft className="size-5" />
           </button>
         )}
-        <h2 className="min-w-0 flex-1">
+        <h2 className="flex min-w-0 flex-1">
+          {/* The title with ▾ is the session's one menu; a session that has not started has none. */}
           <button
+            ref={titleButton}
             type="button"
-            onClick={() => sessionId && setMenuOpen(true)}
-            aria-haspopup={sessionId ? 'dialog' : undefined}
-            className={`block w-full min-w-0 rounded-lg px-2 py-1 text-left ${wide ? 'pl-3' : ''} ${sessionId ? '' : 'cursor-default'}`}
+            onClick={(e) => sessionId && setMenu({ keys: e.detail === 0 })}
+            aria-haspopup={sessionId ? 'menu' : undefined}
+            aria-expanded={sessionId ? Boolean(menu) : undefined}
+            className={`block max-w-full min-w-0 rounded-lg px-2 py-1 text-left ${wide ? 'pl-3' : ''} ${sessionId ? 'hover:bg-hover' : 'cursor-default'} ${menu ? 'bg-hover' : ''}`}
           >
-            <div className="truncate text-[15px] font-medium">{title || ' '}</div>
+            <div className="flex min-w-0 items-center gap-1">
+              <span className="truncate text-[15px] font-medium">{title || ' '}</span>
+              {sessionId && <ChevronDown aria-hidden className="size-4 shrink-0 text-faint" />}
+            </div>
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
               <StatusBadge status={status} runningIn={otherAtWork ? session?.runningIn : undefined} tasks={working} />
               <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
-              {/* On a phone the line has room for the branch only when nothing else is going on; the session menu always has it. */}
+              {/* On a phone the line has room for the branch only when nothing else is going on. */}
               {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
                 <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
               )}
             </div>
           </button>
         </h2>
-        {/* On a phone the meter sits by Send once the context is filling; the session menu always has the number. */}
-        {wide && meter}
-        {cwd && (
+        {cwd && wide && (
+          <>
+            <PaneButton ref={workspace.toggle} icon={FileDiff} label="Changes" keyId="changes" pressed={paneShown && paneTab === 'changes'} onClick={() => togglePane('changes')}>
+              {lines && (lines.added > 0 || lines.removed > 0) && <Lines added={lines.added} removed={lines.removed} />}
+            </PaneButton>
+            <PaneButton icon={Folder} label="Files" keyId="files" pressed={paneShown && paneTab === 'files'} onClick={() => togglePane('files')} />
+            <PaneButton icon={SquareTerminal} label="Terminal" keyId="terminal" pressed={paneShown && paneTab === 'terminal'} onClick={() => togglePane('terminal')} />
+          </>
+        )}
+        {cwd && !wide && (
+          // One button on a phone: the lines changed, or a folder while nothing has; the three panes behind it.
           <button
             ref={workspace.toggle}
             type="button"
-            aria-label="Changes and files"
-            aria-pressed={workspace.dockable ? paneShown : undefined}
-            title={`Changes and files (${PANE_KEYS})`}
-            onClick={() => (paneShown ? workspace.setOpen(false) : makeWay(() => workspace.show()))}
-            className={`relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg ${workspace.dockable && paneShown ? 'bg-hover text-fg' : 'text-muted'}`}
+            aria-label={lines && (lines.added > 0 || lines.removed > 0) ? `Changes, ${lines.added} lines added, ${lines.removed} removed` : 'Changes, files and terminal'}
+            onClick={() => makeWay(() => workspace.show())}
+            className="relative flex h-10 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-muted after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg"
           >
-            <FolderGit2 className="size-[18px]" />
-            {changes > 0 && <span className="absolute top-1.5 right-1 min-w-4 rounded-full bg-fg px-1 text-center text-[10px] leading-4 font-medium text-bg tabular-nums">{changes > 99 ? '99+' : changes}</span>}
-          </button>
-        )}
-        {sessionId && (
-          <button type="button" aria-label="Session menu" onClick={() => setMenuOpen(true)} className="relative grid size-10 shrink-0 place-items-center rounded-full text-muted after:absolute after:-inset-0.5 hover:bg-hover hover:text-fg">
-            <MoreHorizontal className="size-5" />
+            {lines && (lines.added > 0 || lines.removed > 0) ? <><FileDiff className="size-[18px] shrink-0" /><Lines added={lines.added} removed={lines.removed} /></> : <Folder className="size-[18px]" />}
           </button>
         )}
       </header>
@@ -982,7 +1211,7 @@ export function Chat({
             cwd={cwd}
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
-            {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid) } : {})}
+            {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid), onFork: forkFrom, onForkReply: forkReply } : {})}
             {...(sessionId ? { onRetry: sendAgain, ...(sideChat ? {} : { onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') }) } : {})}
           />
           </QuoteTargetContext.Provider>
@@ -1035,6 +1264,13 @@ export function Chat({
         )}
         {view.run?.modeChanged && view.run.modeChanged !== modeSeen && (
           <Notice onDismiss={() => setModeSeen(view.run?.modeChanged)}>{MODE_INFO[view.run.modeChanged].now}</Notice>
+        )}
+        {failedMcp.length > 0 && failedMcp.join('\n') !== mcpSeen && (
+          // Where tools are added, the session's MCP servers; a line here when one fails while Claude runs.
+          <Notice tone="error" onDismiss={() => setMcpSeen(failedMcp.join('\n'))}>
+            {failedMcp.length === 1 ? `The MCP server ${failedMcp[0]} failed.` : `${failedMcp.length} MCP servers failed.`}{' '}
+            <button type="button" onClick={() => setMcpOpen(true)} className="font-medium text-fg underline decoration-faint underline-offset-2">MCP servers</button>
+          </Notice>
         )}
         {note && <Notice onDismiss={() => setNote(undefined)}>{note}</Notice>}
         {demoNote && <Notice onDismiss={dismissDemoNote}>{demoNote}</Notice>}
@@ -1093,7 +1329,9 @@ export function Chat({
         autoFocus={!sessionId || hasKeyboard()}
         placeholder={(otherAtWork && elsewherePlaceholder(otherAtWork)) || (sideChat ? 'Ask a side question' : sessionId ? 'Reply to Claude' : 'Message Claude')}
         draftKey={viewId}
-        {...(!wide && context && context.percent >= 60 ? { trailing: meter } : {})}
+        {...(ring ? { trailing: ring } : {})}
+        {...(sessionId && !sideChat ? { mcpSession: sessionId, onMcp: () => setMcpOpen(true) } : {})}
+        onCommandMenu={() => showCommandMenu(true)}
         {...(cwd ? { cwd } : {})}
         {...(draft ? { draft } : {})}
       />
@@ -1152,35 +1390,62 @@ export function Chat({
       )}
       {sessionId && (
         <SessionMenu
-          open={menuOpen}
-          onClose={() => setMenuOpen(false)}
+          open={Boolean(menu)}
+          onClose={() => setMenu(undefined)}
           sessionId={sessionId}
           {...(session ? { session } : {})}
+          from="title"
+          at={titleButton.current}
+          focusFirst={Boolean(menu?.keys)}
           {...(cwd ? { cwd } : {})}
-          {...(home ? { home } : {})}
-          {...(view.run ? { run: view.run } : {})}
-          {...(machine ? { machine } : {})}
-          thinking={thought}
+          busy={busy}
+          view={{
+            value: viewOf(prefs, sessionId),
+            options: VIEW_OPTIONS.map(({ value, label }) => ({ value, label })),
+            choose: (value) => setSessionView(sessionId, viewMode(value)),
+          }}
+          {...(cwd && !hasKeyboard() ? { header: (pick: (run: () => void) => void) => <PaneTiles {...(lines ? { lines } : {})} onPick={(tab) => pick(() => showPane(tab))} /> } : {})}
+          {...(!sideChat ? { onSideChat: () => side.show() } : {})}
+          onRename={() => setRenaming(true)}
+          onFork={fork}
+          onForked={onOpen}
+          onPin={(next) => session && void changeListed(queryClient, session, { pinned: next }).catch(() => undefined)}
+          onArchive={archive}
           onRenamed={refresh}
-          {...(!sideChat ? {
-            onSideChat: () => {
-              setMenuOpen(false);
-              side.show();
-            },
-          } : {})}
-          onForked={(id) => void branchSettings().then((next) => {
-            // A branch is new work: it carries this session's settings, except Bypass.
-            saveSessionChoice(id, next);
-            setMenuOpen(false);
-            void queryClient.invalidateQueries({ queryKey: ['sessions'] });
-            onOpen(id);
-          })}
           onDeleted={() => {
-            setMenuOpen(false);
             void queryClient.invalidateQueries({ queryKey: ['sessions'] });
             onBack();
           }}
+          onProblem={(problem: MenuProblem) => setSendError(problem)}
         />
+      )}
+      {sessionId && (
+        <ContextPanel
+          open={contextAt !== undefined}
+          onClose={() => setContextAt(undefined)}
+          at={contextAt ?? null}
+          sheet={!hasKeyboard()}
+          sessionId={sessionId}
+          {...(context ? { context } : {})}
+          {...(!sideChat ? { onCompact: () => {
+            setContextAt(undefined);
+            void send('/compact', [], prefs.sendWhileBusy, 'chat');
+          } } : {})}
+          onUsage={() => {
+            setContextAt(undefined);
+            setUsageOpen(true);
+          }}
+        />
+      )}
+      {sessionId && <RenameSheet open={renaming} onClose={() => setRenaming(false)} sessionId={sessionId} title={session?.title ?? title} onRenamed={refresh} />}
+      {sessionId && !sideChat && <McpSheet open={mcpOpen} onClose={() => setMcpOpen(false)} sessionId={sessionId} {...(machine ? { machine } : {})} />}
+      {usageOpen && (
+        <Suspense fallback={null}>
+          <UsageSheet open={usageOpen} onClose={() => setUsageOpen(false)} limits={planBars} onOpenSession={(id) => {
+            setUsageOpen(false);
+            onOpen(id);
+          }} />
+        </Suspense>
       )}
     </div>
     </CommentsChat.Provider>

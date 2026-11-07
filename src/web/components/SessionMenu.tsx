@@ -1,373 +1,228 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, Check, Copy, Download, GitFork, Loader2, MessagesSquare, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from 'lucide-react';
-import { type FormEvent, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Check, Copy, Loader2 } from 'lucide-react';
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { McpServer, RunState, SessionSummary } from '../../shared/protocol';
-import { cacheShare, costShown, costWords, tokenTotal } from '../../shared/usage';
-import { announce } from '../lib/announce';
-import { api } from '../lib/api';
-import { clockTime, dayLabel, duration, isSessionId, resumeCommand, shellQuote, shortPath } from '../lib/format';
-import { changeWords, type ListChange, makeChange, showChange } from '../lib/list-changes';
-import { setSessionView, usePrefs, viewOf, type ViewMode, viewsFor } from '../lib/prefs';
-import { DEMO_NOTE, STATIC_DEMO } from '../lib/static-demo';
-import { compactNumber, percent, span, times } from '../lib/usage';
-import { Segmented, Sheet, SheetHeading, SheetOption } from './Sheet';
+import type { SessionSummary } from '../../shared/protocol';
+import { type Choice, copyText, entries, SESSION_ACTIONS, type SessionTarget } from '../lib/actions';
+import { api, isDemoNote } from '../lib/api';
+import { clockTime, dayLabel, isSessionId, resumeCommand } from '../lib/format';
+import { hasKeyboard } from '../lib/keyboard';
+import { STATIC_DEMO } from '../lib/static-demo';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
+import { Sheet } from './Sheet';
 
-const MCP_DOT: Record<McpServer['status'], string> = { connected: 'bg-live', pending: 'bg-wait', 'needs-auth': 'bg-wait', failed: 'bg-danger', disabled: 'bg-line' };
-const MCP_LABEL: Record<McpServer['status'], string> = { connected: 'Connected', pending: 'Connecting', 'needs-auth': 'Needs sign-in', failed: 'Failed', disabled: 'Off' };
+/** A problem with an action the menu has closed on: said where the page says such things. */
+export type MenuProblem = { text: string; note: boolean };
 
-/**
- * Where a server that needs signing in is signed in to. A session Pelican runs has no /mcp panel to
- * do it in, so, as Claude Code's docs say, it is done in a terminal on the computer, or for a
- * claude.ai connector in claude.ai; then Reconnect picks it up, or the next start of Claude here.
- */
-function SignInHint({ server, machine, live }: { server: McpServer; machine?: string; live: boolean }) {
-  const then = live ? ', then Reconnect' : '';
-  if (server.scope === 'claudeai') {
-    return <>Connect it at <a href="https://claude.ai/customize/connectors" target="_blank" rel="noreferrer" className="underline decoration-faint underline-offset-2 hover:text-fg">claude.ai/customize/connectors</a>{then}.</>;
-  }
-  return <>Sign in with <span className="font-mono text-muted">claude mcp login {shellQuote(server.name)}</span> in a terminal on {machine || 'the computer'}{then}.</>;
+/** Saves the session as Markdown, as Export does in Claude Desktop. */
+export function exportSession(sessionId: string, title?: string): void {
+  const link = document.createElement('a');
+  link.href = api.exportUrl(sessionId);
+  // The server names the file by the session's title; the site's saved one is named here, as it would.
+  link.download = STATIC_DEMO ? `${(title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'session'}.md` : '';
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
-/** The session's MCP servers and whether they work; while Claude runs here, each can be turned off or reconnected. */
-function McpServers({ sessionId, open, machine }: { sessionId: string; open: boolean; machine?: string }) {
-  const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['mcp', sessionId], queryFn: () => api.mcp(sessionId), enabled: open, staleTime: 15_000 });
-  // Servers can be turned on and off only in a Claude process running here.
-  const live = Boolean(data?.live);
-  const [busy, setBusy] = useState<string>();
-  const change = (name: string, patch: { enabled?: boolean; reconnect?: boolean }) => {
-    setBusy(name);
-    api.setMcp(sessionId, name, patch)
-      .then((result) => queryClient.setQueryData(['mcp', sessionId], { servers: result.servers, live: true }))
-      .catch(() => undefined)
-      .finally(() => setBusy(undefined));
-  };
-  const [showAll, setShowAll] = useState(false);
-  if (!isLoading && (data?.servers.length ?? 0) === 0) return null;
-  const servers = data?.servers ?? [];
-  const order: McpServer['status'][] = ['failed', 'connected', 'pending', 'disabled', 'needs-auth'];
-  const sorted = [...servers].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.name.localeCompare(b.name));
-  const signIn = sorted.filter((server) => server.status === 'needs-auth');
-  const shown = showAll ? sorted : sorted.filter((server) => server.status !== 'needs-auth');
-  const connected = servers.filter((server) => server.status === 'connected').length;
+/** "Started today, 10:41 AM · ID 7f3c2a10", and a way to copy the whole ID. */
+function Started({ sessionId, at }: { sessionId: string; at?: number }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const day = at ? dayLabel(at) : '';
   return (
-    <>
-      <SheetHeading>MCP servers{servers.length > 0 ? ` · ${connected} of ${servers.length} connected` : ''}</SheetHeading>
-      {isLoading && <div className="flex px-3 py-2 text-faint"><Loader2 className="size-4 animate-spin" /></div>}
-      {shown.map((server) => (
-        <div key={server.name} className="flex items-center gap-3 rounded-xl px-3 py-2">
-          <span className={`size-2 shrink-0 rounded-full ${MCP_DOT[server.status]}`} />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[14.5px]">{server.name}</div>
-            <div className="truncate text-[12px] text-muted">
-              {MCP_LABEL[server.status]}{server.tools > 0 ? ` · ${server.tools} tools` : ''}{server.scope ? ` · ${server.scope}` : ''}{server.error ? ` · ${server.error}` : ''}
-            </div>
-            {server.status === 'needs-auth' && <div className="mt-0.5 text-[12px] leading-snug break-words text-faint"><SignInHint server={server} live={live} {...(machine ? { machine } : {})} /></div>}
-          </div>
-          {busy === server.name ? <Loader2 className="size-4 animate-spin text-faint" /> : live && (
-            server.status === 'failed' || server.status === 'needs-auth' ? (
-              <button type="button" className="h-10 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-fine:h-8" onClick={() => change(server.name, { reconnect: true })}>Reconnect</button>
-            ) : (
-              <button type="button" className="h-10 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-fine:h-8" onClick={() => change(server.name, { enabled: server.status === 'disabled' })}>
-                {server.status === 'disabled' ? 'Turn on' : 'Turn off'}
-              </button>
-            )
-          )}
-        </div>
-      ))}
-      {!showAll && signIn.length > 0 && (
-        <button type="button" onClick={() => setShowAll(true)} className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-muted hover:bg-hover pointer-fine:min-h-9">
-          <span className="size-2 shrink-0 rounded-full bg-wait" />
-          {signIn.length} more need signing in
-        </button>
-      )}
-      {data && !data.live && data.servers.length > 0 && <p className="px-3 pt-0.5 text-[12px] leading-snug text-faint">They can be turned on or off once Claude runs here.</p>}
-    </>
-  );
-}
-
-function Detail({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="flex gap-3 px-3 py-1.5 text-[13px]">
-      <div className="w-20 shrink-0 text-faint">{label}</div>
-      <div className={`min-w-0 flex-1 break-words text-muted ${mono ? 'font-mono text-[12px] leading-5' : ''}`}>{children}</div>
+    <div className="flex min-w-0 items-center gap-1.5">
+      <span className="min-w-0 truncate">
+        {at ? `Started ${day === 'Today' || day === 'Yesterday' ? day.toLowerCase() : day}, ${clockTime(at)} · ` : ''}ID <span className="font-mono">{isSessionId(sessionId) ? sessionId.slice(0, 8) : sessionId}</span>
+      </span>
+      <button
+        type="button"
+        aria-label={copied ? 'Copied' : 'Copy the session’s ID'}
+        title="Copy ID"
+        onClick={() => void copyText(sessionId).then((done) => setCopied(done))}
+        className="relative -my-1 grid size-6 shrink-0 place-items-center rounded-md hover:bg-hover hover:text-fg after:absolute after:-inset-2"
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </button>
     </div>
   );
 }
 
-const when = (ms: number) => `${dayLabel(ms)}, ${clockTime(ms)}`;
-
-/**
- * What the session used, from its transcript and its subagents': tokens and how much of the input
- * the cache served, its models, how often it was compacted, how long Claude waited for you here,
- * and for an API key or a cloud provider the cost Claude Code estimates.
- */
-function UsageDetails({ sessionId, open }: { sessionId: string; open: boolean }) {
-  const { data: usage } = useQuery({ queryKey: ['session-usage', sessionId], queryFn: () => api.sessionUsage(sessionId), enabled: open, staleTime: 10_000 });
-  const { data: models } = useQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000, enabled: open });
-  const total = usage ? tokenTotal(usage.tokens) : 0;
-  if (!usage || total === 0) return null;
-  const share = cacheShare(usage.tokens);
-  const more = [
-    usage.models.map((m) => m.name).join(', '),
-    usage.compactions > 0 ? `compacted ${times(usage.compactions)}` : '',
-    usage.waits && usage.waits.ms >= 1000 ? `waited ${span(usage.waits.ms)} for you` : '',
-  ].filter(Boolean).join(' · ');
+/** Rename, as /rename does: the title the session has everywhere Claude Code lists it. */
+export function RenameSheet({ open, onClose, sessionId, title, onRenamed }: { open: boolean; onClose: () => void; sessionId: string; title: string; onRenamed: () => void }) {
+  const [value, setValue] = useState(title);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<MenuProblem>();
+  const field = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    setValue(title);
+    setError(undefined);
+    // Selected, to type over it at once.
+    requestAnimationFrame(() => field.current?.select());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    const next = value.trim();
+    if (!next || next === title) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    api.rename(sessionId, next)
+      .then(() => {
+        onRenamed();
+        onClose();
+      })
+      .catch((err: Error) => setError({ text: err.message, note: isDemoNote(err) }))
+      .finally(() => setBusy(false));
+  };
   return (
-    <>
-      <Detail label="Usage">
-        {compactNumber(total)} tokens{share !== undefined ? `, ${percent(share)} from the cache` : ''}
-        {more && <div className="text-faint">{more}</div>}
-      </Detail>
-      {usage.cost && costShown({ signedIn: models?.signedIn ?? null, plan: models?.account?.plan }) && <Detail label="Cost">{costWords(usage.cost.usd)}</Detail>}
-    </>
+    <Sheet open={open} onClose={onClose} title="Rename">
+      <form onSubmit={save} className="px-2 pt-1 pb-3">
+        <input
+          ref={field}
+          data-autofocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          aria-label="Session title"
+          className="h-11 w-full rounded-xl border border-line bg-bg px-3 text-[16px] outline-none focus:border-fg pointer-fine:h-10 pointer-fine:text-[15px]"
+        />
+        {error && <p className={`mt-2 px-1 text-[13px] leading-snug ${error.note ? 'text-muted' : 'text-danger'}`}>{error.text}</p>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="h-10 rounded-full bg-chip px-4 text-[14px] pointer-fine:h-9">Cancel</button>
+          <button type="submit" disabled={busy || !value.trim()} className="flex h-10 items-center rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40 pointer-fine:h-9">
+            {busy ? <Loader2 className="size-4 animate-spin" /> : 'Save'}
+          </button>
+        </div>
+      </form>
+    </Sheet>
   );
 }
 
-/** Everything you can do with one session, and what is known about it. */
+/** Delete asks first, in Desktop's words: the transcript goes for every Claude Code app. */
+function DeleteSheet({ open, onClose, sessionId, onDeleted }: { open: boolean; onClose: () => void; sessionId: string; onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<MenuProblem>();
+  useEffect(() => {
+    if (open) setError(undefined);
+  }, [open]);
+  const remove = () => {
+    setBusy(true);
+    setError(undefined);
+    api.remove(sessionId)
+      .then(() => {
+        onClose();
+        onDeleted();
+      })
+      .catch((err: Error) => setError({ text: err.message, note: isDemoNote(err) }))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="Delete this session?">
+      <div className="px-3 pt-1 pb-3">
+        <p className="text-[14px] leading-relaxed text-muted">Its transcript is removed from this computer, for every Claude Code app. This cannot be undone.</p>
+        {error && <p className={`mt-2 text-[13px] leading-snug ${error.note ? 'text-muted' : 'text-danger'}`}>{error.text}</p>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" data-autofocus onClick={onClose} className="h-10 rounded-full bg-chip px-4 text-[14px] pointer-fine:h-9">Cancel</button>
+          <button type="button" disabled={busy} onClick={remove} className="flex h-10 items-center rounded-full bg-danger px-4 text-[14px] font-medium text-bg disabled:opacity-40 pointer-fine:h-9">
+            {busy ? <Loader2 className="size-4 animate-spin" /> : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+/**
+ * One session's list of actions (lib/actions), from the open session's title ▾ or from its row in
+ * the list: Rename · Pin · Side chat · Fork · Copy resume command · Export · Transcript view ·
+ * Archive · Delete, the same everywhere. Under the title it has the session's keys and view, and
+ * its start and ID at its foot; a row's, which may be another session's, has neither. Rename and
+ * Delete ask in a sheet of their own once the menu has gone.
+ */
 export function SessionMenu({
-  open,
-  onClose,
-  sessionId,
-  session,
-  cwd,
-  home,
-  run,
-  machine,
-  thinking = false,
-  onRenamed,
-  onSideChat,
-  onForked,
-  onDeleted,
+  open, onClose, sessionId, session, from, at, lift, focusFirst, cwd, busy, view, header, onRename, onFork, onSideChat, onForked, onPin, onArchive, onRenamed, onDeleted, onProblem,
 }: {
   open: boolean;
   onClose: () => void;
   sessionId: string;
   session?: SessionSummary;
+  from: 'title' | 'row';
+  at?: MenuAnchor | null;
+  /** On a phone, the row a long press opened it for. */
+  lift?: Element | null;
+  focusFirst?: boolean;
   cwd?: string;
-  home?: string;
-  run?: RunState;
-  /** The computer Claude Code runs on, named where something is done there. */
-  machine?: string;
-  /** Claude has thought in this session: the Thinking view is offered. */
-  thinking?: boolean;
-  onRenamed: () => void;
-  /** Opens the session's side chat (Claude Desktop's); none for a side chat itself. */
+  /** Claude works in it: Delete waits until it stops. */
+  busy?: boolean;
+  view?: Choice;
+  /** Above the list, on a phone's title menu: the panes' tiles. */
+  header?: ReactNode | ((pick: (run: () => void) => void) => ReactNode);
+  /** Renames in a sheet of the caller's (the open session's, which /rename and ⌥⌘R open too). */
+  onRename?: () => void;
+  /** Forks as the caller does (the open session's, which /branch and ⌥⌘O do too). */
+  onFork?: () => void;
   onSideChat?: () => void;
   onForked: (id: string) => void;
+  onPin?: (pinned: boolean) => void;
+  onArchive?: (archived: boolean) => void;
+  onRenamed: () => void;
   onDeleted: () => void;
+  onProblem: (problem: MenuProblem) => void;
 }) {
-  const prefs = usePrefs();
   const queryClient = useQueryClient();
   const [renaming, setRenaming] = useState(false);
-  const [title, setTitle] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [copied, setCopied] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const running = Boolean(run?.busy);
-
-  useEffect(() => {
-    if (open) return;
-    setRenaming(false);
-    setConfirmDelete(false);
-    setError(undefined);
-    setCopied(undefined);
-  }, [open]);
-
-  const act = (work: () => Promise<void>) => {
-    setBusy(true);
-    setError(undefined);
-    work()
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setBusy(false));
-  };
-
-  // At once, as in the list, and put back if the server says no.
-  const pin = (pinned: boolean) => {
-    if (!session) return;
-    const to: ListChange = { pinned };
-    setError(undefined);
-    makeChange(queryClient, session, to).then(() => announce(changeWords(to)), (err: Error) => setError(err.message));
-  };
-
-  const copy = (what: string, text: string) => {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopied(what);
-      setTimeout(() => setCopied((c) => (c === what ? undefined : c)), 1500);
-    });
-  };
-
-  const rename = (e: FormEvent) => {
-    e.preventDefault();
-    const next = title.trim();
-    if (!next || next === session?.title) {
-      setRenaming(false);
-      return;
-    }
-    act(async () => {
-      await api.rename(sessionId, next);
-      setRenaming(false);
-      onRenamed();
-    });
-  };
-
-  const exportMarkdown = () => {
-    const link = document.createElement('a');
-    link.href = api.exportUrl(sessionId);
-    // The server names the file by the session's title; the site's saved one is named here, as it would.
-    link.download = STATIC_DEMO ? `${(session?.title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'session'}.md` : '';
-    document.body.append(link);
-    link.click();
-    link.remove();
-  };
-
+  const [deleting, setDeleting] = useState(false);
+  const title = session?.title ?? '';
+  const target = useMemo<SessionTarget>(() => ({
+    title,
+    archived: Boolean(session?.archived),
+    pinned: Boolean(session?.pinned),
+    from,
+    ...(busy ? { busy } : {}),
+    ...(isSessionId(sessionId) ? { resume: resumeCommand(sessionId, cwd ?? session?.cwd) } : {}),
+    rename: onRename ?? (() => setRenaming(true)),
+    ...(session && onPin ? { pin: onPin } : {}),
+    ...(onSideChat ? { sideChat: onSideChat } : {}),
+    fork: onFork ?? (() => {
+      api.fork(sessionId)
+        .then((id) => {
+          if (!id) return;
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+          onForked(id);
+        })
+        .catch((err: Error) => onProblem({ text: err.message, note: isDemoNote(err) }));
+    }),
+    export: () => exportSession(sessionId, title),
+    ...(view ? { view } : {}),
+    ...(session && onArchive ? { archive: onArchive } : {}),
+    remove: () => setDeleting(true),
+  }), [title, session, from, busy, sessionId, cwd, onRename, onFork, onPin, onSideChat, view, onArchive, queryClient, onForked, onProblem]);
+  const list = entries(SESSION_ACTIONS, target, 'menu', hasKeyboard() ? 'pointer' : 'touch');
   return (
-    <Sheet open={open} onClose={onClose} title="Session" done>
-      {/* This session's own; the one sessions start with is in Settings. */}
-      <SheetHeading>Transcript view</SheetHeading>
-      <Segmented<ViewMode>
-        value={viewOf(prefs, sessionId)}
-        onChange={(view) => setSessionView(sessionId, view)}
-        options={[...viewsFor(thinking, viewOf(prefs, sessionId))]}
+    <>
+      <ActionMenu
+        open={open}
+        onClose={onClose}
+        label={from === 'title' ? 'Session' : title || 'Session'}
+        title={from === 'title' ? 'Session' : title || 'Session'}
+        entries={list}
+        at={at ?? null}
+        keys={from === 'title'}
+        focusFirst={Boolean(focusFirst)}
+        {...(header ? { header } : {})}
+        {...(from === 'title' ? { footer: <Started sessionId={sessionId} {...(session?.createdAt ? { at: session.createdAt } : {})} /> } : {})}
+        {...(lift ? { lift } : {})}
       />
-
-      <SheetHeading>Actions</SheetHeading>
-      {/* The demo's note is not an error. */}
-      {error && <div className={`mx-3 mb-1 rounded-lg bg-chip px-3 py-2 text-[13px] ${error === DEMO_NOTE ? 'text-muted' : 'text-danger'}`}>{error}</div>}
-      {renaming ? (
-        <form onSubmit={rename} className="flex items-center gap-2 px-3 py-1.5">
-          <input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            aria-label="Session title"
-            className="h-10 min-w-0 flex-1 rounded-xl border border-line bg-bg px-3 text-[16px] outline-none focus:border-fg"
-          />
-          <button type="submit" disabled={busy} className="h-10 shrink-0 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40">Save</button>
-        </form>
-      ) : (
-        <SheetOption
-          icon={<Pencil className="size-4" />}
-          label="Rename"
-          onSelect={() => {
-            setTitle(session?.title ?? '');
-            setRenaming(true);
-          }}
-        />
-      )}
-      {onSideChat && (
-        <SheetOption
-          icon={<MessagesSquare className="size-4" />}
-          label="Side chat"
-          description="Ask about this session without adding to it"
-          onSelect={onSideChat}
-        />
-      )}
-      <SheetOption
-        icon={<GitFork className="size-4" />}
-        label="Branch"
-        description="A copy to carry on separately"
-        onSelect={() => act(async () => {
-          const id = await api.fork(sessionId);
-          if (id) onForked(id);
-        })}
-      />
-      {isSessionId(sessionId) && (
-        <SheetOption
-          icon={copied === 'resume' ? <Check className="size-4" /> : <SquareTerminal className="size-4" />}
-          label={copied === 'resume' ? 'Copied' : 'Continue in a terminal'}
-          description={<span className="font-mono text-[11.5px]">{resumeCommand(sessionId, cwd ? shortPath(cwd, home) : undefined)}</span>}
-          onSelect={() => copy('resume', resumeCommand(sessionId, cwd))}
-        />
-      )}
-      <SheetOption icon={<Download className="size-4" />} label="Export as Markdown" onSelect={exportMarkdown} />
-      {/* An archived session is brought back first; then it can be pinned. */}
-      {session && !session.archived && (
-        session.pinned
-          ? <SheetOption icon={<PinOff className="size-4" />} label="Unpin" onSelect={() => pin(false)} />
-          : <SheetOption icon={<Pin className="size-4" />} label="Pin" onSelect={() => pin(true)} />
-      )}
-      {session?.archived ? (
-        <SheetOption
-          icon={<ArchiveRestore className="size-4" />}
-          label="Unarchive"
-          onSelect={() => act(async () => {
-            await api.archive(sessionId, false);
-            if (session) showChange(queryClient, session, { archived: false });
-            onRenamed();
-          })}
-        />
-      ) : (
-        <SheetOption
-          icon={<Archive className="size-4" />}
-          label="Archive"
-          // The list it goes back to shows the session archived, and no longer pinned, at once.
-          onSelect={() => act(async () => {
-            await api.archive(sessionId, true);
-            if (session) showChange(queryClient, session, { archived: true });
-            onDeleted();
-          })}
-        />
-      )}
-      {confirmDelete ? (
-        <div className="mx-1 my-1 rounded-xl border border-line px-3 py-2.5">
-          <div className="text-[14px]">Delete this session?</div>
-          <div className="mt-0.5 text-[12.5px] leading-snug text-muted">Its transcript is removed from this computer, for every Claude Code app. This cannot be undone.</div>
-          <div className="mt-2.5 flex gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              className="h-10 rounded-full bg-danger px-4 text-[14px] font-medium text-bg disabled:opacity-40"
-              onClick={() => act(async () => {
-                await api.remove(sessionId);
-                onDeleted();
-              })}
-            >
-              Delete
-            </button>
-            <button type="button" className="h-10 rounded-full bg-chip px-4 text-[14px]" onClick={() => setConfirmDelete(false)}>Cancel</button>
-          </div>
-        </div>
-      ) : (
-        <SheetOption
-          icon={<Trash2 className="size-4" />}
-          label="Delete"
-          danger
-          {...(running ? { description: 'Stop Claude first' } : {})}
-          onSelect={() => !running && setConfirmDelete(true)}
-        />
-      )}
-
-      <McpServers sessionId={sessionId} open={open} {...(machine ? { machine } : {})} />
-
-      <SheetHeading>Details</SheetHeading>
-      {cwd && <Detail label="Folder" mono>{shortPath(cwd, home)}</Detail>}
-      {session?.gitBranch && <Detail label="Branch" mono>{session.gitBranch}</Detail>}
-      {session?.createdAt && <Detail label="Started">{when(session.createdAt)}</Detail>}
-      {session?.lastActivity ? <Detail label="Last active">{when(session.lastActivity)}</Detail> : null}
-      {session?.openIn && (
-        <Detail label="Also open">In {session.openIn}</Detail>
-      )}
-      {run?.context && (
-        <Detail label="Context">
-          {run.context.percent}% used · {Math.round(run.context.tokens / 1000)}k of {Math.round(run.context.max / 1000)}k tokens
-        </Detail>
-      )}
-      {run?.lastTurn && (
-        <Detail label="Last turn">
-          {duration(run.lastTurn.durationMs)}
-          {run.lastTurn.costUsd ? ` · $${run.lastTurn.costUsd.toFixed(2)}` : ''}
-        </Detail>
-      )}
-      <UsageDetails sessionId={sessionId} open={open} />
-      <Detail label="ID" mono>
-        <button type="button" className="-my-2 inline-flex items-center gap-1.5 py-2 text-left hover:text-fg" onClick={() => copy('id', sessionId)}>
-          {sessionId}
-          {copied === 'id' ? <Check className="size-3 shrink-0" /> : <Copy className="size-3 shrink-0" />}
-        </button>
-      </Detail>
-    </Sheet>
+      <RenameSheet open={renaming} onClose={() => setRenaming(false)} sessionId={sessionId} title={title} onRenamed={onRenamed} />
+      <DeleteSheet open={deleting} onClose={() => setDeleting(false)} sessionId={sessionId} onDeleted={onDeleted} />
+    </>
   );
 }

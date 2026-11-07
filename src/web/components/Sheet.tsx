@@ -28,6 +28,8 @@ export function Sheet({
 }) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
+  // A tap outside closes it; the finger lifting from the long press that opened it is no tap.
+  const tapped = useRef(false);
   const drag = useRef<{ id: number; startY: number; lastY: number; lastT: number; speed: number; dy: number; moving: boolean } | undefined>(undefined);
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
@@ -66,7 +68,16 @@ export function Sheet({
   return (
     <Modal open={open} onClose={onClose} labelledBy={titleId}>
       <div className="flex h-full w-full items-end justify-center sm:items-center sm:p-6">
-        <div className="animate-fade absolute inset-0 bg-black/30 transition-opacity duration-200 group-data-closing/modal:opacity-0" onClick={onClose} />
+        <div
+          className="animate-fade absolute inset-0 bg-black/30 transition-opacity duration-200 group-data-closing/modal:opacity-0"
+          onPointerDown={() => {
+            tapped.current = true;
+          }}
+          onClick={() => {
+            if (tapped.current) onClose();
+            tapped.current = false;
+          }}
+        />
         {behind}
         <div
           ref={panel}

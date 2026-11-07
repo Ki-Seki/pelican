@@ -16,6 +16,12 @@ export type PathRef = { path: string; line?: number; end?: number };
 export type PathLinks = {
   cwd: string;
   openFile: (path: string, line?: number) => void;
+  /** Opens a file's diff in Changes. */
+  openChanges?: (path: string) => void;
+  /** The files git has changes in, from the session's folder. */
+  changed?: ReadonlySet<string>;
+  /** Opens a new terminal in a folder of the session's (from its folder: relative, or '' for the folder itself). */
+  openTerminal?: (folder: string) => void;
   /** Opens one turn's changes, by its prompt's id. */
   openTurn?: (uuid: string) => void;
   /** The turns that changed files (T1, T2…), for the line under each in the conversation. */

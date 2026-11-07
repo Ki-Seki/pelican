@@ -188,29 +188,36 @@ describe('following the end of the conversation', () => {
 });
 
 describe('a prompt', () => {
-  it('is text you can select, with its actions shown on a tap on a touch screen', () => {
+  it('is text you can select, with its actions labelled under it on a tap on a touch screen', () => {
     media['(hover: none)'] = true;
-    render(<MessageList sessionId="s" view={view()} mode="normal" onRewind={() => {}} />);
+    render(<MessageList sessionId="s" view={view()} mode="normal" onRewind={() => {}} onFork={() => {}} />);
     const prompt = screen.getByText('Add a dark theme');
     expect(prompt.closest('button')).toBeNull();
-    // The prompt's Copy comes first; the reply has its own.
-    const row = screen.getAllByRole('button', { name: 'Copy' })[0]!.parentElement!;
-    expect(row.className).toContain('sr-only');
+    // Nothing shows until the prompt is tapped: it sits as close to its answer as anything else.
+    expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull();
     // The end of selecting some of it is not a tap.
     const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'dark' } as Selection);
     fireEvent.click(prompt);
-    expect(row.className).toContain('sr-only');
+    expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull();
     selection.mockRestore();
     fireEvent.click(prompt);
-    expect(row.className).not.toContain('sr-only');
-    expect(screen.getByRole('button', { name: 'Rewind' })).toBeTruthy();
+    // Copy · Rewind to here · Fork from here, labelled, a finger's height.
+    const rewind = screen.getByRole('button', { name: 'Rewind to here' });
+    expect([...rewind.parentElement!.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Copy', 'Rewind to here', 'Fork from here']);
+    expect(rewind.className).toContain('h-9');
+    fireEvent.click(prompt);
+    expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull();
   });
 
-  it('keeps its actions to a pointer’s hover or focus on a computer: a click does nothing', () => {
-    render(<MessageList sessionId="s" view={view()} mode="normal" />);
-    const row = screen.getAllByRole('button', { name: 'Copy' })[0]!.parentElement!;
+  it('keeps its actions to a pointer’s hover or focus on a computer, in the gutter beside it: a click does nothing', () => {
+    render(<MessageList sessionId="s" view={view()} mode="normal" onRewind={() => {}} onFork={() => {}} />);
+    const gutter = screen.getByRole('button', { name: 'Rewind to here' }).parentElement!;
+    expect([...gutter.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))).toEqual(['Copy', 'Rewind to here', 'Fork from here']);
+    // Beside the bubble, adding no height, shown on hover or focus.
+    expect(gutter.className).toContain('right-full');
+    expect(gutter.className).toContain('group-focus-within/user:opacity-100');
     fireEvent.click(screen.getByText('Add a dark theme'));
-    expect(row.className).toContain('group-focus-within/user:opacity-100');
+    expect(gutter.className).toContain('opacity-0');
   });
 
   it('has a heading for each turn, for moving through the conversation by headings', () => {

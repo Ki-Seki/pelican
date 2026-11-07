@@ -67,6 +67,31 @@ function remember(sessionId: string, side: Remembered | undefined): void {
   }
 }
 
+/** Sessions whose side chat was asked for from elsewhere (a row's menu in the list), until their chat opens it. */
+const asked = new Set<string>();
+const askListeners = new Set<(id: string) => void>();
+
+/** Asks for a session's side chat: its chat opens it, now if it is open, else once it is. */
+export function askSideChat(sessionId: string): void {
+  asked.add(sessionId);
+  for (const listener of askListeners) listener(sessionId);
+}
+
+/** Opens the side chat (`show`) when it is asked for this session from elsewhere. */
+export function useSideChatAsked(sessionId: string | undefined, show: () => void): void {
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const take = (id: string) => {
+      if (id === sessionId && asked.delete(id)) show();
+    };
+    take(sessionId);
+    askListeners.add(take);
+    return () => {
+      askListeners.delete(take);
+    };
+  }, [sessionId, show]);
+}
+
 /** Changes and files, as Chat has it (Workspace's useWorkspacePane): where the side chat takes turns with it. */
 type Pane = { open: boolean; setOpen: (open: boolean) => void; dockable: boolean };
 

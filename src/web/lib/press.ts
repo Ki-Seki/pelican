@@ -42,6 +42,12 @@ type LongPressOptions = {
 const HELD_TYPES = new Set(['touch', 'pen']);
 
 /**
+ * Whether an event is the thing's own: one from what a portal shows over the page (a menu the thing
+ * opened, a sheet) passes up through the thing in React's tree, though it is not in the thing.
+ */
+const inside = (e: { currentTarget: EventTarget; target: EventTarget }) => (e.currentTarget as Node).contains(e.target as Node);
+
+/**
  * A long press (500 ms, a finger drifting up to 10 px) and a right-click, the same list on either:
  * spread the returned handlers on the thing. Scrolling or a second finger lets go of a press, and
  * the tap that ends one is not a tap on the thing. iOS's callout on links is turned off on it, and
@@ -68,12 +74,14 @@ export function useLongPress<T extends HTMLElement = HTMLElement>(onPress: (pres
 
   const act = (press: Press) => {
     letGo();
-    pressedAt.current = Date.now();
+    // A finger's press is followed by its lifting (a click) and, on Android, a context menu: both are the press's.
+    if (press.pointerType === 'touch' || press.pointerType === 'pen') pressedAt.current = Date.now();
     handler.current(press);
   };
 
   return {
     onPointerDown(e: PointerEvent<T>) {
+      if (!inside(e)) return;
       downAt.current = Date.now();
       letGo();
       // A mouse has its right button; a second finger is a pinch, not a press.
@@ -93,7 +101,7 @@ export function useLongPress<T extends HTMLElement = HTMLElement>(onPress: (pres
     onPointerUp: letGo,
     onPointerCancel: letGo,
     onContextMenu(e: MouseEvent<T>) {
-      if (!enabled) return;
+      if (!enabled || !inside(e)) return;
       const target = e.target as Element;
       // A long press that already acted (Android follows one with this), or one the browser saw first.
       if (Date.now() - pressedAt.current < 1000) {
@@ -121,7 +129,7 @@ export function useLongPress<T extends HTMLElement = HTMLElement>(onPress: (pres
     },
     onClickCapture(e: MouseEvent<T>) {
       // The finger that held lifts with a click: it is the press's, not a tap.
-      if (Date.now() - pressedAt.current < 600) {
+      if (inside(e) && Date.now() - pressedAt.current < 600) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -212,7 +220,7 @@ export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
   const bind = {
     onPointerDown(e: PointerEvent<T>) {
       drag.current = undefined;
-      if (!enabled || e.pointerType !== 'touch' || !e.isPrimary) return;
+      if (!enabled || e.pointerType !== 'touch' || !e.isPrimary || !inside(e)) return;
       if (e.clientX < SWIPE_EDGE || e.clientX > innerWidth - SWIPE_EDGE) return;
       if (scrollsSideways(e.target, e.currentTarget) || selecting()) return;
       const far = typeof acts === 'number' ? acts : acts(e.currentTarget);
@@ -260,8 +268,8 @@ export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
       else drag.current = undefined;
     },
     onClickCapture(e: MouseEvent<T>) {
-      // What it uncovered takes its own taps.
-      if ((e.target as Element).closest('[data-swipe-action]')) return;
+      // What it uncovered takes its own taps, and what it opened over the page its own.
+      if (!inside(e) || (e.target as Element).closest('[data-swipe-action]')) return;
       // Some browsers follow a swipe with a click on the thing: it was not a tap. Left open, a tap
       // on it closes it, rather than doing what a tap on it does.
       if (Date.now() < swallowUntil.current || at.current !== 0) {
@@ -274,4 +282,37 @@ export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
     style: { touchAction: 'pan-y pinch-zoom' } as CSSProperties,
   };
   return { dx, swiping: dx < 0, dragging, armed: -dx >= reach, slide, bind };
+}
+
+/**
+ * A right-click alone, for a thing whose long press is the system's (a reply's words, which a
+ * finger selects): the list at the pointer, or from the keyboard's menu key under the thing; a
+ * long press's own menu (Android's, after a finger held still) stays the browser's, and so does
+ * the menu of what `nativeMenu` names (a link, an image).
+ */
+export function useRightClick<T extends HTMLElement = HTMLElement>(onPress: (press: Press) => void, nativeMenu?: (target: Element) => boolean) {
+  const handler = useRef(onPress);
+  handler.current = onPress;
+  const last = useRef<{ type: string; at: number }>({ type: 'mouse', at: -Infinity });
+  return {
+    onPointerDown(e: PointerEvent<T>) {
+      if (inside(e)) last.current = { type: e.pointerType, at: Date.now() };
+    },
+    onContextMenu(e: MouseEvent<T>) {
+      if (!inside(e)) return;
+      const target = e.target as Element;
+      const recent = Date.now() - last.current.at < 1500;
+      if (recent && last.current.type !== 'mouse') return;
+      if (nativeMenu?.(target)) return;
+      e.preventDefault();
+      const element = e.currentTarget;
+      // No pointer went down: the keyboard's menu key, which opens it under the thing.
+      if (!recent) {
+        const r = element.getBoundingClientRect();
+        handler.current({ x: r.left, y: r.bottom, pointerType: 'keyboard', target, element });
+        return;
+      }
+      handler.current({ x: e.clientX, y: e.clientY, pointerType: 'mouse', target, element });
+    },
+  };
 }

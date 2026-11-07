@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, GitStatus, SessionSummary } from '../src/shared/protocol';
@@ -73,7 +73,11 @@ describe('the Esc of an input method', () => {
     ];
     const view: SessionView = { messages, offset: 0, total: 2, loaded: true, loadingOlder: false };
     render(<MessageList sessionId="s1" view={view} mode="normal" onEdit={async () => true} />);
-    fireEvent.click(screen.getByTitle(/^Edit and send again/));
+    // Edit is in the prompt's menu, until Rewind to here gives its words back to the box.
+    HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', ''); };
+    HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open'); };
+    fireEvent.contextMenu(screen.getByText('Add a dark theme'));
+    fireEvent.click(within(screen.getByRole('menu', { name: 'Your message' })).getByRole('menuitem', { name: 'Edit' }));
     const editor = screen.getByLabelText('Edit the prompt');
     imeEscapes(editor);
     expect(screen.getByLabelText('Edit the prompt')).toBe(editor);

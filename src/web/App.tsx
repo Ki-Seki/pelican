@@ -1,20 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, MessageSquare, Plus } from 'lucide-react';
-import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Keyboard, Loader2, MessageSquare, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
 import { Announcer } from './components/Announcer';
+import { CommandMenu, commandMenuShown, showCommandMenu } from './components/CommandMenu';
 import { Lightbox } from './components/Lightbox';
 import { Login } from './components/Login';
 import { type Offline, OfflineLine, offlineWords, retryNow, useOffline } from './components/Offline';
 import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
 import { SessionList } from './components/SessionList';
+import { askSideChat } from './components/SideChat';
 import { Sheet } from './components/Sheet';
 import { shortcutsShown, ShortcutsSheet, showShortcuts } from './components/Shortcuts';
 import { announce } from './lib/announce';
 import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
+import { type CommandItem, useCommandPart } from './lib/commands';
 import { forgetDrafts } from './lib/drafts';
 import { isKey } from './lib/keyboard';
 import { retried } from './lib/load';
@@ -117,6 +120,9 @@ function useRoute() {
   };
 }
 
+/** A sheet or menu that is open, and not on its way out (a key pressed just after one closed is the page's). */
+const OPEN_DIALOG = 'dialog[open]:not([data-closing])';
+
 /** The sign-in gate: shown until this browser signs in, unless the server asks no one to (--no-auth, the demo). */
 export function App() {
   const queryClient = useQueryClient();
@@ -215,8 +221,9 @@ function Main() {
     said.current = offline;
   }, [offline, info?.machine]);
 
-  // Desktop's keys for the whole page: ⇧⌘K finds a session (on a phone the list comes first), ⇧⌘O
-  // starts one, ⇧⌘, opens Settings, ⌘/ lists the keys. A sheet that is open keeps the others.
+  // Desktop's keys for the whole page: ⌘K the command menu, ⇧⌘K finds a session (on a phone the
+  // list comes first), ⇧⌘O starts one, ⇧⌘, opens Settings, ⌘/ lists the keys. A sheet that is open
+  // keeps the others.
   const chatOpen = Boolean(sessionId || isNew);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -226,7 +233,12 @@ function Main() {
         showShortcuts(!shortcutsShown());
         return;
       }
-      if (document.querySelector('dialog[open]')) return;
+      if (isKey(e, 'commandMenu') && (commandMenuShown() || !document.querySelector(OPEN_DIALOG))) {
+        e.preventDefault();
+        showCommandMenu(!commandMenuShown());
+        return;
+      }
+      if (document.querySelector(OPEN_DIALOG)) return;
       if (isKey(e, 'searchSessions')) {
         e.preventDefault();
         if (!wide && chatOpen) navigate('');
@@ -248,6 +260,17 @@ function Main() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [wide, chatOpen, navigate, queryClient]);
+
+  // The page's own commands, in the / list and ⌘K (lib/commands); the open chat adds its session's.
+  const pageCommands = useMemo<CommandItem[]>(() => [
+    {
+      id: 'new-session', group: 'pelican', label: 'New session', icon: Plus, key: 'newSession',
+      run: () => navigate(newSessionQuery(defaultStart(queryClient.getQueryData<SessionSummary[]>(['sessions']) ?? []))),
+    },
+    { id: 'settings', group: 'pelican', label: 'Settings', icon: SettingsIcon, name: 'config', description: 'Settings', key: 'settings', run: () => setSettingsOpen(true) },
+    { id: 'shortcuts', group: 'pelican', label: 'Keyboard shortcuts', icon: Keyboard, key: 'shortcuts', only: 'pointer', run: () => showShortcuts(true) },
+  ], [navigate, queryClient]);
+  useCommandPart('page', pageCommands);
 
   const toggleNotifications = () => {
     const next = notifications === 'on' ? disableNotifications() : enableNotifications();
@@ -286,6 +309,11 @@ function Main() {
       onOpen={(id) => open(id)}
       onNew={(start) => navigate(newSessionQuery(start))}
       onSettings={() => setSettingsOpen(true)}
+      onSideChat={(id) => {
+        askSideChat(id);
+        if (id !== sessionId) open(id);
+      }}
+      onGone={(id) => id === sessionId && navigate('')}
       connected={connected}
       banner={banner}
     />
@@ -305,7 +333,7 @@ function Main() {
         wide={wide}
         onBack={() => navigate('')}
         onOpen={open}
-        onStartIn={(start) => navigate(newSessionQuery(start), true)}
+        onStartIn={(start, push) => navigate(newSessionQuery(start), !push)}
       />
     );
   } else if (isNew) {
@@ -366,6 +394,7 @@ function Main() {
         </main>
         {settings}
         <ShortcutsSheet />
+        <CommandMenu sessions={sessions ?? []} onOpenSession={open} />
       </div>
     );
   }
@@ -374,6 +403,7 @@ function Main() {
       {main ?? list}
       {settings}
       <ShortcutsSheet />
+      <CommandMenu sessions={sessions ?? []} onOpenSession={open} />
     </div>
   );
 }

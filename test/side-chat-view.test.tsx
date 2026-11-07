@@ -99,6 +99,12 @@ beforeAll(() => {
 const { Chat } = await import('../src/web/components/Chat');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
+/** The title's ▾, which opens the session's menu. */
+const sessionMenu = () => document.querySelector<HTMLElement>('header h2 button')!;
+
+/** The header's way to Changes: its button on a computer, its one button on a phone. */
+const paneButton = () => screen.getByRole('button', { name: /^Changes(,|$)/ });
+
 afterEach(async () => {
   cleanup();
   const { setWaiting } = await import('../src/web/lib/drafts');
@@ -117,7 +123,11 @@ const computer = (width: number) => {
 };
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
 const session = () => wrap(<Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
-const loaded = () => screen.findAllByText('Clean up the build');
+/** The conversation, and the session's own page (its folder, under the title): what the chat knows of it once loaded. */
+const loaded = async () => {
+  await screen.findAllByText('Clean up the build');
+  await waitFor(() => expect(document.querySelector('header')?.textContent).toContain('/code/app'));
+};
 const pane = () => screen.queryByRole('complementary', { name: 'Side chat' });
 /** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
 const LAZY = { timeout: 5000 };
@@ -221,8 +231,8 @@ describe('the side chat', () => {
     computer(1280);
     session();
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     await waitFor(() => expect(pane()).not.toBeNull());
     type('Side question', 'Which step is slowest?');
     await waitFor(() => expect(server.side).toHaveLength(1));
@@ -236,8 +246,8 @@ describe('the side chat', () => {
     computer(1280);
     session();
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     await waitFor(() => expect(document.querySelector('dialog[open]')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Side question')));
     fireEvent.keyDown(screen.getByLabelText('Side question'), { key: 'Escape' });
@@ -266,8 +276,8 @@ describe('the side chat', () => {
     fireEvent.click(within(pill).getByRole('button', { name: /^Quote/ }));
     const note = within(screen.getByRole('dialog', { name: 'Quote with a note' })).getByLabelText('Your note') as HTMLTextAreaElement;
     fireEvent.change(note, { target: { value: 'Is that on purpose?' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     await waitFor(() => expect(document.querySelector('dialog[open]')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Side question')));
     expect(note.value).toBe('Is that on purpose?');
@@ -317,7 +327,7 @@ describe('the side chat', () => {
       fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
     expect(changes()).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
+    fireEvent.click(paneButton());
     expect(pane()).toBeNull();
     expect(changes()).not.toBeNull();
   });
@@ -354,13 +364,13 @@ describe('the side chat', () => {
       fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
     expect(changes()).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
+    fireEvent.click(paneButton());
     expect(pane()).toBeNull();
     await stays();
     // Closed for good and opened again, it starts in Files again.
     fireEvent.click(within(changes()!).getByRole('button', { name: 'Close' }));
     expect(changes()).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Changes and files' }));
+    fireEvent.click(paneButton());
     await waitFor(() => expect(location.search).toContain('w=files'));
   });
 
@@ -429,8 +439,8 @@ describe('the side chat', () => {
       answered();
       session();
       await loaded();
-      fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-      fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+      fireEvent.click(sessionMenu());
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
       const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
       fireEvent.click(await within(sheet).findByRole('link', { name: 'src/cache.ts:1' }));
       // While the sheet plays its way out it holds the page: the view waits for it.
@@ -453,10 +463,10 @@ describe('the side chat', () => {
     expect(pane()).not.toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull();
     expect(document.documentElement.dataset.pane).toBe('docked');
-    // The list is folded away: the way back to it is in the header, and Cmd/Ctrl+K brings it back.
+    // The list is folded away: the way back to it is in the header, and Cmd/Ctrl+Shift+K brings it back.
     expect(screen.getByRole('button', { name: 'Back to sessions' })).toBeTruthy();
     act(() => {
-      fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+      fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
     });
     expect(pane()).toBeNull();
     expect(document.documentElement.dataset.pane).toBeUndefined();
@@ -479,8 +489,8 @@ describe('the side chat', () => {
     media = { '(pointer: coarse)': true };
     session();
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
     const box = within(sheet).getByLabelText('Side question');
     expect(foot(box)).toBe('8px');
@@ -491,8 +501,8 @@ describe('the side chat', () => {
     media = {};
     session();
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
     const sheet = await screen.findByRole('dialog', { name: 'Side chat' });
     expect(within(sheet).getByText('Reads this session · changes nothing')).toBeTruthy();
     expect(pane()).toBeNull();
@@ -557,8 +567,8 @@ describe('a side question that did not go', () => {
     session();
     await loaded();
     const open = async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
-      fireEvent.click(await screen.findByRole('button', { name: /^Side chat/ }));
+      fireEvent.click(sessionMenu());
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^Side chat/ }));
       return screen.findByRole('dialog', { name: 'Side chat' });
     };
     const sheet = await open();
@@ -689,20 +699,25 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     await screen.findByRole('button', { name: 'Create PR' }, LAZY);
     expect(screen.getByLabelText('Message Claude')).toBeTruthy();
     expect(pinned()).not.toBeNull();
-    expect(screen.getByTitle(/^Rewind code/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Rewind to here' })).toBeTruthy();
     cleanup();
 
     history.replaceState(null, '', `/?s=${SIDE}&w=changes&t=u1`);
     open(SIDE);
     await screen.findAllByText('Clean up the build');
-    const box = screen.getByLabelText('Side question') as HTMLTextAreaElement;
+    const box = await screen.findByLabelText('Side question') as HTMLTextAreaElement;
     expect(box.placeholder).toBe('Ask a side question');
-    for (const name of ['Attach files', 'Model, effort and speed', 'Permission mode']) expect(screen.queryByRole('button', { name })).toBeNull();
+    for (const name of ['Add', 'Model, effort and speed', 'Permission mode']) expect(screen.queryByRole('button', { name })).toBeNull();
     // The task list it copied is the session's work, not its own.
     expect(pinned()).toBeNull();
-    // The prompt it copied offers no Rewind, nor Edit.
-    expect(screen.queryByTitle(/^Rewind code/)).toBeNull();
-    expect(screen.queryByTitle(/^Edit and send again/)).toBeNull();
+    // The prompt it copied offers no Rewind, nor Fork from here, nor Edit.
+    expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull();
+    fireEvent.contextMenu(screen.getAllByText('Clean up the build').find((el) => el.closest('[data-quote-what="prompt"]'))!);
+    const menu = await screen.findByRole('menu', { name: 'Your message' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', 'Quote']);
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    document.querySelector('dialog')?.dispatchEvent(new Event('cancel', { cancelable: true }));
     // Its turn's changes, without Rewind code; the folder's, without Commit, Push or Create PR.
     const changes = await screen.findByRole('complementary', { name: 'Changes and files' });
     await within(changes).findByText('cache.ts', {}, LAZY);

@@ -5,6 +5,8 @@ import {
   absolutePath,
   type Action,
   ACTIONS,
+  ADD_ACTIONS,
+  type AddTarget,
   copyText,
   type Device,
   entries,
@@ -59,6 +61,7 @@ const prompt = (extra: Partial<PromptTarget> = {}): PromptTarget => ({
   text: 'Now remember the choice, and run the theme tests when you are done.',
   quote: noop, rewind: noop, fork: noop, selectText: noop, ...extra,
 });
+const add = (extra: Partial<AddTarget> = {}): AddTarget => ({ addFiles: noop, commands: noop, mention: noop, shell: noop, mcp: noop, mcpOn: '1 of 2 on', ...extra });
 const reply = (extra: Partial<ReplyTarget> = {}): ReplyTarget => ({
   text: 'Done. All 14 theme tests pass.', markdown: 'Done. All **14** theme tests pass.',
   sideChat: noop, quote: noop, rewind: noop, fork: noop, ...extra,
@@ -78,12 +81,13 @@ const terminal = (extra: Partial<TerminalTarget> = {}): TerminalTarget => ({
 /** Each thing with everything it can have, for the rules every list keeps. */
 const FULL = {
   session: [SESSION_ACTIONS, [session(), session({ from: 'row' }), session({ archived: true }), session({ pinned: true })]],
-  prompt: [PROMPT_ACTIONS, [prompt()]],
+  prompt: [PROMPT_ACTIONS, [prompt(), prompt({ edit: noop })]],
   reply: [REPLY_ACTIONS, [reply(), reply({ selection: 'It follows the system', sideChatOpen: true }), reply({ code: 'npm test' })]],
   step: [STEP_ACTIONS, [step(), step({ kind: 'agent', command: undefined, viewOutput: noop, stop: noop })]],
   path: [PATH_ACTIONS, [path({ changed: true, openInChanges: noop }), path({ path: 'src/styles', folder: true, openInTerminal: noop })]],
   selection: [SELECTION_ACTIONS, [selection()]],
   terminal: [TERMINAL_ACTIONS, [terminal()]],
+  add: [ADD_ACTIONS, [add()]],
 } as unknown as Record<keyof typeof ACTIONS, [readonly Action<unknown>[], unknown[]]>;
 const DEVICES: Device[] = ['pointer', 'touch'];
 const WAYS: Way[] = ['row', 'menu', 'swipe', 'command'];
@@ -104,10 +108,10 @@ describe('the session’s list', () => {
     ]);
     expect(list.find((e) => e.id === 'delete')!.danger).toBe(true);
     expect(list.find((e) => e.id === 'transcript-view')).toMatchObject({ choice: { value: 'normal' } });
-    // Desktop's keys show once they work: Side chat and Transcript view now, the others when theirs do.
-    expect(Object.fromEntries(list.filter((e) => e.key).map((e) => [e.id, e.key]))).toEqual({ 'side-chat': 'sideChat', 'transcript-view': 'transcriptView' });
-    expect(SESSION_ACTIONS.find((a) => a.id === 'rename')!.key).toBe('rename');
-    expect(SESSION_ACTIONS.find((a) => a.id === 'archive')!.key).toBe('archive');
+    // Desktop's keys, each beside what it does: Pin has none on the web, nor does anything that asks first.
+    expect(Object.fromEntries(list.filter((e) => e.key).map((e) => [e.id, e.key]))).toEqual({
+      rename: 'rename', 'side-chat': 'sideChat', fork: 'fork', 'transcript-view': 'transcriptView', archive: 'archive',
+    });
   });
 
   it('from a row of the list: the same, without the open session’s view', () => {
@@ -160,6 +164,11 @@ describe('your prompt’s list', () => {
 
   it('right-clicked on a computer, where the pointer selects: the same without Select text', () => {
     expect(menu(entries(PROMPT_ACTIONS, prompt(), 'menu', 'pointer'))).toEqual(['Copy', 'Quote', '— Rewind to here', 'Fork from here']);
+  });
+
+  it('keeps Edit, until Rewind to here gives a prompt’s words back to the box, in its menus only', () => {
+    expect(menu(entries(PROMPT_ACTIONS, prompt({ edit: noop }), 'menu', 'pointer'))).toEqual(['Copy', 'Quote', '— Edit', 'Rewind to here', 'Fork from here']);
+    for (const device of DEVICES) expect(names(entries(PROMPT_ACTIONS, prompt({ edit: noop }), 'row', device))).not.toContain('Edit');
   });
 
   it('in its row (a tap on a phone, the gutter on a computer): Copy · Rewind to here · Fork from here; a swipe quotes it', () => {
@@ -296,6 +305,19 @@ describe('the terminal’s list', () => {
     expect(menu(list)).toEqual(['Quote', 'Copy', 'Paste', 'Select all', '— Clear terminal']);
     expect(list.map((e) => e.key ?? '')).toEqual([keyWorks('quoteSelection') ? 'quoteSelection' : '', 'copy', 'paste', 'selectAll', '']);
     expect(names(entries(TERMINAL_ACTIONS, terminal({ selection: undefined }), 'menu', 'pointer'))).toEqual(['Paste', 'Select all', 'Clear terminal']);
+  });
+});
+
+describe('the message box’s +', () => {
+  it('is Desktop’s: Add files or photos · Commands · Files and agents · Shell command, then MCP servers with how many are on', () => {
+    const list = entries(ADD_ACTIONS, add(), 'menu', 'pointer');
+    expect(menu(list)).toEqual(['Add files or photos', 'Commands', 'Files and agents', 'Shell command', '— MCP servers']);
+    expect(list.map((e) => e.key ?? '')).toEqual(['addFiles', 'commands', 'mention', 'shell', '']);
+    expect(list.at(-1)).toMatchObject({ detail: '1 of 2 on', opens: true });
+  });
+
+  it('leaves out what the box cannot do: a shell command where there is none, MCP servers before a session starts', () => {
+    expect(names(entries(ADD_ACTIONS, add({ shell: undefined, mcp: undefined }), 'menu', 'touch'))).toEqual(['Add files or photos', 'Commands', 'Files and agents']);
   });
 });
 

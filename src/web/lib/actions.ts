@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Archive,
   ArchiveRestore,
+  AtSign,
   CircleStop,
   Clipboard,
   Copy,
@@ -18,7 +19,9 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plug,
   ScrollText,
+  Slash,
   SquareCode,
   SquareTerminal,
   TextCursor,
@@ -74,6 +77,10 @@ export type Action<T> = {
   iconFor?: (target: T) => LucideIcon;
   /** Desktop's web key for it (lib/keyboard), shown faintly in a menu on a computer once it works. */
   key?: Shown<T, KeyId | undefined>;
+  /** A few words after its name, faintly: how many MCP servers are on. */
+  detail?: Shown<T, string | undefined>;
+  /** It opens a sheet of its own, which a chevron says. */
+  opens?: true;
   /** Claude Code's command for it, as the / list and ⌘K show it. */
   command?: { name: string; description: string };
   /** The part of the list it is in: a computer's menu draws a rule between parts. */
@@ -102,6 +109,8 @@ export type MenuEntry = {
   icon?: LucideIcon;
   /** The key, when one works for it now. */
   key?: KeyId;
+  detail?: string;
+  opens?: boolean;
   danger?: boolean;
   /** The first of its part, after another part: under a rule on a computer. */
   rule?: boolean;
@@ -124,11 +133,14 @@ function inWay<T>(action: Action<T>, way: Way, device: Device): boolean {
 function entry<T>(action: Action<T>, target: T, device: Device): MenuEntry | undefined {
   const key = action.key === undefined ? undefined : shown(action.key, target);
   const icon = action.iconFor ? action.iconFor(target) : action.icon;
+  const detail = action.detail === undefined ? undefined : shown(action.detail, target);
   const base = {
     id: action.id,
     label: shown(action.label, target),
     ...(icon ? { icon } : {}),
     ...(key && keyWorks(key) ? { key } : {}),
+    ...(detail ? { detail } : {}),
+    ...(action.opens ? { opens: true } : {}),
     ...(action.danger ? { danger: true } : {}),
   };
   if (action.items) {
@@ -305,16 +317,23 @@ export type PromptTarget = {
   /** Its words, as they were sent. */
   text: string;
   quote?: () => void;
+  /** Edit and send again, until Rewind to here puts the words back in the box. */
+  edit?: () => void;
   rewind?: () => void;
   fork?: () => void;
   /** Lets a finger select its words, which a long press takes otherwise. */
   selectText?: () => void;
 };
 
-/** Copy · Quote · Rewind to here · Fork from here, and Select text on a phone. */
+/**
+ * Copy · Quote · Rewind to here · Fork from here, and Select text on a phone. Edit stays in the
+ * list until Rewind to here gives a prompt's words back to the box, as in Desktop (the next part
+ * of 0.5.0), and goes then.
+ */
 export const PROMPT_ACTIONS: readonly Action<PromptTarget>[] = [
   { id: 'copy', group: 'text', label: 'Copy', icon: Copy, row: true, run: (p) => copy(p.text) },
   { id: 'quote', group: 'text', label: 'Quote', icon: TextQuote, swipe: true, when: (p) => Boolean(p.quote), run: (p) => p.quote?.() },
+  { id: 'edit', group: 'turn', label: 'Edit', icon: Pencil, when: (p) => Boolean(p.edit), run: (p) => p.edit?.() },
   { id: 'rewind', group: 'turn', label: 'Rewind to here', icon: History, row: true, when: (p) => Boolean(p.rewind), run: (p) => p.rewind?.() },
   { id: 'fork', group: 'turn', label: 'Fork from here', icon: GitFork, row: true, when: (p) => Boolean(p.fork), run: (p) => p.fork?.() },
   // A computer selects with the pointer as ever; a long press on a phone takes the words' own.
@@ -469,6 +488,35 @@ export const TERMINAL_ACTIONS: readonly Action<TerminalTarget>[] = [
   { id: 'clear', group: 'clear', label: 'Clear terminal', icon: Eraser, when: (t) => Boolean(t.clear), run: (t) => t.clear?.() },
 ];
 
+/* ---------- the message box's + ---------- */
+
+/** What the message box's + can add: files, a command, a file or an agent to name, a shell command, and the session's MCP servers. */
+export type AddTarget = {
+  addFiles?: () => void;
+  /** Types / in the box, for its list of commands. */
+  commands?: () => void;
+  /** Types @, for its list of files and agents. */
+  mention?: () => void;
+  /** Types !, for a shell command. */
+  shell?: () => void;
+  mcp?: () => void;
+  /** How many of the session's MCP servers are on: "1 of 2 on". */
+  mcpOn?: string;
+};
+
+/** Desktop's +, as Pelican has it: Add files or photos · Commands · Files and agents · Shell command · MCP servers. */
+export const ADD_ACTIONS: readonly Action<AddTarget>[] = [
+  { id: 'add-files', group: 'add', label: 'Add files or photos', icon: Paperclip, key: 'addFiles', when: (t) => Boolean(t.addFiles), run: (t) => t.addFiles?.() },
+  { id: 'commands', group: 'add', label: 'Commands', icon: Slash, key: 'commands', when: (t) => Boolean(t.commands), run: (t) => t.commands?.() },
+  { id: 'mention', group: 'add', label: 'Files and agents', icon: AtSign, key: 'mention', when: (t) => Boolean(t.mention), run: (t) => t.mention?.() },
+  { id: 'shell', group: 'add', label: 'Shell command', icon: SquareTerminal, key: 'shell', when: (t) => Boolean(t.shell), run: (t) => t.shell?.() },
+  {
+    id: 'mcp', group: 'tools', label: 'MCP servers', icon: Plug, detail: (t) => t.mcpOn, opens: true,
+    command: { name: '/mcp', description: 'MCP servers' },
+    when: (t) => Boolean(t.mcp), run: (t) => t.mcp?.(),
+  },
+];
+
 /** Every thing's list, by the thing. */
 export const ACTIONS = {
   session: SESSION_ACTIONS,
@@ -478,4 +526,5 @@ export const ACTIONS = {
   path: PATH_ACTIONS,
   selection: SELECTION_ACTIONS,
   terminal: TERMINAL_ACTIONS,
+  add: ADD_ACTIONS,
 } as const;

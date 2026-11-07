@@ -75,7 +75,7 @@ describe('a list of actions on a computer', () => {
     render(<Harness list={entries(SESSION_ACTIONS, session(), 'menu', 'pointer')} />);
     openIt();
     expect(rows().map((row) => row.textContent)).toEqual([
-      'Rename', 'Pin', 'Side chatCtrl+;', 'Fork', 'Copy resume command', 'Export', 'Archive', 'Delete',
+      'RenameCtrl+Alt+R', 'Pin', 'Side chatCtrl+;', 'ForkCtrl+Alt+O', 'Copy resume command', 'Export', 'ArchiveCtrl+Alt+A', 'Delete',
     ]);
     // A rule between Pin and Side chat, Export and Archive.
     expect(theMenu().querySelectorAll('.h-px')).toHaveLength(2);
@@ -96,7 +96,7 @@ describe('a list of actions on a computer', () => {
     });
     render(<Harness list={entries(SESSION_ACTIONS, session({ rename }), 'menu', 'pointer')} />);
     const opener = openIt();
-    act(() => within(theMenu()).getByRole('menuitem', { name: 'Rename' }).click());
+    act(() => within(theMenu()).getByRole('menuitem', { name: /^Rename/ }).click());
     expect(rename).toHaveBeenCalledOnce();
     expect(seen).toEqual({ dialog: false, focus: opener });
     expect(screen.queryByRole('menu')).toBeNull();
@@ -128,11 +128,11 @@ describe('a list of actions on a computer', () => {
     expect(document.activeElement).toBe(menu);
     const key = (k: string) => act(() => fireEvent.keyDown(document.activeElement!, { key: k }));
     key('ArrowDown');
-    expect(document.activeElement!.textContent).toBe('Rename');
+    expect(document.activeElement!.textContent).toBe('RenameCtrl+Alt+R');
     key('ArrowUp');
     expect(document.activeElement!.textContent).toBe('Delete');
     key('Home');
-    expect(document.activeElement!.textContent).toBe('Rename');
+    expect(document.activeElement!.textContent).toBe('RenameCtrl+Alt+R');
     key('e');
     expect(document.activeElement!.textContent).toBe('Export');
     key('End');

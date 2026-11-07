@@ -172,9 +172,12 @@ export async function claudeCodeStatus(): Promise<{ version?: string; signedIn: 
 }
 
 const DEMO_COMMANDS: Command[] = [
-  { name: 'compact', description: 'Summarize the conversation so far to free up context', argumentHint: '' },
-  { name: 'review', description: 'Review the changes on this branch', argumentHint: '' },
-  { name: 'init', description: 'Write a CLAUDE.md for this project', argumentHint: '' },
+  { name: 'compact', description: 'Clear history but keep a summary in context', argumentHint: '', builtin: true },
+  { name: 'fork', description: 'Copy this conversation into a new background session and keep working here', argumentHint: '', builtin: true },
+  { name: 'review', description: 'Review the changes on this branch', argumentHint: '', builtin: true },
+  { name: 'init', description: 'Write a CLAUDE.md for this project', argumentHint: '', builtin: true },
+  { name: 'context', description: 'Show how full the context window is', argumentHint: '', builtin: true },
+  { name: 'ship', description: 'Run the checks, then open a pull request (project)', argumentHint: '[base branch]' },
 ];
 const DEMO_AGENTS: Agent[] = [{ name: 'code-reviewer', description: 'Reviews a change for bugs and style' }];
 
@@ -196,7 +199,7 @@ export function toCompletions(commands: SlashCommand[], agents: AgentInfo[]): Co
   return {
     commands: commands
       .filter((c) => !terminalCommands.has(c.name))
-      .map((c) => ({ name: c.name, description: c.description ?? '', argumentHint: c.argumentHint ?? '' })),
+      .map((c) => ({ name: c.name, description: c.description ?? '', argumentHint: c.argumentHint ?? '', ...(c.builtin ? { builtin: true } : {}) })),
     agents: agents.map((a) => ({ name: a.name, description: a.description ?? '' })),
   };
 }

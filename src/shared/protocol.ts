@@ -234,7 +234,8 @@ export type ModelOption = {
   resolvedModel?: string;
 };
 
-export type Command = { name: string; description: string; argumentHint: string };
+/** A slash command Claude Code offers; `builtin`: Claude Code's own, not the user's, a project's, a plugin's or a server's. */
+export type Command = { name: string; description: string; argumentHint: string; builtin?: boolean };
 
 export type RunSettings = {
   model?: string;

@@ -1,17 +1,20 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, type LucideIcon, Pin, PinOff, Plus, Search, Settings, X } from 'lucide-react';
-import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, type LucideIcon, MoreHorizontal, Pin, PinOff, Plus, Search, Settings, X } from 'lucide-react';
+import { memo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api, isUnreachable } from '../lib/api';
 import { type Entry, fold, foldKey, isActive } from '../lib/fold';
 import { dayGroup, relativeTime, timeAgo } from '../lib/format';
-import { composing, MOD_ARIA } from '../lib/keyboard';
-import { changed, changeWords, type ListChange, makeChange, undoOf } from '../lib/list-changes';
-import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
-import { useSwipeLeft } from '../lib/press';
+import { ariaKeys, composing, keyText } from '../lib/keyboard';
+import { changed, changeListed, changeWords, type Done, type ListChange, noteDone, undoOf, useDone } from '../lib/list-changes';
+import { type Prefs, saveSessionChoice, setPrefs, usePrefs, useSeen } from '../lib/prefs';
+import { type Press, useLongPress, useSwipeLeft } from '../lib/press';
+import { fromRecorded } from '../lib/settings';
 import { defaultStart, type Start } from '../lib/start';
 import { statusLabel } from '../lib/status';
+import type { MenuAnchor } from './ActionMenu';
+import { SessionMenu } from './SessionMenu';
 import { Segmented, Sheet, SheetHeading, SheetToggle } from './Sheet';
 
 /** Filter values for sessions outside projects. */
@@ -89,6 +92,14 @@ const OpenMark = () => <span aria-hidden className="absolute inset-y-2.5 left-0 
 
 type RowProps = { session: SessionSummary; selected: boolean; unread: boolean; showProject: boolean; onOpen: (id: string) => void };
 
+/**
+ * A row's time gives way to its ⋯ where that shows, on a computer: on hover, while its menu is
+ * open, or when the keyboard reaches the ⋯.
+ */
+const GIVES_WAY = 'pointer-fine:group-hover/row:invisible pointer-fine:group-has-[[data-row-menu]:focus-visible]/row:invisible pointer-fine:group-has-[[data-row-menu][aria-expanded=true]]/row:invisible';
+/** iOS shows a link's own menu on a long press: the row's is shown instead. */
+const NO_CALLOUT = { WebkitTouchCallout: 'none' } as const;
+
 const DetailedRow = memo(function DetailedRow({ session, selected, unread, showProject, onOpen }: RowProps) {
   const preview = useId();
   return (
@@ -98,13 +109,14 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
       aria-describedby={session.stopped || session.preview ? preview : undefined}
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
+      style={NO_CALLOUT}
       className={`relative block rounded-xl px-3 py-2.5 transition-colors ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
     >
       {selected && <OpenMark />}
       <div className="flex items-start gap-2">
         {unread && <span aria-label="New activity" className="mt-[7px] size-2 shrink-0 rounded-full bg-run" />}
         <div className={`line-clamp-2 min-w-0 flex-1 text-[15px] leading-snug ${unread ? 'font-semibold' : ''}`}>{session.title}</div>
-        <span className="shrink-0 pt-0.5 text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
+        <span className={`shrink-0 pt-0.5 text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
       </div>
       {/* A turn that ended on an error has no reply to show: why it stopped, quietly. */}
       {session.stopped ? (
@@ -124,12 +136,6 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
   );
 });
 
-/**
- * A compact row's project and time, which give way to its buttons where they show, on a computer:
- * the title then ends before them, never under them.
- */
-const GIVES_WAY = 'pointer-fine:group-hover/row:hidden pointer-fine:group-has-[[data-row-action]:focus-visible]/row:hidden';
-
 const CompactRow = memo(function CompactRow({ session, selected, unread, showProject, onOpen }: RowProps) {
   return (
     <a
@@ -138,12 +144,13 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       title={statusLabel(session.status, session.runningIn, session.tasks) || undefined}
-      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 pointer-fine:group-hover/row:pr-(--row-actions) pointer-fine:group-has-[[data-row-action]:focus-visible]/row:pr-(--row-actions) ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
+      style={NO_CALLOUT}
+      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
     >
       {selected && <OpenMark />}
       {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} tasks={session.tasks} />}
       <span className={`min-w-0 flex-1 truncate text-[14.5px] ${unread ? 'font-semibold' : ''}`}>{session.title}</span>
-      {showProject && <span className={`max-w-[35%] shrink-0 truncate text-[12px] text-faint ${GIVES_WAY}`}>{session.scratch ? 'Scratch' : session.project}</span>}
+      {showProject && <span className="max-w-[35%] shrink-0 truncate text-[12px] text-faint">{session.scratch ? 'Scratch' : session.project}</span>}
       {/* As wide as "11h" at least, and as a date ("Oct 25") on one line. */}
       <span className={`min-w-8 shrink-0 whitespace-nowrap text-right text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
     </a>
@@ -175,30 +182,38 @@ const FULL_PAST = 64;
 type RowAction = { label: string; icon: LucideIcon; act: () => void };
 
 /**
- * A row with its actions, reached without opening the session: Pin and Archive (Unpin and
- * Unarchive once done). Under a finger the row slides left only, as in Mail: a short slide shows
- * Pin and Archive side by side, Archive at the edge, and leaves them to a tap; a full one archives
- * when let go. A slide to the right is Safari's Back, so the row takes none, nor one that starts
- * at the screen's edge: a swipe to the left as press.ts has it, the one a reply's paragraph takes
- * to be quoted. With a mouse or the keyboard the actions are buttons on the row, shown on hover or
- * focus.
+ * A row with its actions, reached without opening the session. Under a finger it slides left only,
+ * as in Mail: a short slide shows Pin and Archive side by side, Archive at the edge, and leaves them
+ * to a tap; a full one archives when let go. A slide to the right is Safari's Back, so the row takes
+ * none, nor one that starts at the screen's edge: a swipe to the left as press.ts has it, the one a
+ * reply's paragraph takes to be quoted. A long press opens the session's menu, raised over the
+ * dimmed list; with a pointer, ⋯ in place of the time (on hover, or reached with the keyboard) and
+ * a right-click open it.
  */
-function Swipeable({ id, name, pin, archive, compact, selected, children }: {
+function Swipeable({ id, name, pin, archive, compact, menuOpen, onMenu, children }: {
   /** The session's id, which tells its row in the list. */
   id: string;
-  /** The session's title, so each row's buttons say which session they act on. */
+  /** The session's title, so each row's ⋯ says which session it is for. */
   name: string;
   /** Pin or Unpin; none for an archived session. */
   pin?: RowAction;
   /** Archive or Unarchive: what a full slide does. */
   archive: RowAction;
   compact: boolean;
-  selected: boolean;
+  /** Its menu is open. */
+  menuOpen: boolean;
+  /** Opens its menu: at the pointer, under its ⋯, or raised over the list for a finger. */
+  onMenu: (at: MenuAnchor, lift?: Element, focusFirst?: boolean) => void;
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const open = pin ? 2 * BUTTON : ALONE;
   const swipe = useSwipeLeft<HTMLDivElement>(() => act(archive), { opens: open, acts: (row) => Math.max(row.offsetWidth * FULL, open + FULL_PAST) });
+  const press = useLongPress<HTMLDivElement>((p: Press) => {
+    // A finger's press raises the row; a right-click opens at the pointer, the menu key under the row.
+    if (p.pointerType === 'touch' || p.pointerType === 'pen') onMenu(p.element, p.element);
+    else onMenu(p.pointerType === 'keyboard' ? p.element : { x: p.x, y: p.y }, undefined, p.pointerType === 'keyboard');
+  });
   // How far the row is slid, never right of its place; and whether far enough to archive when let go.
   const { dx: offset, armed: full, dragging } = swipe;
   // What lies under the row stays while the row slides back over it.
@@ -238,21 +253,27 @@ function Swipeable({ id, name, pin, archive, compact, selected, children }: {
     </button>
   );
 
-  const button = (action: RowAction) => (
-    <button
-      type="button"
-      data-row-action
-      aria-label={`${action.label}: ${name}`}
-      title={action.label}
-      onClick={action.act}
-      className="pointer-events-auto grid size-8 place-items-center rounded-full text-muted hover:text-fg"
-    >
-      <action.icon className="size-4" />
-    </button>
-  );
-
+  // The two ways in share the row's pointer: a slide left, or a press held still.
+  const both = <E extends ReactPointerEvent<HTMLDivElement>>(a: (e: E) => void, b: (e: E) => void) => (e: E) => {
+    a(e);
+    b(e);
+  };
   return (
-    <div ref={box} data-session={id} className="group/row relative" {...swipe.bind}>
+    <div
+      ref={box}
+      data-session={id}
+      className={`group/row relative ${press.className}`}
+      style={{ ...swipe.bind.style, ...press.style }}
+      onPointerDown={both(swipe.bind.onPointerDown, press.onPointerDown)}
+      onPointerMove={both(swipe.bind.onPointerMove, press.onPointerMove)}
+      onPointerUp={both(swipe.bind.onPointerUp, press.onPointerUp)}
+      onPointerCancel={both(swipe.bind.onPointerCancel, press.onPointerCancel)}
+      onContextMenu={press.onContextMenu}
+      onClickCapture={(e: ReactMouseEvent<HTMLDivElement>) => {
+        press.onClickCapture(e);
+        if (!e.isPropagationStopped()) swipe.bind.onClickCapture(e);
+      }}
+    >
       {under && (
         // Behind the row's rounded corners, the color of the button they meet.
         <div className={`absolute inset-0 flex justify-end overflow-hidden rounded-xl ${pinWidth ? 'bg-chip' : 'bg-fg'}`}>
@@ -261,31 +282,33 @@ function Swipeable({ id, name, pin, archive, compact, selected, children }: {
         </div>
       )}
       <div
-        // How far a compact row's words keep from its right edge while its buttons show: the
-        // buttons, 6px in, 32px each and 2px apart, and 6px more.
-        className={`relative rounded-xl bg-bg ${pin ? '[--row-actions:78px]' : '[--row-actions:44px]'} ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
+        className={`relative rounded-xl bg-bg ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
-        {/*
-          Shown together, on hover or when the keyboard reaches either. Over a detailed row's title
-          they stand on the row's own color, as tall as the title's first line, which fades out the
-          words they cover rather than cutting one off mid-letter.
-        */}
-        <div
-          className={`pointer-events-none absolute right-1.5 hidden items-start gap-0.5 opacity-0 group-hover/row:opacity-100 has-focus-visible:opacity-100 pointer-fine:flex ${compact
-            ? 'top-1/2 -translate-y-1/2'
-            : `top-1.5 h-[25px] rounded-r-full bg-linear-to-l from-75% to-transparent pl-6 ${selected ? 'from-chip' : 'from-bg group-hover/row:from-hover'}`}`}
+        {/* In place of the time, with a pointer: on hover, while its menu is open, or reached with the keyboard. */}
+        <button
+          type="button"
+          data-row-menu
+          aria-label={`More for ${name}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(e) => onMenu(e.currentTarget, undefined, e.detail === 0)}
+          className={`absolute right-1.5 hidden size-8 place-items-center rounded-full text-muted opacity-0 hover:bg-chip hover:text-fg focus-visible:opacity-100 group-hover/row:opacity-100 pointer-fine:grid ${menuOpen ? 'opacity-100' : ''} ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'}`}
         >
-          {pin && button(pin)}
-          {button(archive)}
-        </div>
+          <MoreHorizontal className="size-4" />
+        </button>
       </div>
     </div>
   );
 }
 
-const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: RowProps & { compact: boolean; onChange: (session: SessionSummary, change: ListChange) => void }) {
+const ListRow = memo(function ListRow({ session, compact, onChange, menuOpen, onMenu, ...row }: RowProps & {
+  compact: boolean;
+  onChange: (session: SessionSummary, change: ListChange) => void;
+  menuOpen: boolean;
+  onMenu: (session: SessionSummary, at: MenuAnchor, lift?: Element, focusFirst?: boolean) => void;
+}) {
   const Row = compact ? CompactRow : DetailedRow;
   const pin: RowAction = session.pinned
     ? { label: 'Unpin', icon: PinOff, act: () => onChange(session, { pinned: false }) }
@@ -294,7 +317,15 @@ const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: Ro
     ? { label: 'Unarchive', icon: ArchiveRestore, act: () => onChange(session, { archived: false }) }
     : { label: 'Archive', icon: Archive, act: () => onChange(session, { archived: true }) };
   return (
-    <Swipeable id={session.id} name={session.title} {...(session.archived ? {} : { pin })} archive={archive} compact={compact} selected={row.selected}>
+    <Swipeable
+      id={session.id}
+      name={session.title}
+      {...(session.archived ? {} : { pin })}
+      archive={archive}
+      compact={compact}
+      menuOpen={menuOpen}
+      onMenu={(at, lift, focusFirst) => onMenu(session, at, lift, focusFirst)}
+    >
       <Row session={session} {...row} />
     </Swipeable>
   );
@@ -401,8 +432,37 @@ function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
-/** What was just pinned or archived, or brought back, for Undo; or why it could not be. */
-type Done = { session: SessionSummary; change: ListChange; error?: string; at: number };
+/**
+ * What was just pinned or archived, or brought back, from any way in, with Undo; or why it could
+ * not be. At the foot of the list, or where the list would be while it is hidden. Always there, so
+ * a screen reader hears what lands in it.
+ */
+export function UndoLine({ className = 'absolute inset-x-0 bottom-0 z-20', onUndo, ref }: {
+  className?: string;
+  onUndo?: (done: Done) => void;
+  ref?: React.Ref<HTMLDivElement>;
+}) {
+  const done = useDone();
+  const queryClient = useQueryClient();
+  const undo = onUndo ?? ((d: Done) => void changeListed(queryClient, changed(d.session, d.change), undoOf(d.session, d.change), false).catch(() => undefined));
+  return (
+    <div ref={ref} role="status" className={`pb-safe pointer-events-none flex justify-center px-3 ${className}`}>
+      {done && (
+        <div className="animate-fade pointer-events-auto mb-2 flex min-h-11 max-w-sm items-center gap-2 rounded-2xl bg-fg py-1 pr-1 pl-4 text-[14px] leading-snug text-bg shadow-lg">
+          <span className="min-w-0 py-1.5">{done.error ?? changeWords(done.change)}</span>
+          {done.error ? (
+            <button type="button" aria-label="Dismiss" onClick={() => noteDone(undefined)} className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-bg/15"><X className="size-4" /></button>
+          ) : (
+            <button type="button" onClick={() => undo(done)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A row's menu, open: the session it is for, where it opened, and the row a finger raised. */
+type RowMenu = { session: SessionSummary; at: MenuAnchor; lift?: Element; focusFirst?: boolean; open: boolean };
 
 export function SessionList({
   machine,
@@ -410,6 +470,8 @@ export function SessionList({
   onOpen,
   onNew,
   onSettings,
+  onSideChat,
+  onGone,
   connected,
   banner,
 }: {
@@ -419,6 +481,10 @@ export function SessionList({
   /** Starts a new session there; nowhere given, the page that asks where. */
   onNew: (start?: Start) => void;
   onSettings: () => void;
+  /** Opens a session with its side chat (a row's menu's Side chat). */
+  onSideChat?: (id: string) => void;
+  /** A session was deleted from its row's menu: the page it was open in goes too. */
+  onGone?: (id: string) => void;
   connected: boolean;
   banner?: React.ReactNode;
 }) {
@@ -431,7 +497,7 @@ export function SessionList({
   const [viewOpen, setViewOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
-  const [done, setDone] = useState<Done>();
+  const [menu, setMenu] = useState<RowMenu>();
   const scroller = useRef<HTMLDivElement>(null);
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>, key: string) => set((prev) => {
     const next = new Set(prev);
@@ -462,17 +528,20 @@ export function SessionList({
   // Pinned or archived at once in the list, then on the server; put back if the server says no.
   const change = useCallback((session: SessionSummary, to: ListChange, undoable = true) => {
     keepFocus(session.id);
-    setDone(undoable ? { session, change: to, at: Date.now() } : undefined);
-    makeChange(queryClient, session, to).catch((err: Error) => {
-      keepFocus(session.id);
-      setDone({ session, change: to, error: err.message, at: Date.now() });
-    });
+    changeListed(queryClient, session, to, undoable).catch(() => keepFocus(session.id));
   }, [queryClient, keepFocus]);
-  useEffect(() => {
-    if (!done) return undefined;
-    const timer = setTimeout(() => setDone(undefined), done.error ? 8000 : 5000);
-    return () => clearTimeout(timer);
-  }, [done]);
+  const openMenu = useCallback((session: SessionSummary, at: MenuAnchor, lift?: Element, focusFirst?: boolean) => {
+    setMenu({ session, at, ...(lift ? { lift } : {}), ...(focusFirst ? { focusFirst } : {}), open: true });
+  }, []);
+  // A fork carries on with the session's settings, but Bypass, as one from its title's menu does:
+  // it starts in Manual (Claude Code's settings may start it in Bypass when it is next sent to).
+  const forked = (source: SessionSummary, id: string) => {
+    void api.session(source.id).then((detail) => {
+      if (detail.settings?.permissionMode !== 'bypassPermissions') return;
+      const models = queryClient.getQueryData<{ models?: Parameters<typeof fromRecorded>[1] }>(['models'])?.models;
+      saveSessionChoice(id, { ...fromRecorded(detail.settings, models), permissionMode: 'default' });
+    }, () => undefined).finally(() => onOpen(id));
+  };
 
   // One chip per real project; scratch sessions share one chip, and so do temporary ones,
   // which "All" leaves out unless the list's options say otherwise: they are mostly runs other sessions started.
@@ -620,8 +689,8 @@ export function SessionList({
             id="session-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            // ⌘K comes here (App); Enter opens the first match, Esc clears.
-            aria-keyshortcuts={`${MOD_ARIA}+K`}
+            // ⇧⌘K comes here (App); Enter opens the first match, Esc clears.
+            aria-keyshortcuts={ariaKeys('searchSessions')}
             onKeyDown={(e) => {
               // Keys an input method takes are its own: Esc there cancels a conversion, not the search.
               if (composing(e.nativeEvent)) return;
@@ -635,8 +704,10 @@ export function SessionList({
             }}
             placeholder="Search sessions"
             aria-label="Search sessions"
-            className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-faint"
+            className="peer min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-faint"
           />
+          {/* Its key, faintly, with a keyboard, while the field is empty and not being typed in. */}
+          {!query && keyText('searchSessions') && <span aria-hidden className="hidden shrink-0 pr-3 text-[12px] text-faint peer-focus:hidden pointer-fine:inline">{keyText('searchSessions')}</span>}
           {query && (
             <button type="button" aria-label="Clear search" onClick={() => setQuery('')} className="grid size-11 shrink-0 place-items-center rounded-xl text-faint hover:text-fg pointer-fine:size-10">
               <X className="size-4" />
@@ -704,6 +775,8 @@ export function SessionList({
                     showProject={!byProject || group.key === PINNED}
                     onOpen={openSession}
                     onChange={change}
+                    menuOpen={Boolean(menu?.open) && menu?.session.id === session.id}
+                    onMenu={openMenu}
                   />
                 );
                 if (earlier.length === 0) return row(s);
@@ -743,20 +816,34 @@ export function SessionList({
           </div>
         ))}
       </div>
-      {/* Always there, so a screen reader hears what lands in it. */}
-      <div ref={toast} role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
-        {done && (
-          <div className="animate-fade pointer-events-auto mb-2 flex min-h-11 max-w-sm items-center gap-2 rounded-2xl bg-fg py-1 pr-1 pl-4 text-[14px] leading-snug text-bg shadow-lg">
-            <span className="min-w-0 py-1.5">{done.error ?? changeWords(done.change)}</span>
-            {done.error ? (
-              <button type="button" aria-label="Dismiss" onClick={() => setDone(undefined)} className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-bg/15"><X className="size-4" /></button>
-            ) : (
-              <button type="button" onClick={() => change(changed(done.session, done.change), undoOf(done.session, done.change), false)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
-            )}
-          </div>
-        )}
-      </div>
+      <UndoLine ref={toast} onUndo={(d) => change(changed(d.session, d.change), undoOf(d.session, d.change), false)} />
       <ListViewSheet open={viewOpen} onClose={() => setViewOpen(false)} />
+      {/* Kept once opened: Rename and Delete ask in sheets of their own after it has closed. */}
+      {menu && (
+        <SessionMenu
+          key={menu.session.id}
+          open={menu.open}
+          onClose={() => setMenu((was) => was && { ...was, open: false })}
+          sessionId={menu.session.id}
+          session={menu.session}
+          from="row"
+          at={menu.at}
+          {...(menu.lift ? { lift: menu.lift } : {})}
+          focusFirst={Boolean(menu.focusFirst)}
+          cwd={menu.session.cwd}
+          busy={menu.session.status === 'running'}
+          {...(onSideChat && !menu.session.sideChatOf ? { onSideChat: () => onSideChat(menu.session.id) } : {})}
+          onForked={(id) => forked(menu.session, id)}
+          onPin={(pinned) => change(menu.session, { pinned })}
+          onArchive={(archived) => change(menu.session, { archived })}
+          onRenamed={() => void queryClient.invalidateQueries({ queryKey: ['sessions'] })}
+          onDeleted={() => {
+            void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+            onGone?.(menu.session.id);
+          }}
+          onProblem={(problem) => noteDone({ session: menu.session, change: { pinned: Boolean(menu.session.pinned) }, error: problem.text, at: Date.now() })}
+        />
+      )}
     </div>
   );
 }

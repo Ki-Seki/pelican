@@ -1,4 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 
 import type { SessionSummary } from '../../shared/protocol';
 import { api } from './api';
@@ -59,4 +60,42 @@ export async function makeChange(queryClient: QueryClient, session: SessionSumma
     void queryClient.invalidateQueries({ queryKey: ['sessions'] });
     void queryClient.invalidateQueries({ queryKey: detail });
   }
+}
+
+/** What was just pinned or archived, or brought back, for Undo; or why it could not be. */
+export type Done = { session: SessionSummary; change: ListChange; error?: string; at: number };
+
+let done: Done | undefined;
+let doneTimer: ReturnType<typeof setTimeout> | undefined;
+const doneListeners = new Set<() => void>();
+
+/** Says what was done, for the list's line with Undo, until it has been there a while (an error longer). */
+export function noteDone(next: Done | undefined): void {
+  done = next;
+  clearTimeout(doneTimer);
+  if (next) doneTimer = setTimeout(() => noteDone(undefined), next.error ? 8000 : 5000);
+  for (const listener of doneListeners) listener();
+}
+
+export function useDone(): Done | undefined {
+  return useSyncExternalStore(
+    (listener) => {
+      doneListeners.add(listener);
+      return () => doneListeners.delete(listener);
+    },
+    () => done,
+  );
+}
+
+/**
+ * Pins or archives a session, or brings it back, from any way in (its row, its swipe, its menu,
+ * its title's menu, a key): at once in the list, then on the server, with Undo on the list's line,
+ * or the reason it could not be.
+ */
+export function changeListed(queryClient: QueryClient, session: SessionSummary, to: ListChange, undoable = true): Promise<void> {
+  noteDone(undoable ? { session, change: to, at: Date.now() } : undefined);
+  return makeChange(queryClient, session, to).catch((err: Error) => {
+    noteDone({ session, change: to, error: err.message, at: Date.now() });
+    throw err;
+  });
 }

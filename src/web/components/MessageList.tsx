@@ -1,11 +1,18 @@
-import { ArrowDown, Brain, ChevronRight, Copy, FileDiff, History, Layers, Loader2, Paperclip, Pencil, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizontal, Paperclip, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
 import { api, apiUrl } from '../lib/api';
+import { modelName } from '../../shared/usage';
+import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget } from '../lib/actions';
+import { addWaiting } from '../lib/drafts';
+import { announce } from '../lib/announce';
 import { clockTime, dayLabel, duration } from '../lib/format';
 import { newId } from '../lib/ids';
-import { composing } from '../lib/keyboard';
+import { composing, hasKeyboard } from '../lib/keyboard';
+import { useMedia } from '../lib/media';
+import { type Press, useLongPress, useRightClick } from '../lib/press';
+import { quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
 import { promptBefore } from '../lib/next-steps';
 import { usePathLinks } from '../lib/path-links';
 import type { ViewMode } from '../lib/prefs';
@@ -16,8 +23,9 @@ import { InReply } from '../lib/terminals';
 import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
-import { CopyButton, loadsInPlace, Markdown, RemoteImage } from './Markdown';
-import { PromptBody, SelectionActions, SwipeQuote } from './Quotes';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
+import { loadsInPlace, Markdown, RemoteImage } from './Markdown';
+import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { sentFilesOf, ToolCallView, ToolTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
@@ -102,30 +110,14 @@ function Steps({ parts, cwd, running, view }: { parts: Part[]; cwd?: string; run
   );
 }
 
-function TurnFooter({ text, timestamp, stats }: { text?: string; timestamp?: number; stats?: RunState['lastTurn'] }) {
-  return (
-    <div className="-ml-1.5 flex h-7 items-center gap-1 text-[11px] text-faint opacity-0 transition-opacity select-none group-focus-within/turn:opacity-100 group-hover/turn:opacity-100 [@media(hover:none)]:opacity-100">
-      {text && <CopyButton text={text} />}
-      {timestamp && <span>{clockTime(timestamp)}</span>}
-      {stats && (
-        <span className="tabular-nums">
-          · {duration(stats.durationMs)}
-          {stats.outputTokens ? ` · ${stats.outputTokens >= 1000 ? `${(stats.outputTokens / 1000).toFixed(1)}k` : stats.outputTokens} tokens out` : ''}
-          {stats.costUsd ? ` · $${stats.costUsd.toFixed(2)}` : ''}
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** Under a turn that changed files: how many, with the lines, opening that turn's changes. */
-function TurnFiles({ turn }: { turn: TurnChanges }) {
+function TurnFiles({ turn, inline = false }: { turn: TurnChanges; inline?: boolean }) {
   const openTurn = usePathLinks()?.openTurn;
   if (!openTurn) return null;
   const added = turn.files.reduce((sum, f) => sum + f.added, 0);
   const removed = turn.files.reduce((sum, f) => sum + f.removed, 0);
   return (
-    <button type="button" onClick={() => openTurn(turn.uuid)} className="-mt-2 flex min-h-8 items-center gap-1.5 rounded-md text-[12.5px] text-muted hover:text-fg">
+    <button type="button" onClick={() => openTurn(turn.uuid)} className={`flex items-center gap-1.5 rounded-md text-[12.5px] text-muted hover:text-fg ${inline ? 'relative min-h-9 after:absolute after:-inset-y-1 after:inset-x-0' : '-mt-2 min-h-8'}`}>
       <FileDiff className="size-3.5 shrink-0" />
       <span>{turn.files.length === 1 ? '1 file changed' : `${turn.files.length} files changed`}</span>
       {added > 0 && <span className="font-mono text-[11.5px] text-add">+{added}</span>}
@@ -140,16 +132,122 @@ function TurnFiles({ turn }: { turn: TurnChanges }) {
 const PromptHeading = () => <h5 className="sr-only">You said:</h5>;
 const TurnHeading = () => <h6 className="sr-only">Claude said:</h6>;
 
+/** A menu on a thing in the conversation, where it was asked for: at the pointer, under a button, or raised for a finger. */
+type MenuAt = { at: MenuAnchor; lift?: Element; keys?: boolean };
+
+/** Where a press opens a thing's menu: a finger's raises the thing, a right-click opens at the pointer, the menu key under it. */
+const menuAt = (press: Press, lift?: Element): MenuAt => (press.pointerType === 'touch' || press.pointerType === 'pen'
+  ? { at: press.element, lift: lift ?? press.element }
+  : press.pointerType === 'keyboard' ? { at: press.element, keys: true } : { at: { x: press.x, y: press.y } });
+
+/** Links and pictures keep the browser's own menu. */
+const browsersOwn = (target: Element) => Boolean(target.closest('a[href]:not([data-path-link]), img, video, audio'));
+
+/** A quiet icon button in a row of actions: 44 px under a finger. */
+const ROW_BUTTON = 'relative grid size-7 place-items-center rounded-md text-faint hover:bg-hover hover:text-fg after:absolute after:-inset-1.5 [@media(hover:none)]:size-9 [@media(hover:none)]:after:-inset-1';
+
+/** A row of a thing's own actions, as icons with their names in tooltips. */
+function IconRow({ list, className = '' }: { list: MenuEntry[]; className?: string }) {
+  return (
+    <>
+      {list.map((entry) => entry.icon && 'run' in entry && (
+        <button key={entry.id} type="button" aria-label={entry.label} title={entry.label} onClick={entry.run} className={`${ROW_BUTTON} ${className}`}>
+          <entry.icon className="size-3.5" />
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** Where a turn ends, quietly: the turn's model, its time, and the last turn's figures. */
+function figures(model: string | undefined, timestamp: number | undefined, stats: RunState['lastTurn'] | undefined, withTime: boolean): string[] {
+  return [
+    model ? modelName(model) : '',
+    withTime && timestamp ? clockTime(timestamp) : '',
+    stats ? duration(stats.durationMs) : '',
+    stats?.outputTokens ? `${stats.outputTokens >= 1000 ? `${(stats.outputTokens / 1000).toFixed(1)}k` : stats.outputTokens} tokens out` : '',
+    stats?.costUsd ? `$${stats.costUsd.toFixed(2)}` : '',
+  ].filter(Boolean);
+}
+
 const AssistantTurn = memo(function AssistantTurn({
-  item, cwd, running, view, stats,
-}: { item: Extract<Item, { kind: 'assistant' }>; cwd?: string; running: boolean; view: ViewMode; stats?: RunState['lastTurn'] }) {
+  item, cwd, running, view, stats, changed, onRewind, onFork,
+}: {
+  item: Extract<Item, { kind: 'assistant' }>;
+  cwd?: string;
+  running: boolean;
+  view: ViewMode;
+  stats?: RunState['lastTurn'];
+  /** What the turn changed in files: at the end of its row on a phone, under it on a computer. */
+  changed?: TurnChanges;
+  /** Rewind to here and Fork from here, which act on the turn's prompt, as Desktop's message menu does. */
+  onRewind?: () => void;
+  onFork?: () => void;
+}) {
   // Claude's thinking shows from the Thinking view on, as in Desktop.
   const segments = useMemo(() => segment(view === 'normal' ? item.parts.filter((p) => p.kind !== 'thinking') : item.parts), [item.parts, view]);
   const texts = item.parts.filter((p): p is Extract<Part, { kind: 'text' }> => p.kind === 'text');
-  const lastText = texts.at(-1);
+  const target = useContext(QuoteTargetContext);
+  const box = useRef<HTMLDivElement>(null);
+  const touch = useMedia('(hover: none)');
+  const [menu, setMenu] = useState<MenuAt & { selection?: string; code?: string }>();
+
+  // The reply as it reads, from its words on the page; as Claude wrote it, its Markdown.
+  const reads = () => [...(box.current?.querySelectorAll<HTMLElement>('[data-reply-text]') ?? [])].map((el) => el.innerText.trim()).filter(Boolean).join('\n\n');
+  const markdown = texts.map((t) => t.text).join('\n\n');
+  const quote = (passage: string) => {
+    if (!target) return;
+    const quoted = quoteItem(passage, { what: target.side ? 'side' : 'reply', key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) });
+    if (!quoted) return;
+    if (addWaiting(target.chat, quoted)) announce('Quoted in your message');
+    else announce(TOO_MANY_REPLIES);
+  };
+  const replyTarget = (selection?: string, code?: string): ReplyTarget => ({
+    get text() {
+      return reads() || markdown;
+    },
+    markdown,
+    ...(selection ? { selection } : {}),
+    ...(code ? { code } : {}),
+    ...(target?.sideChat ? {
+      sideChatOpen: target.sideChat.open,
+      sideChat: (passage?: string) => {
+        const quoted = quoteItem(passage || reads() || markdown, { what: 'reply', key: item.key });
+        if (quoted) target.sideChat?.start(quoted);
+      },
+    } : {}),
+    ...(target ? { quote } : {}),
+    ...(onRewind ? { rewind: onRewind } : {}),
+    ...(onFork ? { fork: onFork } : {}),
+  });
+
+  // A right-click puts what was clicked first: a selection in the reply, a code block; a path has
+  // its own menu, and links and pictures keep the browser's.
+  const right = useRightClick<HTMLDivElement>((press) => {
+    const chosen = typeof getSelection === 'function' ? getSelection() : null;
+    const inside = Boolean(chosen && !chosen.isCollapsed && chosen.anchorNode && box.current?.contains(chosen.anchorNode));
+    const selection = inside ? chosen!.toString().trim() : undefined;
+    const code = press.target.closest('pre')?.textContent ?? undefined;
+    setMenu({ ...menuAt(press), ...(selection ? { selection } : {}), ...(code ? { code } : {}) });
+  }, browsersOwn);
+
+  const device = touch ? 'touch' : 'pointer';
+  const list = menu ? entries(REPLY_ACTIONS, replyTarget(menu.selection, menu.code), 'menu', device) : [];
+  const row = entries(REPLY_ACTIONS, replyTarget(), 'row', device);
+  const more = useRef<HTMLButtonElement>(null);
+  const said = figures(item.model, item.timestamp, stats, !touch);
 
   return (
-    <div className="group/turn" data-quotable data-quote-from={item.key} data-quote-what="reply" {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})}>
+    <div
+      ref={box}
+      className="group/turn"
+      data-quotable
+      data-quote-from={item.key}
+      data-quote-what="reply"
+      {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})}
+      onPointerDown={right.onPointerDown}
+      onContextMenu={right.onContextMenu}
+    >
       <TurnHeading />
       {segments.map((seg) =>
         seg.kind === 'steps' ? (
@@ -159,7 +257,7 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.kind === 'text' ? (
           // A paragraph swiped to the left is quoted (a phone's swipe to reply); a shell command in
           // Claude's own words can be run in the terminal.
-          <SwipeQuote key={seg.key}><InReply.Provider value><Markdown text={seg.text} className="my-2" /></InReply.Provider></SwipeQuote>
+          <SwipeQuote key={seg.key}><InReply.Provider value><div data-reply-text><Markdown text={seg.text} className="my-2" /></div></InReply.Provider></SwipeQuote>
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
@@ -168,11 +266,40 @@ const AssistantTurn = memo(function AssistantTurn({
           </button>
         ),
       )}
-      {!running && lastText && <TurnFooter text={lastText.text} timestamp={item.timestamp} stats={stats} />}
+      {!running && texts.length > 0 && (
+        // Always there on a phone; with a pointer on hover or focus, in room kept for it, so nothing moves.
+        <div className={`-ml-1.5 flex min-h-7 items-center gap-0.5 text-[11.5px] text-faint ${menu ? '' : '[@media(hover:hover)]:opacity-0'} [@media(hover:hover)]:transition-opacity [@media(hover:hover)]:group-focus-within/turn:opacity-100 [@media(hover:hover)]:group-hover/turn:opacity-100 [@media(hover:none)]:min-h-9`}>
+          <IconRow list={row} />
+          <button
+            ref={more}
+            type="button"
+            aria-label="More for Claude’s reply"
+            title="More"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(menu)}
+            onClick={(e) => setMenu({ at: e.currentTarget, ...(e.detail === 0 ? { keys: true } : {}) })}
+            className={ROW_BUTTON}
+          >
+            <MoreHorizontal className="size-3.5" />
+          </button>
+          {/* The model and the time; the last turn's figures are in its menu. */}
+          <span className="ml-1 truncate tabular-nums">{touch ? (item.timestamp ? clockTime(item.timestamp) : '') : [item.model ? modelName(item.model) : '', item.timestamp ? clockTime(item.timestamp) : ''].filter(Boolean).join(' · ')}</span>
+          {touch && changed && <span className="ml-auto pl-2"><TurnFiles turn={changed} inline /></span>}
+        </div>
+      )}
+      <ActionMenu
+        open={Boolean(menu)}
+        onClose={() => setMenu(undefined)}
+        label="Claude’s reply"
+        title={`Claude’s reply${item.timestamp ? ` · ${clockTime(item.timestamp)}` : ''}`}
+        entries={list}
+        at={menu?.at ?? null}
+        focusFirst={Boolean(menu?.keys)}
+        {...(said.length > 0 ? { footer: touch ? said.filter((part) => part !== (item.timestamp ? clockTime(item.timestamp) : '')).join(' · ') : said.join(' · ') } : {})}
+      />
     </div>
   );
 });
-
 
 /** A file that went with a prompt; once the prompt is written down, a tap opens it. */
 function FileChip({ file }: { file: SentFile }) {
@@ -186,7 +313,15 @@ function FileChip({ file }: { file: SentFile }) {
  * A prompt's words, selectable like any text. Past about twelve lines (a pasted log, a file) it
  * folds, with a way to read it all. On a touch screen a tap shows the prompt's actions.
  */
-function PromptText({ text, command, onTap, source }: { text: string; command: boolean; onTap: () => void; source: { key: string; at?: number } }) {
+function PromptText({ text, command, onTap, source, press, bubble }: {
+  text: string;
+  command: boolean;
+  onTap: () => void;
+  source: { key: string; at?: number };
+  /** A long press and a right-click open the prompt's list. */
+  press: ReturnType<typeof useLongPress<HTMLDivElement>>;
+  bubble: React.RefObject<HTMLDivElement | null>;
+}) {
   const body = useRef<HTMLDivElement>(null);
   const [all, setAll] = useState(false);
   const [long, setLong] = useState(false);
@@ -204,6 +339,8 @@ function PromptText({ text, command, onTap, source }: { text: string; command: b
   }, [foldable, all, text]);
   return (
     <div
+      ref={bubble}
+      {...press}
       onClick={() => {
         // A tap, not the end of selecting some of it.
         if (matches('(hover: none)') && !getSelection()?.toString()) onTap();
@@ -212,7 +349,7 @@ function PromptText({ text, command, onTap, source }: { text: string; command: b
       data-quote-from={source.key}
       data-quote-what="prompt"
       {...(source.at ? { 'data-quote-at': source.at } : {})}
-      className={`max-w-full rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'}`}
+      className={`max-w-full rounded-2xl bg-chip px-3.5 py-2 break-words ${command ? 'font-mono text-[13px]' : 'text-[15px] leading-relaxed'} ${press.className}`}
     >
       <div
         ref={body}
@@ -237,27 +374,47 @@ function PromptText({ text, command, onTap, source }: { text: string; command: b
   );
 }
 
-// The prompt's actions: with a pointer, quiet icons that show on hover or focus and keep their
-// row; on a touch screen, labelled pills a finger can hit, laid out only once the prompt is tapped,
-// so a prompt sits as close to its answer as any other item.
-const ACTION = 'flex h-7 items-center gap-1.5 rounded-md px-1.5 hover:bg-hover hover:text-fg [@media(hover:none)]:relative [@media(hover:none)]:h-9 [@media(hover:none)]:rounded-full [@media(hover:none)]:px-3 [@media(hover:none)]:text-[12.5px] [@media(hover:none)]:text-muted [@media(hover:none)]:after:absolute [@media(hover:none)]:after:-inset-y-1 [@media(hover:none)]:active:bg-hover';
-const LABEL = '[@media(hover:hover)]:sr-only';
-const ROW_HIDDEN = 'pointer-events-none opacity-0 group-hover/user:pointer-events-auto group-hover/user:opacity-100 group-focus-within/user:pointer-events-auto group-focus-within/user:opacity-100 [@media(hover:none)]:sr-only [@media(hover:none)]:focus-within:not-sr-only';
+// The prompt's actions under a finger: labelled pills, laid out only once the prompt is tapped, so a
+// prompt sits as close to its answer as any other item.
+const PILL = 'relative flex h-9 items-center gap-1.5 rounded-full px-3 text-[12.5px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 active:bg-hover';
 
 const UserBubble = memo(function UserBubble({
-  item, last, onEdit, onRewind,
+  item, last, onEdit, onRewind, onFork,
 }: {
   item: Extract<Item, { kind: 'user' }>;
   /** The newest prompt: an edit replaces it here instead of branching. */
   last: boolean;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
+  /** Fork from here: a new session up to just before it, its words in that session's box. */
+  onFork?: (prompt: Extract<Item, { kind: 'user' }>) => void;
 }) {
   const [actions, setActions] = useState(false);
   // The id of an edit in progress, made once when the editor opens: sending twice (a retry after
   // a lost answer) gets the same branch, not a second one.
   const [editing, setEditing] = useState<string>();
+  const [menu, setMenu] = useState<MenuAt>();
+  // Select text, picked under a finger: its words take the system's own long press again.
+  const [selectable, setSelectable] = useState(false);
+  const bubble = useRef<HTMLDivElement>(null);
+  const target = useContext(QuoteTargetContext);
+  const touch = useMedia('(hover: none)');
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
+  const ready = !item.pending;
+  const press = useLongPress<HTMLDivElement>((p) => ready && setMenu(menuAt(p)), { enabled: ready && !selectable, nativeMenu: browsersOwn, selectable });
+  // Gone (a tap elsewhere took the selection), its words are a prompt's again, a long press its list.
+  useEffect(() => {
+    if (!selectable) return undefined;
+    const onChange = () => {
+      const now = getSelection();
+      if (!now || now.isCollapsed || !bubble.current?.contains(now.anchorNode)) setSelectable(false);
+    };
+    const timer = setTimeout(() => document.addEventListener('selectionchange', onChange), 300);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('selectionchange', onChange);
+    };
+  }, [selectable]);
   if (editing && onEdit) {
     return (
       <EditPrompt
@@ -272,9 +429,41 @@ const UserBubble = memo(function UserBubble({
       />
     );
   }
-  // A message still on its way has no actions, and hidden actions take no taps: a tap meant for
-  // the composer or the list must never land on one (Edit makes a branch).
-  const shown = actions && !item.pending;
+  const from = { what: 'prompt' as const, key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) };
+  const prompt: PromptTarget = {
+    text,
+    ...(target ? {
+      quote: () => {
+        const quoted = quoteItem(text, from);
+        if (quoted && addWaiting(target.chat, quoted)) announce('Quoted in your message');
+        else if (quoted) announce(TOO_MANY_REPLIES);
+      },
+    } : {}),
+    ...(onEdit && !item.command ? {
+      edit: () => {
+        setActions(false);
+        setEditing(newId());
+      },
+    } : {}),
+    ...(onRewind && !item.command ? { rewind: () => onRewind(item.key) } : {}),
+    ...(onFork && !item.command ? { fork: () => onFork(item) } : {}),
+    selectText: () => {
+      setSelectable(true);
+      // The words selected whole, with the system's handles, for the selection's own actions.
+      requestAnimationFrame(() => {
+        const el = bubble.current?.firstElementChild;
+        const selection = getSelection();
+        if (!el || !selection) return;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+    },
+  };
+  const device = touch ? 'touch' : 'pointer';
+  const row = ready ? entries(PROMPT_ACTIONS, prompt, 'row', device) : [];
+  const list = menu ? entries(PROMPT_ACTIONS, prompt, 'menu', device) : [];
   return (
     <div className={`group/user flex flex-col items-end gap-1.5 pt-2 ${item.pending ? 'opacity-60' : ''}`}>
       <PromptHeading />
@@ -293,39 +482,42 @@ const UserBubble = memo(function UserBubble({
         </div>
       )}
       {text && (
-        // Swiped to the left, it is quoted.
-        <SwipeQuote whole={{ from: () => ({ what: 'prompt', key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }) }} className="flex max-w-[85%] flex-col items-end">
-          <PromptText text={text} command={Boolean(item.command)} onTap={() => !item.pending && setActions((v) => !v)} source={{ key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) }} />
+        // Swiped to the left, it is quoted. With a pointer its actions show in the empty gutter
+        // beside it, on hover or focus, adding no height.
+        <SwipeQuote whole={{ from: () => from }} className="relative flex max-w-[85%] flex-col items-end">
+          {!touch && row.length > 0 && (
+            <div className="pointer-events-none absolute top-1 right-full mr-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/user:pointer-events-auto group-focus-within/user:opacity-100 group-hover/user:pointer-events-auto group-hover/user:opacity-100">
+              <IconRow list={row} />
+            </div>
+          )}
+          <PromptText text={text} command={Boolean(item.command)} onTap={() => ready && setActions((v) => !v)} source={from} press={press} bubble={bubble} />
         </SwipeQuote>
       )}
       {item.pending ? (
         <div className="text-[11px] text-faint">{item.queued ? 'Queued · sent when this turn ends' : 'Sending…'}</div>
-      ) : text && (
-        <div className={`flex items-center gap-0.5 text-[11px] text-faint transition-opacity [@media(hover:none)]:gap-1 ${shown ? '' : ROW_HIDDEN}`}>
-          {item.timestamp && <span className="mr-1">{clockTime(item.timestamp)}{item.steered ? ' · while Claude worked' : ''}</span>}
-          <button type="button" title="Copy" className={ACTION} onClick={() => void navigator.clipboard?.writeText(text)}>
-            <Copy className="size-3.5" /><span className={LABEL}>Copy</span>
-          </button>
-          {onEdit && !item.command && (
-            <button
-              type="button"
-              title={last ? 'Edit and send again, in place of this prompt' : 'Edit and send again, as a new branch'}
-              className={ACTION}
-              onClick={() => {
-                setActions(false);
-                setEditing(newId());
-              }}
-            >
-              <Pencil className="size-3.5" /><span className={LABEL}>Edit</span>
+      ) : text && touch && actions && (
+        // A tap shows them, labelled; its long press's sheet says when it was sent.
+        <div className="flex flex-wrap items-center justify-end gap-1 text-[11px] text-faint">
+          {row.map((entry) => entry.icon && 'run' in entry && (
+            <button key={entry.id} type="button" onClick={() => {
+              setActions(false);
+              entry.run();
+            }} className={PILL}>
+              <entry.icon className="size-3.5" />{entry.label}
             </button>
-          )}
-          {onRewind && !item.command && (
-            <button type="button" title="Rewind code: put files back the way they were before this prompt" className={ACTION} onClick={() => onRewind(item.key)}>
-              <History className="size-3.5" /><span className={LABEL}>Rewind</span>
-            </button>
-          )}
+          ))}
         </div>
       )}
+      <ActionMenu
+        open={Boolean(menu)}
+        onClose={() => setMenu(undefined)}
+        label="Your message"
+        title={`Your message${item.timestamp ? ` · ${clockTime(item.timestamp)}` : ''}${item.steered ? ' · while Claude worked' : ''}`}
+        entries={list}
+        at={menu?.at ?? null}
+        focusFirst={Boolean(menu?.keys)}
+        {...(menu?.lift ? { lift: menu.lift } : {})}
+      />
     </div>
   );
 });
@@ -731,7 +923,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind, onRetry, onCompact,
+  sessionId, view, cwd, machine, mode, onEdit, onRewind, onFork, onForkReply, onRetry, onCompact,
 }: {
   sessionId: string;
   view: SessionView;
@@ -741,11 +933,17 @@ export function MessageList({
   mode: ViewMode;
   onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
   onRewind?: (uuid: string) => void;
+  /** Fork from a prompt: a new session up to just before it, its words in that session's box. */
+  onFork?: (prompt: Extract<Item, { kind: 'user' }>) => void;
+  /** Fork from a reply: a new session up to the end of it (`upTo`, its last message). */
+  onForkReply?: (upTo: string) => void;
   /** The next step on an API error that ends the conversation: send its prompt again, or /compact. */
   onRetry?: (prompt: Extract<Item, { kind: 'user' }>) => void;
   onCompact?: () => void;
 }) {
   const items = useMemo(() => buildItems(view.messages, machine), [view.messages, machine]);
+  // Under a finger, a turn's "files changed" ends its row; with a pointer it sits under the turn.
+  const touchScreen = useMedia('(hover: none)');
   // A `!` command shows live until its record replaces it, under the same id.
   const shells = useLiveShells(sessionId);
   const live = useMemo(() => new Set(shells.map((shell) => shell.id)), [shells]);
@@ -919,12 +1117,15 @@ export function MessageList({
             {items.map((item, at) => {
               switch (item.kind) {
                 case 'user':
-                  return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} />;
+                  return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} {...(onFork ? { onFork } : {})} />;
                 case 'shell':
                   return live.has(item.key) ? null : <ShellItem key={item.key} item={item} sessionId={sessionId} />;
                 case 'assistant': {
                   const running = busy && item.key === lastAssistant;
                   const changed = running ? undefined : changedUnder.get(item.key);
+                  // The turn's prompt, which its Rewind to here acts on; its own end, which Fork from here keeps.
+                  const prompt = onRewind ? promptBefore(items, at) : undefined;
+                  const end = item.parts.at(-1)?.key.split(':')[0];
                   return (
                     <Fragment key={item.key}>
                       <AssistantTurn
@@ -932,9 +1133,12 @@ export function MessageList({
                         cwd={cwd}
                         view={mode}
                         running={running}
+                        {...(changed ? { changed } : {})}
+                        {...(prompt && !prompt.command && onRewind ? { onRewind: () => onRewind(prompt.key) } : {})}
+                        {...(end && onForkReply && !running ? { onFork: () => onForkReply(end) } : {})}
                         {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
                       />
-                      {changed && <TurnFiles turn={changed} />}
+                      {changed && !touchScreen && <TurnFiles turn={changed} />}
                     </Fragment>
                   );
                 }

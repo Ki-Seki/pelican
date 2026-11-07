@@ -551,10 +551,117 @@ describe('/btw', () => {
 
   it('in the side chat itself only says what the rest is', () => {
     const { onSend, box } = renderComposer('b2', { side: true });
-    expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Permission mode' })).toBeNull();
     fireEvent.change(box, { target: { value: '/btw what does it read?' } });
     fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
     expect(onSend).toHaveBeenCalledWith('what does it read?', [], 'steer');
+  });
+});
+
+describe('the message box’s +', () => {
+  const plus = async (extra: { onShell?: (command: string) => void; mcp?: boolean } = {}) => {
+    const { api } = await import('../src/web/lib/api');
+    vi.spyOn(api, 'mcp').mockResolvedValue({ servers: [{ name: 'github', status: 'connected', tools: 26 }, { name: 'linear', status: 'needs-auth', tools: 0 }], live: false });
+    const onMcp = vi.fn();
+    const onSend = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Composer
+          busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={() => {}} draftKey="plus"
+          {...(extra.onShell ? { onShell: extra.onShell } : {})}
+          {...(extra.mcp ? { mcpSession: 's1', onMcp } : {})}
+        />
+      </QueryClientProvider>,
+    );
+    const box = screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
+    return { box, onMcp, onSend, open: () => fireEvent.click(screen.getByRole('button', { name: 'Add' })) };
+  };
+
+  it('is Desktop’s: Add files or photos · Commands · Files and agents · Shell command, then MCP servers with how many are on', async () => {
+    media = { [COMPUTER]: true };
+    const { open, onMcp } = await plus({ onShell: () => {}, mcp: true });
+    open();
+    const menu = screen.getByRole('menu', { name: 'Add' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Add files or photosCtrl+U', 'Commands/', 'Files and agents@', 'Shell command!', expect.stringMatching(/^MCP servers/),
+    ]);
+    await waitFor(() => expect(within(menu).getByRole('menuitem', { name: /^MCP servers/ }).textContent).toBe('MCP servers1 of 2 on'));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /^MCP servers/ }));
+    expect(onMcp).toHaveBeenCalled();
+  });
+
+  it('types what opens the box’s lists: / for commands, @ for files and agents, ! for a shell command', async () => {
+    const { box, open } = await plus({ onShell: () => {} });
+    open();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Commands/ }));
+    expect(box.value).toBe('/');
+    fireEvent.change(box, { target: { value: 'look at' } });
+    open();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Files and agents/ }));
+    expect(box.value).toBe('look at @');
+    fireEvent.change(box, { target: { value: 'ls src' } });
+    open();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Shell command/ }));
+    expect(box.value).toBe('!ls src');
+  });
+
+  it('opens the file picker with Add files or photos, and with ⌘U', async () => {
+    const { open } = await plus();
+    const picker = document.querySelector<HTMLInputElement>('input[type=file]')!;
+    const click = vi.spyOn(picker, 'click').mockImplementation(() => {});
+    open();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Add files or photos/ }));
+    expect(click).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(window, { key: 'u', code: 'KeyU', ctrlKey: true });
+    expect(click).toHaveBeenCalledTimes(2);
+    // Shell command is there only where the box runs one; MCP servers once the session has started.
+    open();
+    expect(screen.queryByRole('menuitem', { name: /^Shell command/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /^MCP servers/ })).toBeNull();
+  });
+});
+
+describe('the / list', () => {
+  it('has the page’s and the chat’s commands by Claude Code’s names, then Claude Code’s; one typed whole is done, not sent', async () => {
+    const { api } = await import('../src/web/lib/api');
+    vi.spyOn(api, 'completions').mockResolvedValue({ commands: [{ name: 'compact', description: 'Clear history but keep a summary in context', argumentHint: '', builtin: true }], agents: [] });
+    const { useCommandPart, forgetCommands } = await import('../src/web/lib/commands');
+    const rename = vi.fn();
+    const items = [
+      { id: 'rename', group: 'session' as const, label: 'Rename', name: 'rename', description: 'Rename this session', run: rename },
+      { id: 'pin', group: 'pelican' as const, label: 'Pin', run: vi.fn() },
+    ];
+    function Chat() {
+      useCommandPart('chat', items);
+      return null;
+    }
+    const onSend = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Chat />
+        <Composer busy={false} settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={() => {}} draftKey="slash" cwd="/code/app" />
+      </QueryClientProvider>,
+    );
+    const box = screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: '/' } });
+    await screen.findByRole('option', { name: /\/compact/ });
+    const list = screen.getByRole('listbox', { name: 'Commands' });
+    expect(within(list).getAllByRole('option').map((o) => o.textContent)).toEqual(['/renameRename this session', 'Pin', '/compactClear history but keep a summary in context']);
+    expect([...list.querySelectorAll('[role=presentation] > div')].map((h) => h.textContent)).toEqual(['This session', 'Pelican actions', 'Claude Code']);
+    // Picked, one that needs no words is done at once, and what was typed for it goes.
+    fireEvent.click(within(list).getByRole('option', { name: /\/rename/ }));
+    expect(rename).toHaveBeenCalledWith('');
+    expect(box.value).toBe('');
+    // Typed whole, with its words.
+    fireEvent.change(box, { target: { value: '/rename Faster exports' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13, ctrlKey: true });
+    expect(rename).toHaveBeenLastCalledWith('Faster exports');
+    expect(onSend).not.toHaveBeenCalled();
+    // One of Claude Code's goes to Claude.
+    fireEvent.change(box, { target: { value: '/compact' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13, ctrlKey: true });
+    expect(onSend).toHaveBeenCalledWith('/compact', [], 'steer');
+    forgetCommands();
   });
 });

@@ -52,7 +52,7 @@ export function sendsMessage(e: KeyLike, enterSends: boolean): boolean {
 }
 
 /** A computer: a mouse or trackpad that can hover, so a keyboard is very likely there too. */
-export const hasKeyboard = (): boolean => typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+export const hasKeyboard = (): boolean => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
 /**
  * A key and the modifiers held with it, written as Desktop's table writes them: `mod+shift+k`.
@@ -82,8 +82,8 @@ export type KeyScope =
 export const KEY_GROUPS = ['General', 'This session', 'Panes', 'Message box', 'Quotes and comments', 'Questions'] as const;
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
-/** What the message box's keys depend on: the Enter key setting. */
-export type KeyContext = { enterSends: boolean };
+/** What the message box's keys depend on: the Enter key setting; and the kind of keyboard, for a key one kind has alone. */
+export type KeyContext = { enterSends: boolean; apple?: boolean };
 
 export type KeyDef = {
   label: string;
@@ -108,24 +108,23 @@ export type KeyDef = {
  * desktop app's key is the browser's (⌘N, ⌘⇧D, ⌘,), its web build has another, and so does Pelican.
  */
 export const KEYS = {
-  commandMenu: { label: 'Command menu', group: 'General', scope: 'page', keys: ['mod+k'], soon: true },
-  // ⌘K finds a session until the command menu takes it, as it did before.
-  searchSessions: { label: 'Search sessions', group: 'General', scope: 'page', keys: ['mod+shift+k'], also: ['mod+k'] },
+  commandMenu: { label: 'Command menu', group: 'General', scope: 'page', keys: ['mod+k'] },
+  searchSessions: { label: 'Search sessions', group: 'General', scope: 'page', keys: ['mod+shift+k'] },
   newSession: { label: 'New session', group: 'General', scope: 'page', keys: ['mod+shift+o'] },
   settings: { label: 'Settings', group: 'General', scope: 'page', keys: ['mod+shift+,'], also: ['mod+,'] },
   shortcuts: { label: 'Keyboard shortcuts', group: 'General', scope: 'page', keys: ['mod+/'] },
   close: { label: 'Close a menu or sheet', group: 'General', scope: 'dialog', keys: ['escape'] },
 
-  rename: { label: 'Rename', group: 'This session', scope: 'page', keys: ['mod+alt+r'], soon: true },
-  fork: { label: 'Fork', group: 'This session', scope: 'page', keys: ['mod+alt+o'], soon: true },
-  archive: { label: 'Archive', group: 'This session', scope: 'page', keys: ['mod+alt+a'], soon: true },
+  rename: { label: 'Rename', group: 'This session', scope: 'page', keys: ['mod+alt+r'] },
+  fork: { label: 'Fork', group: 'This session', scope: 'page', keys: ['mod+alt+o'] },
+  archive: { label: 'Archive', group: 'This session', scope: 'page', keys: ['mod+alt+a'] },
   sideChat: { label: 'Side chat', group: 'This session', scope: 'page', keys: ['mod+;'] },
   transcriptView: { label: 'Transcript view', group: 'This session', scope: 'page', keys: ['ctrl+o'] },
   backgroundTasks: { label: 'Background tasks', group: 'This session', scope: 'page', keys: ['ctrl+b'], soon: true },
 
   // Control on a Mac too, as in Desktop's web build: ⌘⇧D is the browser's (bookmark all tabs).
-  changes: { label: 'Changes and files', group: 'Panes', scope: 'page', keys: ['ctrl+shift+d'], also: ['mod+shift+d'] },
-  files: { label: 'Files', group: 'Panes', scope: 'page', keys: ['mod+shift+f'], soon: true },
+  changes: { label: 'Changes', group: 'Panes', scope: 'page', keys: ['ctrl+shift+d'], also: ['mod+shift+d'] },
+  files: { label: 'Files', group: 'Panes', scope: 'page', keys: ['mod+shift+f'] },
   // Control on a Mac too, as in Desktop; the key left of 1, whatever a keyboard prints on it.
   terminal: { label: 'Terminal', group: 'Panes', scope: 'page', keys: ['ctrl+`'] },
   newTerminal: { label: 'New terminal', group: 'Panes', scope: 'page', keys: ['ctrl+shift+`'] },
@@ -134,11 +133,11 @@ export const KEYS = {
   send: { label: 'Send', group: 'Message box', scope: 'box', keys: ({ enterSends }) => (enterSends ? ['enter', 'mod+enter'] : ['mod+enter']) },
   newLine: { label: 'New line', group: 'Message box', scope: 'box', keys: ({ enterSends }) => (enterSends ? ['shift+enter'] : ['enter']) },
   queue: { label: 'Queue for later, while Claude works', group: 'Message box', scope: 'box', keys: ['mod+enter'], soon: true },
-  addFiles: { label: 'Add files or photos', group: 'Message box', scope: 'page', keys: ['mod+u'], soon: true },
-  model: { label: 'Model', group: 'Message box', scope: 'page', keys: ['mod+shift+i'], soon: true },
-  effort: { label: 'Effort', group: 'Message box', scope: 'page', keys: ['mod+shift+e'], soon: true },
-  fastMode: { label: 'Fast mode', group: 'Message box', scope: 'page', keys: ['mod+alt+f'], soon: true },
-  mode: { label: 'Mode', group: 'Message box', scope: 'page', keys: ['mod+alt+m'], soon: true },
+  addFiles: { label: 'Add files or photos', group: 'Message box', scope: 'page', keys: ['mod+u'] },
+  model: { label: 'Model', group: 'Message box', scope: 'page', keys: ['mod+shift+i'] },
+  effort: { label: 'Effort', group: 'Message box', scope: 'page', keys: ['mod+shift+e'] },
+  fastMode: { label: 'Fast mode', group: 'Message box', scope: 'page', keys: ['mod+alt+f'] },
+  mode: { label: 'Mode', group: 'Message box', scope: 'page', keys: ['mod+alt+m'] },
   stop: { label: 'Stop', group: 'Message box', scope: 'page', keys: ['escape'] },
   // Typed at the start of a word in the box, not pressed with a modifier.
   commands: { label: 'Commands', group: 'Message box', scope: 'box', keys: ['/'] },
@@ -150,7 +149,7 @@ export const KEYS = {
   // As in the message box: where the Enter key makes a new line, it does so in a note too.
   noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ({ enterSends }) => (enterSends ? ['enter'] : []) },
   noteSend: { label: 'Note box: send now', group: 'Quotes and comments', scope: 'note', keys: ['mod+enter'] },
-  commentsSend: { label: 'Changes and files: send all comments', group: 'Quotes and comments', scope: 'comments', keys: ['mod+enter'] },
+  commentsSend: { label: 'Changes: send all comments', group: 'Quotes and comments', scope: 'comments', keys: ['mod+enter'] },
 
   pickAnswer: { label: 'Pick an answer', group: 'Questions', scope: 'question', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], soon: true },
 
@@ -172,7 +171,7 @@ export const keyWorks = (id: KeyId): boolean => !def(id).soon;
 /** The keys shown for it, first the key itself. */
 export function chordsOf(id: KeyId, context: KeyContext = { enterSends: true }): readonly Chord[] {
   const { keys } = def(id);
-  return typeof keys === 'function' ? keys(context) : keys;
+  return typeof keys === 'function' ? keys({ apple: isApple, ...context }) : keys;
 }
 
 type Parsed = { key: string; mod: boolean; ctrl: boolean; shift: boolean; alt: boolean };
@@ -238,7 +237,7 @@ export function pressed(e: KeyLike, chord: Chord, apple = isApple): boolean {
 
 /** Whether a keydown is the key for this, or one it takes too. */
 export function isKey(e: KeyLike, id: KeyId, apple = isApple, context?: KeyContext): boolean {
-  return [...chordsOf(id, context), ...(def(id).also ?? [])].some((chord) => pressed(e, chord, apple));
+  return [...chordsOf(id, { enterSends: true, ...context, apple }), ...(def(id).also ?? [])].some((chord) => pressed(e, chord, apple));
 }
 
 const APPLE_MODS: Array<[keyof Parsed, string]> = [['ctrl', '⌃'], ['alt', '⌥'], ['shift', '⇧'], ['mod', '⌘']];
@@ -273,7 +272,7 @@ export const chordText = (chord: Chord, apple = isApple): string => chordParts(c
  */
 export function keyText(id: KeyId, apple = isApple, context?: KeyContext): string | undefined {
   if (!keyWorks(id)) return undefined;
-  const first = chordsOf(id, context)[0];
+  const first = chordsOf(id, { enterSends: true, ...context, apple })[0];
   return first ? chordText(first, apple) : undefined;
 }
 
@@ -288,7 +287,7 @@ const ARIA_NAMES: Record<string, string> = { enter: 'Enter', escape: 'Escape', '
 /** Every key that does this, in the form aria-keyshortcuts takes, for an element that has it; none if none does. */
 export function ariaKeys(id: KeyId, apple = isApple, context?: KeyContext): string | undefined {
   if (!keyWorks(id)) return undefined;
-  const chords = [...chordsOf(id, context), ...(def(id).also ?? [])];
+  const chords = [...chordsOf(id, { enterSends: true, ...context, apple }), ...(def(id).also ?? [])];
   if (chords.length === 0) return undefined;
   const names = chords.map((chord) => {
     const c = parse(chord);
@@ -348,10 +347,11 @@ export type ShortcutRow = { id: KeyId; label: string; keys: string[][]; range?: 
  * The message box's follow the Enter key setting.
  */
 export function shortcutList(context: KeyContext, apple = isApple): Array<{ group: KeyGroup; rows: ShortcutRow[] }> {
+  const on = { ...context, apple };
   return KEY_GROUPS.map((group) => ({
     group,
-    rows: KEY_IDS.filter((id) => def(id).group === group && keyWorks(id) && chordsOf(id, context).length > 0).map((id) => {
-      const chords = chordsOf(id, context);
+    rows: KEY_IDS.filter((id) => def(id).group === group && keyWorks(id) && chordsOf(id, on).length > 0).map((id) => {
+      const chords = chordsOf(id, on);
       // A run of digits (1 to 9) reads as a range.
       const range = chords.length > 2 && chords.every((chord) => /^\d$/.test(chord));
       const keys = range ? [chordParts(chords[0]!, apple), chordParts(chords.at(-1)!, apple)] : chords.map((chord) => chordParts(chord, apple));

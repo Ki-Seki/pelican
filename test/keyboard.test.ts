@@ -97,11 +97,12 @@ describe('Claude Desktop’s web keys', () => {
     expect(isKey(shiftCmdK, 'searchSessions', APPLE)).toBe(true);
     expect(isKey({ ...shiftCmdK, metaKey: false, ctrlKey: true }, 'searchSessions', OTHER)).toBe(true);
     expect(isKey({ ...cmdK, metaKey: false, ctrlKey: true }, 'commandMenu', OTHER)).toBe(true);
-    // Until the command menu is here, ⌘K still finds a session, as it did.
-    expect(keyWorks('commandMenu')).toBe(false);
-    expect(isKey(cmdK, 'searchSessions', APPLE)).toBe(true);
+    // ⌘K is the command menu's now, and finds a session no longer: ⇧⌘K does, as in Desktop.
+    expect(keyWorks('commandMenu')).toBe(true);
+    expect(isKey(cmdK, 'searchSessions', APPLE)).toBe(false);
     // On a Mac, Control+K is the text field's own (delete to the end of the line).
-    expect(isKey({ key: 'k', ctrlKey: true }, 'searchSessions', APPLE)).toBe(false);
+    expect(isKey({ key: 'k', ctrlKey: true }, 'commandMenu', APPLE)).toBe(false);
+    expect(isKey({ key: 'K', ctrlKey: true, shiftKey: true }, 'searchSessions', APPLE)).toBe(false);
   });
 
   it('takes ⌘, for Settings too where the browser passes it on, and ⇧⌘, however a layout prints it', () => {
@@ -168,7 +169,7 @@ describe('Claude Desktop’s web keys', () => {
     expect(chordParts('mod+enter', APPLE)).toEqual(['⌘', '↵']);
     expect(chordParts('escape', OTHER)).toEqual(['Esc']);
     expect(withKey('Close', 'sideChat', OTHER)).toBe('Close (Ctrl+;)');
-    expect(ariaKeys('searchSessions', APPLE)).toBe('Shift+Meta+K Meta+K');
+    expect(ariaKeys('searchSessions', APPLE)).toBe('Shift+Meta+K');
     // Off a Mac, ⌘⇧D and ⌃⇧D are the same keys.
     expect(ariaKeys('changes', OTHER)).toBe('Control+Shift+D');
   });
@@ -189,11 +190,8 @@ const held = (id: KeyId, apple: boolean, enterSends: boolean) => {
 };
 const scopeOf = (id: KeyId): KeyScope => KEYS[id].scope;
 
-/**
- * Keys that pass from one thing to another as 0.5.0 is built: ⌘K finds a session until the command
- * menu takes it, and ⌘↵ sends until it queues for later while Claude works.
- */
-const HANDOVERS: Array<[coming: KeyId, going: KeyId]> = [['commandMenu', 'searchSessions'], ['queue', 'send']];
+/** Keys that pass from one thing to another as 0.5.0 is built: ⌘↵ sends until it queues for later while Claude works. */
+const HANDOVERS: Array<[coming: KeyId, going: KeyId]> = [['queue', 'send']];
 const handedOver = (a: KeyId, b: KeyId) => HANDOVERS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
 
 describe('the key table', () => {
@@ -242,6 +240,7 @@ describe('the key table', () => {
     const works = KEY_IDS.filter((id) => keyWorks(id) && !('browser' in KEYS[id]));
     expect([...listed].sort()).toEqual([...works].sort());
     expect(parts.find((part) => part.group === 'General')!.rows.map((row) => `${row.label}: ${row.keys.map((k) => k.join(' ')).join(' or ')}`)).toEqual([
+      'Command menu: ⌘ K',
       'Search sessions: ⇧ ⌘ K',
       'New session: ⇧ ⌘ O',
       'Settings: ⇧ ⌘ ,',

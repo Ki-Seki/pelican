@@ -48,6 +48,8 @@ const archive = vi.fn(async (id: string, archived: boolean) => {
   serverSets(id, { archived });
   return { ok: true };
 });
+const rename = vi.fn(async (_id: string, _title: string) => ({ ok: true }));
+const remove = vi.fn(async (_id: string) => ({ ok: true }));
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -62,6 +64,8 @@ vi.mock('../src/web/lib/api', async (original) => {
       mcp: async () => ({ servers: [], live: false }),
       sessionUsage: async () => null,
       models: async () => ({ models: [], signedIn: true }),
+      rename: (id: string, title: string) => rename(id, title),
+      remove: (id: string) => remove(id),
     },
   };
 });
@@ -84,14 +88,21 @@ beforeAll(() => {
 const { SessionList } = await import('../src/web/components/SessionList');
 const { SessionMenu } = await import('../src/web/components/SessionMenu');
 const { setPrefs } = await import('../src/web/lib/prefs');
+const { noteDone } = await import('../src/web/lib/list-changes');
 
 beforeEach(() => {
   server = initial();
   pin.mockClear();
   archive.mockClear();
+  rename.mockClear();
+  remove.mockClear();
   setPrefs({ listGroup: 'time', listDensity: 'detailed' });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // What was done says so for a few seconds, wherever the list is: not into the next test's.
+  noteDone(undefined);
+});
 
 const list = () => render(
   <QueryClientProvider client={new QueryClient()}>
@@ -107,6 +118,18 @@ const groups = () => [...document.querySelectorAll('section')].map((section) => 
 const titles = (heading: string) => groups().find((g) => g.heading === heading)?.rows.map((row) => row.split(', ')[0]);
 const pinnedSection = () => [...document.querySelectorAll('section')].find((s) => s.querySelector('h2, button[aria-expanded]')?.textContent?.startsWith('Pinned'))!;
 
+/** A row's menu, opened from its ⋯, as a pointer or the keyboard opens it (a finger: a long press). */
+const rowMenu = async (title: string) => {
+  const more = screen.getByRole('button', { name: `More for ${title}` });
+  more.focus();
+  fireEvent.click(more);
+  return screen.findByRole('menu', { name: title });
+};
+/** Picks an action of a row's menu. */
+const fromMenu = async (title: string, action: string) => {
+  fireEvent.click(within(await rowMenu(title)).getByRole('menuitem', { name: action }));
+};
+
 describe('pinned sessions in the list', () => {
   it('lead it, above Active, each keeping its status and its earlier runs, and say so to a screen reader', async () => {
     list();
@@ -119,9 +142,9 @@ describe('pinned sessions in the list', () => {
     expect(pinned.getByText('2 tasks')).toBeTruthy();
     expect(pinned.getByRole('button', { name: '2 earlier' })).toBeTruthy();
     expect(pinned.getAllByRole('link')[0]!.getAttribute('aria-label')).toBe('Fix the login test, Needs you, pinned, app, 5 minutes ago');
-    // Their heading says so: the rows carry no pin of their own, only their Unpin buttons do.
-    expect(pinnedSection().querySelectorAll('a .lucide-pin, a .lucide-pin-off')).toHaveLength(0);
-    expect(pinnedSection().querySelectorAll('button[aria-label^="Unpin: "] .lucide-pin-off')).toHaveLength(4);
+    // Their heading says so: the rows carry no pin of their own; each has its ⋯, which has Unpin.
+    expect(pinnedSection().querySelectorAll('.lucide-pin, .lucide-pin-off')).toHaveLength(0);
+    expect(within(pinnedSection()).getAllByRole('button', { name: /^More for / })).toHaveLength(4);
     // The earlier runs fold into the pinned one, not into a row of their own.
     expect(titles('Today')).toEqual(['Tidy the docs']);
   });
@@ -212,17 +235,17 @@ describe('pinned sessions in the list', () => {
     expect(titles('Today')).toEqual(['Tidy the docs']);
   });
 
-  it('are pinned and unpinned at once from a row’s button, and put back when the server says no', async () => {
+  it('are pinned and unpinned at once from a row’s menu, and put back when the server says no', async () => {
     list();
     await screen.findByText('Pinned');
-    fireEvent.click(screen.getByRole('button', { name: 'Pin: Tidy the docs' }));
+    await fromMenu('Tidy the docs', 'Pin');
     expect(titles('Pinned')).toContain('Tidy the docs');
     expect(titles('Today')).toBeUndefined();
     expect(pin).toHaveBeenCalledWith('t1', true);
     expect(screen.getByRole('status').textContent).toContain('Pinned');
 
     pin.mockRejectedValueOnce(new Error('The disk is full'));
-    fireEvent.click(screen.getByRole('button', { name: 'Unpin: Release notes' }));
+    await fromMenu('Release notes', 'Unpin');
     expect(titles('Yesterday')).toEqual(['Release notes']);
     await waitFor(() => expect(titles('Pinned')).toContain('Release notes'));
     expect(screen.getByRole('status').textContent).toContain('The disk is full');
@@ -231,18 +254,18 @@ describe('pinned sessions in the list', () => {
   it('are unpinned by archiving, which Undo takes back, pin and all', async () => {
     list();
     await screen.findByText('Pinned');
-    fireEvent.click(screen.getByRole('button', { name: 'Archive: Release notes' }));
+    await fromMenu('Release notes', 'Archive');
     expect(titles('Pinned')).not.toContain('Release notes');
     expect(archive).toHaveBeenCalledWith('p1', true);
     await waitFor(() => expect(screen.getByRole('button', { name: /^Archived\s*2$/ })).toBeTruthy());
     expect(screen.getByRole('status').textContent).toContain('Archived');
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     expect(pin).toHaveBeenCalledWith('p1', true);
-    expect(titles('Pinned')).toContain('Release notes');
+    await waitFor(() => expect(titles('Pinned')).toContain('Release notes'));
     await waitFor(() => expect(screen.getByRole('button', { name: /^Archived\s*1$/ })).toBeTruthy());
   });
 
-  it('leave focus with the session a row’s button changed: on its row where it went, or on the next one; Undo brings it back', async () => {
+  it('leave focus with the session a row’s menu changed: on its row where it went, or on the next one; Undo brings it back', async () => {
     list();
     await screen.findByText('Pinned');
     const link = (title: string) => screen.getByRole('link', { name: new RegExp(`^${title}, `) });
@@ -251,20 +274,20 @@ describe('pinned sessions in the list', () => {
       button.focus();
       fireEvent.click(button);
     };
-    press('Pin: Tidy the docs');
+    await fromMenu('Tidy the docs', 'Pin');
     await waitFor(() => expect(document.activeElement).toBe(link('Tidy the docs')));
     expect(pinnedSection().contains(document.activeElement)).toBe(true);
-    press('Unpin: Tidy the docs');
+    await fromMenu('Tidy the docs', 'Unpin');
     await waitFor(() => expect(titles('Today')).toEqual(['Tidy the docs']));
     expect(document.activeElement).toBe(link('Tidy the docs'));
     // Archived, it leaves the list: the row after it takes focus, and Undo gives it back.
-    press('Archive: Release notes');
+    await fromMenu('Release notes', 'Archive');
     await waitFor(() => expect(document.activeElement).toBe(link('Add a dark theme')));
     press('Undo');
     await waitFor(() => expect(document.activeElement).toBe(link('Release notes')));
     // One the server refuses comes back, focus still with it.
     pin.mockRejectedValueOnce(new Error('The disk is full'));
-    press('Unpin: Release notes');
+    await fromMenu('Release notes', 'Unpin');
     await screen.findByText('The disk is full');
     await waitFor(() => expect(pinnedSection().contains(link('Release notes'))).toBe(true));
     expect(document.activeElement).toBe(link('Release notes'));
@@ -275,7 +298,9 @@ describe('pinned sessions in the list', () => {
     await screen.findByText('Pinned');
     const search = screen.getByRole('textbox', { name: 'Search sessions' });
     search.focus();
-    fireEvent.click(screen.getByRole('button', { name: 'Pin: Tidy the docs' }));
+    // A right-click on the row leaves focus where it was; so does what is picked in its menu.
+    fireEvent.contextMenu(screen.getByRole('link', { name: /^Tidy the docs, / }), { clientX: 100, clientY: 200 });
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Tidy the docs' })).getByRole('menuitem', { name: 'Pin' }));
     await waitFor(() => expect(titles('Pinned')).toContain('Tidy the docs'));
     expect(document.activeElement).toBe(search);
   });
@@ -284,8 +309,9 @@ describe('pinned sessions in the list', () => {
     list();
     await screen.findByText('Pinned');
     fireEvent.click(screen.getByRole('button', { name: /^Archived/ }));
-    expect(screen.getByRole('button', { name: 'Unarchive: Old idea' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^Pin: / })).toBeNull();
+    const menu = await rowMenu('Old idea');
+    expect(within(menu).getByRole('menuitem', { name: 'Unarchive' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: /^(Pin|Unpin)$/ })).toBeNull();
   });
 });
 
@@ -380,54 +406,119 @@ describe('a finger on a row', () => {
   });
 });
 
-describe('the session menu', () => {
-  const menu = (shown: SessionSummary, onDeleted = () => {}) => {
-    const client = new QueryClient();
-    client.setQueryData(['sessions'], server);
-    return {
-      client,
-      ...render(
-        <QueryClientProvider client={client}>
-          <SessionMenu open onClose={() => {}} sessionId={shown.id} session={shown} onRenamed={() => {}} onForked={() => {}} onDeleted={onDeleted} />
-        </QueryClientProvider>,
-      ),
-    };
-  };
+describe('a session’s menu', () => {
+  /** What each row of a menu says, as a screen reader names it. */
+  const items = (menu: HTMLElement) => within(menu).getAllByRole('menuitem').map((item) => item.textContent);
 
-  it('pins and unpins the session, next to Archive', async () => {
-    const tidy = server.find((s) => s.id === 't1')!;
-    const { unmount } = menu(tidy);
-    const options = screen.getAllByRole('button').map((b) => b.textContent);
-    expect(options.indexOf('Pin')).toBe(options.indexOf('Archive') - 1);
-    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
-    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', true));
-    unmount();
-    menu(server.find((s) => s.id === 't1')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Unpin' }));
-    await waitFor(() => expect(pin).toHaveBeenCalledWith('t1', false));
+  it('from a row: Rename · Pin · Side chat · Fork · Copy resume command · Export · Archive · Delete, without the open session’s view or keys', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SessionList machine="studio" onOpen={() => {}} onNew={() => {}} onSettings={() => {}} onSideChat={() => {}} connected />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Pinned');
+    const menu = await rowMenu('Tidy the docs');
+    // Copy resume command is there for a session Claude Code can resume, by its id (these are made up).
+    expect(items(menu)).toEqual(['Rename', 'Pin', 'Side chat', 'Fork', 'Export', 'Archive', 'Delete']);
+    expect(within(menu).queryByText('Transcript view')).toBeNull();
+    // A session Claude works in can be deleted once it stops.
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    document.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true }));
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(items(await rowMenu('Add a dark theme'))).not.toContain('Delete');
+  });
+
+  it('opens on a long press of a finger, with the row raised over the dimmed list', async () => {
+    list();
+    await screen.findByText('Pinned');
+    const row = screen.getByRole('link', { name: /^Tidy the docs, / });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      fireEvent.pointerDown(row, { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: 120, clientY: 100 });
+      act(() => vi.advanceTimersByTime(520));
+    } finally {
+      vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+    }
+    fireEvent.pointerUp(row, { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: 120, clientY: 100 });
+    const menu = await screen.findByRole('menu', { name: 'Tidy the docs' });
+    expect(items(menu)[0]).toBe('Rename');
+    // The row itself, raised over the dim, takes no taps.
+    expect(document.querySelector('dialog [inert] [data-session]')).not.toBeNull();
+    // The click that ends the press is the press's: the session does not open, nor the menu close.
+    fireEvent.click(row);
+    expect(screen.getByRole('menu', { name: 'Tidy the docs' })).toBeTruthy();
   });
 
   it('says why when the server says no', async () => {
+    list();
+    await screen.findByText('Pinned');
     pin.mockRejectedValueOnce(new Error('The disk is full'));
-    menu(server.find((s) => s.id === 't1')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    await fromMenu('Tidy the docs', 'Pin');
     expect(await screen.findByText('The disk is full')).toBeTruthy();
   });
 
-  it('archives a pinned session, which the list it goes back to shows archived and unpinned', async () => {
-    const onDeleted = vi.fn();
-    const { client } = menu(server.find((s) => s.id === 'p1')!, onDeleted);
-    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
-    expect(archive).toHaveBeenCalledWith('p1', true);
-    const listed = client.getQueryData<SessionSummary[]>(['sessions'])!.find((s) => s.id === 'p1');
-    expect([listed?.archived, listed?.pinned]).toEqual([true, undefined]);
+  it('archives a pinned session, which the list shows archived and unpinned, with Undo', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await fromMenu('Release notes', 'Archive');
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('p1', true));
+    expect(titles('Pinned')).not.toContain('Release notes');
+    expect(screen.getByRole('status').textContent).toContain('Archived');
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
   });
 
-  it('offers no pin for an archived session, only Unarchive', () => {
-    menu(server.find((s) => s.id === 'o1')!);
-    expect(screen.getByRole('button', { name: 'Unarchive' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Pin' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Unpin' })).toBeNull();
+  it('renames in a sheet of its own, the title selected to type over', async () => {
+    list();
+    await screen.findByText('Pinned');
+    await fromMenu('Tidy the docs', 'Rename');
+    const field = await screen.findByRole('textbox', { name: 'Session title' }) as HTMLInputElement;
+    expect(field.value).toBe('Tidy the docs');
+    fireEvent.change(field, { target: { value: 'Tidy the docs site' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('t1', 'Tidy the docs site'));
+  });
+
+  it('asks before Delete, in Desktop’s words, and deletes only then', async () => {
+    const onGone = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SessionList machine="studio" onOpen={() => {}} onNew={() => {}} onSettings={() => {}} onGone={onGone} connected />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Pinned');
+    await fromMenu('Tidy the docs', 'Delete');
+    const ask = await screen.findByRole('dialog', { name: 'Delete this session?' });
+    expect(ask.textContent).toContain('Its transcript is removed from this computer, for every Claude Code app.');
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(onGone).toHaveBeenCalledWith('t1'));
+  });
+
+  it('from the open session’s title: its view, all three, and its start and ID at its foot', async () => {
+    const choose = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SessionMenu
+          open
+          onClose={() => {}}
+          sessionId="7f3c2a10-0000-4000-8000-000000000001"
+          session={{ ...server.find((s) => s.id === 't1')!, createdAt: now - 2 * HOUR }}
+          from="title"
+          view={{ value: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'thinking', label: 'Thinking' }, { value: 'verbose', label: 'Verbose' }], choose }}
+          onForked={() => {}}
+          onRenamed={() => {}}
+          onDeleted={() => {}}
+          onProblem={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+    const sheet = screen.getByRole('dialog');
+    expect(within(sheet).getByRole('group', { name: 'Transcript view' }).textContent).toBe('NormalThinkingVerbose');
+    fireEvent.click(within(sheet).getByRole('menuitemradio', { name: 'Verbose' }));
+    expect(choose).toHaveBeenCalledWith('verbose');
+    expect(sheet.textContent).toMatch(/Started today, .* · ID 7f3c2a10/);
+    expect(within(sheet).getByRole('button', { name: 'Copy the session’s ID' })).toBeTruthy();
   });
 });

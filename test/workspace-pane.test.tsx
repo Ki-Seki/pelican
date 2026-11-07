@@ -68,6 +68,9 @@ const { setPrefs } = await import('../src/web/lib/prefs');
 const { takeTerminalAsks } = await import('../src/web/lib/terminals');
 const { forgetLastTab } = await import('../src/web/components/Workspace');
 
+/** The header's way to Changes: its button on a computer, its one button on a phone. */
+const paneButton = () => screen.getByRole('button', { name: /^Changes(,|$)/ });
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -88,11 +91,13 @@ const computer = () => {
 const session = async () => {
   render(<QueryClientProvider client={new QueryClient()}><Chat sessionId={SESSION} home="/home/me" machine="studio" demo wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} /></QueryClientProvider>);
   await screen.findAllByText('Clean up the build');
+  // The session's folder is known: its panes' buttons are there, and their keys work.
+  await screen.findByRole('button', { name: /^Changes(,|$)/ });
 };
 const pane = () => screen.queryByRole('complementary', { name: 'Changes and files' });
 /** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
 const LAZY = { timeout: 5000 };
-const toggle = () => screen.getByRole('button', { name: 'Changes and files' });
+const toggle = () => paneButton();
 // Off Apple keyboards, as here, the modifier is Ctrl.
 const key = (target: Element | Window, init: KeyboardEventInit) => act(() => {
   fireEvent.keyDown(target, init);

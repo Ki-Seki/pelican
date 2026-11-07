@@ -44,17 +44,23 @@ describe('the keyboard shortcuts sheet', () => {
     // Off Apple keyboards (as here) the keys are Ctrl, Alt and Shift; on them, ⌃ ⌥ ⇧ ⌘.
     expect(parts()).toEqual({
       General: [
+        'Command menu: Ctrl K',
         'Search sessions: Ctrl Shift K',
         'New session: Ctrl Shift O',
         'Settings: Ctrl Shift ,',
         'Keyboard shortcuts: Ctrl /',
         'Close a menu or sheet: Esc',
       ],
-      'This session': ['Side chat: Ctrl ;', 'Transcript view: Ctrl O'],
-      Panes: ['Changes and files: Ctrl Shift D', 'Terminal: Ctrl `', 'New terminal: Ctrl Shift `', 'Close pane: Ctrl \\'],
+      'This session': ['Rename: Ctrl Alt R', 'Fork: Ctrl Alt O', 'Archive: Ctrl Alt A', 'Side chat: Ctrl ;', 'Transcript view: Ctrl O'],
+      Panes: ['Changes: Ctrl Shift D', 'Files: Ctrl Shift F', 'Terminal: Ctrl `', 'New terminal: Ctrl Shift `', 'Close pane: Ctrl \\'],
       'Message box': [
         'Send: Enter Ctrl Enter',
         'New line: Shift Enter',
+        'Add files or photos: Ctrl U',
+        'Model: Ctrl Shift I',
+        'Effort: Ctrl Shift E',
+        'Fast mode: Ctrl Alt F',
+        'Mode: Ctrl Alt M',
         'Stop: Esc',
         'Commands: /',
         'Files and agents: @',
@@ -65,7 +71,7 @@ describe('the keyboard shortcuts sheet', () => {
         'Quote without a note: Ctrl Shift L',
         'Note box: add: Enter',
         'Note box: send now: Ctrl Enter',
-        'Changes and files: send all comments: Ctrl Enter',
+        'Changes: send all comments: Ctrl Enter',
       ],
     });
   });
@@ -76,8 +82,10 @@ describe('the keyboard shortcuts sheet', () => {
       const { label } = KEYS[id];
       if (!keyWorks(id)) expect(listed, label).not.toContain(label);
     }
-    expect(listed).not.toContain('Command menu');
-    expect(listed).not.toContain('Rename');
+    // Still to come: Queue for later (the next part of 0.5.0's message box), Background tasks, picking an answer by its number.
+    expect(listed).not.toContain('Queue for later, while Claude works');
+    expect(listed).not.toContain('Background tasks');
+    expect(listed).not.toContain('Pick an answer');
     // The browser's own (Copy, Paste) are shown in menus, not here.
     expect(listed).not.toContain('Copy');
   });

@@ -101,38 +101,46 @@ describe('cancelling a check Claude scheduled', () => {
   });
 });
 
-describe('the session menu', async () => {
-  const { SessionMenu } = await import('../src/web/components/SessionMenu');
+describe('Context, and the MCP servers sheet', async () => {
+  const { ContextPanel } = await import('../src/web/components/ContextPanel');
+  const { McpSheet } = await import('../src/web/components/McpSheet');
   const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
   HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', ''); };
   HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open'); };
-  const run = (extra: Partial<RunState>): RunState => ({ sessionId: 's', cwd: '/p', busy: false, settings: {}, permissions: [], partial: [], ...extra });
   const USAGE = { tokens: { input: 1200, output: 9800, cacheRead: 410_000, cacheWrite: 38_000 }, models: [{ model: 'claude-opus-5-5', name: 'Opus 5.5', tokens: 459_000 }], compactions: 0, cost: { usd: 1.8432 } };
-  const menu = (props: { run?: RunState; servers?: McpServer[]; live?: boolean; plan?: string }) => {
-    vi.spyOn(api, 'mcp').mockResolvedValue({ servers: props.servers ?? [], live: props.live ?? false });
+  const context = (plan?: string) => {
     vi.spyOn(api, 'sessionUsage').mockResolvedValue(USAGE);
-    vi.spyOn(api, 'models').mockResolvedValue({ models: [], signedIn: true, ...(props.plan ? { account: { plan: props.plan } } : {}) });
+    vi.spyOn(api, 'usage').mockResolvedValue([]);
+    vi.spyOn(api, 'planUsage').mockResolvedValue(null);
+    vi.spyOn(api, 'models').mockResolvedValue({ models: [], signedIn: true, ...(plan ? { account: { plan } } : {}) });
     return render(
       <QueryClientProvider client={new QueryClient()}>
-        <SessionMenu open onClose={() => {}} sessionId="s" machine="laptop" {...(props.run ? { run: props.run } : {})} onRenamed={() => {}} onForked={() => {}} onDeleted={() => {}} />
+        <ContextPanel open onClose={() => {}} at={null} sheet sessionId="s" context={{ percent: 64, tokens: 128_000, max: 200_000 }} onCompact={() => {}} />
       </QueryClientProvider>,
     );
   };
 
-  it('says what the whole session has cost, as an estimate, where Claude Code counts it', async () => {
-    menu({ run: run({ lastTurn: { durationMs: 1000, costUsd: 0.5 } }) });
-    expect(await screen.findByText('$1.84, estimated at API prices')).toBeTruthy();
-    expect(screen.getByText('Cost')).toBeTruthy();
+  it('says how full the window is, and what the whole session has cost, as an estimate, where Claude Code counts it', async () => {
+    context();
+    expect(screen.getByText('128k of 200k tokens')).toBeTruthy();
+    expect(screen.getByText('64% full')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Compact' })).toBeTruthy();
+    expect(await screen.findByText('459K tokens · 91% from cache · $1.84, estimated at API prices')).toBeTruthy();
   });
 
   it('says nothing of cost where a subscription pays', async () => {
-    menu({ run: run({}), plan: 'max' });
-    expect(await screen.findByText(/459K tokens/)).toBeTruthy();
-    expect(screen.queryByText('Cost')).toBeNull();
+    context('max');
+    expect(await screen.findByText('459K tokens · 91% from cache')).toBeTruthy();
+    expect(screen.queryByText(/\$1\.84/)).toBeNull();
   });
 
   it('says where to sign in to a server that needs it', async () => {
-    menu({ servers: [{ name: 'linear', status: 'needs-auth', tools: 0, scope: 'project' }, { name: 'Gmail', status: 'needs-auth', tools: 0, scope: 'claudeai' }], live: true });
+    vi.spyOn(api, 'mcp').mockResolvedValue({ servers: [{ name: 'linear', status: 'needs-auth', tools: 0, scope: 'project' }, { name: 'Gmail', status: 'needs-auth', tools: 0, scope: 'claudeai' }], live: true });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <McpSheet open onClose={() => {}} sessionId="s" machine="laptop" />
+      </QueryClientProvider>,
+    );
     fireEvent.click(await screen.findByText('2 more need signing in'));
     expect(screen.getByText('claude mcp login linear')).toBeTruthy();
     expect(screen.getAllByText(/in a terminal on laptop, then Reconnect/)).toHaveLength(1);

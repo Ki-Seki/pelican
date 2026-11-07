@@ -87,6 +87,9 @@ beforeAll(() => {
 const { SettingsSheet } = await import('../src/web/components/Settings');
 const { Chat } = await import('../src/web/components/Chat');
 
+/** The title's ▾, which opens the session's menu. */
+const sessionMenu = () => document.querySelector<HTMLElement>('header h2 button')!;
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -269,8 +272,8 @@ describe('a session’s own model sheet', () => {
     const onOpen = vi.fn();
     session({ demo: true, onOpen });
     await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Bypass'));
-    fireEvent.click(screen.getByLabelText('Session menu'));
-    fireEvent.click(await screen.findByText('Branch'));
+    fireEvent.click(sessionMenu());
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Fork/ }));
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith(BRANCH));
     const choices = JSON.parse(localStorage.getItem('pelican:session-settings')!) as Record<string, { settings: RunSettings }>;
     expect(choices[BRANCH]!.settings.permissionMode).toBe('plan');

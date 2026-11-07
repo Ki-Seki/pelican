@@ -77,13 +77,16 @@ export function useWorkspacePane(available: boolean) {
     goTo(undefined, false);
   }, [dockable]);
   const setOpen = useCallback((next: boolean) => (next ? show() : hide()), [show, hide]);
+  // ⌃⇧D shows Changes, or hides the pane while it shows them, as Desktop's Changes key does.
+  const showsChanges = open && shownTab(step) === 'changes';
   useEffect(() => {
     if (!available) return undefined;
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (isKey(e, 'changes')) {
         e.preventDefault();
-        setOpen(!open);
+        if (showsChanges) hide();
+        else show({ tab: 'changes' });
       } else if (isKey(e, 'searchSessions') && open && dockable && !roomy) {
         // Finding a session needs the list, which the pane has folded away: it goes, and the list
         // comes back for the search (App focuses it).
@@ -92,7 +95,7 @@ export function useWorkspacePane(available: boolean) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [available, open, setOpen, hide, dockable, roomy]);
+  }, [available, showsChanges, show, hide, open, dockable, roomy]);
   const docked = dockable && open;
   const toggle = useRef<HTMLButtonElement>(null);
   const wasDocked = useRef(docked);

@@ -1,10 +1,17 @@
-import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2, MoreHorizontal, TriangleAlert } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
 import type { ChatMessage, DeliveredFile } from '../../shared/protocol';
+import { entries, PATH_ACTIONS, STEP_ACTIONS, type StepTarget } from '../lib/actions';
+import { announce } from '../lib/announce';
 import { api, ApiError, type SentState } from '../lib/api';
+import { addWaiting } from '../lib/drafts';
+import { hasKeyboard } from '../lib/keyboard';
+import { type Press, useLongPress } from '../lib/press';
+import { quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
+import { RunInTerminal } from '../lib/terminals';
 import { duration, formatBytes } from '../lib/format';
 import { useFileLink, usePathLinks } from '../lib/path-links';
 import { useSessionId } from '../lib/session-context';
@@ -16,8 +23,10 @@ import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
 import { loadsInPlace, Markdown } from './Markdown';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { STEP_LINK } from './PathLink';
-import { SwipeQuote } from './Quotes';
+import { usePathTarget } from './PathMenu';
+import { QuoteTargetContext, SwipeQuote } from './Quotes';
 import { WorkflowCard } from './WorkflowCard';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -712,12 +721,59 @@ function useStepFile(call: ToolCall) {
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
+/** A step's menu, open: where, and the row a finger raised. */
+type StepMenuAt = { at: MenuAnchor; lift?: Element; keys?: boolean };
+
 export const ToolCallView = memo(function ToolCallView({ call, cwd, running, defaultOpen = false }: { call: ToolCall; cwd?: string; running: boolean; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => setOpen(defaultOpen), [defaultOpen]);
   const summary = describeTool(call.name, call.input, cwd);
   const outcome = outcomeOf(call);
   const fileLink = useStepFile(call);
+  // A step's own list: a command's, an agent's, or a file step's path menu (lib/actions).
+  const quoteTo = useContext(QuoteTargetContext);
+  const runIn = useContext(RunInTerminal);
+  const path = usePathTarget(fileLink?.path);
+  const [menu, setMenu] = useState<StepMenuAt>();
+  const isCommand = call.name === 'Bash' || call.name === 'PowerShell';
+  const isAgent = call.name === 'Agent' || call.name === 'Task';
+  const commandText = isCommand ? str(call.input.command) : '';
+  const stepTarget = (): StepTarget | undefined => {
+    if (isAgent) return { kind: 'agent', viewOutput: () => setOpen(true) };
+    if (!isCommand || !commandText) return undefined;
+    const output = outcome.kind === 'done' || outcome.kind === 'failed' ? cleanOutput(resultText(call.result)).trim() : '';
+    const from = { what: 'step' as const, key: call.id };
+    return {
+      kind: 'command',
+      command: commandText,
+      ...(output ? { output } : {}),
+      ...(runIn ? { runInTerminal: () => runIn(commandText) } : {}),
+      ...(quoteTo?.sideChat ? {
+        sideChatOpen: quoteTo.sideChat.open,
+        sideChat: (passage?: string) => {
+          const quoted = quoteItem(passage || commandText, from);
+          if (quoted) quoteTo.sideChat?.start(quoted);
+        },
+      } : {}),
+      ...(quoteTo ? {
+        quote: (passage: string) => {
+          const quoted = quoteItem(passage, from);
+          if (!quoted) return;
+          announce(addWaiting(quoteTo.chat, quoted) ? 'Quoted in your message' : TOO_MANY_REPLIES);
+        },
+      } : {}),
+    };
+  };
+  const device = hasKeyboard() ? 'pointer' : 'touch';
+  const listFor = () => {
+    const step = stepTarget();
+    if (step) return entries(STEP_ACTIONS, step, 'menu', device);
+    return path ? entries(PATH_ACTIONS, path, 'menu', device) : [];
+  };
+  const hasMenu = isAgent || (isCommand && Boolean(commandText)) || Boolean(path);
+  const press = useLongPress<HTMLDivElement>((p: Press) => {
+    setMenu(p.pointerType === 'touch' || p.pointerType === 'pen' ? { at: p.element, lift: p.element } : p.pointerType === 'keyboard' ? { at: p.element, keys: true } : { at: { x: p.x, y: p.y } });
+  }, { enabled: hasMenu, nativeMenu: (target) => Boolean(target.closest('a[href]:not([data-path-link]), img')) });
   const stats = useMemo(() => {
     const edits = editsOf(call);
     if (edits.length === 0) return undefined;
@@ -777,8 +833,47 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   );
   // A command's output can be quoted: swiped to the left on a phone, or selected once it is open.
   const command = (call.name === 'Bash' || call.name === 'PowerShell') && outcome.kind !== 'pending';
+  const menuNow = menu ? listFor() : [];
   const step = (
-    <div data-quote-from={call.id} data-quote-what="step">
+    <div
+      data-quote-from={call.id}
+      data-quote-what="step"
+      data-step
+      {...(hasMenu ? {
+        ...press,
+        // Its own list, not the reply's it is in.
+        onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => {
+          press.onContextMenu(e);
+          e.stopPropagation();
+        },
+      } : {})}
+      className={`group/step relative ${hasMenu ? press.className : ''}`}
+    >
+      {hasMenu && (
+        // With a pointer, ⋯ beside the chevron on hover, or reached with the keyboard.
+        <button
+          type="button"
+          aria-label={`More for ${summary.verb}${summary.target ? ` ${summary.target}` : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(menu)}
+          onClick={(e) => setMenu({ at: e.currentTarget, ...(e.detail === 0 ? { keys: true } : {}) })}
+          className={`absolute top-0.5 right-5 z-[2] hidden size-7 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover/step:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
+        >
+          <MoreHorizontal className="size-3.5" />
+        </button>
+      )}
+      {hasMenu && (
+        <ActionMenu
+          open={Boolean(menu)}
+          onClose={() => setMenu(undefined)}
+          label={`${summary.verb}${summary.target ? ` ${summary.target}` : ''}`}
+          title={<>{summary.verb}{summary.target && <> · <span className={summary.prose ? '' : 'font-mono'}>{summary.target}</span></>}</>}
+          entries={menuNow}
+          at={menu?.at ?? null}
+          focusFirst={Boolean(menu?.keys)}
+          {...(menu?.lift ? { lift: menu.lift } : {})}
+        />
+      )}
       {fileLink ? (
         // The file's name opens it, as a path does in Claude Desktop; the rest of the row still
         // opens the step (its toggle lies under the whole row, the name's link above it). On a

@@ -1,18 +1,22 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Slash, Square, SquareTerminal, X } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Plus, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import type { StartDefaults } from '../../shared/defaults';
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
+import { ADD_ACTIONS, entries } from '../lib/actions';
 import { api, apiUrl, isDemoNote } from '../lib/api';
+import { type CommandItem, commandFor, commandList, filtered, GROUP_NAMES, isClaudeCommand, useCommandItems } from '../lib/commands';
 import { type Held, loadDraft, removeWaiting, updateWaiting, useDraftSaver, useWaiting, whenAdded } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
-import { composing, hasKeyboard, sendsMessage } from '../lib/keyboard';
+import { ariaKeys, composing, hasKeyboard, isKey, keyText, sendsMessage } from '../lib/keyboard';
 import { enterSends, getPrefs } from '../lib/prefs';
 import { useMedia } from '../lib/media';
 import { showPassage, sourceElement } from '../lib/passages';
 import { type WaitingItem, withQuote } from '../lib/quote';
+import { ActionMenu } from './ActionMenu';
+import { mcpCount, useMcpServers } from './McpSheet';
 import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
 import { ChipEditor, QuoteCard, WaitingChips } from './WaitingItems';
 
@@ -131,13 +135,35 @@ function findTrigger(text: string, caret: number): Trigger | undefined {
   return undefined;
 }
 
-type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' | 'agent' };
+/**
+ * A row of the / or @ list. `insert`: what picking it types in place of what was typed; a command
+ * of Pelican's that needs no words (`item`, no `insert`) is done at once instead.
+ */
+type Suggestion = { key: string; label: string; detail?: string; insert: string; icon: 'command' | 'file' | 'folder' | 'agent'; group?: string; item?: CommandItem; mono?: boolean };
 
-/** `/btw`: a side question, which Pelican opens as Claude Desktop does (a side chat), not a command Claude Code runs. */
-const BTW: Command = { name: 'btw', description: 'Ask a side question; this session stays as it is', argumentHint: '<question>' };
 const ASKS_BTW = /^\/btw(?:\s|$)/;
 
-function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, own: Command[]): { items: Suggestion[]; loading: boolean } {
+/** `/btw`, the box's own where the chat has no list of its own: a side question, as Claude Desktop asks one. */
+const BTW = (ask: (question: string) => void): CommandItem => ({
+  id: 'side-chat', group: 'session', label: 'Side chat', name: 'btw', description: 'Ask in side chat', key: 'sideChat', needsWords: true, run: ask,
+});
+
+/** The / list's row for one item: its name (`/btw`, mono), or its label where it has none, and what it does. */
+function commandRow(item: CommandItem): Suggestion {
+  const named = Boolean(item.name);
+  return {
+    key: item.id,
+    label: named ? `/${item.name}` : item.label,
+    ...(item.description ? { detail: item.description } : {}),
+    insert: named && (isClaudeCommand(item) || item.needsWords) ? `/${item.name} ` : '',
+    icon: 'command',
+    group: GROUP_NAMES[item.group],
+    item,
+    mono: named,
+  };
+}
+
+function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, own: readonly CommandItem[] | undefined, device: 'pointer' | 'touch'): { items: Suggestion[]; loading: boolean; list: CommandItem[] } {
   const [fileQuery, setFileQuery] = useState('');
   useEffect(() => {
     if (trigger?.kind !== 'file') return;
@@ -159,16 +185,12 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, o
     staleTime: 30_000,
   });
 
+  // Pelican's own, then Claude Code's commands and skills; one of yours takes its name from Pelican's.
+  const list = useMemo(() => (own ? commandList(own, completions.data?.commands ?? [], device) : []), [own, completions.data, device]);
   return useMemo(() => {
-    if (!trigger) return { items: [], loading: false };
+    if (!trigger) return { items: [], loading: false, list };
     if (trigger.kind === 'command') {
-      const q = trigger.query.toLowerCase();
-      const list = [...own, ...(completions.data?.commands ?? []).filter((c: Command) => !own.some((o) => o.name === c.name))]
-        .filter((c: Command) => !q || c.name.toLowerCase().includes(q))
-        .sort((a: Command, b: Command) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name))
-        .slice(0, 8)
-        .map((c: Command) => ({ key: c.name, label: `/${c.name}`, detail: c.argumentHint ? `${c.argumentHint} · ${c.description}` : c.description, insert: `/${c.name} `, icon: 'command' as const }));
-      return { items: list, loading: completions.isLoading };
+      return { items: filtered(list, trigger.query).map(commandRow), loading: completions.isLoading && list.length === 0, list };
     }
     // Subagents first (`@agent-name` asks Claude to use one), then files and folders.
     const q = trigger.query.toLowerCase().replace(/^agent-/, '');
@@ -176,15 +198,15 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, o
       .filter((a: Agent) => q.length > 0 ? a.name.toLowerCase().includes(q) : true)
       .slice(0, 3)
       .map((a: Agent) => ({ key: `agent:${a.name}`, label: `agent-${a.name}`, detail: a.description, insert: `@agent-${a.name} `, icon: 'agent' as const }));
-    const list = (files.data ?? []).slice(0, 8 - agents.length).map((path) => ({
+    const found = (files.data ?? []).slice(0, 8 - agents.length).map((path) => ({
       key: path,
       label: path.replace(/\/$/, '').split('/').pop() + (path.endsWith('/') ? '/' : ''),
       detail: path,
       insert: `@${path}${path.endsWith('/') ? '' : ' '}`,
       icon: path.endsWith('/') ? ('folder' as const) : ('file' as const),
     }));
-    return { items: [...agents, ...list], loading: files.isLoading };
-  }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading, own]);
+    return { items: [...agents, ...found], loading: files.isLoading, list };
+  }, [trigger, completions.data, completions.isLoading, files.data, files.isLoading, list]);
 }
 
 /**
@@ -192,7 +214,15 @@ function useSuggestions(trigger: Trigger | undefined, cwd: string | undefined, o
  * keeping what is typed now, not a moment later (the chat is about to go: see lib/drafts), and
  * giving the box the keys.
  */
-export type ComposerHandle = { addFiles: (files: FileList | File[]) => void; saveDraft: () => void; focus: () => void };
+export type ComposerHandle = {
+  addFiles: (files: FileList | File[]) => void;
+  saveDraft: () => void;
+  focus: () => void;
+  /** Puts words in the box in place of what is there (a command picked from ⌘K), the keys with them. */
+  putText: (text: string) => void;
+  /** Opens the model's sheet or the mode's, as their chips do. */
+  openSheet: (which: 'model' | 'mode') => void;
+};
 
 /** A finished upload as it comes back from a saved draft: the file is on the server already. */
 const restored = (a: Attachment): Upload => ({
@@ -295,6 +325,9 @@ export function Composer({
   atBottom = true,
   defaults,
   sheetNotes,
+  mcpSession,
+  onMcp,
+  onCommandMenu,
   ref,
 }: {
   busy: boolean;
@@ -330,6 +363,11 @@ export function Composer({
   side?: boolean;
   /** At the foot of the screen, clear of a phone's or a tablet's home indicator; a sheet keeps clear of it itself. */
   atBottom?: boolean;
+  /** The session whose MCP servers + counts, and opens (`onMcp`). */
+  mcpSession?: string;
+  onMcp?: () => void;
+  /** The command menu, for + › Commands while the box holds words. */
+  onCommandMenu?: () => void;
   ref?: Ref<ComposerHandle>;
 }) {
   // The box starts from what was typed in it; a draft it is given goes in once it is up (taken).
@@ -351,10 +389,13 @@ export function Composer({
   const [dismissed, setDismissed] = useState<string>();
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const plus = useRef<HTMLButtonElement>(null);
+  const [adding, setAdding] = useState<{ keys: boolean }>();
   const chips = useRef<HTMLUListElement>(null);
   const card = carded && touch ? items.find((item) => item.id === carded) : undefined;
   const opened = editing ? items.find((item) => item.id === editing.id) : undefined;
   const listId = useId();
+  const listBox = useRef<HTMLDivElement>(null);
 
   const model = modelOf(models, settings);
   const permission = settings.permissionMode ?? 'default';
@@ -394,11 +435,23 @@ export function Composer({
     if (side && found?.kind === 'command') return undefined;
     return found && `${found.kind}:${found.start}` !== dismissed ? found : undefined;
   }, [text, caret, dismissed, side]);
-  const own = useMemo(() => (onSideChat ? [BTW] : []), [onSideChat]);
-  const { items: suggestions, loading: suggesting } = useSuggestions(trigger, cwd, own);
+  // The page's and the chat's commands, by name, for the main box; a side chat's takes questions only.
+  const registered = useCommandItems();
+  const asks = useRef(onSideChat);
+  asks.current = onSideChat;
+  const ownBtw = useMemo(() => BTW((question) => asks.current?.(question)), []);
+  const own = useMemo(() => {
+    if (side) return undefined;
+    return onSideChat && !registered.some((item) => item.name === 'btw') ? [ownBtw, ...registered] : registered;
+  }, [side, registered, onSideChat, ownBtw]);
+  const device = touch ? 'touch' : 'pointer';
+  const { items: suggestions, loading: suggesting, list: commands } = useSuggestions(trigger, cwd, own, device);
   const showSuggestions = Boolean(trigger) && (suggestions.length > 0 || suggesting);
 
   useEffect(() => setHighlight(0), [trigger?.kind, trigger?.query]);
+  useEffect(() => {
+    listBox.current?.querySelector(`[id="${listId}-${highlight}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [highlight, listId]);
 
   useEffect(() => {
     if (!draft || taken.has(draft)) return;
@@ -529,6 +582,16 @@ export function Composer({
     addFiles,
     saveDraft: () => draftSaver.now(text, uploads.flatMap((u) => (u.attachment ? [u.attachment] : [])), held),
     focus: () => area.current?.focus({ preventScroll: true }),
+    putText: (next: string) => {
+      setText(next);
+      setCaret(next.length);
+      setDismissed(undefined);
+      requestAnimationFrame(() => takeKeys(area.current, () => {
+        area.current?.focus();
+        area.current?.setSelectionRange(next.length, next.length);
+      }));
+    },
+    openSheet: (which: 'model' | 'mode') => setSheet(which),
   }));
 
   const forget = (u: Upload) => {
@@ -609,6 +672,16 @@ export function Composer({
       setCaret(0);
       return;
     }
+    // One of Pelican's, by Claude Code's name (/rename, /export, /diff…): done here, not sent.
+    const asked = side ? undefined : commandFor(text, commands);
+    if (asked) {
+      draftSaver.now('', [], held);
+      justSent.current = true;
+      setText('');
+      setCaret(0);
+      asked.item.run(asked.words);
+      return;
+    }
     // Typed out of habit in a side chat, /btw only says what the rest is.
     const words = side ? text.trim().replace(ASKS_BTW, '').trim() : text.trim();
     if (!words && items.length === 0 && !uploads.some((u) => u.attachment)) return;
@@ -630,7 +703,15 @@ export function Composer({
 
   const accept = (suggestion: Suggestion) => {
     if (!trigger) return;
+    // One of Pelican's that needs no words is done at once, and what was typed for it goes.
+    const now = suggestion.item && !suggestion.insert ? suggestion.item : undefined;
     const next = text.slice(0, trigger.start) + suggestion.insert + text.slice(trigger.end);
+    if (now) {
+      setText(next);
+      setCaret(trigger.start);
+      now.run('');
+      return;
+    }
     const at = trigger.start + suggestion.insert.length;
     setText(next);
     setCaret(at);
@@ -683,6 +764,66 @@ export function Composer({
     }
   };
 
+  /**
+   * Puts a character that opens one of the box's lists (/ for commands, @ for files and agents, !
+   * for a shell command) where it starts one, and gives the box the keys: / and ! begin the box,
+   * @ goes at the caret, after a space.
+   */
+  const typeIn = (mark: '/' | '@' | '!') => {
+    const el = area.current;
+    const at = el ? el.selectionStart : text.length;
+    let next: string;
+    let caretAt: number;
+    if (mark === '@') {
+      const before = text.slice(0, at);
+      const lead = before && !/\s$/.test(before) ? ' ' : '';
+      next = `${before}${lead}@${text.slice(at)}`;
+      caretAt = before.length + lead.length + 1;
+    } else {
+      next = `${mark}${text.replace(/^[!/]/, '')}`;
+      caretAt = mark === '/' ? 1 : next.length;
+    }
+    setText(next);
+    setCaret(caretAt);
+    setDismissed(undefined);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(caretAt, caretAt);
+    });
+  };
+  const mcp = useMcpServers(mcpSession, Boolean(adding));
+  const addEntries = side ? [] : entries(ADD_ACTIONS, {
+    addFiles: () => picker.current?.click(),
+    // With words in the box, the command menu; an empty box takes the / and lists them above it.
+    commands: () => (text.trim() && onCommandMenu ? onCommandMenu() : typeIn('/')),
+    mention: () => typeIn('@'),
+    ...(onShell ? { shell: () => typeIn('!') } : {}),
+    ...(onMcp && mcpSession ? { mcp: onMcp } : {}),
+    ...(mcpCount(mcp.data?.servers) ? { mcpOn: mcpCount(mcp.data?.servers) } : {}),
+  }, 'menu', touch ? 'touch' : 'pointer');
+
+  // Desktop's keys for the box's own controls, in the session's box (not a side chat's), while
+  // no sheet is open: ⌘U adds files, ⇧⌘I the model, ⇧⌘E its effort, ⌥⌘F fast mode, ⌥⌘M the mode.
+  const keyed = useRef({ settings, models, onSettings });
+  keyed.current = { settings, models, onSettings };
+  useEffect(() => {
+    if (side || disabled) return undefined;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.repeat || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]:not([data-closing])')) return;
+      const { settings: now, models: offered, onSettings: change } = keyed.current;
+      if (isKey(e, 'addFiles')) picker.current?.click();
+      else if (isKey(e, 'model') || isKey(e, 'effort')) setSheet('model');
+      else if (isKey(e, 'mode')) setSheet('mode');
+      else if (isKey(e, 'fastMode')) {
+        if (!modelOf(offered, now)?.supportsFast) return;
+        change({ ...now, fast: !now.fast });
+      } else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [side, disabled]);
+
   const set = (patch: Partial<RunSettings>) => onSettings({ ...settings, ...patch });
   const failed = uploads.filter((u) => u.error);
   const problems = [...new Set(failed.filter((u) => !u.note).map((u) => u.error!))];
@@ -695,29 +836,33 @@ export function Composer({
       {showSuggestions && (
         <div
           id={listId}
+          ref={listBox}
           role="listbox"
           aria-label={trigger?.kind === 'command' ? 'Commands' : 'Files and agents'}
-          className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-w-3xl overflow-hidden rounded-2xl border border-line bg-panel shadow-xl"
+          className="animate-fade absolute right-3 bottom-full left-3 z-20 mx-auto mb-1 max-h-[min(60dvh,26rem)] max-w-3xl overflow-y-auto overscroll-contain rounded-2xl border border-line bg-panel py-1 shadow-xl"
         >
           {suggesting && suggestions.length === 0 && <div className="flex justify-center py-3"><Loader2 className="size-4 animate-spin text-faint" /></div>}
           {suggestions.map((s, i) => {
-            const Icon = s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : s.icon === 'agent' ? Bot : FileText;
+            const Icon = s.item?.icon ?? (s.icon === 'command' ? Slash : s.icon === 'folder' ? Folder : s.icon === 'agent' ? Bot : FileText);
+            const heading = s.group && s.group !== suggestions[i - 1]?.group ? s.group : undefined;
             return (
-              <button
-                key={s.key}
-                id={`${listId}-${i}`}
-                type="button"
-                role="option"
-                tabIndex={-1}
-                aria-selected={i === highlight}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => accept(s)}
-                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left ${i === highlight ? 'bg-hover' : ''}`}
-              >
-                <Icon className="size-3.5 shrink-0 text-faint" />
-                <span className="shrink-0 font-mono text-[13px]">{s.label}</span>
-                {s.detail && <span className="min-w-0 truncate text-[12px] text-faint">{s.detail}</span>}
-              </button>
+              <div key={s.key} role="presentation">
+                {heading && <div role="presentation" className="px-3 pt-2 pb-1 text-[12px] text-faint">{heading}</div>}
+                <button
+                  id={`${listId}-${i}`}
+                  type="button"
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={i === highlight}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => accept(s)}
+                  className={`flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left pointer-fine:min-h-9 ${i === highlight ? 'bg-hover' : ''}`}
+                >
+                  <Icon className="size-3.5 shrink-0 text-faint" />
+                  <span className={`shrink-0 ${s.mono === false ? 'text-[14px]' : 'font-mono text-[13px]'}`}>{s.label}</span>
+                  {s.detail && <span className="min-w-0 truncate text-[12.5px] text-faint">{s.detail}</span>}
+                </button>
+              </div>
             );
           })}
         </div>
@@ -821,12 +966,15 @@ export function Composer({
           {!side && (
             <>
               <button
+                ref={plus}
                 type="button"
-                aria-label="Attach files"
-                className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg`}
-                onClick={() => picker.current?.click()}
+                aria-label="Add"
+                aria-haspopup="menu"
+                aria-expanded={Boolean(adding)}
+                className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg ${adding ? 'bg-hover text-fg' : ''}`}
+                onClick={(e) => setAdding({ keys: e.detail === 0 })}
               >
-                <Paperclip className="size-[18px]" />
+                <Plus className="size-[19px]" />
               </button>
               <input ref={picker} type="file" multiple hidden onChange={(e) => {
                 if (e.target.files) addFiles(e.target.files);
@@ -915,6 +1063,7 @@ export function Composer({
       )}
       {!side && (
         <>
+          <ActionMenu open={Boolean(adding)} onClose={() => setAdding(undefined)} label="Add" entries={addEntries} at={plus.current} focusFirst={Boolean(adding?.keys)} />
           <ModelSheet
             open={sheet === 'model'}
             onClose={() => setSheet(undefined)}

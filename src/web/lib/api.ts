@@ -267,7 +267,7 @@ export const api = {
   side: (id: string, body: { question: string; settings: RunSettings; uuid: string }) =>
     send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/side`, body),
   /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
-  fork: (id: string, options: { before?: string; title?: string } = {}) =>
+  fork: (id: string, options: { before?: string; upTo?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
   remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
   /** Put the session away from the list (true), unpinned, or bring it back (false); nothing else changes. */

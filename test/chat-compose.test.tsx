@@ -126,6 +126,12 @@ type WaitingItem = import('../src/web/lib/quote').WaitingItem;
 const { setRun } = await import('../src/web/lib/store');
 const { goTo } = await import('../src/web/lib/workspace-route');
 
+/** The title's ▾, which opens the session's menu. */
+const sessionMenu = () => document.querySelector<HTMLElement>('header h2 button')!;
+
+/** The header's way to Changes: its button on a computer, its one button on a phone. */
+const paneButton = () => screen.findByRole('button', { name: /^Changes(,|$)/ });
+
 /** The address with Changes and files at a file of the folder, as a path in the conversation opens it. */
 function atFile(id: string, path: string) {
   history.replaceState(null, '', `/?s=${id}`);
@@ -153,7 +159,11 @@ const fresh = () => wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wid
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
 /** The tabs of Changes and files load when first shown, which takes longer on a busy machine. */
 const LAZY = { timeout: 5000 };
-const loaded = () => screen.findAllByText('Clean up the build');
+/** The conversation, and the session's own page (its folder, under the title): what the chat knows of it once loaded. */
+const loaded = async () => {
+  await screen.findAllByText('Clean up the build');
+  await waitFor(() => expect(document.querySelector('header')?.textContent).toContain('/code/app'));
+};
 const untrusted = () => new ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: PreToolUse (.claude/settings.json)'] });
 
 /** Holds the next send's answer: what it returns lets it go. */
@@ -279,7 +289,7 @@ describe('what is being typed, when a message the chat sends on its own does not
     session();
     await loaded();
     typing();
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     fireEvent.click(await screen.findByText('Send now'));
     await screen.findByText('Can’t reach studio');
     expect(server.sent.map((body) => body.text)).toEqual(['In `src/a.ts` at line 3:\n```ts\nconst a = 1;\n```\nName this better']);
@@ -294,7 +304,7 @@ describe('what is being typed, when a message the chat sends on its own does not
     session();
     await loaded();
     typing();
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     fireEvent.click(await screen.findByText('Send now'));
     const sheet = await screen.findByRole('dialog', { name: 'Trust this folder?' });
     act(() => {
@@ -538,7 +548,7 @@ describe('line comments, as in Claude Desktop', () => {
     setComments(SESSION, [comment]);
     session();
     await loaded();
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     const release = holdNextSend();
     const sendNow = await screen.findByText('Send now');
     fireEvent.click(sendNow);
@@ -587,7 +597,7 @@ describe('line comments, as in Claude Desktop', () => {
     setComments(SESSION, [comment]);
     session();
     await loaded();
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     fireEvent.click(await screen.findByText('Send now'));
     await waitFor(() => expect(server.sent).toHaveLength(1));
     expect(server.sent[0]!.text).toBe(said);
@@ -620,7 +630,7 @@ describe('Commit, Push and Create PR', () => {
     session();
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }, LAZY));
     await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
     expect(server.sent).toEqual([]);
@@ -823,7 +833,7 @@ describe('quotes with a note, as Claude Desktop sends them', () => {
     setComments(SESSION, [comment]);
     session();
     await loaded();
-    fireEvent.click(screen.getByLabelText('Changes and files'));
+    fireEvent.click(await paneButton());
     expect(await screen.findByText('1 comment, 1 quote')).toBeTruthy();
     expect(screen.getByText(/wait for your next message/)).toBeTruthy();
     cleanup();
@@ -873,7 +883,7 @@ describe('Ctrl+O', () => {
     ctrlO({ shiftKey: true });
     ctrlO({ metaKey: true });
     expect(screen.queryByText(thinking)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Session menu' }));
+    fireEvent.click(sessionMenu());
     await screen.findByRole('dialog');
     ctrlO();
     expect(screen.queryByText(thinking)).toBeNull();
