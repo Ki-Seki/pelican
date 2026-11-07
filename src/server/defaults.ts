@@ -39,25 +39,38 @@ function highest<T>(layers: Layer[], read: (settings: Settings) => T | undefined
 }
 
 const saved = (level: unknown) => (isSavedEffort(level) ? level : undefined);
+const LEVELS: readonly unknown[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+/** A level a file caps effort at; Max is no cap, though a model's own Max takes the file's cap away for it. */
+const capOf = (level: unknown) => (typeof level === 'string' && LEVELS.includes(level) ? level : undefined);
 
 /**
- * Claude Code's table of efforts (2.1.318): each model's own level from modelSettings, the files
- * read from the highest precedence down, where a folder's or managed top-level effortLevel stops
- * the search too; the user's own top-level effortLevel is kept apart, for older models.
+ * Claude Code's table of efforts (2.1.318): each model's own level from modelSettings, keyed as
+ * Claude Code keys a model (an alias, such as opus, by the model it stands for in `models`), the
+ * files read from the highest precedence down, where a folder's or managed top-level effortLevel
+ * stops the search too; the user's own top-level effortLevel is kept apart, for older models. And
+ * the files' maxEffortLevel, the most a session's effort may be.
  */
-export function effortTable(layers: Layer[], env: NodeJS.ProcessEnv = {}): EffortTable {
+export function effortTable(layers: Layer[], env: NodeJS.ProcessEnv = {}, models?: ModelOption[]): EffortTable {
   let legacy: EffortDefault | undefined;
   let fallback: EffortDefault | undefined;
   const walk: Array<{ source: DefaultSource; top: unknown; setsTop: boolean; own: Map<string, unknown> }> = [];
+  const caps: NonNullable<EffortTable['caps']> = [];
   for (const { source, settings } of layers) {
     const own = new Map<string, unknown>();
+    const capped: Record<string, string> = {};
     if (isObject(settings.modelSettings)) {
       for (const [name, entry] of Object.entries(settings.modelSettings)) {
-        if (!isObject(entry) || entry.effortLevel === undefined) continue;
-        const key = modelKey(name);
+        if (!isObject(entry)) continue;
+        const key = modelKey(name, models);
+        // A file's own cap for a model: the lowest it names under any of the model's keys.
+        const cap = capOf(entry.maxEffortLevel);
+        if (cap && !Object.hasOwn(Object.prototype, key) && (!capped[key] || LEVELS.indexOf(cap) < LEVELS.indexOf(capped[key]))) capped[key] = cap;
+        if (entry.effortLevel === undefined) continue;
         if (name === key || !own.has(key)) own.set(key, entry.effortLevel);
       }
     }
+    const most = saved(settings.maxEffortLevel);
+    if (most || Object.keys(capped).length > 0) caps.push({ ...(most ? { top: most } : {}), ...(Object.keys(capped).length > 0 ? { byModel: capped } : {}) });
     const top = settings.effortLevel;
     if (source === 'user') {
       const level = saved(top);
@@ -78,7 +91,7 @@ export function effortTable(layers: Layer[], env: NodeJS.ProcessEnv = {}): Effor
       break;
     }
   }
-  const table: EffortTable = { byModel, ...(fallback ? { fallback } : legacy ? { legacy } : {}) };
+  const table: EffortTable = { byModel, ...(fallback ? { fallback } : legacy ? { legacy } : {}), ...(caps.length > 0 ? { caps } : {}) };
   const asked = env.CLAUDE_CODE_EFFORT_LEVEL?.trim().toLowerCase();
   if (asked === 'auto' || asked === 'unset') table.env = null;
   else if (asked && (isSavedEffort(asked) || asked === 'max')) table.env = asked;
@@ -126,8 +139,8 @@ export function startMode(layers: Layer[]): StartDefaults['permissionMode'] {
   return { value: mode === 'auto' && autoOff ? 'default' : mode, source, ...mine(source) };
 }
 
-/** What a new session starts with, from Claude Code's settings files (lowest precedence first). */
-export function startDefaults(layers: Layer[], env: NodeJS.ProcessEnv, file: UserSettingsFile): StartDefaults {
+/** What a new session starts with, from Claude Code's settings files (lowest precedence first); `models`, the picker's list, as far as it is known. */
+export function startDefaults(layers: Layer[], env: NodeJS.ProcessEnv, file: UserSettingsFile, models?: ModelOption[]): StartDefaults {
   const user = layers.find((layer) => layer.source === 'user')?.settings;
   const envModel = env.ANTHROPIC_MODEL?.trim();
   const named = highest(layers, (s) => (typeof s.model === 'string' && s.model.trim() ? s.model.trim() : undefined));
@@ -146,7 +159,7 @@ export function startDefaults(layers: Layer[], env: NodeJS.ProcessEnv, file: Use
 
   return {
     model,
-    effort: effortTable(layers, env),
+    effort: effortTable(layers, env, models),
     fast: { value: fastSet?.value === true && !perSession, source: fastSet?.source ?? 'built-in', perSession },
     ultracode: { value: ultra?.value === true && !workflowsOff, source: ultra?.source ?? 'built-in', workflows: !workflowsOff },
     permissionMode: startMode(layers),
@@ -208,8 +221,11 @@ export const DEMO_DEFAULTS: StartDefaults = {
   file: { path: '~/.claude/settings.json', state: 'missing' },
 };
 
-/** What a new session in `cwd` (none: a scratch session) starts with, and where each value comes from. */
-export async function readDefaults(cwd?: string): Promise<StartDefaults> {
+/**
+ * What a new session in `cwd` (none: a scratch session) starts with, and where each value comes
+ * from; `models`, the picker's list (as last listed), by which an alias's settings are its model's.
+ */
+export async function readDefaults(cwd?: string, models: ModelOption[] | undefined = knownModels()): Promise<StartDefaults> {
   if (config.demo) return DEMO_DEFAULTS;
   const dir = cwd ? await realpath(cwd).catch(() => undefined) : undefined;
   const settingSources = await sourcesFor(dir);
@@ -223,7 +239,7 @@ export async function readDefaults(cwd?: string): Promise<StartDefaults> {
   const file: UserSettingsFile = skipped
     ? { ...read.file, state: 'skipped', problem: 'Claude Code skips it: a value in it is not one Claude Code reads.' }
     : read.file;
-  return startDefaults(layers, process.env, file);
+  return startDefaults(layers, process.env, file, models);
 }
 
 /** Why a change was not made: said to the page as it is. */
@@ -259,9 +275,11 @@ async function patchFor(change: DefaultChange, models: () => Promise<ModelOption
     return { model: model === 'default' ? undefined : model };
   }
   if ('effort' in change) {
-    const { level } = change.effort ?? {};
+    const { level, model } = change.effort ?? {};
     if (level !== null && !isSavedEffort(level)) throw new SettingsRefused('Claude Code keeps Low, Medium, High or Extra high as a default; Max is for one session.', 400);
-    const key = modelKey(await listed(change.effort.model), await models());
+    // Any model a session or a settings file names, listed or not (opus[1m]): /effort saves under its key.
+    if (typeof model !== 'string' || !model.trim() || model.length > 200) throw new SettingsRefused('No such model', 400);
+    const key = modelKey(model, await models());
     // As /effort does: under the model's key, or at the top for a key every object has.
     return Object.hasOwn(Object.prototype, key)
       ? { effortLevel: level ?? undefined }
@@ -363,7 +381,8 @@ export async function newSessionSettings(
   // As last listed: asking Claude Code now would start another process for a list the page has asked for already.
   listed: () => Promise<ModelOption[] | undefined> = async () => knownModels(),
 ): Promise<{ given: RunSettings; shown: RunSettings }> {
-  const [defaults, models] = await Promise.all([readDefaults(cwd), listed()]);
+  const models = await listed();
+  const defaults = await readDefaults(cwd, models);
   const model = picked.model ?? pickerValue(defaults.model.value, models);
   const option = models?.find((m) => m.value === model);
   // Default picked where a file names another: the model's own, as /effort auto gives it, which

@@ -13,3 +13,23 @@ export function pickerValue(id: string, models: ModelOption[] | undefined, chose
   const resolving = models?.filter((m) => m.resolvedModel === id) ?? [];
   return exact?.value ?? (resolving.find((m) => m.value !== 'default') ?? resolving[0])?.value ?? id;
 }
+
+/**
+ * A model Claude Code's settings or a session name that the picker's list does not offer (opus[1m],
+ * a dated id), as an option of its own, as Claude Code's /model shows one: by the listed model it is
+ * a version of, with that model's efforts and fast mode, else by its name; "Custom model (opus[1m])".
+ */
+export function unlistedModel(value: string, models: ModelOption[]): ModelOption {
+  const long = /\[1m\]$/i.test(value);
+  const bare = value.replace(/\[[12]m\]$/i, '');
+  const base = models.find((m) => m.value !== 'default' && (m.value === bare || m.resolvedModel === bare));
+  return {
+    value,
+    label: base ? `${base.label}${long ? ' (1M context)' : ''}` : value,
+    description: `Custom model (${value})`,
+    efforts: base?.efforts ?? [],
+    supportsFast: base?.supportsFast ?? false,
+    ...(base?.supportsAuto !== undefined ? { supportsAuto: base.supportsAuto } : {}),
+    ...(base?.resolvedModel ? { resolvedModel: base.resolvedModel } : {}),
+  };
+}

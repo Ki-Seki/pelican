@@ -9,6 +9,7 @@ import { BUILT_IN } from './start-defaults';
 
 const models: ModelOption[] = [
   { value: 'default', label: 'Default (recommended)', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, supportsAuto: true, resolvedModel: 'claude-opus-5-5' },
+  { value: 'opus', label: 'Opus', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, supportsAuto: true, resolvedModel: 'claude-opus-5-5' },
   { value: 'sonnet', label: 'Sonnet', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: false, supportsAuto: true, resolvedModel: 'claude-sonnet-5-5' },
   { value: 'haiku', label: 'Haiku', description: '', efforts: [], supportsFast: false, supportsAuto: false, resolvedModel: 'claude-haiku-5-5' },
 ];
@@ -144,6 +145,30 @@ describe('Settings › New sessions start with', () => {
     fireEvent.click(within(sheet).getByText('Sonnet'));
     await waitFor(() => expect(claudeCode.saved.at(-1)).toEqual({ change: { model: 'sonnet' } }));
     await waitFor(() => expect(rows.model().textContent).toContain('Sonnet'));
+  });
+
+  it('shows the effort new sessions start with as Claude Code works it out: by an alias of the model, and no more than maxEffortLevel', async () => {
+    // A model's own effort under its alias, as the server reads it before it knows the list.
+    claudeCode.byFolder.set('', said({ effort: { byModel: { opus: { level: 'high', source: 'user' } } } }));
+    const rows = settings();
+    await waitFor(() => expect(rows.model().textContent).toBe('ModelYour Claude Code settingsDefaultHigh'));
+    cleanup();
+    claudeCode.byFolder.set('', said({ effort: { byModel: { 'claude-opus-5-5': { level: 'high', source: 'user' } }, caps: [{ top: 'low' }] } }));
+    const capped = settings();
+    await waitFor(() => expect(capped.model().textContent).toBe('ModelYour Claude Code settingsDefaultLow'));
+  });
+
+  it('shows a model Claude Code’s settings name that its list does not offer as itself, and saves an effort for it', async () => {
+    claudeCode.byFolder.set('', said({ model: { value: 'opus[1m]', source: 'user' }, effort: { byModel: { 'claude-opus-5-5': { level: 'high', source: 'user' } } } }));
+    const rows = settings();
+    await waitFor(() => expect(rows.model().textContent).toBe('ModelYour Claude Code settingsOpus (1M context)High'));
+    fireEvent.click(rows.model());
+    const sheet = lastSheet();
+    const picked = within(sheet).getByText('Opus (1M context)').closest('button')!;
+    expect(picked.getAttribute('aria-pressed') ?? picked.getAttribute('aria-checked') ?? picked.getAttribute('aria-selected')).toBe('true');
+    expect(within(sheet).getByText('Custom model (opus[1m])')).toBeTruthy();
+    fireEvent.click(within(sheet).getByText('Med'));
+    await waitFor(() => expect(claudeCode.saved).toEqual([{ change: { effort: { model: 'opus[1m]', level: 'medium' } } }]));
   });
 
   it('offers Manual, Accept edits, Plan and Auto as the mode, never Bypass, and saves the one picked', async () => {

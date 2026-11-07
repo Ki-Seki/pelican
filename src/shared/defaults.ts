@@ -17,6 +17,9 @@ export const SAVED_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
 export type SavedEffort = (typeof SAVED_EFFORTS)[number];
 export const isSavedEffort = (value: unknown): value is SavedEffort => (SAVED_EFFORTS as readonly unknown[]).includes(value);
 
+/** Every level, the least first. */
+const LEVELS: readonly string[] = [...SAVED_EFFORTS, 'max'];
+
 /**
  * A new session's effort picked as Default where Claude Code's settings would start it with another:
  * the model's own, as `/effort auto` gives it (Claude Code's word for its default). Only a pick says it.
@@ -38,6 +41,11 @@ export type EffortTable = {
   legacy?: EffortDefault;
   /** CLAUDE_CODE_EFFORT_LEVEL in Pelican's environment, which every session gets; null where it says auto. */
   env?: string | null;
+  /**
+   * The files' maxEffortLevel, which no session's effort goes above: by file, the model's own cap
+   * (modelSettings.<model>.maxEffortLevel, Max for none) in place of the file's; the lowest counts.
+   */
+  caps?: Array<{ top?: string; byModel?: Record<string, string> }>;
 };
 
 export type StartDefaults = {
@@ -85,8 +93,10 @@ export type DefaultChange =
  * picker's list), without [1m], a provider's prefix or a date; it matches all those spellings.
  */
 export function modelKey(model: string, models?: ModelOption[]): string {
-  const option = models?.find((m) => m.value === model);
-  let key = (option?.resolvedModel ?? model).trim().toLowerCase().replace(/\[[12]m\]$/, '');
+  // opus[1m] is opus's key, as an alias the list does not have.
+  const bare = model.trim().replace(/\[[12]m\]$/i, '');
+  const option = models?.find((m) => m.value === model) ?? models?.find((m) => m.value === bare);
+  let key = (option?.resolvedModel ?? bare).trim().toLowerCase().replace(/\[[12]m\]$/, '');
   key = key.slice(key.lastIndexOf('/') + 1).replace(/^(?:[a-z-]+\.)?anthropic\./, '');
   return key.replace(/-v\d+(?::\d+)?$/, '').replace(/[@-]\d{8}$/, '');
 }
@@ -109,15 +119,37 @@ export function effortFor(table: EffortTable, key: string | undefined, model?: M
     ? (table.env === null ? { source: 'env' } : { level: table.env, source: 'env' })
     : key !== undefined && Object.hasOwn(table.byModel, key) ? table.byModel[key]!
       : table.fallback ?? (table.legacy && key !== undefined && takesLegacyEffort(key) ? table.legacy : { source: 'built-in' });
-  if (!found.level || !model || model.efforts.includes(found.level)) return found;
+  const capped = capTo(found, capFor(table, key));
+  if (!capped.level || !model || model.efforts.includes(capped.level)) return capped;
   // A model without effort levels gets none; one without Extra high or Max gets High, as Claude Code clamps it.
-  if (model.efforts.length === 0) return { source: found.source };
-  return found.level === 'xhigh' || found.level === 'max' ? { ...found, level: 'high' } : found;
+  if (model.efforts.length === 0) return { source: capped.source };
+  return capped.level === 'xhigh' || capped.level === 'max' ? { ...capped, level: 'high' } : capped;
 }
 
-/** The effort a new session on the picker's `model` starts with. */
-export const effortOf = (defaults: StartDefaults, model: string, models: ModelOption[] | undefined): EffortDefault =>
-  effortFor(defaults.effort, modelKey(model, models), models?.find((m) => m.value === model));
+/** The highest effort the files let a session on the model with this key run at (maxEffortLevel); none for no cap. */
+export function capFor(table: EffortTable, key: string | undefined): string | undefined {
+  let cap: string | undefined;
+  for (const file of table.caps ?? []) {
+    // A model's own cap stands in for its file's; Max is none.
+    const level = (key !== undefined && file.byModel && Object.hasOwn(file.byModel, key) ? file.byModel[key] : undefined) ?? file.top;
+    if (level && level !== 'max' && (cap === undefined || LEVELS.indexOf(level) < LEVELS.indexOf(cap))) cap = level;
+  }
+  return cap;
+}
+
+const capTo = (found: EffortDefault, cap: string | undefined): EffortDefault =>
+  (found.level && cap && LEVELS.indexOf(found.level) > LEVELS.indexOf(cap) ? { ...found, level: cap } : found);
+
+/**
+ * The effort a new session on the picker's `model` starts with. A table read before the server
+ * knew the list of models keeps an alias's own key (opus): it counts for the model it stands for.
+ */
+export function effortOf(defaults: StartDefaults, model: string, models: ModelOption[] | undefined): EffortDefault {
+  const key = modelKey(model, models);
+  const table = defaults.effort;
+  const alias = Object.hasOwn(table.byModel, key) ? undefined : Object.keys(table.byModel).find((name) => modelKey(name, models) === key);
+  return effortFor(alias ? { ...table, byModel: { ...table.byModel, [key]: table.byModel[alias]! } } : table, key, models?.find((m) => m.value === model));
+}
 
 /** The mode a new session starts in on `model`: Auto is Manual on a model without it, as in Claude Code. */
 export function startModeFor(defaults: StartDefaults, model: { supportsAuto?: boolean } | undefined): PermissionMode {
