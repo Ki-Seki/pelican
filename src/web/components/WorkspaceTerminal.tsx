@@ -37,9 +37,11 @@ const shownBefore = (cwd: string) => {
 
 /**
  * What this tab of the browser knows of a folder's terminals, kept while the view closes and
- * opens again: those the last list had, and those gone since that were not ended here.
+ * opens again: those the last list had, those gone since that were not ended here, and those
+ * started here in a folder that is elsewhere once its links are followed (Open in terminal on a
+ * link to a folder outside the session's), which are this tab's all the same.
  */
-type Kept = { known: TerminalInfo[]; lost: TerminalInfo[] };
+type Kept = { known: TerminalInfo[]; lost: TerminalInfo[]; also: string[] };
 const keptKey = (cwd: string) => `pelican:terminal-tabs:${cwd}`;
 const isInfo = (t: unknown): t is TerminalInfo => {
   const info = t as Partial<TerminalInfo> | null;
@@ -48,9 +50,9 @@ const isInfo = (t: unknown): t is TerminalInfo => {
 const keptBefore = (cwd: string): Kept => {
   try {
     const kept = JSON.parse(sessionStorage.getItem(keptKey(cwd)) ?? 'null') as Partial<Kept> | null;
-    return { known: (kept?.known ?? []).filter(isInfo), lost: (kept?.lost ?? []).filter(isInfo) };
+    return { known: (kept?.known ?? []).filter(isInfo), lost: (kept?.lost ?? []).filter(isInfo), also: (kept?.also ?? []).filter((id) => typeof id === 'string') };
   } catch {
-    return { known: [], lost: [] };
+    return { known: [], lost: [], also: [] };
   }
 };
 const keep = (cwd: string, kept: Kept) => {
@@ -131,7 +133,10 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   // A touch screen types with the line field, a keyboard into the screen: decided once, as a
   // tablet that also has a trackpad says one or the other as it is used.
   const [touch] = useState(() => window.matchMedia('(pointer: coarse)').matches);
-  const list = useQuery({ queryKey: ['terminals'], queryFn: api.terminals, enabled: !hidden, refetchInterval: hidden ? false : 10_000, staleTime: 2_000 });
+  const list = useQuery({ queryKey: ['terminals', cwd], queryFn: () => api.terminals(cwd), enabled: !hidden, refetchInterval: hidden ? false : 10_000, staleTime: 2_000 });
+  // The folder as terminals name it, its links followed (on a Mac, /tmp is /private/tmp): a new
+  // session's page under a link's name shows the terminals its session will.
+  const here = list.data?.folder ?? cwd;
   // The folder's terminals as this tab of the browser knows them, and those gone since that were
   // not ended here (endedHere): their tabs stay, with Start again, also when the list comes back
   // before a terminal's socket says so, and while the view closes and opens again.
@@ -139,13 +144,14 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   const endedHere = useRef(new Set<string>());
   // A list fetched since the view opened tells what is running for sure; one from before may be old.
   const fresh = Boolean(list.isFetchedAfterMount && list.data?.available);
-  const running = useMemo(() => (list.data?.available ? list.data.terminals.filter((t) => within(t.cwd, cwd)) : []), [list.data, cwd]);
-  const lost = useMemo(() => lostSince(fresh ? kept : { known: [], lost: kept.lost }, running, endedHere.current), [fresh, kept, running]);
+  const ours = useCallback((t: TerminalInfo) => within(t.cwd, here) || kept.also.includes(t.id), [here, kept.also]);
+  const running = useMemo(() => (list.data?.available ? list.data.terminals.filter(ours) : []), [list.data, ours]);
+  const lost = useMemo(() => lostSince(fresh ? kept : { known: [], lost: kept.lost, also: [] }, running, endedHere.current), [fresh, kept, running]);
   const tabs = useMemo(() => [...running, ...lost].sort((a, b) => a.createdAt - b.createdAt), [running, lost]);
   useEffect(() => {
     if (!fresh) return;
     setKept((before) => {
-      const next = { known: running, lost: lostSince(before, running, endedHere.current) };
+      const next = { known: running, lost: lostSince(before, running, endedHere.current), also: before.also.filter((id) => running.some((t) => t.id === id)) };
       return JSON.stringify(next) === JSON.stringify(before) ? before : next;
     });
   }, [fresh, running]);
@@ -171,8 +177,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   const opening = useRef(false);
   const asks = useTerminalAsks();
   const focusWanted = useTerminalFocusWanted();
-  const latest = useRef({ tabs, shown });
-  latest.current = { tabs, shown };
+  const latest = useRef({ tabs, shown, here });
+  latest.current = { tabs, shown, here };
 
   const show = useCallback((id: string) => {
     setPicked(id);
@@ -188,8 +194,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
    */
   const changeList = useCallback((change: (old: TerminalList | undefined) => TerminalList | undefined) => {
     void queryClient.cancelQueries({ queryKey: ['terminals'] });
-    queryClient.setQueryData<TerminalList>(['terminals'], change);
-  }, [queryClient]);
+    queryClient.setQueryData<TerminalList>(['terminals', cwd], change);
+  }, [queryClient, cwd]);
 
   /** The list as the page knows it, one terminal changed (or, with undefined, taken out). */
   const patch = useCallback((id: string, change: (terminal: TerminalInfo) => TerminalInfo | undefined) => {
@@ -214,6 +220,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
           const size = screen.current?.size() ?? { cols: 80, rows: 24 };
           const colors = screen.current?.colors();
           const terminal = await api.openTerminal({ cwd: folder, ...size, ...(command ? { command } : {}), ...(trust ? { trust } : {}), ...(colors ? { colors } : {}) });
+          // Started here in a folder outside this one, once its links are followed: this tab's still.
+          if (!within(terminal.cwd, latest.current.here)) setKept((before) => ({ ...before, also: [...before.also, terminal.id] }));
           changeList((old) => ({
             available: true,
             ...old,
@@ -279,11 +287,11 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   const quote = useCallback((text: string) => {
     const { tabs: all, shown: from } = latest.current;
     const at = from ? all.findIndex((t) => t.id === from.id) : -1;
-    const item = quoteItem(text, { what: 'terminal' }, { ...(at >= 0 ? { tab: String(at + 1) } : {}), ...(from ? { label: tabTitle(from, cwd) } : {}) });
+    const item = quoteItem(text, { what: 'terminal' }, { ...(at >= 0 ? { tab: String(at + 1) } : {}), ...(from ? { label: tabTitle(from, latest.current.here) } : {}) });
     if (!item) return;
     onQuote(item);
     announce('Quoted in your message');
-  }, [onQuote, cwd]);
+  }, [onQuote]);
   const showText = useCallback(() => setAsText(screen.current?.text()), []);
   // The terminal's menu (lib/actions), Desktop's, on a right-click or a long press: what it offers is
   // read as it opens, what is selected included.
@@ -314,7 +322,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   const forget = async (terminal: TerminalInfo) => {
     const wasLost = lost.some((t) => t.id === terminal.id);
     endedHere.current.add(terminal.id);
-    setKept((before) => ({ known: before.known.filter((t) => t.id !== terminal.id), lost: before.lost.filter((t) => t.id !== terminal.id) }));
+    setKept((before) => ({ known: before.known.filter((t) => t.id !== terminal.id), lost: before.lost.filter((t) => t.id !== terminal.id), also: before.also.filter((id) => id !== terminal.id) }));
     patch(terminal.id, () => undefined);
     if (wasLost) return;
     await api.closeTerminal(terminal.id).catch((error: unknown) => {
@@ -394,10 +402,10 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
   if (list.data && !list.data.available) return <><Centered><p className="max-w-xs"><Reason text={list.data.reason ?? 'There is no terminal here.'} /></p></Centered>{above}</>;
 
   const shownRuns = Boolean(shown && !shown.exit && !shownLost);
-  const elsewhere = (list.data?.terminals ?? []).filter((t) => !within(t.cwd, cwd));
+  const elsewhere = (list.data?.terminals ?? []).filter((t) => !ours(t));
   const ended = shown && !shownRuns;
   const crowded = connection?.kind === 'crowded';
-  const label = (t: TerminalInfo) => tabTitle(t, cwd);
+  const label = (t: TerminalInfo) => tabTitle(t, here);
   const safe = lowest ? 'pb-safe' : 'pb-1.5';
 
   return (

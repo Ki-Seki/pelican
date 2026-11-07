@@ -1,7 +1,8 @@
 // The terminal: a shell on the computer, shown beside the conversation as Claude Desktop shows
 // one. Its routes, and what its socket carries; the server side is src/server/terminals.ts.
 //
-//   GET    /api/terminals?cwd   → TerminalList (the folder's terminals; all of them without cwd)
+//   GET    /api/terminals?cwd&folder → TerminalList (the folder's terminals; all of them without cwd;
+//                               with folder, how terminals name that one)
 //   POST   /api/terminals       NewTerminal → 201 { terminal: TerminalInfo }
 //                               403 off or the demo · 409 { needsTrust, brings } · 429 too many · 503 no PTY here
 //   GET    /api/terminals/:id   → TerminalRunning, or 404: End asks first while a program runs
@@ -26,7 +27,10 @@ export type TerminalExit = { code: number | null; signal: string | null };
 /** A terminal, as the list shows it. Terminals belong to the folder they started in. */
 export type TerminalInfo = {
   id: string;
-  /** The folder it started in. */
+  /**
+   * The folder it started in, its links followed (on a Mac, /tmp is /private/tmp), as a session
+   * started there names it: whichever name a page opened it under, it is that folder's.
+   */
   cwd: string;
   /** The program in front, for the tab's name: the shell's at its prompt, else what runs (vim, node). */
   program: string;
@@ -56,7 +60,11 @@ export type TerminalAvailability = { available: boolean; reason?: string };
 export type TerminalColors = { foreground: string; background: string; cursor: string; ansi: string[] };
 
 /** GET /api/terminals */
-export type TerminalList = TerminalAvailability & { terminals: TerminalInfo[] };
+export type TerminalList = TerminalAvailability & {
+  terminals: TerminalInfo[];
+  /** The folder asked about (`folder=`), as terminals name it: its links followed. */
+  folder?: string;
+};
 
 /** POST /api/terminals */
 export type NewTerminal = {

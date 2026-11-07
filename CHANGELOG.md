@@ -351,7 +351,9 @@ settings; and updates from Settings.
 - A session started in a folder reached through a link (on a Mac, `/tmp` is `/private/tmp`) runs in
   the folder itself, as Claude Code records it, so its conversation, Changes and Terminal name one
   folder alike: before, a reload could show its terminal as no longer running, beside a second one
-  started under the folder's other name.
+  started under the folder's other name. A terminal belongs to the folder itself too, so one opened
+  on the New session page, before the first message, is the session's terminal once it starts,
+  rather than running on unseen, counting toward the 10, beside a second one.
 
 ### Security
 

@@ -4,7 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -158,6 +158,27 @@ describe('a terminal', () => {
     await until(() => late.closed !== undefined);
     expect(late.closed?.code).toBe(TERMINAL_CLOSE.gone);
   }, 30_000);
+
+  it('belongs to the folder itself, links followed, as the session there does: opened under a link’s name, it is listed under both', async () => {
+    // A new session's page in a folder reached through a link (on a Mac, /tmp is /private/tmp): the
+    // session starts in the folder itself, and its page lists the terminal opened before it did.
+    const link = path.join(dir, 'link-to-work');
+    await symlink(work(), link);
+    try {
+      const terminal = await open(link);
+      expect(terminal.cwd).toBe(work());
+      const shown = await atPrompt(terminal.id);
+      shown.type('pwd -P\r');
+      await shown.sees(new RegExp(`\\r\\n${literally(work())}\\r\\n`));
+      for (const name of [link, work()]) {
+        const listed = await api('GET', `/api/terminals?cwd=${encodeURIComponent(name)}&folder=${encodeURIComponent(name)}`);
+        expect(listed.body).toMatchObject({ terminals: [{ id: terminal.id, cwd: work() }], folder: work() });
+      }
+      expect((await api('GET', '/api/terminals')).body).not.toHaveProperty('folder');
+    } finally {
+      await rm(link);
+    }
+  }, 20_000);
 
   it('when Pelican stops, its pages lose the connection as to a server going away, to come back and start again', async () => {
     const terminal = await open();
