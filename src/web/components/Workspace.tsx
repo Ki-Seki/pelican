@@ -383,8 +383,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
         </span>
       )}
+      {/* Beside the conversation, the message box's Send is the one black button: this one is quiet. */}
       {onSendComments && (
-        <button type="button" onClick={onSendComments} aria-keyshortcuts={ariaKeys('commentsSend')} title={`Send now (${SEND_KEYS})`} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
+        <button type="button" onClick={onSendComments} aria-keyshortcuts={ariaKeys('commentsSend')} title={`Send now (${SEND_KEYS})`} className={`flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium pointer-fine:h-9 ${docked ? 'bg-chip text-fg hover:bg-hover' : 'bg-fg text-bg'}`}>
           Send now
           {docked && SEND_KEYS && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{SEND_KEYS}</span>}
         </button>
@@ -426,6 +427,30 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   const view = useRef<HTMLDivElement>(null);
   useCovering(open && !docked, view);
+  // A phone on its side folds the view's header and tabs, and the terminal's, away from its screen
+  // (styles.css): a tap on the screen shows them, or folds them again; typing in its line folds them.
+  const [unfolded, setUnfolded] = useState(false);
+  const tap = useRef<{ id: number; x: number; y: number; at: number; fingers: number }>(undefined);
+  const onScreen = (target: EventTarget) => target instanceof Element && Boolean(target.closest('[data-terminal]'));
+  const foldHandlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== 'touch' || !onScreen(e.target)) return;
+      tap.current = tap.current ? { ...tap.current, fingers: tap.current.fingers + 1 } : { id: e.pointerId, x: e.clientX, y: e.clientY, at: e.timeStamp, fingers: 1 };
+    },
+    onPointerUp: (e: React.PointerEvent) => {
+      const down = tap.current;
+      if (!down || e.pointerId !== down.id) return;
+      tap.current = undefined;
+      // A tap: not a swipe through the output, a long press for its menu, or two fingers sizing it.
+      if (down.fingers === 1 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && e.timeStamp - down.at < 400) setUnfolded((was) => !was);
+    },
+    onPointerCancel: () => {
+      tap.current = undefined;
+    },
+    onFocus: (e: React.FocusEvent) => {
+      if (e.target instanceof Element && e.target.matches('[data-terminal-line]')) setUnfolded(false);
+    },
+  };
   // Beside the conversation on a screen under 1280px, the session list makes way (styles.css); the
   // side chat, which can sit under it, marks the page too, and the mark stays while either does.
   useDockedMark(open && docked);
@@ -463,7 +488,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       role="region"
       aria-label="Changes and files"
       data-workspace
+      data-tab={tab}
+      data-unfolded={unfolded || undefined}
       tabIndex={-1}
+      {...foldHandlers}
       onKeyDown={(e) => {
         onKeyDown(e);
         if (own(e) && e.key === 'Escape' && !e.defaultPrevented && !composing(e.nativeEvent)) {

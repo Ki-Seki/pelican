@@ -123,12 +123,26 @@ body {
 
 /* Typing in a phone's terminal line while what can be seen is short (data-short, lib/viewport: its
    keyboard is up, or it lies on its side): Changes and files' header and tabs, and the terminal's
-   own tabs, make way, so the screen keeps rows to read; with room for the line alone, the key row
-   too, so the line stays above the keyboard. They come back once the line is left (a tap on the
-   screen), or what can be seen is no longer short: on an upright phone, the keyboard down. */
-:root[data-short] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='short'],
-:root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='tiny'] {
+   own tabs, make way, so the screen keeps rows to read; upright, with room for the line alone, the
+   key row too, so the line stays above the keyboard. They come back once the line is left (a tap
+   on the screen), or what can be seen is no longer short: on an upright phone, the keyboard down. */
+:root[data-short] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='short'] {
   display: none;
+}
+@media (orientation: portrait) {
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-makes-room='tiny'] {
+    display: none;
+  }
+}
+
+/* A phone on its side, on the Terminal tab: they are folded away whether the line is typed in or
+   not, so the screen keeps a dozen rows; a tap on the screen shows them, or folds them again, and
+   typing in the line folds them (Workspace, data-unfolded). The key row and the line share one row
+   there (WorkspaceTerminal), which the keyboard leaves room for. */
+@media (orientation: landscape) and (pointer: coarse) {
+  :root[data-short] [data-workspace][data-tab='terminal']:not([data-unfolded]) [data-makes-room='short'] {
+    display: none;
+  }
 }
 
 /* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px

@@ -63,9 +63,14 @@ export function dayLabel(ms: number, now = Date.now()): string {
 }
 
 /** `~/repos/x` for paths under home. */
+/**
+ * A folder as it is read: under the home folder from ~; and a Mac's /private/tmp, /private/var and
+ * /private/etc, where its /tmp, /var and /etc lead and where Claude Code records a session started
+ * in them, by the names they were picked by (New session shows /tmp; the session then says so too).
+ */
 export function shortPath(path: string, home?: string): string {
   if (home && (path === home || path.startsWith(`${home}/`))) return `~${path.slice(home.length)}`;
-  return path;
+  return path.replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, '');
 }
 
 export function baseName(path: string): string {

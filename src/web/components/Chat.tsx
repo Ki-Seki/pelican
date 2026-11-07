@@ -3,7 +3,7 @@ import {
   Activity, Archive, ArchiveRestore, BarChart3, CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, Cpu, Download, FileDiff, Folder,
   Gauge, GitBranch, GitFork, Info, ListChecks, Loader2, type LucideIcon, MessagesSquare, Pencil, Pin, PinOff, Plug, Plus, ShieldCheck, SquareTerminal, TriangleAlert, X, Zap,
 } from 'lucide-react';
-import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { OWN_EFFORT, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
@@ -17,7 +17,7 @@ import { commandOf, SESSION_ACTIONS } from '../lib/actions';
 import { addWaiting, clearDraft, loadDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
+import { ariaKeys, closesPane, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
 import { type CommandItem, useCommandContext, useCommandPart } from '../lib/commands';
 import { changeListed } from '../lib/list-changes';
 import { retried } from '../lib/load';
@@ -159,17 +159,22 @@ function PaneButton({ icon: Icon, label, keyId, pressed, onClick, children, ref 
   );
 }
 
-/** On a phone, the panes as tiles at the top of the title's menu, the first menu a newcomer opens. */
+/**
+ * On a phone, the panes as tiles at the top of the title's menu, the first menu a newcomer opens:
+ * Changes with its lines takes the room they need, so it shows them whole, "Changes +13 −1", as
+ * the view's own tab does; the others share the rest.
+ */
 function PaneTiles({ lines, onPick }: { lines?: { added: number; removed: number }; onPick: (tab: WorkspaceTab) => void }) {
+  const counted = Boolean(lines && (lines.added > 0 || lines.removed > 0));
   const tile = (tab: WorkspaceTab, Icon: LucideIcon, label: string, extra?: ReactNode) => (
-    <button type="button" onClick={() => onPick(tab)} className="flex min-h-16 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl bg-chip px-2 py-2 text-[14px] active:bg-hover">
+    <button type="button" onClick={() => onPick(tab)} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-chip px-2 py-2 text-[14px] active:bg-hover">
       <Icon className="size-[18px] text-muted" />
       <span className="flex max-w-full items-baseline gap-1.5 truncate">{label}{extra}</span>
     </button>
   );
   return (
-    <div className="flex gap-2 px-1 pt-1 pb-2">
-      {tile('changes', FileDiff, 'Changes', lines && (lines.added > 0 || lines.removed > 0) ? <Lines {...lines} /> : undefined)}
+    <div className={`grid gap-2 px-1 pt-1 pb-2 ${counted ? 'grid-cols-[minmax(max-content,1.4fr)_1fr_1fr]' : 'grid-cols-3'}`}>
+      {tile('changes', FileDiff, 'Changes', counted && lines ? <Lines {...lines} /> : undefined)}
       {tile('files', Folder, 'Files')}
       {tile('terminal', SquareTerminal, 'Terminal')}
     </div>
@@ -351,6 +356,35 @@ function TasksBar({ tasks }: { tasks: Todo[] }) {
   );
 }
 
+/**
+ * While Claude waits for an answer, Claude's task list and what runs in the background fold into
+ * this one line under its card, so the card and its buttons sit near the thumb and the conversation
+ * keeps its room; a tap unfolds them until the card is answered.
+ */
+function FoldedBars({ tasks, background, onUnfold }: { tasks: Todo[]; background: string; onUnfold: () => void }) {
+  const done = tasks.filter((t) => t.status === 'completed').length;
+  const current = tasks.find((t) => t.status === 'in_progress');
+  return (
+    <button type="button" aria-expanded={false} onClick={onUnfold} className="relative mx-auto mb-2 flex h-8 w-full max-w-3xl items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:text-fg">
+      {tasks.length > 0 && (
+        <>
+          <ListChecks className="size-3.5 shrink-0" />
+          <span className="shrink-0 tabular-nums">{done}/{tasks.length}</span>
+          <span className="min-w-0 flex-1 truncate">{current ? current.activeForm || current.content : done === tasks.length ? 'All done' : 'Tasks'}</span>
+        </>
+      )}
+      {background && (
+        <span className={`flex min-w-0 items-center gap-2 ${tasks.length > 0 ? 'shrink-0' : 'flex-1'}`}>
+          {tasks.length > 0 && <span aria-hidden className="text-faint">·</span>}
+          <Pulse />
+          <span className="truncate tabular-nums">{background}</span>
+        </span>
+      )}
+      <ChevronUp className="size-4 shrink-0" />
+    </button>
+  );
+}
+
 /** The demo's note, with its way out on the site: a link to install. */
 function NoteText({ text }: { text: string }) {
   const at = STATIC_DEMO ? text.indexOf('Install Pelican') : -1;
@@ -461,6 +495,8 @@ export function Chat({
   const [picking, setPicking] = useState(false);
   // What runs in the background here, its list open (⌃B, /tasks).
   const [backgroundOpen, setBackgroundOpen] = useState(false);
+  // The card Claude waits on whose bars were unfolded (FoldedBars): they fold again for the next one.
+  const [unfoldedFor, setUnfoldedFor] = useState<string>();
   const backgroundBar = useRef<HTMLDivElement>(null);
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -939,6 +975,22 @@ export function Chat({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cwd, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
+  // Cmd/Ctrl+\ closes a pane beside the conversation from anywhere on the page, as ⌘/ lists it: the
+  // one it is pressed in (which closes itself), else the one asked for last of the side chat and
+  // Changes, Files or the Terminal.
+  const { docked: sideDocked, front: sideFront, close: closeSide } = side;
+  const paneDocked = workspace.docked && paneShown;
+  useEffect(() => {
+    if (!sideDocked && !paneDocked) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!closesPane(e) || e.repeat || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]:not([data-closing])')) return;
+      e.preventDefault();
+      if (sideDocked && (!paneDocked || sideFront === 'side')) closeSide();
+      else setPaneOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sideDocked, paneDocked, sideFront, closeSide, setPaneOpen]);
   // Run in terminal, from a command in a reply or a step, once asked: a new terminal in the
   // session's folder runs it, in the shell the terminal runs.
   const terminals = useTerminalsAvailable();
@@ -964,6 +1016,9 @@ export function Chat({
   );
   // A side chat's tasks are the copy of its session's, not work of its own.
   const showTasks = !sideChat && tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
+  const inBackgroundNow = Boolean(sessionId) && (view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0) > 0;
+  // While Claude waits for an answer, the two fold into one line under its card, until unfolded.
+  const folded = Boolean(request) && unfoldedFor !== request?.id && (showTasks || inBackgroundNow);
 
   useEffect(() => setSessionTitle(title), [title]);
   useEffect(() => () => setSessionTitle(undefined), []);
@@ -993,6 +1048,29 @@ export function Chat({
   // Esc stops Claude, as in Claude Code, when nothing else takes it: an open sheet, the / list,
   // a field of its own (the reason for a Deny), or a part of the page outside this chat.
   const root = useRef<HTMLDivElement>(null);
+  // The message box's height, for a card's foot to stay just above it where the whole chat scrolls
+  // (a phone on its side, PermissionCard); and there, a card that comes is scrolled to, its foot in
+  // view, as it is anywhere else at once.
+  useLayoutEffect(() => {
+    const el = root.current;
+    const box = el?.querySelector<HTMLElement>(':scope > [data-composer]');
+    if (!el || !box || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => el.style.setProperty('--composer-h', `${box.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  const asking = request?.id;
+  useEffect(() => {
+    const el = root.current;
+    if (!asking || !el || !window.matchMedia('(max-height: 380px)').matches) return;
+    // Its start at the top, its foot above the message box: as much of it as there is room for.
+    requestAnimationFrame(() => {
+      const card = el.querySelector('[data-dock] section');
+      if (card) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    });
+  }, [asking]);
   useEffect(() => {
     if (!busy || !sessionId) return undefined;
     const onKey = (e: KeyboardEvent) => {
@@ -1179,6 +1257,8 @@ export function Chat({
       composer.current?.focus();
       return;
     }
+    // Folded under a card Claude waits on, they unfold first.
+    setUnfoldedFor(getView(viewId).run?.permissions?.[0]?.id);
     setBackgroundOpen(true);
     requestAnimationFrame(() => backgroundBar.current?.querySelector<HTMLElement>('button')?.focus());
   };
@@ -1264,7 +1344,7 @@ export function Chat({
     <RunInTerminal.Provider value={runInTerminal}>
     <TerminalShell.Provider value={terminalShell}>
     <CommentsChat.Provider value={viewId}>
-    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:scroll-pt-12 [@media(max-height:380px)]:scroll-pb-[calc(var(--composer-h,0px)+5rem)] [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {!wide && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
@@ -1288,10 +1368,11 @@ export function Chat({
             </div>
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
               <StatusBadge status={status} runningIn={otherAtWork ? session?.runningIn : undefined} tasks={working} />
-              <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
+              {/* A long path gives way from its start, keeping the folder's name, and leaves the branch its room. */}
+              <span dir="rtl" className="min-w-0 truncate text-left font-mono" title={cwd}><bdi dir="ltr">{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</bdi></span>
               {/* On a phone the line has room for the branch only when nothing else is going on. */}
               {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
-                <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
+                <span className="flex max-w-[45%] min-w-0 shrink-0 items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
               )}
             </div>
           </button>
@@ -1345,16 +1426,25 @@ export function Chat({
         )}
       </div>
 
-      {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view. */}
-      <div className="max-h-[55%] shrink-0 overflow-y-auto overscroll-contain px-3 [@media(max-height:600px)]:max-h-[40%] [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:overflow-visible">
+      {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view;
+          where the screen is short (a phone's keyboard up), shorter still, unless Claude waits for an
+          answer, which then takes the room it needs. It gives way before the message box does, and
+          scrolls, Claude's card keeping its head and its buttons in view (PermissionCard). On a phone
+          on its side the whole chat scrolls instead, the message box at its foot. */}
+      {/* A field of the card that takes the keys (a question's Other…) scrolls into view clear of its head and foot. */}
+      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-20 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
           <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
             {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
             <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
           </section>
         )}
+        {folded ? (
+          <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+        ) : (
+          <>
         {showTasks && <TasksBar tasks={tasks} />}
-        {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
+        {sessionId && inBackgroundNow && (
           <BackgroundTasks
             ref={backgroundBar}
             sessionId={sessionId}
@@ -1364,6 +1454,8 @@ export function Chat({
             setOpen={setBackgroundOpen}
             onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')}
           />
+        )}
+          </>
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">

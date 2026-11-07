@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { PermissionRequest } from '../../shared/protocol';
+import { readPrCreated } from './requests';
 import { describeTool } from './tools';
 
 /**
@@ -37,9 +38,9 @@ export function useAnnouncement(): string {
   );
 }
 
-/** Markdown as it would be read aloud: the words, without the marks around them. */
+/** Markdown as it would be read aloud: the words, without the marks around them, nor Desktop's pull request tag. */
 export function plainText(markdown: string): string {
-  return markdown
+  return readPrCreated(markdown).text
     .replace(/```[\w-]*\n?([\s\S]*?)```/g, '$1')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')

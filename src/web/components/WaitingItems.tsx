@@ -29,8 +29,8 @@ export function waitingCount(items: readonly WaitingItem[]): { said: string; one
   return { said: parts.join(', '), one: items.length === 1 };
 }
 
-/** What a chip shows of its item, after its icon. */
-function ChipText({ item }: { item: WaitingItem }) {
+/** What a chip shows of its item, after its icon: a quote with a note, a short lead of the passage (longer on a computer, whose box has the room), then the note. */
+function ChipText({ item, touch }: { item: WaitingItem; touch: boolean }) {
   if (item.kind === 'file') return <span className="min-w-0 truncate font-mono text-[12px] text-fg">{baseName(item.path ?? item.text)}{item.folder ? '/' : ''}</span>;
   const where = item.kind === 'comment' || item.path ? shortLines(item.path ?? '', item.lines) : undefined;
   if (item.kind === 'comment' || isReply(item)) {
@@ -39,7 +39,7 @@ function ChipText({ item }: { item: WaitingItem }) {
         {where ? (
           <span className="shrink-0 font-mono text-[11.5px] text-faint">{where}</span>
         ) : (
-          <span className="max-w-[3.5rem] shrink-0 truncate text-faint">“{passageStart(item)}”</span>
+          <span className={`${touch ? 'max-w-[4.5rem]' : 'max-w-[8rem]'} shrink-0 truncate text-faint`}>“{passageStart(item)}”</span>
         )}
         <span className="min-w-0 truncate text-fg">{item.note}</span>
       </>
@@ -82,14 +82,15 @@ export function WaitingChips({ items, touch, open, onOpen, onRemove, list }: {
                 className={`flex h-11 max-w-[17rem] items-center gap-1.5 rounded-full border bg-bg px-3.5 text-[12.5px] ${active ? 'border-fg' : 'border-line'}`}
               >
                 <ChipIcon item={item} />
-                <ChipText item={item} />
+                <ChipText item={item} touch />
               </button>
             </li>
           );
         }
         return (
           // Keyboard focus on its main part rings the whole chip; its × shows its own.
-          <li key={item.id} title={name} className={`flex h-8 max-w-[12.5rem] shrink-0 items-center rounded-full border bg-bg text-[12.5px] has-[>button:first-child:focus-visible]:ring-2 has-[>button:first-child:focus-visible]:ring-faint ${active ? 'border-fg' : 'border-line'}`}>
+          // As wide as it needs, up to what a box beside a conversation has room for: a quote's note reads in it.
+          <li key={item.id} title={name} className={`flex h-8 max-w-[min(24rem,100%)] shrink-0 items-center rounded-full border bg-bg text-[12.5px] has-[>button:first-child:focus-visible]:ring-2 has-[>button:first-child:focus-visible]:ring-faint ${active ? 'border-fg' : 'border-line'}`}>
             <button
               type="button"
               aria-label={name}
@@ -99,7 +100,7 @@ export function WaitingChips({ items, touch, open, onOpen, onRemove, list }: {
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-full pl-2.5 outline-none"
             >
               <ChipIcon item={item} />
-              <ChipText item={item} />
+              <ChipText item={item} touch={false} />
             </button>
             <button
               type="button"

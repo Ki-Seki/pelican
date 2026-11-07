@@ -41,6 +41,23 @@ describe('currentTasks', () => {
     ]);
   });
 
+  it('leaves out a call that failed: a list Claude Code refused never becomes the live one', () => {
+    const failed = (id: string, content: string): ChatMessage => ({
+      uuid: `r-${id}`, role: 'user', blocks: [{ type: 'tool_result', tool_use_id: id, content, is_error: true }],
+    });
+    const before = call('1', 'TodoWrite', { todos: [{ content: 'Read', status: 'completed' }] });
+    expect(currentTasks([
+      before,
+      result('1', 'Todos have been modified successfully'),
+      call('2', 'TodoWrite', { todos: [{ content: 'Read', status: 'completed' }, { content: 'Add the dark palette', status: 'in_progress' }] }),
+      failed('2', '<tool_use_error>Error: No such tool available: TodoWrite</tool_use_error>'),
+    ])).toEqual([{ content: 'Read', status: 'completed' }]);
+    expect(currentTasks([
+      call('c1', 'TaskCreate', { subject: 'Set up' }),
+      failed('c1', 'Task tools are not available here'),
+    ])).toEqual([]);
+  });
+
   it('numbers a task whose result has not arrived yet', () => {
     const tasks = currentTasks([call('c1', 'TaskCreate', { subject: 'First' }), call('u1', 'TaskUpdate', { taskId: '1', status: 'in_progress' })]);
     expect(tasks).toEqual([{ content: 'First', status: 'in_progress' }]);

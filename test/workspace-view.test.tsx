@@ -511,3 +511,35 @@ describe('a file’s Quote and Copy', () => {
     expect(clear((await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!)).toBe(false);
   });
 });
+
+describe('a phone on its side', () => {
+  it('folds the view’s header and tabs, and the terminal’s, away from its screen until a tap on it; typing in its line folds them again', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files');
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    const view = await screen.findByRole('region', { name: 'Changes and files' });
+    // What folds is marked (styles.css folds it, on the Terminal tab of a phone on its side).
+    expect(view.getAttribute('data-tab')).toBe('files');
+    expect(view.querySelectorAll('[data-makes-room="short"]').length).toBeGreaterThan(0);
+    const shown = document.createElement('div');
+    shown.setAttribute('data-terminal', '');
+    const line = document.createElement('input');
+    line.setAttribute('data-terminal-line', '');
+    view.append(shown, line);
+    const touch = (pointerId: number, from: [number, number], to: [number, number]) => {
+      fireEvent.pointerDown(shown, { pointerType: 'touch', pointerId, clientX: from[0], clientY: from[1] });
+      fireEvent.pointerUp(shown, { pointerType: 'touch', pointerId, clientX: to[0], clientY: to[1] });
+    };
+    expect(view.hasAttribute('data-unfolded')).toBe(false);
+    touch(1, [50, 50], [52, 51]);
+    expect(view.hasAttribute('data-unfolded')).toBe(true);
+    // A swipe through the output is no tap.
+    touch(2, [50, 50], [50, 150]);
+    expect(view.hasAttribute('data-unfolded')).toBe(true);
+    fireEvent.focusIn(line);
+    expect(view.hasAttribute('data-unfolded')).toBe(false);
+    touch(3, [60, 60], [60, 60]);
+    expect(view.hasAttribute('data-unfolded')).toBe(true);
+    touch(4, [60, 60], [60, 60]);
+    expect(view.hasAttribute('data-unfolded')).toBe(false);
+  });
+});

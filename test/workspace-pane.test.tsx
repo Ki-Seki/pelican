@@ -120,7 +120,7 @@ describe('Changes and files beside the conversation', () => {
     expect(document.activeElement).toBe(toggle());
   });
 
-  it('closes with Cmd/Ctrl+\\ pressed in it, as the side chat does, and gives the keys to its button', async () => {
+  it('closes with Cmd/Ctrl+\\ pressed in it, as the side chat does, and gives the keys to its button; pressed anywhere else on the page too', async () => {
     computer();
     setPrefs({ workspacePane: true });
     await session();
@@ -131,13 +131,14 @@ describe('Changes and files beside the conversation', () => {
     key(button, { key: '\\', ctrlKey: true });
     expect(pane()).toBeNull();
     expect(document.activeElement).toBe(toggle());
-    // Pressed in the conversation, the key is the conversation's: nothing closes.
+    // A key of the whole page, as ⌘/ lists it: pressed in the conversation, it closes the pane too,
+    // and the message box keeps the keys.
     key(toggle(), { key: 'D', ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(pane()).not.toBeNull());
     const message = screen.getByLabelText('Message Claude');
     message.focus();
     key(message, { key: '\\', ctrlKey: true });
-    expect(pane()).not.toBeNull();
+    expect(pane()).toBeNull();
     expect(document.activeElement).toBe(message);
   });
 

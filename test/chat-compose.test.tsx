@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Attachment, ChatMessage, GitStatus, RunState, SessionSummary } from '../src/shared/protocol';
+import type { Attachment, ChatMessage, GitStatus, PermissionRequest, RunState, SessionSummary } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CREATED = '44444444-2222-4333-8444-555555555555';
@@ -651,6 +651,31 @@ describe('what runs in the background', () => {
     expect(within(bar).getByRole('button', { name: /checkout-fixes/ }).getAttribute('title')).toBe('Show the workflow');
     fireEvent.keyDown(document.activeElement!, { key: 'b', code: 'KeyB', ctrlKey: true, altKey: true });
     await waitFor(() => expect(document.activeElement).toBe(box()));
+  });
+
+  it('folds, with Claude’s task list, into one line under a card Claude waits on; a tap or ⌃B unfolds them until the next card', async () => {
+    const asking = (id: string): PermissionRequest => ({ id, sessionId: SESSION, toolName: 'Bash', input: { command: 'npm test' }, createdAt: Date.now() });
+    const todo = { type: 'tool_use' as const, id: 'todo1', name: 'TodoWrite', input: { todos: [{ content: 'Read', status: 'completed' }, { content: 'Test', activeForm: 'Testing', status: 'in_progress' }] } };
+    server.after = [{ uuid: 'a1', role: 'assistant', blocks: [todo], timestamp: Date.now() - 30_000 }];
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [asking('p1')], partial: [], tasks };
+    session();
+    await loaded();
+    const line = await screen.findByRole('button', { name: /1\/2.*Testing.*2 in background/ });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('region', { name: '2 in background' })).toBeNull();
+    fireEvent.click(line);
+    expect(await screen.findByRole('region', { name: '2 in background' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^1\/2\s*Testing/ })).toBeTruthy();
+    // The next card folds them again; ⌃B unfolds them, with the list open and the keys in it.
+    act(() => setRun(SESSION, { ...getView(SESSION).run!, permissions: [asking('p2')] }));
+    expect(await screen.findByRole('button', { name: /1\/2.*Testing.*2 in background/ })).toBeTruthy();
+    ctrlAltB();
+    const bar = await screen.findByRole('region', { name: '2 in background' });
+    await waitFor(() => expect(bar.contains(document.activeElement)).toBe(true));
+    // With no card waiting, the bars show as they do.
+    act(() => setRun(SESSION, { ...getView(SESSION).run!, permissions: [] }));
+    expect(screen.getByRole('region', { name: '2 in background' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /1\/2.*Testing.*2 in background/ })).toBeNull();
   });
 
   it('/tasks opens the same, as Claude Code names it; with nothing running it says so', async () => {

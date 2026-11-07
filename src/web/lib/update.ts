@@ -12,8 +12,25 @@ export const APP_VERSION = built;
 /** Where a page notes the version it loaded the app again for: once for each, never round and round. */
 const RELOADED = 'pelican-reloaded-for';
 
+/** Where a page notes the version it said it was updated to: once, in the page that loaded it. */
+const SAID = 'pelican-updated-said';
+
 /** Loading the page again; tests see it here. */
 export const page = { reload: () => location.reload() };
+
+/**
+ * The version this page loaded the app again for (Pelican started again as it, after an update),
+ * to say so once: none once said, or where the page was loaded any other way.
+ */
+export function updatedTo(): string | undefined {
+  try {
+    if (sessionStorage.getItem(RELOADED) !== APP_VERSION || sessionStorage.getItem(SAID) === APP_VERSION) return undefined;
+    sessionStorage.setItem(SAID, APP_VERSION);
+    return APP_VERSION;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Once the page connects again after losing Pelican (it started again, after an update here or one
