@@ -157,12 +157,12 @@ export function addLocalMessage(sessionId: string, message: ChatMessage): void {
  * next message): the view shows it up to the prompt it went back to before, at once, and reads it
  * again; after Undo the messages come back.
  */
-export function setRewound(sessionId: string, rewound: Rewound | undefined): void {
+export function setRewound(sessionId: string, rewound: Rewound | undefined): Promise<void> {
   update(sessionId, (view) => {
     const messages = beforeCut(view.messages, rewound);
     return { ...view, messages, total: Math.max(0, view.total - (view.messages.length - messages.length)), rewound };
   });
-  void loadLatest(sessionId);
+  return loadLatest(sessionId);
 }
 
 /** Drops a local message the server never accepted. */
@@ -263,7 +263,7 @@ export function handleEvent(event: ServerEvent): void {
       void loadLatest(event.sessionId);
       break;
     case 'rewound':
-      if (views.has(event.sessionId)) setRewound(event.sessionId, event.rewound ?? undefined);
+      if (views.has(event.sessionId)) void setRewound(event.sessionId, event.rewound ?? undefined);
       break;
     default:
       break;

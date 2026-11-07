@@ -101,7 +101,7 @@ beforeAll(() => {
 });
 
 const { Chat } = await import('../src/web/components/Chat');
-const { loadDraft, waitingOf, setWaiting } = await import('../src/web/lib/drafts');
+const { loadDraft, saveDraft, waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { CommandMenu, showCommandMenu } = await import('../src/web/components/CommandMenu');
 
 afterEach(async () => {
@@ -212,6 +212,34 @@ describe('Rewind to here', () => {
     await screen.findByText('It stays after a reload now.');
     await waitFor(() => expect(box().value).toBe(''));
     expect(marker()).toBeNull();
+  });
+
+  it('Undo rewind takes the words back out of the box after a reload too, from the prompt back in the conversation', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    // Rewound in another visit of the page: the cut is the server's, the words this browser's draft.
+    server.rewound = { prompt: 'u2', at: Date.now() };
+    saveDraft(SESSION, 'Now remember the choice');
+    setWaiting(SESSION, []);
+    open();
+    await screen.findByText('Done. The toggle sits under Display.');
+    expect(screen.queryByText('It stays after a reload now.')).toBeNull();
+    await waitFor(() => expect(box().value).toBe('Now remember the choice'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo rewind' }));
+    await screen.findByText('It stays after a reload now.');
+    await waitFor(() => expect(box().value).toBe(''));
+  });
+
+  it('Undo rewind leaves what was typed since in the box', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    server.check = { files: [], insertions: 0, deletions: 0 };
+    open();
+    await loaded();
+    fireEvent.click(rewindOn('Now remember the choice'));
+    await waitFor(() => expect(box().value).toBe('Now remember the choice'));
+    fireEvent.change(box(), { target: { value: 'Now remember the choice, per user' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo rewind' }));
+    await screen.findByText('It stays after a reload now.');
+    expect(box().value).toBe('Now remember the choice, per user');
   });
 
   it('says so, and asks nothing, while Claude works', async () => {

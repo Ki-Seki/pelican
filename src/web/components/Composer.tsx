@@ -222,9 +222,10 @@ export type ComposerHandle = {
   putText: (text: string) => void;
   /**
    * Takes back words and files given to the box (a prompt a rewind put back, undone), as long as
-   * the box holds those words as they were: anything typed since stays.
+   * the box holds those words as they were: anything typed since stays. `file`: whether a file in
+   * the box is one of those given.
    */
-  takeBack: (text: string, files: string[]) => void;
+  takeBack: (text: string, file: (attachment: Attachment) => boolean) => void;
   /** Opens the model's sheet or the mode's, as their chips do. */
   openSheet: (which: 'model' | 'mode') => void;
 };
@@ -597,12 +598,12 @@ export function Composer({
       }));
     },
     openSheet: (which: 'model' | 'mode') => setSheet(which),
-    takeBack: (back: string, files: string[]) => {
+    takeBack: (back: string, file: (attachment: Attachment) => boolean) => {
       if (text.trim() !== back.trim()) return;
       setText('');
       setCaret(0);
       setUploads((list) => list.filter((u) => {
-        const taken = Boolean(u.attachment && files.includes(u.attachment.id));
+        const taken = Boolean(u.attachment && file(u.attachment));
         if (taken) forget(u);
         return !taken;
       }));

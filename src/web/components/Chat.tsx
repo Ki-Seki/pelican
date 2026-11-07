@@ -46,7 +46,7 @@ import {
 import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
-import { buildItems, type Item } from '../lib/turns';
+import { buildItems, splitFiles, type Item } from '../lib/turns';
 import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { ContextPanel, ContextRing } from './ContextPanel';
@@ -100,6 +100,22 @@ const REWIND_PAUSE_MS = 400;
 
 /** Rewind to here being asked about: the message, and what its check says can go back. */
 type RewindAsk = RewindPoint & { token: number; preview: RewindCheck | 'pending'; shown: boolean };
+
+/** What a rewind puts in the box: the prompt's words, its files, and its quotes and comments waiting above. */
+type InBox = { text: string; file: (attachment: Attachment) => boolean; items: WaitingItem[] };
+
+/**
+ * What a rewind to the prompt put in the box, read from the prompt itself: its words and quotes,
+ * and its pictures and files, which the server saved again by these names (server/rewind.ts).
+ */
+function inBoxOf(prompt: ChatMessage | undefined): InBox | undefined {
+  if (!prompt) return undefined;
+  const { text: typed, files } = splitFiles(prompt.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n\n'));
+  const { items, text } = readMessage(typed);
+  const pictures = prompt.blocks.filter((b) => b.type === 'image').length;
+  const names = new Set(files.map((f) => f.name));
+  return { text, items, file: (a) => names.has(a.name) || Array.from({ length: pictures }, (_, i) => `image-${i + 1}.`).some((n) => a.name.startsWith(n)) };
+}
 
 // Usage and activity loads when it is first opened, from Context.
 const UsageSheet = lazy(() => retried(() => import('./Usage')).then((m) => ({ default: m.UsageSheet })));
@@ -708,8 +724,9 @@ export function Chat({
    * three choices where files changed, from the moment the check has taken a while.
    */
   const rewindToken = useRef(0);
-  // What a rewind put in the box, for Undo rewind to take back while it is as it was.
-  const backInBox = useRef<{ text: string; files: string[]; items: string[] }>(undefined);
+  // What a rewind put in the box, for Undo rewind to take back while it is as it was; after a
+  // reload, what the prompt, back in the conversation, would have put there.
+  const backInBox = useRef<InBox>(undefined);
   const closeRewind = () => {
     rewindToken.current += 1;
     setRewind(undefined);
@@ -728,7 +745,8 @@ export function Chat({
         const { items, text } = readMessage(done.prompt.text);
         putBackWaiting(viewId, items);
         if (text || done.prompt.attachments.length > 0) setDraftText({ text, attachments: done.prompt.attachments, key: Date.now(), back: true });
-        backInBox.current = { text, files: done.prompt.attachments.map((a) => a.id), items: items.map((i) => i.id) };
+        const ids = done.prompt.attachments.map((a) => a.id);
+        backInBox.current = { text, file: (a) => ids.includes(a.id), items };
       }
       if (done.skipped) {
         setNote(`Restored the code, but skipped ${done.skipped === 1 ? '1 file' : `${done.skipped} files`} that couldn’t be safely written. Skipped files were left untouched.`);
@@ -786,14 +804,15 @@ export function Chat({
   const undoRewind = async () => {
     if (!sessionId) return;
     setSendError(undefined);
+    const cut = getView(viewId).rewound;
     try {
       await api.undoRewind(sessionId);
-      setRewound(viewId, undefined);
-      const back = backInBox.current;
+      await setRewound(viewId, undefined);
+      const back = backInBox.current ?? inBoxOf(getView(viewId).messages.find((m) => m.uuid === cut?.prompt));
       backInBox.current = undefined;
       if (back) {
-        composer.current?.takeBack(back.text, back.files);
-        for (const id of back.items) removeWaiting(viewId, id);
+        composer.current?.takeBack(back.text, back.file);
+        for (const item of waitingOf(viewId)) if (back.items.some((b) => b.kind === item.kind && b.text === item.text && b.note === item.note)) removeWaiting(viewId, item.id);
       }
     } catch (error) {
       failed(error);
