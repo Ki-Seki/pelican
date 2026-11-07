@@ -1,7 +1,8 @@
 // The README's and the site's screenshots, from the demo (made-up sessions; nothing of yours is shown).
 //   npm run build && npm run screenshots      (CHROME=/path/to/chrome if it is not in the usual place;
 //                                              PELICAN_DEMO_PORT if 47860 is taken)
-// Writes docs/shots/{phone,desktop,list,live}-{light,dark}.png and og.png, the picture shared links show.
+// Writes docs/shots/{phone,desktop,list,live}-{light,dark}.png; with --og, og.png too, the picture
+// shared links show, which is otherwise kept as uploaded.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -92,10 +93,8 @@ async function phoneShots(scheme) {
   await context.close();
   // The site's phone frames draw a status bar over the top 40px (about 48px of the app at their
   // scale), so the pictures that go in them are taken that much shorter, to show the whole screen,
-  // on a phone that tall from the start. Their one-time tips are seen already: the message box says
-  // the same.
+  // on a phone that tall from the start.
   const framed = await phone(scheme, FRAMED_HEIGHT);
-  await framed.context.addInitScript(() => localStorage.setItem('pelican:tips-seen', JSON.stringify({ 'open-elsewhere': true, 'working-elsewhere': true, 'waiting-elsewhere': true })));
   const list = await phoneShot(framed.page, BASE, 500);
   const live = await phoneShot(framed.page, `${BASE}?s=${ELSEWHERE}`, 700);
   await framed.context.close();
@@ -157,7 +156,7 @@ for (const scheme of ['light', 'dark']) {
   await strip(shots, scheme, `phone-${scheme}.png`);
   await writeFile(path.join(OUT, `list-${scheme}.png`), list);
   await writeFile(path.join(OUT, `live-${scheme}.png`), live);
-  if (scheme === 'light') await socialCard(shots);
+  if (scheme === 'light' && process.argv.includes('--og')) await socialCard(shots);
   await desktopShot(scheme, `desktop-${scheme}.png`);
 }
 await browser.close();
