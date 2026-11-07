@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { exportMarkdown } from '../src/server/actions';
 import { config } from '../src/server/config';
 import { sideChatPrompt } from '../src/server/side-chat';
+import { COMMIT_REQUEST, createPrRequest } from '../src/shared/requests';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 
 // Transcripts written here as Claude Code writes them, in a folder of this test's: nothing of this
@@ -361,6 +362,34 @@ describe('the export, in step with the conversation', () => {
     expect(markdown).toContain('*Failed*');
     expect(markdown).toContain(config.machine);
     expect(markdown).not.toContain('your computer');
+  });
+});
+
+describe('the export, with Claude Desktop’s requests', () => {
+  it('writes Commit changes as its words, Create PR as /create-pr, and a pull request Claude made as its card names it, never Desktop’s tags', async () => {
+    const pr = createPrRequest({ repo: 'acme/web', branch: 'fix-login', baseBranch: 'main', cwd: folder, draft: false });
+    const draft = createPrRequest({ repo: 'acme/web', branch: 'fix-login', baseBranch: 'main', cwd: folder, draft: true });
+    const sessionId = await session(61, 'Requests', [
+      user('Fix the login test'),
+      claude(text('Fixed.')),
+      user(COMMIT_REQUEST),
+      claude(text('Committed.')),
+      user(pr),
+      claude(text('Opened.\n\n<pr-created>https://github.com/acme/web/pull/7</pr-created>')),
+      // Two taken in together, as Claude Code reads what was queued: each part as the conversation shows it.
+      user([text(`${COMMIT_REQUEST}\n`), text(draft)]),
+      claude(text('Done: <pr-created>https://github.com/acme/web/pull/8</pr-created>')),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).not.toContain('create-pr-command');
+    expect(markdown).not.toContain('pr-created');
+    expect(markdown).not.toContain('## Overview');
+    expect(markdown).toContain(`## You\n\n${COMMIT_REQUEST}\n\n## Claude\n\nCommitted.`);
+    expect(markdown).toContain('## You\n\n`/create-pr`\n\n## Claude\n\nOpened.\n\nPull request [acme/web#7](<https://github.com/acme/web/pull/7>)');
+    // A tag among words leaves its address there, as the conversation shows it, and the card under them.
+    expect(markdown).toContain(`## You\n\n${COMMIT_REQUEST}\n\n/create-pr --draft\n\n## Claude\n\nDone: https://github.com/acme/web/pull/8\n\nPull request [acme/web#8](<https://github.com/acme/web/pull/8>)`);
+    // Read back, the cards are links.
+    expect(read(markdown)).toContain('<a href="https://github.com/acme/web/pull/7">acme/web#7</a>');
   });
 });
 

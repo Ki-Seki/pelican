@@ -2,9 +2,11 @@ import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 import { revealHidden } from '../shared/hidden.js';
 import { hasQuotes, readPrompt } from '../shared/quoted.js';
+import { partsShown, requestShown } from '../shared/requests.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
 import { baseName, shortPath } from '../web/lib/format.js';
+import { type PrCreated, readPrCreated } from '../web/lib/requests.js';
 import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
@@ -120,6 +122,9 @@ const attached = (pictures: number, files: SentFile[]) => {
   return all.length > 0 ? [`Attached: ${inlineText(all.join(', '))}`] : [];
 };
 
+/** A pull request Claude made, as its card names it where gh says nothing: Pull request, its repository and number, linked. */
+const pullRequest = (pr: PrCreated) => `Pull request [${inlineText(`${pr.repo}#${pr.number}`)}](<${pr.url.replace(/[<>\s]/g, encodeURIComponent)}>)`;
+
 /** A workflow's end, in the words of its line in the conversation. */
 const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
   `Workflow ${name ? `${name} ` : ''}${status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'stopped'}${durationMs !== undefined ? ` · ${durationText(durationMs)}` : ''}`;
@@ -162,7 +167,11 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
   // What the conversation view shows, read the same way.
   for (const item of buildItems(messages, config.machine)) {
     if (item.kind === 'user') {
-      const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())] : item.text ? prompt(item.text) : [];
+      // Desktop's Create PR request as the command it shows, /create-pr, alone or among other prompts.
+      const request = item.command ? undefined : requestShown(item.text);
+      const words = item.command ? [asCode(`${item.command.name} ${item.command.args}`.trim())]
+        : request ? [asCode(request)]
+          : item.text ? prompt(partsShown(item.text) ?? item.text) : [];
       say('You', [...words, ...attached(item.images.length, item.files)]);
     } else if (item.kind === 'shell') {
       const output = [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd();
@@ -192,7 +201,11 @@ export async function exportMarkdown(sessionId: string): Promise<{ title: string
         } else if (part.kind === 'text' && part.text.trim()) {
           if (tools.length > 0) blocks.push(tools.join('\n'));
           tools = [];
-          blocks.push(reply(part.text.trim(), (replies += 1)));
+          // A pull request named in Desktop's <pr-created> tag is its card in the conversation:
+          // here, a line under the words, its link.
+          const { text, prs } = readPrCreated(part.text);
+          if (text.trim()) blocks.push(reply(text.trim(), (replies += 1)));
+          for (const pr of prs) blocks.push(pullRequest(pr));
         }
       }
       if (tools.length > 0) blocks.push(tools.join('\n'));
