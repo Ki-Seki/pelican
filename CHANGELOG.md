@@ -87,6 +87,18 @@ settings; and updates from Settings.
   showing its tab or hiding the pane while it shows it (Changes, asked for, shows Changes in a folder
   git does not track too, and says why it is empty); on a phone one button, the lines changed or a
   folder.
+- **Side chats, kept with their session.** A session's side chats are the computer's to list, not
+  one browser tab's, so your phone and your computer show the same ones, also after a reload. The
+  side chat opens on the latest, called by its first question ("Side chat · Why not a class on
+  html?"), and its name's ▾ lists the session's others, the latest first, then New side chat. Start
+  a side chat, on a selection, a reply or a command's output, starts a new one from the session as
+  it is now, the passage going with your question as Claude Desktop attaches one and quoted above
+  it; while one is open, Send to side chat goes to it, and so does `/btw` with a question. On a
+  computer it shares the column beside the conversation with Changes, Files and the Terminal: from
+  1280px it sits under the one open, a handle between them sharing the height, which this browser
+  remembers; below that, where there is room for one, the one asked for last shows and the other
+  waits behind it until it closes. On a phone it is a sheet that Back closes. Picked in the session
+  list or found with ⌘K, a side chat opens as its session's side chat, not as a copy of the session.
 - **Context, by Send.** The context ring sits in the message box's row, as in Desktop, and opens
   Context: how full the window is, with Compact, what the whole session used, your plan's limits,
   and Usage and activity. On a phone it shows once a turn has run, faint and without its number
@@ -225,6 +237,12 @@ settings; and updates from Settings.
   to search.
 - Export as Markdown shows a prompt's quotes and their notes, comments on lines and attached files
   as the conversation does, Claude Desktop's and Pelican's alike, never their markers.
+- The side chat no longer puts Changes and files away beside the conversation from 1280px: both
+  show, one above the other, and a file or a turn's changes opened from an answer opens above it.
+  Its New is New side chat, in its name's ▾; its sheet on a phone closes with ×, as it does beside
+  the conversation, or Back.
+- The session list (with its options showing side chats) and ⌘K call each side chat by its first
+  question, each a row of its own, no longer all "Side chat", folded into one.
 
 ### Fixes
 
@@ -302,6 +320,11 @@ settings; and updates from Settings.
   terminal beside the conversation" as done.
 - The demo and the site's live demo show the Terminal tab, which says calmly that nothing runs
   there.
+- The docs describe side chats as they are kept now: by the computer, each called by its first
+  question, under Changes, Files or the Terminal from 1280px, in their place below that, and a
+  sheet on a phone. The demo and the site's live demo have two side chats on the dark theme
+  session, the latest asked with a passage of Claude's reply, and the smoke test walks them on a
+  computer and a phone, in the app and the site's live demo.
 - THIRD_PARTY_NOTICES names the terminal's xterm.js packages, built into the web app and the
   server; the PTY is installed as a package of its own, with its license, as the Agent SDK is.
 
