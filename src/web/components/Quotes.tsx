@@ -394,8 +394,8 @@ function Dock({ picked, frame, sideLabel, onSideChat, onQuote }: { picked: Picke
 const NOTE_WIDTH = 400;
 
 /**
- * Claude Desktop's note box, at the selection it quotes, which stays marked while it is open: the
- * quote, and a note about it. ↵ adds the quote to the message (with the note, or as it is without
+ * Claude Desktop's note box, above the selection it quotes, as Desktop opens it (below it only where
+ * the window has no room above), which stays marked while it is open: the quote, and a note about it. ↵ adds the quote to the message (with the note, or as it is without
  * one); ⌘↵ sends it now with its note, a steer while Claude works; Esc lets it go. A click outside
  * closes it only while the note is empty: words written are not thrown away by a stray click.
  */
@@ -443,11 +443,15 @@ function NoteBox({ chat, noting, bounds, canSend, onNote, onAdd, onSend, onClose
         setPlace({ left: Math.round(area.left + (area.width - width) / 2), top: Math.round(area.bottom - height - EDGE) });
         return;
       }
-      const below = lines.last.bottom + GAP;
-      const top = below + height <= area.bottom - EDGE ? below : lines.first.top - GAP - height;
+      // Above the passage, as Desktop has it, so it covers nothing that follows (a code block, the
+      // next lines); over the header, where that is the room above a passage at the top of the
+      // conversation; below it only where the window has no room above.
+      const above = lines.first.top - GAP - height;
+      const seen = lines.last.bottom > area.top && lines.first.top < area.bottom;
+      const top = seen && above >= EDGE ? above : seen ? lines.last.bottom + GAP : above;
       // Scrolled out of view, the passage leaves the box at the conversation's edge, never over the
       // header or what sits above the message box.
-      const inside = Math.max(area.top + EDGE, Math.min(top, area.bottom - height - EDGE));
+      const inside = seen ? Math.min(top, area.bottom - height - EDGE) : Math.max(area.top + EDGE, Math.min(top, area.bottom - height - EDGE));
       setPlace({ left: centred(lines.last, width, area), top: Math.round(inside) });
     };
     update();

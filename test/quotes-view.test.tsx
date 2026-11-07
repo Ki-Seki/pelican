@@ -235,7 +235,7 @@ describe('text selected with a mouse', () => {
     expect(waitingOf('chat')).toEqual([]);
   });
 
-  it('stays inside the conversation when its passage is scrolled out of view, never over the header or the box', () => {
+  it('opens above its passage, as Desktop’s does, and stays inside the conversation when the passage is scrolled out of view, never over the header or the box', () => {
     const frameRect = HTMLElement.prototype.getBoundingClientRect;
     const { getClientRects, getBoundingClientRect } = Range.prototype;
     // The conversation's frame runs from 60 to 520; the passage is wherever `at` says.
@@ -252,7 +252,8 @@ describe('text selected with a mouse', () => {
       wait(SETTLE_MS);
       fireEvent.keyDown(document.body, { key: 'Enter' });
       const top = () => noteBox()!.style.top;
-      expect(top()).toBe('326px');
+      // Above the passage (jsdom draws the box with no height): what follows it stays in view.
+      expect(top()).toBe('292px');
       // Scrolled up: the passage is below the frame, the box at its foot.
       at = 700;
       act(() => {
@@ -267,6 +268,20 @@ describe('text selected with a mouse', () => {
       });
       wait(20);
       expect(top()).toBe('72px');
+      // In view at the top of the conversation, with no room under the header: above it all the same,
+      // over the header, rather than over what follows.
+      at = 64;
+      act(() => {
+        window.dispatchEvent(new Event('scroll'));
+      });
+      wait(20);
+      expect(top()).toBe('56px');
+      at = 66;
+      act(() => {
+        window.dispatchEvent(new Event('scroll'));
+      });
+      wait(20);
+      expect(top()).toBe('58px');
     } finally {
       HTMLElement.prototype.getBoundingClientRect = frameRect;
       Object.assign(Range.prototype, { getClientRects, getBoundingClientRect });
