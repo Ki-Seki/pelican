@@ -4,8 +4,9 @@ import { type CSSProperties, type MouseEvent, type PointerEvent, useEffect, useR
  * The gestures that open a thing's list of actions (lib/actions) or do its one action: a long press
  * under a finger, which is a right-click with a pointer, and a swipe to the left. They keep to the
  * rules a phone's own gestures need: a long press only where there is no text to select (the
- * system's own long press selects text), never a swipe to the right (Safari's Back) or one from an
- * edge of the screen, and no swipe on what scrolls sideways or while text is selected.
+ * system's own long press selects text), never a swipe to the right (Safari's Back; a row a swipe
+ * left open goes back, as in Mail) or one from an edge of the screen, and no swipe on what scrolls
+ * sideways or while text is selected.
  */
 
 /** How long a finger holds before a long press acts, as in Claude Desktop. */
@@ -18,6 +19,8 @@ export const SWIPE_START = 12;
 export const SWIPE_EDGE = 24;
 /** How far to the left a swipe must go for letting go to act. */
 export const SWIPE_ACTS = 64;
+/** How long after a swipe the click some browsers send after one is the swipe's, not a tap. */
+const SWIPE_CLICK_MS = 400;
 
 /** Where a list was asked for, and how: what was under the finger or the pointer, and what the gesture is on. */
 export type Press = {
@@ -148,27 +151,63 @@ const selecting = () => {
 /** Past how far a swipe acts, it follows the finger more slowly. */
 const resisted = (dx: number, acts: number) => (-dx <= acts ? dx : -(acts + (-dx - acts) * 0.35));
 
+type SwipeOptions<T extends HTMLElement> = {
+  enabled?: boolean;
+  /** How far to the left letting go acts: so many px, or as far as the thing's width says (read as the finger goes down). */
+  acts?: number | ((element: T) => number);
+  /**
+   * For a thing with actions under it, as a row in Mail has: how wide they are. Let go past half
+   * of them, it stays open on them, to a tap on one; a tap on the thing, a touch anywhere else or
+   * a drag back to the right closes it. It follows the finger all the way, as such a row does.
+   */
+  opens?: number;
+};
+
 /**
- * A swipe to the left under a finger, as Telegram's swipe to reply: the thing follows the finger
- * (`dx`, at most 0, for its transform), and letting go past `acts` px does `onSwipe`. It is a swipe
- * only once it goes more than 12 px sideways and twice as far as up or down; until then the page
- * scrolls as ever. A swipe to the right is left to the browser (Back), and so is one that starts
- * within 24 px of an edge, on code, a table or a diff, or while text is selected.
+ * A swipe to the left under a finger, as Telegram's swipe to reply or a row in Mail: the thing
+ * follows the finger (`dx`, at most 0, for its transform), and letting go past `acts` px does
+ * `onSwipe`. It is a swipe only once it goes more than 12 px sideways and twice as far as up or
+ * down; until then the page scrolls as ever. A swipe to the right is left to the browser (Back),
+ * and so is one that starts within 24 px of an edge, on code, a table or a diff, or while text is
+ * selected. With `opens`, a short swipe leaves it open on its actions, which take a tap (they are
+ * marked `data-swipe-action`); `slide` moves it as an action does (out of sight, or closed).
  */
 export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
   onSwipe: (swipe: { target: Element; element: T }) => void,
-  { enabled = true, acts = SWIPE_ACTS }: { enabled?: boolean; acts?: number } = {},
+  { enabled = true, acts = SWIPE_ACTS, opens = 0 }: SwipeOptions<T> = {},
 ) {
   const [dx, setDx] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  // Where letting go acts, as the thing's width last said it.
+  const [measured, setMeasured] = useState(Infinity);
+  const reach = typeof acts === 'number' ? acts : measured;
   const handler = useRef(onSwipe);
   handler.current = onSwipe;
-  const drag = useRef<{ id: number; x: number; y: number; target: Element; element: T; sideways: boolean }>(undefined);
+  const drag = useRef<{ id: number; x: number; y: number; from: number; reach: number; target: Element; element: T; sideways: boolean }>(undefined);
   const swallowUntil = useRef(0);
+  // Where it is between renders, and what it is, for a touch elsewhere to close it.
+  const at = useRef(0);
+  const element = useRef<T>(undefined);
 
-  const end = () => {
-    drag.current = undefined;
-    setDx(0);
+  const slide = (to: number) => {
+    at.current = to;
+    setDx(to);
   };
+  const end = (to: number) => {
+    drag.current = undefined;
+    setDragging(false);
+    slide(to);
+  };
+
+  // Left open on its actions, it closes at the next touch anywhere else, as rows in Mail do.
+  useEffect(() => {
+    if (!opens || dx === 0 || dragging) return undefined;
+    const close = (e: globalThis.PointerEvent) => {
+      if (!element.current?.contains(e.target as Node)) slide(0);
+    };
+    document.addEventListener('pointerdown', close, true);
+    return () => document.removeEventListener('pointerdown', close, true);
+  }, [opens, dx, dragging]);
 
   const bind = {
     onPointerDown(e: PointerEvent<T>) {
@@ -176,7 +215,10 @@ export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
       if (!enabled || e.pointerType !== 'touch' || !e.isPrimary) return;
       if (e.clientX < SWIPE_EDGE || e.clientX > innerWidth - SWIPE_EDGE) return;
       if (scrollsSideways(e.target, e.currentTarget) || selecting()) return;
-      drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, target: e.target as Element, element: e.currentTarget, sideways: false };
+      const far = typeof acts === 'number' ? acts : acts(e.currentTarget);
+      if (far !== measured) setMeasured(far);
+      element.current = e.currentTarget;
+      drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: at.current, reach: far, target: e.target as Element, element: e.currentTarget, sideways: false };
     },
     onPointerMove(e: PointerEvent<T>) {
       const d = drag.current;
@@ -185,36 +227,51 @@ export function useSwipeLeft<T extends HTMLElement = HTMLElement>(
       const my = e.clientY - d.y;
       if (!d.sideways) {
         if (Math.abs(mx) <= SWIPE_START && Math.abs(my) <= SWIPE_START) return;
-        // Up or down is the page scrolling, and to the right is Back's: neither is a swipe here.
-        if (mx >= -SWIPE_START || -mx < 2 * Math.abs(my) || selecting()) {
+        // Up or down is the page scrolling, and to the right is Back's: neither is a swipe here,
+        // but for one left open, which goes back.
+        if (Math.abs(mx) < 2 * Math.abs(my) || (mx > 0 && d.from === 0) || selecting()) {
           drag.current = undefined;
           return;
         }
         d.sideways = true;
+        setDragging(true);
         e.currentTarget.setPointerCapture?.(e.pointerId);
       }
-      setDx(resisted(Math.min(0, mx), acts));
+      const to = Math.min(0, d.from + mx);
+      slide(opens ? to : resisted(to, d.reach));
     },
     onPointerUp(e: PointerEvent<T>) {
       const d = drag.current;
       if (!d || e.pointerId !== d.id) return;
-      const acted = d.sideways && d.x - e.clientX >= acts;
-      if (d.sideways) swallowUntil.current = Date.now() + 400;
-      end();
+      if (!d.sideways) {
+        drag.current = undefined;
+        return;
+      }
+      swallowUntil.current = Date.now() + SWIPE_CLICK_MS;
+      const to = Math.min(0, d.from + e.clientX - d.x);
+      const acted = -to >= d.reach;
+      end(!acted && opens && -to > opens / 2 ? -opens : 0);
       if (acted) handler.current({ target: d.target, element: d.element });
     },
-    onPointerCancel() {
-      if (drag.current) end();
+    onPointerCancel(e: PointerEvent<T>) {
+      const d = drag.current;
+      if (!d || e.pointerId !== d.id) return;
+      if (d.sideways) end(d.from);
+      else drag.current = undefined;
     },
     onClickCapture(e: MouseEvent<T>) {
-      // Some browsers follow a swipe with a click on the thing: it was not a tap.
-      if (Date.now() < swallowUntil.current) {
+      // What it uncovered takes its own taps.
+      if ((e.target as Element).closest('[data-swipe-action]')) return;
+      // Some browsers follow a swipe with a click on the thing: it was not a tap. Left open, a tap
+      // on it closes it, rather than doing what a tap on it does.
+      if (Date.now() < swallowUntil.current || at.current !== 0) {
         e.preventDefault();
         e.stopPropagation();
+        slide(0);
       }
     },
     // The page keeps scrolling up and down, and zooming; a sideways drag is this one's.
     style: { touchAction: 'pan-y pinch-zoom' } as CSSProperties,
   };
-  return { dx, swiping: dx < 0, armed: -dx >= acts, bind };
+  return { dx, swiping: dx < 0, dragging, armed: -dx >= reach, slide, bind };
 }

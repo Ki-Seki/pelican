@@ -272,3 +272,57 @@ describe('a swipe to the left', () => {
     expect(screen.getByTestId('para').style.touchAction).toBe('pan-y pinch-zoom');
   });
 });
+
+/** A row with its actions under it, 176 px of them, as a session's row has Pin and Archive. */
+function Row({ onSwipe, onTap, onPin }: { onSwipe: () => void; onTap: () => void; onPin: () => void }) {
+  const { dx, armed, dragging, bind } = useSwipeLeft<HTMLDivElement>(onSwipe, { opens: 176, acts: (row) => Math.max(row.offsetWidth * 0.6, 240) });
+  return (
+    <div data-testid="row" data-dx={dx} data-armed={armed} data-dragging={dragging} {...bind}>
+      <button type="button" data-swipe-action onClick={onPin}>Pin</button>
+      <a href="#s1" onClick={(e) => { e.preventDefault(); onTap(); }}>Release notes</a>
+    </div>
+  );
+}
+
+describe('a swipe to the left on a thing with actions under it', () => {
+  it('leaves it open on them past half of them, for a tap on one; a tap on it, a touch elsewhere or a drag back closes it', () => {
+    const [onSwipe, onTap, onPin] = [vi.fn(), vi.fn(), vi.fn()];
+    render(<Row onSwipe={onSwipe} onTap={onTap} onPin={onPin} />);
+    const row = screen.getByTestId('row');
+    const link = screen.getByText('Release notes');
+    swipe(link, 300, 400, -60, 0);
+    expect(row.dataset.dx).toBe('0');
+    swipe(link, 300, 400, -100, 0);
+    expect(row.dataset.dx).toBe('-176');
+    // A tap on it closes it, and is not a tap on what it is.
+    fireEvent.click(link);
+    expect(onTap).not.toHaveBeenCalled();
+    expect(row.dataset.dx).toBe('0');
+    swipe(link, 300, 400, -100, 0);
+    fireEvent.click(screen.getByText('Pin'));
+    expect(onPin).toHaveBeenCalledOnce();
+    fireEvent.pointerDown(document.body, { ...finger, clientX: 300, clientY: 100 });
+    expect(row.dataset.dx).toBe('0');
+    // Open, it goes back to the right; closed, it takes no swipe that way.
+    swipe(link, 300, 400, -100, 0);
+    swipe(link, 300, 400, 100, 0);
+    expect(row.dataset.dx).toBe('0');
+    swipe(link, 300, 400, 100, 0);
+    expect(row.dataset.dx).toBe('0');
+    expect(onSwipe).not.toHaveBeenCalled();
+  });
+
+  it('follows the finger all the way, and acts let go past where its width says', () => {
+    const onSwipe = vi.fn();
+    render(<Row onSwipe={onSwipe} onTap={() => {}} onPin={() => {}} />);
+    const row = screen.getByTestId('row');
+    const link = screen.getByText('Release notes');
+    swipe(link, 300, 400, -200, 0, { lift: false });
+    expect([row.dataset.dx, row.dataset.armed, row.dataset.dragging]).toEqual(['-200', 'false', 'true']);
+    fireEvent.pointerMove(link, { ...finger, clientX: 40, clientY: 400 });
+    expect([row.dataset.dx, row.dataset.armed]).toEqual(['-260', 'true']);
+    fireEvent.pointerUp(link, { ...finger, clientX: 40, clientY: 400 });
+    expect(onSwipe).toHaveBeenCalledOnce();
+    expect([row.dataset.dx, row.dataset.dragging]).toEqual(['0', 'false']);
+  });
+});
