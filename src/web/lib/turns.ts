@@ -363,6 +363,8 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
         // Claude Code that found the run without its end gives way to the word of the one that ran it.
         const { task, ...notice } = classified;
         const call = task?.toolUseId ? workflows.get(task.toolUseId) : undefined;
+        // So does a background agent's: by its call, or by its agent where the notice names no call.
+        const agent = task && !call ? (task.toolUseId ? agents.get(task.toolUseId) : task.taskId ? agentIds.get(task.taskId) : undefined) : undefined;
         if (call && task) {
           if (!call.ended || call.ended.orphan || !task.orphan) call.ended = task;
           const name = launchOf(call.result)?.name ?? workflowOf(call.input).name;
@@ -372,9 +374,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
             key: message.uuid,
             workflow: { toolUseId: call.id, ...(name ? { name } : {}), ...(task.status ? { status: task.status } : {}), ...(task.usage?.durationMs !== undefined ? { durationMs: task.usage.durationMs } : {}) },
           });
-        } else if (task && (task.toolUseId ? agents.get(task.toolUseId) : task.taskId ? agentIds.get(task.taskId) : undefined)) {
-          // So does a background agent's: its result and how it ended go into its card, and the line names it.
-          const agent = (task.toolUseId ? agents.get(task.toolUseId) : agentIds.get(task.taskId!))!;
+        } else if (agent && task) {
           if (!agent.ended || agent.ended.orphan || !task.orphan) agent.ended = task;
           const description = typeof agent.input.description === 'string' && agent.input.description.trim() ? agent.input.description.trim() : undefined;
           const { detail: _shownInTheCard, ...line } = notice;
