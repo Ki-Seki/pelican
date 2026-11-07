@@ -75,8 +75,10 @@ export function LineCount({ added, removed }: { added: number; removed: number }
  */
 function PaneTabs({ tab, onChange, lines }: { tab: WorkspaceTab; onChange: (tab: WorkspaceTab) => void; lines: { added: number; removed: number } | undefined }) {
   const options: Array<{ value: WorkspaceTab; label: string }> = [{ value: 'changes', label: 'Changes' }, { value: 'files', label: 'Files' }, { value: 'terminal', label: 'Terminal' }];
+  // Changes with its lines takes the room they need, so a phone shows its name whole; the others share the rest.
+  const counted = Boolean(lines && (lines.added > 0 || lines.removed > 0));
   return (
-    <div className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-full bg-chip p-0.5">
+    <div className={`grid gap-0.5 rounded-full bg-chip p-0.5 ${counted ? 'grid-cols-[minmax(max-content,1.4fr)_1fr_1fr]' : 'auto-cols-fr grid-flow-col'}`}>
       {options.map((option) => (
         <button
           key={option.value}
