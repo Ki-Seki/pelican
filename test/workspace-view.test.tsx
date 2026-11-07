@@ -41,9 +41,11 @@ vi.mock('../src/web/lib/api', async (original) => {
   };
 });
 
+/** A computer's pointer (hover and fine), where a test asks for one; a finger otherwise. */
+const media = { fine: false };
 beforeAll(() => {
   window.matchMedia = ((query: string) => ({
-    matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    matches: media.fine && /hover: hover|pointer: fine/.test(query), media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
   HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
@@ -57,13 +59,16 @@ beforeAll(() => {
 const { Workspace } = await import('../src/web/components/Workspace');
 const { UnifiedDiff } = await import('../src/web/components/UnifiedDiff');
 const { WorkspaceChanges } = await import('../src/web/components/WorkspaceChanges');
-const { setComments } = await import('../src/web/lib/review');
+const { commentsOf, setComments, withComments } = await import('../src/web/lib/review');
+const { SendComments } = await import('../src/web/components/Comments');
+const { setWaiting, waitingOf } = await import('../src/web/lib/drafts');
 const { COMMIT_REQUEST, createPrRequest } = await import('../src/web/lib/requests');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
 afterEach(() => {
   cleanup();
   setComments(CWD, []);
+  setWaiting(CWD, []);
   server.asked = [];
   server.diff = '';
   server.plain = false;
@@ -138,6 +143,7 @@ describe('what Changes shows', () => {
     wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     fireEvent.click(document.querySelector('[data-line="2"]')!);
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Picked lines' })).getByRole('button', { name: 'Add comment' }));
     const box = screen.getByLabelText('Comment for Claude');
     fireEvent.change(box, { target: { value: 'Rename b' } });
     fireEvent.keyDown(box, { key: 'Escape' });
@@ -251,6 +257,67 @@ describe('Commit changes and Create PR, at the foot of Changes', () => {
   });
 });
 
+describe('a comment on a diff, in Desktop’s box', () => {
+  // Lines 1 and 3 of the new file unchanged, line 2 changed: a removed line and an added one.
+  const DIFF = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,3 +1,3 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n const c = 4;\n';
+  const row = (text: string) => screen.getByText(text, { exact: false }).closest('[data-row]') as HTMLElement;
+
+  it('opens on a tap: Cancel · Send to Claude · Add comment, and Add comment adds it under its line', () => {
+    const send = vi.fn();
+    render(<SendComments.Provider value={send}><UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} /></SendComments.Provider>);
+    fireEvent.click(row('const b = 3;'));
+    const box = screen.getByLabelText('Comment for Claude').closest('form')!;
+    expect(within(box).getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Send to Claude', 'Add comment']);
+    fireEvent.change(within(box).getByLabelText('Comment for Claude'), { target: { value: 'Why 3?' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'Add comment' }));
+    expect(commentsOf(CWD)).toMatchObject([{ path: 'src/a.ts', kind: 'add', line: 2, code: 'const b = 3;', note: 'Why 3?' }]);
+    expect(send).not.toHaveBeenCalled();
+    // Send to Claude adds it and sends everything that waits.
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment on line 1' }));
+    fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Keep a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Claude' }));
+    expect(commentsOf(CWD).map((c) => c.note)).toEqual(['Why 3?', 'Keep a']);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('under a finger, takes in the lines a long press drags over, on the new file, and shows under the last', () => {
+    render(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+    Object.assign(document, { elementFromPoint: () => row('const c = 4;') });
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(row('const a = 1;'), { pointerType: 'touch', isPrimary: true, pointerId: 5, clientX: 20, clientY: 5 });
+      act(() => vi.advanceTimersByTime(510));
+      fireEvent.pointerMove(row('const a = 1;'), { pointerType: 'touch', pointerId: 5, clientX: 20, clientY: 80 });
+      fireEvent.pointerUp(row('const a = 1;'), { pointerType: 'touch', pointerId: 5 });
+    } finally {
+      vi.useRealTimers();
+      Object.assign(document, { elementFromPoint: undefined });
+    }
+    fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'One block' } });
+    fireEvent.submit(screen.getByLabelText('Comment for Claude').closest('form')!);
+    // The removed line is not the new file's: lines 1 to 3 as they read now.
+    expect(commentsOf(CWD)).toMatchObject([{ kind: 'add', line: 1, to: 3, code: 'const a = 1;\nconst b = 3;\nconst c = 4;', note: 'One block' }]);
+    expect(row('const c = 4;').parentElement!.textContent).toContain('One block');
+  });
+
+  it('on removed lines alone is Desktop’s "before changes"; a right-click offers Copy and Add comment', () => {
+    media.fine = true;
+    try {
+      render(<UnifiedDiff diff={DIFF} path="src/a.ts" cwd={CWD} />);
+      fireEvent.contextMenu(row('const b = 2;'), { clientX: 10, clientY: 10 });
+      const menu = screen.getByRole('menu', { name: 'Lines' });
+      expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', 'Add comment']);
+      fireEvent.click(within(menu).getByText('Add comment'));
+      fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Was 2' } });
+      fireEvent.submit(screen.getByLabelText('Comment for Claude').closest('form')!);
+      expect(commentsOf(CWD)).toMatchObject([{ kind: 'del', line: 2, code: 'const b = 2;' }]);
+      expect(withComments('', commentsOf(CWD))).toMatch(/^In `src\/a\.ts` at line 2 \(before changes\):/);
+    } finally {
+      media.fine = false;
+    }
+  });
+});
+
 describe('a diff read again while it is open', () => {
   const DIFF = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n';
 
@@ -305,6 +372,62 @@ describe('a diff read again while it is open', () => {
   });
 });
 
+describe('quoting inside the view', () => {
+  it('on a phone opens the quote in place, for a note; added, it waits, the view stays and its foot says so', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    const onClose = vi.fn();
+    const onSendNow = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onSendNow={onSendNow} onSendComments={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+    fireEvent.click(document.querySelector('[data-line="2"]')!);
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Picked lines' })).getByRole('button', { name: 'Quote' }));
+    const sheet = screen.getByRole('dialog', { name: 'Quote · a.ts:2' });
+    expect(sheet.textContent).toContain('const b = 2;');
+    // The keyboard comes up only once Add a note is tapped; Send now needs a note.
+    expect(within(sheet).queryByLabelText('Your note')).toBeNull();
+    expect((within(sheet).getByRole('button', { name: 'Send now' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Add a note' }));
+    fireEvent.change(within(sheet).getByLabelText('Your note'), { target: { value: 'Why 2?' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Add' }));
+    expect(waitingOf(CWD)).toMatchObject([{ kind: 'quote', text: 'const b = 2;', note: 'Why 2?', path: 'src/a.ts', lines: [2, 2] }]);
+    expect(onClose).not.toHaveBeenCalled();
+    const foot = screen.getAllByRole('button', { name: 'Send now' }).find((button) => !button.closest('dialog'))!;
+    expect(foot.parentElement!.textContent).toBe('1 quote waits for your next messageSend now');
+    // Send now sends one at once, with its note.
+    fireEvent.click(document.querySelector('[data-line="3"]')!);
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Picked lines' })).getByRole('button', { name: 'Quote' }));
+    const next = screen.getByRole('dialog', { name: 'Quote · a.ts:3' });
+    fireEvent.click(within(next).getByRole('button', { name: 'Add a note' }));
+    fireEvent.change(within(next).getByLabelText('Your note'), { target: { value: 'And 3?' } });
+    fireEvent.click(within(next).getByRole('button', { name: 'Send now' }));
+    expect(onSendNow).toHaveBeenCalledWith(expect.objectContaining({ text: 'const c = 3;', note: 'And 3?', path: 'src/a.ts', lines: [3, 3] }));
+    setWaiting(CWD, []);
+  });
+
+  it('beside the conversation quotes at once, as Desktop’s Attach as context, with no sheet', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    wrap(<Workspace open docked cwd={CWD} sessionId="s1" onClose={() => {}} onSendNow={() => {}} onAddToMessage={() => {}} />);
+    await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
+    fireEvent.click(document.querySelector('[data-line="1"]')!);
+    fireEvent.click(document.querySelector('[data-line="2"]')!, { shiftKey: true });
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Picked lines' })).getByRole('button', { name: 'Quote' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(waitingOf(CWD)).toMatchObject([{ kind: 'quote', text: 'const a = 1;\nconst b = 2;', path: 'src/a.ts', lines: [1, 2] }]);
+    setWaiting(CWD, []);
+  });
+
+  it('has the file’s path menu under ⋯ beside its name, as everywhere a path is', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files&p=src%2Fa.ts');
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'More for a.ts' }, LAZY));
+    const menu = screen.getByRole('dialog', { name: 'a.ts' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Attach as context', 'Copy', 'Open in Changes', 'Download file']);
+    fireEvent.click(within(menu).getByText('Attach as context'));
+    expect(waitingOf(CWD)).toMatchObject([{ kind: 'file', path: 'src/a.ts' }]);
+    setWaiting(CWD, []);
+  });
+});
+
 describe('a file’s Quote and Copy', () => {
   /** Padded at least as deep as the home indicator, where there is one: 0 on a computer. */
   const clear = (row: Element) => /\bpb-safe\b|env\(safe-area-inset-bottom\)/.test(row.className);
@@ -326,7 +449,7 @@ describe('a file’s Quote and Copy', () => {
     const view = wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     select(1, 2);
-    const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    const bar = (await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!;
     expect(bar.textContent).toContain('Lines 1–2');
     expect(bar.closest('.overflow-y-auto')).toBeNull();
     expect(bar.closest('[role="region"]')).toBe(screen.getByRole('region', { name: 'Changes and files' }));
@@ -335,7 +458,7 @@ describe('a file’s Quote and Copy', () => {
     view.rerender(<QueryClientProvider client={new QueryClient()}><Workspace open cwd={CWD} sessionId="s1" needsYou="Claude wants to run npm test" onClose={() => {}} onAddToMessage={() => {}} /></QueryClientProvider>);
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
     select(1, 2);
-    const under = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    const under = (await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!;
     expect(clear(under)).toBe(false);
     expect(clear(screen.getByText('Claude wants to run npm test').closest('button')!)).toBe(true);
   });
@@ -349,7 +472,7 @@ describe('a file’s Quote and Copy', () => {
     const view = render(at(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
     select(1, 2);
-    expect(floor((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe('8px');
+    expect(floor((await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!)).toBe('8px');
     // The view's other lowest rows: the comments, with Send now, and the bar saying Claude waits.
     act(() => setComments(CWD, [{ id: 'c1', path: 'src/a.ts', kind: 'same', line: 2, code: 'const b = 2;', note: 'Rename b' }]));
     expect(floor(screen.getByRole('button', { name: 'Send now' }).parentElement!)).toBe('8px');
@@ -361,7 +484,7 @@ describe('a file’s Quote and Copy', () => {
     view.rerender(at(<Workspace open docked cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
     await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy());
     select(1, 2);
-    expect(floor((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe('8px');
+    expect(floor((await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!)).toBe('8px');
     act(() => setComments(CWD, [{ id: 'c1', path: 'src/a.ts', kind: 'same', line: 2, code: 'const b = 2;', note: 'Rename b' }]));
     expect(floor(screen.getByRole('button', { name: 'Send now' }).parentElement!)).toBe('8px');
     act(() => setComments(CWD, []));
@@ -377,7 +500,7 @@ describe('a file’s Quote and Copy', () => {
     expect(clear(pane.querySelector('.overflow-y-auto')!)).toBe(true);
     // The conversation beside it says Claude waits: the selection's row is the pane's lowest.
     select(1, 2);
-    const bar = (await screen.findByRole('button', { name: 'Quote' })).parentElement!;
+    const bar = (await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!;
     expect(bar.closest('aside')).toBe(pane);
     expect(clear(bar)).toBe(true);
     // Comments waiting: their row, with Send now, is the lowest.
@@ -385,6 +508,6 @@ describe('a file’s Quote and Copy', () => {
     view.rerender(at(<Workspace open docked cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} onSendComments={() => {}} />));
     expect(clear(screen.getByRole('button', { name: 'Send now' }).parentElement!)).toBe(true);
     select(1, 2);
-    expect(clear((await screen.findByRole('button', { name: 'Quote' })).parentElement!)).toBe(false);
+    expect(clear((await screen.findByRole('button', { name: 'Quote' })).closest('[data-lines-bar]')!)).toBe(false);
   });
 });

@@ -53,30 +53,36 @@ export function parseDiff(diff: string): DiffLine[] {
   return out;
 }
 
-/** A comment on one line of a diff, for Claude. */
+/** A comment on a line of a diff or a file, or on a few in a row, for Claude. */
 export type LineComment = {
   id: string;
   path: string;
   kind: CodeLine['kind'];
-  /** The line's number in the new file, or for a removed line, in the old one. */
+  /** The line's number in the new file, or for a removed line, in the old one; the first of a few. */
   line: number;
-  /** The line as it read, so the comment still says what it is about after the file changes. */
+  /** The last of a few lines in a row, where it is on more than one. */
+  to?: number;
+  /** The lines as they read, so the comment still says what it is about after the file changes. */
   code: string;
   note: string;
 };
+
+/** The last line a comment is on: where it shows. */
+export const lastLine = (comment: LineComment): number => comment.to ?? comment.line;
 
 export const lineNumber = (line: CodeLine) => (line.kind === 'del' ? line.oldLine : line.newLine);
 
 /** Where a line is in its file's diff; removed lines are counted in the old file, the rest in the new. */
 export const lineKey = (line: CodeLine) => `${line.kind === 'del' ? '-' : '+'}${lineNumber(line)}`;
-export const commentKey = (comment: LineComment) => `${comment.kind === 'del' ? '-' : '+'}${comment.line}`;
+/** Where a comment shows in its file's diff: under its last line, on its side. */
+export const commentKey = (comment: LineComment) => `${comment.kind === 'del' ? '-' : '+'}${lastLine(comment)}`;
 
 /** A comment as it goes to Claude: where it is, the code it is about, what was said. */
 export type CommentBlock = { path: string; lines: [number, number]; removed?: boolean; code?: string; note: string };
 
 /** A comment on a line of a diff, as one goes to Claude. */
 export const commentBlock = (comment: LineComment): CommentBlock => ({
-  path: comment.path, lines: [comment.line, comment.line], removed: comment.kind === 'del', code: comment.code, note: comment.note,
+  path: comment.path, lines: [comment.line, lastLine(comment)], removed: comment.kind === 'del', code: comment.code, note: comment.note,
 });
 
 /** What starts a line Claude Desktop would read as a header of its own, after any space: those lines of a snippet are quoted. */
@@ -175,12 +181,13 @@ export const withComments = (text: string, comments: readonly LineComment[]): st
 
 const asItem = (comment: LineComment): WaitingItem => ({
   id: comment.id, kind: 'comment', text: comment.code, note: comment.note, path: comment.path,
-  lines: [comment.line, comment.line], side: comment.kind, from: { what: comment.kind === 'same' ? 'file' : 'diff' },
+  lines: [comment.line, lastLine(comment)], side: comment.kind, from: { what: comment.kind === 'same' ? 'file' : 'diff' },
 });
 
-const asComment = (item: WaitingItem): LineComment => ({
-  id: item.id, path: item.path ?? '', kind: item.side ?? 'same', line: item.lines?.[0] ?? 0, code: item.text, note: item.note ?? '',
-});
+const asComment = (item: WaitingItem): LineComment => {
+  const [first = 0, last = first] = item.lines ?? [];
+  return { id: item.id, path: item.path ?? '', kind: item.side ?? 'same', line: first, ...(last > first ? { to: last } : {}), code: item.text, note: item.note ?? '' };
+};
 
 const seen = new WeakMap<readonly WaitingItem[], LineComment[]>();
 const commentsIn = (items: readonly WaitingItem[]): LineComment[] => {

@@ -1,24 +1,28 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MoreHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { GitFile } from '../../shared/protocol';
 import { api, type TrustChoice, type TrustQuestion } from '../lib/api';
-import { useWaiting } from '../lib/drafts';
+import { entries, PATH_ACTIONS } from '../lib/actions';
+import { announce } from '../lib/announce';
+import { addWaiting, useWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
 import { ariaKeys, closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
-import type { WaitingItem } from '../lib/quote';
+import { fileItem, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 import { useComments, useCommentsChat } from '../lib/review';
 import { wantTerminalFocus } from '../lib/terminals';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
-import { SelectionFoot, type SelectionFootAt } from './FileViewer';
+import { ActionMenu } from './ActionMenu';
+import { PaneQuote, SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
+import { downloadFile } from './PathMenu';
 import type { RewindPoint } from './Rewind';
-import { waitingCount } from './WaitingItems';
+import { QuoteSheet, waitingCount } from './WaitingItems';
 import { WorkspaceChanges, WorkspaceFiles, WorkspaceTerminal } from './WorkspaceTabs';
 
 /**
@@ -175,7 +179,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onRequest, onAddToMessage, onSendComments, askTrust = noTrust, onQuote }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onRequest, onAddToMessage, onSendComments, askTrust = noTrust, onSendNow }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -199,8 +203,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   onSendComments?: () => void;
   /** The trust sheet, for a terminal in a folder nobody trusted that brings programs: the answer, or none. */
   askTrust?: (trust: TrustQuestion) => Promise<TrustChoice | undefined>;
-  /** Puts a quote of the terminal above the message box, to go with the next message. */
-  onQuote?: (item: WaitingItem) => void;
+  /** Sends a quote taken here at once, with its note: the in-place sheet's Send now on a phone. */
+  onSendNow?: (item: WaitingItem) => void;
 }) {
   const chat = useCommentsChat(cwd);
   const comments = useComments(chat);
@@ -211,6 +215,17 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     for (const c of comments) count.set(c.path, (count.get(c.path) ?? 0) + 1);
     return count;
   }, [comments]);
+  // A quote taken here (lines of a file, the terminal's output): beside the conversation it waits
+  // above the message box at once, as Desktop's Attach as context does; on a phone, where the box
+  // is out of sight, it opens in place as a sheet, for a note, and the view stays.
+  const [quoting, setQuoting] = useState<WaitingItem>();
+  const quoteHere = useCallback((item: WaitingItem) => {
+    if (!docked) {
+      setQuoting(item);
+      return;
+    }
+    announce(addWaiting(chat, item) ? 'Quoted in your message' : TOO_MANY_REPLIES);
+  }, [docked, chat]);
   const routed = useWorkspaceStep();
   // The pane beside the conversation opens on the tab last used when the address names none.
   const step: WorkspaceStep = routed ?? { tab: lastTab };
@@ -272,12 +287,47 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     </button>
   ) : null;
 
+  // The shown file's path menu, as everywhere a path is: under ⋯ beside its name.
+  const [pathMenu, setPathMenu] = useState<{ at: Element; keys: boolean }>();
+  const shownFile = shown && git?.files.find((f) => f.path === shown.path);
+  const gone = shownFile?.status === 'deleted';
+  const pathTarget = shown && {
+    path: shown.path,
+    cwd,
+    ...(!gone ? {
+      attach: () => {
+        if (addWaiting(chat, fileItem(shown.path))) announce(`${baseName(shown.path)} goes with your message`);
+      },
+      download: () => downloadFile(cwd, shown.path),
+      ...(shown.kind === 'diff' ? { openInFiles: () => go({ tab: 'files', path: shown.path }) } : {}),
+    } : {}),
+    ...(shown.kind === 'file' && shownFile ? { changed: true, openInChanges: () => go({ tab: 'changes', path: shown.path }) } : {}),
+  };
   const header = (
     <div className="pt-1 pb-2">
       {shown ? (
         <div className="flex min-w-0 items-center gap-2">
           {back}
           <div className="min-w-0 flex-1"><PathLabel path={shown.path} /></div>
+          <button
+            type="button"
+            aria-label={`More for ${baseName(shown.path)}`}
+            aria-haspopup="menu"
+            aria-expanded={Boolean(pathMenu)}
+            onClick={(e) => setPathMenu({ at: e.currentTarget, keys: e.detail === 0 })}
+            className="-mr-1 grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg"
+          >
+            <MoreHorizontal className="size-[18px]" />
+          </button>
+          <ActionMenu
+            open={Boolean(pathMenu)}
+            onClose={() => setPathMenu(undefined)}
+            label={shown.path}
+            title={<span className="font-mono">{baseName(shown.path)}</span>}
+            entries={pathMenu && pathTarget ? entries(PATH_ACTIONS, pathTarget, 'menu', hasKeyboard() ? 'pointer' : 'touch') : []}
+            at={pathMenu?.at ?? null}
+            focusFirst={Boolean(pathMenu?.keys)}
+          />
         </div>
       ) : (
         <PaneTabs tab={tab} onChange={switchTab} lines={git && lineCount(git.files)} />
@@ -318,7 +368,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         hidden={tab !== 'terminal'}
         lowest={waiting.length === 0 && !waits}
         askTrust={askTrust}
-        onQuote={(item) => onQuote?.(item)}
+        onQuote={quoteHere}
       />
     </div>
   );
@@ -378,6 +428,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     return (
       <SendComments.Provider value={onSendComments}>
       <SelectionFoot.Provider value={selectionFoot}>
+      <PaneQuote.Provider value={quoteHere}>
       <aside aria-label="Changes and files" data-workspace onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
         <div data-makes-room="short" className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
@@ -391,6 +442,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
         <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>
+      </PaneQuote.Provider>
       </SelectionFoot.Provider>
       </SendComments.Provider>
     );
@@ -398,6 +450,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   return createPortal(
     <SendComments.Provider value={onSendComments}>
     <SelectionFoot.Provider value={selectionFoot}>
+    <PaneQuote.Provider value={quoteHere}>
     <div
       ref={view}
       role="region"
@@ -436,7 +489,18 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           </button>
         )}
       </div>
+      <QuoteSheet
+        item={quoting}
+        onClose={() => setQuoting(undefined)}
+        onAdd={(item) => {
+          if (!addWaiting(chat, item)) return false;
+          announce(item.note ? 'Quoted with your note' : 'Quoted in your message');
+          return true;
+        }}
+        {...(onSendNow ? { onSend: onSendNow } : {})}
+      />
     </div>
+    </PaneQuote.Provider>
     </SelectionFoot.Provider>
     </SendComments.Provider>,
     document.body,

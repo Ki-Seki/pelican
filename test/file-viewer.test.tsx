@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const CWD = '/code/app';
@@ -27,19 +27,28 @@ vi.mock('../src/web/lib/api', async (original) => {
   };
 });
 
+let media: Record<string, boolean> = {};
 beforeAll(() => {
   window.matchMedia = ((query: string) => ({
-    matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    matches: Boolean(media[query]), media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   Element.prototype.scrollIntoView = vi.fn();
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    this.removeAttribute('open');
+  };
 });
 
-const { FileViewer } = await import('../src/web/components/FileViewer');
+const { FileViewer, PaneQuote } = await import('../src/web/components/FileViewer');
+const { SendComments } = await import('../src/web/components/Comments');
 const { WorkspaceFiles } = await import('../src/web/components/WorkspaceFiles');
 const { setComments, commentsOf } = await import('../src/web/lib/review');
 
 afterEach(() => {
   cleanup();
+  media = {};
   setComments(CWD, []);
   server.searched = [];
   server.files = {};
@@ -48,21 +57,96 @@ afterEach(() => {
 
 const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
 
+const line = (n: number) => document.querySelector(`[data-line="${n}"]`)!;
+const bar = () => screen.getByRole('toolbar', { name: 'Picked lines' });
+
 describe('a file', () => {
-  it('opens at its line, numbered, and a tap on a line comments on it', async () => {
+  it('opens at its line, numbered; a tap on a line picks it, for Copy · Quote · Add comment, and Add comment comments on it', async () => {
     wrap(<FileViewer cwd={CWD} path="src/a.ts" line={2} onAddToMessage={() => {}} />);
-    await waitFor(() => expect(document.querySelector('[data-line="2"]')?.textContent).toBe('2const b = 2;'));
+    await waitFor(() => expect(line(2).textContent).toBe('2+const b = 2;'));
     await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'center' }));
-    const line = document.querySelector('[data-line="3"]')!;
-    fireEvent.click(line);
+    fireEvent.click(line(3));
+    expect(bar().textContent).toBe('Line 3CopyQuoteAdd comment');
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Add comment' }));
+    expect(screen.queryByRole('toolbar', { name: 'Picked lines' })).toBeNull();
     fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Name it c3' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    // Desktop's box: Cancel · Send to Claude (where comments can be sent from) · Add comment.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Send to Claude/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }));
     expect(commentsOf(CWD)).toMatchObject([{ path: 'src/a.ts', kind: 'same', line: 3, code: 'const c = 3;', note: 'Name it c3' }]);
     expect(screen.getByText('Name it c3')).toBeTruthy();
+    // A tap on the one line picked lets it go.
+    fireEvent.click(line(1));
+    fireEvent.click(line(1));
+    expect(screen.queryByRole('toolbar', { name: 'Picked lines' })).toBeNull();
+  });
+
+  it('picks a few lines in a row with Shift, and comments on them all, as Desktop’s "at lines 1-3"', async () => {
+    wrap(<FileViewer cwd={CWD} path="src/a.ts" onAddToMessage={() => {}} />);
+    await waitFor(() => expect(line(3)).toBeTruthy());
+    fireEvent.click(line(1));
+    fireEvent.click(line(3), { shiftKey: true });
+    expect(bar().textContent).toMatch(/^Lines 1\u20133/);
+    expect([1, 2, 3].map((n) => line(n).className.includes('bg-mark'))).toEqual([true, true, true]);
+    fireEvent.click(within(bar()).getByRole('button', { name: 'Add comment' }));
+    fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'One block' } });
+    fireEvent.submit(screen.getByLabelText('Comment for Claude').closest('form')!);
+    expect(commentsOf(CWD)).toMatchObject([{ line: 1, to: 3, code: 'const a = 1;\nconst b = 2;\nconst c = 3;', note: 'One block' }]);
+    // It shows under its last line.
+    expect(line(3).parentElement!.textContent).toContain('One block');
+  });
+
+  it('comments on a line at once from the + its number shows with a pointer, and Send to Claude sends what waits', async () => {
+    const send = vi.fn();
+    wrap(<SendComments.Provider value={send}><FileViewer cwd={CWD} path="src/a.ts" onAddToMessage={() => {}} /></SendComments.Provider>);
+    await waitFor(() => expect(line(2)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment on line 2' }));
+    fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Rename b' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Send to Claude/ }));
+    expect(commentsOf(CWD)).toMatchObject([{ line: 2, note: 'Rename b' }]);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('under a finger, picks the lines a long press drags over', async () => {
+    wrap(<FileViewer cwd={CWD} path="src/a.ts" onAddToMessage={() => {}} />);
+    await waitFor(() => expect(line(3)).toBeTruthy());
+    // jsdom lays nothing out: the finger is over line 3 once it moves.
+    Object.assign(document, { elementFromPoint: () => line(3).lastChild });
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(line(1).lastChild!, { pointerType: 'touch', isPrimary: true, pointerId: 7, clientX: 50, clientY: 10 });
+      act(() => vi.advanceTimersByTime(510));
+      fireEvent.pointerMove(line(1).lastChild!, { pointerType: 'touch', pointerId: 7, clientX: 50, clientY: 60 });
+      fireEvent.pointerUp(line(1).lastChild!, { pointerType: 'touch', pointerId: 7 });
+      // The tap that ends the press is the press's.
+      fireEvent.click(line(1).lastChild!);
+    } finally {
+      vi.useRealTimers();
+      Object.assign(document, { elementFromPoint: undefined });
+    }
+    expect(bar().textContent).toMatch(/^Lines 1\u20133/);
+  });
+
+  it('quotes lines picked with ⇧⌘L, and a right-click opens the bar’s list for them', async () => {
+    const quoted = vi.fn();
+    wrap(<PaneQuote.Provider value={quoted}><FileViewer cwd={CWD} path="src/a.ts" onAddToMessage={() => {}} /></PaneQuote.Provider>);
+    await waitFor(() => expect(line(3)).toBeTruthy());
+    fireEvent.click(line(2));
+    fireEvent.keyDown(screen.getByRole('group', { name: 'The text of src/a.ts' }), { key: 'l', code: 'KeyL', ctrlKey: true, shiftKey: true });
+    expect(quoted).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: 'const b = 2;', path: 'src/a.ts', lines: [2, 2], from: { what: 'file' } }));
+    expect(screen.queryByRole('toolbar', { name: 'Picked lines' })).toBeNull();
+    media = { '(hover: hover) and (pointer: fine)': true, '(pointer: fine)': true };
+    fireEvent.contextMenu(line(3).lastChild!, { clientX: 20, clientY: 20 });
+    const menu = screen.getByRole('menu', { name: 'Lines' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', expect.stringMatching(/^Quote/), 'Add comment']);
+    fireEvent.click(within(menu).getByText('Quote'));
+    expect(quoted).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'const c = 3;', lines: [3, 3] }));
   });
 
   it('numbers the lines it has, highlighted or plain: the line break a file ends with starts no line', async () => {
-    const numbered = () => [...document.querySelectorAll('[data-line]')].map((row) => row.textContent);
+    // Each row's number and text, without the + its number turns into under a pointer.
+    const numbered = () => [...document.querySelectorAll('[data-line]')].map((row) => row.textContent!.replace('+', ''));
     const shown = async (path: string, text: string) => {
       server.files = { [path]: text };
       const view = wrap(<FileViewer cwd={CWD} path={path} onAddToMessage={() => {}} />);
@@ -139,14 +223,12 @@ describe('going straight from one file to another', () => {
     const view = render(at(path));
     return { client, go: (p: string) => view.rerender(at(p)) };
   }
-  const line = (n: number) => document.querySelector(`[data-line="${n}"]`);
-
   it('shows a source file numbered after a Markdown file was shown as it reads', async () => {
     server.files = { 'README.md': '# Title\n\nSome *words*.\n', 'src/a.ts': TEXT };
     const { go } = open('README.md');
     await screen.findByRole('heading', { name: 'Title' });
     go('src/a.ts');
-    await waitFor(() => expect(line(2)?.textContent).toBe('2const b = 2;'));
+    await waitFor(() => expect(line(2)?.textContent).toBe('2+const b = 2;'));
     expect(screen.getByRole('button', { name: 'Wrap' })).toBeTruthy();
   });
 
@@ -168,10 +250,10 @@ describe('going straight from one file to another', () => {
     server.files = { 'src/a.ts': TEXT, 'src/b.ts': 'let x = 1;\nlet y = 2;\nlet z = 3;\n' };
     const { go } = open('src/a.ts');
     await waitFor(() => expect(line(2)).toBeTruthy());
-    fireEvent.click(line(2)!);
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment on line 2' }));
     fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Rename b' } });
     go('src/b.ts');
-    await waitFor(() => expect(line(2)?.textContent).toBe('2let y = 2;'));
+    await waitFor(() => expect(line(2)?.textContent).toBe('2+let y = 2;'));
     expect(screen.queryByLabelText('Comment for Claude')).toBeNull();
     expect(commentsOf(CWD)).toEqual([]);
   });

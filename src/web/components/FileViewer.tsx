@@ -1,19 +1,22 @@
 import { useQuery } from '@tanstack/react-query';
-import { AtSign, Check, Copy, Download, Loader2, Maximize2, Play, Quote } from 'lucide-react';
+import { Download, Loader2, Maximize2, Play } from 'lucide-react';
 import { createContext, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 
+import { entries, LINES_ACTIONS, type LinesTarget } from '../lib/actions';
 import { api, apiUrl } from '../lib/api';
 import { rehypeCodeLines } from '../lib/code-lines';
 import { formatBytes } from '../lib/format';
 import { newId } from '../lib/ids';
 import { markTipSeen, tipSeen } from '../lib/prefs';
-import { quoteLines } from '../lib/quote';
-import { commentsOf, type LineComment, setComments, useComments, useCommentsChat } from '../lib/review';
+import { ariaKeys, composing, hasKeyboard, isKey } from '../lib/keyboard';
+import { quoteItem, quoteLines, type WaitingItem } from '../lib/quote';
+import { commentsOf, lastLine, type LineComment, setComments, useComments, useCommentsChat } from '../lib/review';
 import { CommentBox, CommentNote, useSendComments } from './Comments';
-import { useLinePick } from './line-pick';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
+import { useLineDrag, useLinePick, useLineSelection } from './line-pick';
 import { Markdown } from './Markdown';
 import { openPreview, Sandbox } from './Preview';
 
@@ -50,6 +53,9 @@ const useWrapping = () => useSyncExternalStore((l) => {
   return () => wrapListeners.delete(l);
 }, () => wrapping);
 
+/** Lines picked by their numbers: the first and last, and where a Shift-click extends from. */
+type Picked = { from: number; to: number; anchor: number };
+
 /** What every line of the file needs to draw itself, shared through the highlighted lines. */
 type Lines = {
   path: string;
@@ -58,11 +64,17 @@ type Lines = {
   wrap: boolean;
   /** The line opened at (from a link, a search result). */
   target?: number;
+  /** Lines picked by their numbers. */
+  picked?: Picked;
+  /** Comments, under the last line each is on. */
   comments: Map<number, LineComment[]>;
-  /** The line a comment is being written on; what is typed is the box's own (and `note`'s). */
-  editing?: number;
+  /** The lines a comment is being written on; what is typed is the box's own (and `note`'s). */
+  editing?: { from: number; to: number };
   note: { current: string };
-  pick: (line: number) => void;
+  /** A tap or a click on a line: picks it, or with Shift extends what is picked to it. */
+  pick: (line: number, extend: boolean) => void;
+  /** The gutter's + with a pointer: a comment on the line at once, as Desktop's line number offers. */
+  commentOn: (line: number) => void;
   save: (note: string, sendAll: boolean) => void;
   cancel: () => void;
   remove: (comment: LineComment) => void;
@@ -85,22 +97,40 @@ function EditingBox({ lines }: { lines: Lines }) {
 }
 const LinesContext = createContext<Lines | undefined>(undefined);
 
+const within = (n: number, range: { from: number; to: number } | undefined) => Boolean(range && n >= range.from && n <= range.to);
+
 /** One line: its number, its text (highlighted when it could be), its comments, a comment being written. */
 function LineRow({ n, children }: { n: number; children?: ReactNode }) {
   const lines = useContext(LinesContext)!;
-  const marked = lines.target === n || lines.editing === n;
+  const picked = within(n, lines.picked) || within(n, lines.editing);
+  const marked = picked || lines.target === n;
   return (
     <div>
       <div
         data-line={n}
-        onClick={() => lines.pick(n)}
-        className={`flex cursor-pointer ${marked ? 'bg-hover shadow-[inset_3px_0_0_var(--fg)]' : 'pointer-fine:hover:shadow-[inset_3px_0_0_var(--faint)]'}`}
+        onClick={(e) => lines.pick(n, e.shiftKey)}
+        className={`group/line flex cursor-pointer ${picked ? 'bg-mark' : marked ? 'bg-hover shadow-[inset_3px_0_0_var(--fg)]' : 'pointer-fine:hover:shadow-[inset_3px_0_0_var(--faint)]'}`}
       >
-        <span className={`shrink-0 pr-2.5 pl-2 text-right text-faint tabular-nums select-none ${lines.wrap ? '' : 'sticky left-0 bg-bg'}`} style={{ width: `calc(${lines.digits}ch + 1.125rem)` }}>{n}</span>
+        <span className={`relative shrink-0 pr-2.5 pl-2 text-right text-faint tabular-nums select-none ${lines.wrap ? '' : 'sticky left-0'} ${picked ? 'bg-mark text-fg' : lines.wrap ? '' : 'bg-bg'}`} style={{ width: `calc(${lines.digits}ch + 1.125rem)` }}>
+          {n}
+          {/* With a pointer, its number turns into Desktop's + on hover: a comment on the line at once. */}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={`Add comment on line ${n}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              lines.commentOn(n);
+            }}
+            className="absolute inset-y-0 right-1.5 my-auto hidden size-4 place-items-center rounded bg-fg text-[12px] leading-none font-medium text-bg pointer-fine:group-hover/line:grid"
+          >
+            +
+          </button>
+        </span>
         <span className={`min-w-0 flex-1 pr-3 ${lines.wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>{children ?? (lines.texts[n - 1] || ' ')}</span>
       </div>
       {lines.comments.get(n)?.map((c) => <CommentNote key={c.id} comment={c} onRemove={() => lines.remove(c)} />)}
-      {lines.editing === n && <EditingBox lines={lines} />}
+      {lines.editing?.to === n && <EditingBox lines={lines} />}
     </div>
   );
 }
@@ -120,33 +150,6 @@ const Highlighted = memo(function Highlighted({ text, language }: { text: string
   return <ReactMarkdown rehypePlugins={highlightPlugins} components={highlightComponents}>{`${fence}${language}\n${lastBreakOff(text)}\n${fence}`}</ReactMarkdown>;
 });
 
-/** The lines the selection covers inside `box`, and its text, while there is one. */
-function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: number; to: number; text: string } | undefined {
-  const [range, setRange] = useState<{ from: number; to: number; text: string }>();
-  useEffect(() => {
-    const lineOf = (node: Node | null) => {
-      const element = node instanceof Element ? node : node?.parentElement;
-      return Number(element?.closest('[data-line]')?.getAttribute('data-line')) || undefined;
-    };
-    const onChange = () => {
-      const selection = window.getSelection();
-      const el = box.current;
-      const text = selection?.toString() ?? '';
-      if (!selection || selection.isCollapsed || !text.trim() || !el || !el.contains(selection.anchorNode) || !el.contains(selection.focusNode)) {
-        setRange(undefined);
-        return;
-      }
-      const a = lineOf(selection.anchorNode);
-      const b = lineOf(selection.focusNode);
-      if (!a || !b) return setRange(undefined);
-      setRange({ from: Math.min(a, b), to: Math.max(a, b), text });
-    };
-    document.addEventListener('selectionchange', onChange);
-    return () => document.removeEventListener('selectionchange', onChange);
-  }, [box]);
-  return range;
-}
-
 /**
  * Where Changes and files puts a file's selection bar: a row of its own under what scrolls, so
  * the file never scrolls under it; `safe`: the lowest row of the view, clear of the home indicator
@@ -157,26 +160,36 @@ function useLineSelection(box: React.RefObject<HTMLElement | null>): { from: num
 export type SelectionFootAt = { at: HTMLElement; safe?: boolean };
 export const SelectionFoot = createContext<SelectionFootAt | undefined>(undefined);
 
-/** Under a selection of lines: quote them into the message as `path:7-8` and the lines, or copy the text. */
-function SelectionBar({ from, to, onQuote, text, place }: { from: number; to: number; onQuote: () => void; text: string; place: string }) {
-  const [copied, setCopied] = useState(false);
+/**
+ * Where a quote taken in Changes and files goes: beside the conversation it waits above the message
+ * box at once; on a phone it opens in place, for a note (the view's own sheet). Given by the view.
+ */
+export const PaneQuote = createContext<((item: WaitingItem) => void) | undefined>(undefined);
+
+/** Under lines picked or selected: Copy · Quote · Add comment, one design wherever lines are (lib/actions). */
+export function LinesBar({ target, place }: { target: LinesTarget; place: string }) {
+  const list = entries(LINES_ACTIONS, target, 'row', hasKeyboard() ? 'pointer' : 'touch');
   return (
-    <div className={`flex items-center gap-1 border-t border-line bg-bg text-[13px] ${place}`}>
-      <span className="min-w-0 flex-1 truncate text-muted">{to > from ? `Lines ${from}–${to}` : `Line ${from}`}</span>
-      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onQuote} className="flex h-9 items-center gap-1.5 rounded-full px-3 hover:bg-hover">
-        <Quote className="size-3.5" /> Quote
-      </button>
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => void navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
-        })}
-        className="flex h-9 items-center gap-1.5 rounded-full px-3 hover:bg-hover"
-      >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} Copy
-      </button>
+    <div data-lines-bar className={place}>
+      <div role="toolbar" aria-label="Picked lines" className="flex h-11 items-center rounded-2xl border border-line bg-panel pr-1 pl-3.5 text-[14px] shadow-lg pointer-fine:h-9 pointer-fine:text-[13px]">
+        <span className="min-w-0 flex-1 truncate text-muted tabular-nums">{target.to > target.from ? `Lines ${target.from}\u2013${target.to}` : `Line ${target.from}`}</span>
+        {list.map((entry, i) => 'run' in entry && (
+          <span key={entry.id} className="flex h-full items-center">
+            {i > 0 && <span aria-hidden className="h-5 w-px bg-line" />}
+            <button
+              type="button"
+              // The selection stays while the bar is pressed.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={entry.run}
+              {...(entry.key ? { 'aria-keyshortcuts': ariaKeys(entry.key) } : {})}
+              className="flex h-full items-center gap-1.5 rounded-full px-3 hover:bg-hover"
+            >
+              {entry.icon && entry.id !== 'copy' && <entry.icon className="size-4 text-muted pointer-fine:size-3.5" />}
+              {entry.label}
+            </button>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -225,17 +238,28 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
   const chat = useCommentsChat(cwd);
   const all = useComments(chat);
   const mine = useMemo(() => all.filter((c) => c.path === path && c.kind !== 'del'), [all, path]);
-  // What is typed follows a tap on another line, so a missed line costs nothing.
-  const [editing, setEditing] = useState<number>();
+  // Lines picked by their numbers, and the lines a comment is being written on: what is typed
+  // follows a tap on other lines, so a missed line costs nothing.
+  const [picked, setPicked] = useState<Picked>();
+  const [editing, setEditing] = useState<{ from: number; to: number }>();
   const note = useRef('');
   const [showHint] = useState(() => !tipSeen('line-comments'));
   const sendAll = useSendComments();
   const foot = useContext(SelectionFoot);
-  const box = useRef<HTMLDivElement>(null);
-  const selection = useLineSelection(box);
-  const pick = useLinePick((n: number) => setEditing(n));
-  const latest = useRef({ chat, path, texts, editing, sendAll });
-  latest.current = { chat, path, texts, editing, sendAll };
+  const quoteHere = useContext(PaneQuote);
+  const box = useRef<HTMLDivElement | null>(null);
+  // The lines' box, once it is there (the file loaded, shown as its source): where a finger picks.
+  const [boxShown, setBoxShown] = useState<HTMLDivElement | null>(null);
+  const selection = useLineSelection(box, 'data-line');
+  const [menu, setMenu] = useState<{ at: MenuAnchor; keys: boolean }>();
+  // A click on a line picks it: with a mouse once a double click (selecting a word) is ruled out.
+  const pickOne = useLinePick((n: number) => {
+    setPicked((was) => (was && was.from === n && was.to === n ? undefined : { from: n, to: n, anchor: n }));
+  });
+  const latest = useRef({ chat, path, texts, editing, sendAll, picked });
+  latest.current = { chat, path, texts, editing, sendAll, picked };
+  // Under a finger: a long press on a line, then a drag, picks the lines it goes over.
+  useLineDrag(boxShown, 'data-line', (anchor, end) => setPicked({ from: Math.min(anchor, end), to: Math.max(anchor, end), anchor }));
 
   // Opening at a line: Source, the line in the middle of the view, marked.
   useEffect(() => {
@@ -250,25 +274,43 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
     const at = new Map<number, LineComment[]>();
     const gone: LineComment[] = [];
     for (const c of mine) {
-      if (texts[c.line - 1] === c.code) at.set(c.line, [...(at.get(c.line) ?? []), c]);
+      if (texts.slice(c.line - 1, lastLine(c)).join('\n') === c.code) at.set(lastLine(c), [...(at.get(lastLine(c)) ?? []), c]);
       else gone.push(c);
     }
     return { onLine: at, outdated: gone };
   }, [mine, texts]);
+  /** A comment on lines `from` to `to`: Desktop's box under the last, the lines staying marked. */
+  const commentOn = (from: number, to = from) => {
+    note.current = '';
+    setEditing({ from, to });
+    setPicked(undefined);
+    window.getSelection()?.removeAllRanges();
+  };
   const lines = useMemo<Lines>(() => ({
     path,
     texts,
     digits: String(texts.length).length,
     wrap,
     ...(line ? { target: line } : {}),
+    ...(picked ? { picked } : {}),
     comments: onLine,
     ...(editing ? { editing } : {}),
     note,
-    pick,
+    pick: (n, extend) => {
+      const was = latest.current.picked;
+      if (extend && was) {
+        // Shift-click: from where the picking started to this line, at once.
+        setPicked({ from: Math.min(was.anchor, n), to: Math.max(was.anchor, n), anchor: was.anchor });
+        window.getSelection()?.removeAllRanges();
+        return;
+      }
+      pickOne(n);
+    },
+    commentOn: (n) => commentOn(n),
     save: (typed, now) => {
       const { chat: owner, path: file, texts: text, editing: at, sendAll: send } = latest.current;
       if (!at || !typed.trim()) return;
-      setComments(owner, [...commentsOf(owner), { id: newId(), path: file, kind: 'same', line: at, code: text[at - 1] ?? '', note: typed.trim() }]);
+      setComments(owner, [...commentsOf(owner), { id: newId(), path: file, kind: 'same', line: at.from, ...(at.to > at.from ? { to: at.to } : {}), code: text.slice(at.from - 1, at.to).join('\n'), note: typed.trim() }]);
       note.current = '';
       setEditing(undefined);
       markTipSeen('line-comments');
@@ -283,19 +325,53 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
     },
     remove: (comment) => setComments(latest.current.chat, commentsOf(latest.current.chat).filter((c) => c.id !== comment.id)),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [path, texts, wrap, line, onLine, editing]);
+  }), [path, texts, wrap, line, onLine, editing, picked]);
   const language = LANGUAGE[ext];
   const highlight = text !== undefined && language && text.length <= HIGHLIGHT_MAX.chars && texts.length <= HIGHLIGHT_MAX.lines;
 
-  const quote = () => {
-    if (!selection) return;
-    onAddToMessage(quoteLines(path, selection.from, selection.to, texts.slice(selection.from - 1, selection.to)), 'quote');
+  // What the bar and a right-click act on: a selection with a mouse, else the lines picked.
+  const range = selection ?? (picked ? { from: picked.from, to: picked.to } : undefined);
+  /** Lines from..to as a quote: their path and lines go with them, as Desktop attaches a file's. */
+  const quote = (from: number, to: number) => {
+    const item = quoteItem(texts.slice(from - 1, to).join('\n'), { what: 'file' }, { path, lines: [from, to] });
     window.getSelection()?.removeAllRanges();
+    setPicked(undefined);
+    if (!item) return;
+    if (quoteHere) quoteHere(item);
+    else onAddToMessage(quoteLines(path, from, to, texts.slice(from - 1, to)), 'quote');
   };
   // Copy takes the lines themselves: a comment shown between them is not part of the file.
-  const bar = selection && ((place: string) => (
-    <SelectionBar from={selection.from} to={selection.to} text={selection.from === selection.to ? selection.text : texts.slice(selection.from - 1, selection.to).join('\n')} onQuote={quote} place={place} />
-  ));
+  const target = (at: { from: number; to: number; text?: string }): LinesTarget => ({
+    from: at.from,
+    to: at.to,
+    text: at.text !== undefined && at.from === at.to ? at.text : texts.slice(at.from - 1, at.to).join('\n'),
+    quote: () => quote(at.from, at.to),
+    comment: () => commentOn(at.from, at.to),
+  });
+  const bar = range && !editing && ((place: string) => <LinesBar target={target(range)} place={place} />);
+
+  // ⇧⌘L quotes the lines picked, as it quotes a selection; Esc lets them go, before it closes the view.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!range || composing(e.nativeEvent)) return;
+    if (isKey(e, 'quoteSelection')) {
+      e.preventDefault();
+      e.stopPropagation();
+      quote(range.from, range.to);
+    } else if (e.key === 'Escape' && picked) {
+      e.preventDefault();
+      e.stopPropagation();
+      setPicked(undefined);
+    }
+  };
+  // A right-click on the lines: the bar's list, for what is picked, or the line clicked when it is not.
+  const onContextMenu = (e: React.MouseEvent) => {
+    const at = Number((e.target as Element).closest('[data-line]')?.getAttribute('data-line'));
+    if (!at || !hasKeyboard()) return;
+    e.preventDefault();
+    if (!within(at, range)) setPicked({ from: at, to: at, anchor: at });
+    setMenu({ at: { x: e.clientX, y: e.clientY }, keys: false });
+  };
+  const menuRange = range;
 
   const tool = 'flex h-9 shrink-0 items-center gap-1 rounded-full px-2 text-[13px] text-muted hover:bg-hover hover:text-fg aria-pressed:text-fg';
   return (
@@ -312,9 +388,6 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
         <a href={apiUrl(`file/raw?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`)} download={name} className={tool}>
           <Download className="size-3.5" /> Download
         </a>
-        <button type="button" onClick={() => onAddToMessage(`@${path} `)} className={tool}>
-          <AtSign className="size-3.5" /> Mention
-        </button>
       </div>
       {isLoading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
       {error && <div className="px-3 py-6 text-[13px] text-danger">{(error as Error).message}</div>}
@@ -334,7 +407,10 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
       {text !== undefined && !preview && (
         <>
           {showHint && mine.length === 0 && (
-            <p className="px-2 pb-1.5 text-[12px] text-faint"><span className="pointer-fine:hidden">Tap</span><span className="hidden pointer-fine:inline">Click</span> a line to comment on it, or select lines to quote them</p>
+            <p className="px-2 pb-1.5 text-[12px] text-faint">
+              <span className="pointer-fine:hidden">Tap a line, or hold one and drag, to quote it or comment on it</span>
+              <span className="hidden pointer-fine:inline">Click a line, or Shift-click to more, to quote it or comment on it</span>
+            </p>
           )}
           {outdated.length > 0 && (
             <div className="mb-1.5 overflow-hidden rounded-lg border border-line">
@@ -343,16 +419,30 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
           )}
           <LinesContext.Provider value={lines}>
             <div
-              ref={box}
+              ref={(el) => {
+                box.current = el;
+                setBoxShown(el);
+              }}
               role="group"
               tabIndex={-1}
               aria-label={`The text of ${path}`}
-              className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] [tab-size:4] ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
+              onKeyDown={onKeyDown}
+              onContextMenu={onContextMenu}
+              style={{ WebkitTouchCallout: 'none' }}
+              className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] [tab-size:4] [@media(hover:none)]:select-none ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
             >
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>
           </LinesContext.Provider>
-          {bar && (foot ? createPortal(bar(`py-1.5 pr-2 pl-4 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-3 py-1.5'))}
+          {bar && (foot ? createPortal(bar(`px-3 py-1.5 ${foot.safe ? 'pb-safe' : ''}`), foot.at) : bar('sticky bottom-0 z-10 -mx-1 px-2 py-1.5'))}
+          <ActionMenu
+            open={Boolean(menu)}
+            onClose={() => setMenu(undefined)}
+            label="Lines"
+            entries={menu && menuRange ? entries(LINES_ACTIONS, target(menuRange), 'menu', 'pointer') : []}
+            at={menu?.at ?? null}
+            focusFirst={Boolean(menu?.keys)}
+          />
         </>
       )}
       {data?.truncated && <div className="pt-2 text-center text-[12px] text-faint">Only the first 512 KB is shown</div>}

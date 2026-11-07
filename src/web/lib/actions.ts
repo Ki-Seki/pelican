@@ -14,6 +14,7 @@ import {
   FolderOpen,
   GitFork,
   History,
+  MessageSquarePlus,
   MessagesSquare,
   Paperclip,
   Pencil,
@@ -479,6 +480,27 @@ export const PATH_ACTIONS: readonly Action<PathTarget>[] = [
   { id: 'download', group: 'open', label: 'Download file', icon: Download, when: (p) => !p.folder && Boolean(p.download), run: (p) => p.download?.() },
 ];
 
+/* ---------- lines of a file or a diff ---------- */
+
+/** Lines picked by their numbers, or selected, in a file or a diff. */
+export type LinesTarget = {
+  from: number;
+  to: number;
+  /** The lines as they read. */
+  text: string;
+  /** Quotes them, as context with their path and lines (not offered on a diff, as in Desktop). */
+  quote?: () => void;
+  /** Opens a comment on them, Desktop's box under the last. */
+  comment?: () => void;
+};
+
+/** Copy · Quote · Add comment: the bar under picked lines, and their right-click, in one order (Desktop's diff: Add comment, Copy). */
+export const LINES_ACTIONS: readonly Action<LinesTarget>[] = [
+  { id: 'copy', group: 'lines', label: 'Copy', icon: Copy, row: true, run: (t) => copy(t.text) },
+  { id: 'quote', group: 'lines', label: 'Quote', icon: TextQuote, key: 'quoteSelection', row: true, when: (t) => Boolean(t.quote), run: (t) => t.quote?.() },
+  { id: 'comment', group: 'lines', label: 'Add comment', icon: MessageSquarePlus, row: true, when: (t) => Boolean(t.comment), run: (t) => t.comment?.() },
+];
+
 /* ---------- a selection ---------- */
 
 /** Text selected in the conversation. */
@@ -554,5 +576,6 @@ export const ACTIONS = {
   path: PATH_ACTIONS,
   selection: SELECTION_ACTIONS,
   terminal: TERMINAL_ACTIONS,
+  lines: LINES_ACTIONS,
   add: ADD_ACTIONS,
 } as const;

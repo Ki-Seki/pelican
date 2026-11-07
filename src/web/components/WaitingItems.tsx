@@ -5,7 +5,7 @@ import { baseName } from '../lib/format';
 import { composing } from '../lib/keyboard';
 import { paint, rangeOf } from '../lib/passages';
 import { enterSends } from '../lib/prefs';
-import { isReply, itemName, itemTitle, passageStart, previewText, shortLines, type WaitingItem } from '../lib/quote';
+import { isReply, itemName, itemTitle, passageStart, previewText, shortLines, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 import { Sheet } from './Sheet';
 
 /**
@@ -357,5 +357,93 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
         <button type="button" onClick={finish} className="flex h-8 items-center rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg">Done</button>
       </div>
     </div>
+  );
+}
+
+/** What a quote taken in a pane is called in its sheet: "Quote · Terminal", "Quote · theme.css:10-12". */
+const paneQuoteTitle = (item: WaitingItem) => `Quote · ${item.path ? shortLines(item.path, item.lines) : item.from.what === 'terminal' ? 'Terminal' : 'Selection'}`;
+
+/**
+ * On a phone, a quote taken inside Changes, Files or the Terminal, where the message box is out of
+ * sight: Claude Desktop's note box as a sheet, in place: the passage, Add a note (the keyboard
+ * comes up only when it is tapped), Send now, which sends it at once with its note (a steer while
+ * Claude works), and Add, after which it waits with the next message and the view's foot says so.
+ */
+export function QuoteSheet({ item, onClose, onAdd, onSend }: {
+  item: WaitingItem | undefined;
+  onClose: () => void;
+  /** False when the message holds as many quotes with a note as it can. */
+  onAdd: (item: WaitingItem) => boolean;
+  onSend?: (item: WaitingItem) => void;
+}) {
+  const [note, setNote] = useState('');
+  const [writing, setWriting] = useState(false);
+  const [full, setFull] = useState(false);
+  const [shown, setShown] = useState(item);
+  const field = useRef<HTMLTextAreaElement>(null);
+  // A new quote starts with no note; one closing keeps showing what it showed on its way out.
+  if (item && item !== shown) {
+    setShown(item);
+    setNote('');
+    setWriting(false);
+    setFull(false);
+  }
+  useGrow(field, note, 160);
+  const passage = item ?? shown;
+  if (!passage) return null;
+  const withNote = { ...passage, ...(note.trim() ? { note: note.trim() } : {}) };
+  const add = () => {
+    if (onAdd(withNote)) onClose();
+    else setFull(true);
+  };
+  return (
+    <Sheet open={Boolean(item)} onClose={onClose} title={paneQuoteTitle(passage)}>
+      <div className="px-3 pb-1">
+        <blockquote className="max-h-[30vh] overflow-y-auto border-l-2 border-faint/40 pl-3 font-mono text-[13px] leading-relaxed break-words whitespace-pre-wrap text-muted">{previewText(passage.text)}</blockquote>
+        {writing ? (
+          <textarea
+            ref={field}
+            rows={1}
+            value={note}
+            aria-label="Your note"
+            placeholder="Add a note"
+            onChange={(e) => {
+              setNote(e.target.value);
+              setFull(false);
+            }}
+            className="mt-3 block min-h-11 w-full resize-none rounded-xl border border-line bg-bg px-3 py-2.5 text-[16px] leading-6 outline-none placeholder:text-faint focus:border-fg"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setWriting(true);
+              requestAnimationFrame(() => field.current?.focus());
+            }}
+            className="mt-2 flex h-11 w-full items-center gap-2 text-[15px] text-faint"
+          >
+            <PencilLine className="size-4" />
+            Add a note
+          </button>
+        )}
+        {full && <p role="alert" className="mt-2 text-[12.5px] leading-snug text-danger">{TOO_MANY_REPLIES}</p>}
+        <div className="mt-2 flex items-center justify-end gap-1.5">
+          {onSend && (
+            <button
+              type="button"
+              disabled={!note.trim()}
+              onClick={() => {
+                onSend(withNote);
+                onClose();
+              }}
+              className="flex h-11 items-center rounded-full px-4 text-[14px] text-muted active:bg-hover disabled:opacity-40"
+            >
+              Send now
+            </button>
+          )}
+          <button type="button" onClick={add} className="flex h-11 items-center rounded-full bg-fg px-6 text-[14px] font-medium text-bg">Add</button>
+        </div>
+      </div>
+    </Sheet>
   );
 }

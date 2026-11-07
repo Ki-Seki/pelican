@@ -1438,10 +1438,12 @@ export function Chat({
             if (quote) addWaiting(viewId, quote);
             else if (how !== 'quote') setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
-          onQuote={(item) => {
-            // A quote of the terminal waits above the message box, as one of a file does.
+          onSendNow={(item) => {
+            // A quote taken in a pane, sent at once with its note, as the note box's Send now sends
+            // one (a steer while Claude works): lines of a file as a comment on them, as Desktop's
+            // Add comment on a file is.
             if (!workspace.docked) workspace.setOpen(false);
-            addWaiting(viewId, item);
+            void send(item.path ? messageWith([item], '') : sendNowMessage(item.text, item.note ?? ''), [], 'steer', { reply: item });
           }}
           onSendComments={() => {
             // Nothing waiting: there was nothing, or it is on its way (a second tap of Send now).

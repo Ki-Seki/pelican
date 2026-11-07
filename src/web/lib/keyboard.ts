@@ -73,6 +73,8 @@ export type KeyScope =
   | 'note'
   /** Changes and files, with comments waiting. */
   | 'comments'
+  /** The box a comment on a line is written in. */
+  | 'comment'
   /** A question Claude asks, while it waits. */
   | 'question'
   /** An open menu or sheet. */
@@ -153,6 +155,9 @@ export const KEYS = {
   noteAdd: { label: 'Note box: add', group: 'Quotes and comments', scope: 'note', keys: ({ enterSends }) => (enterSends ? ['enter'] : []) },
   noteSend: { label: 'Note box: send now', group: 'Quotes and comments', scope: 'note', keys: ['mod+enter'] },
   commentsSend: { label: 'Changes: send all comments', group: 'Quotes and comments', scope: 'comments', keys: ['mod+enter'] },
+  // As in the message box: where the Enter key makes a new line, it does so in a comment too.
+  commentAdd: { label: 'Comment box: add comment', group: 'Quotes and comments', scope: 'comment', keys: ({ enterSends }) => (enterSends ? ['enter'] : []) },
+  commentSend: { label: 'Comment box: send to Claude', group: 'Quotes and comments', scope: 'comment', keys: ['mod+enter'] },
 
   pickAnswer: { label: 'Pick an answer', group: 'Questions', scope: 'question', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], soon: true },
 

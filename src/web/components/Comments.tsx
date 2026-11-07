@@ -1,7 +1,7 @@
 import { MessageSquare, X } from 'lucide-react';
 import { createContext, useContext } from 'react';
 
-import { composing } from '../lib/keyboard';
+import { ariaKeys, composing, hasKeyboard, keyText } from '../lib/keyboard';
 import { enterSends } from '../lib/prefs';
 import type { LineComment } from '../lib/review';
 
@@ -29,15 +29,22 @@ export function CommentNote({ comment, outdated = false, onRemove }: { comment: 
 }
 
 /**
- * Writing a comment on a line, with Claude Desktop's keys: Enter adds it where Enter sends a
- * message (a computer, unless Settings says otherwise), ⌘↵ (Ctrl Enter) adds it and sends all the
- * comments at once, Esc lets it go. `onSave(true)`: send them all now.
+ * Claude Desktop's box for a comment on a line, or on a few in a row: Cancel · Send to Claude · Add
+ * comment, with its keys. Enter adds the comment where Enter sends a message (a computer, unless
+ * Settings says otherwise); ⌘↵ (Ctrl Enter) is Send to Claude: it adds it and sends everything that
+ * waits at once; Esc lets it go. `onSave(true)`: send it all now.
  */
 export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; onNote: (note: string) => void; onSave: (sendAll: boolean) => void; onCancel: () => void }) {
   const ready = note.trim().length > 0;
+  const sends = useSendComments();
+  // Keys, faintly, where there is a keyboard to press them; where Enter makes a new line, Add comment has none.
+  const keyboard = hasKeyboard();
+  const addKey = keyboard && enterSends() ? keyText('commentAdd') : undefined;
+  const sendKey = keyboard ? keyText('commentSend') : undefined;
   return (
     <form
-      className="border-y border-line bg-panel p-2 font-sans"
+      data-comment-box
+      className="mx-1.5 my-1.5 rounded-2xl border border-line bg-panel p-2.5 font-sans shadow-sm"
       onSubmit={(e) => {
         e.preventDefault();
         if (ready) onSave(false);
@@ -61,17 +68,24 @@ export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; o
           } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             e.stopPropagation();
-            if (ready) onSave(true);
+            if (ready) onSave(Boolean(sends));
           } else if (e.key === 'Enter' && !e.shiftKey && !e.altKey && enterSends()) {
             e.preventDefault();
             if (ready) onSave(false);
           }
         }}
-        className="block w-full resize-none rounded-lg border border-line bg-bg px-2.5 py-2 text-[16px] leading-snug outline-none placeholder:text-faint focus:border-fg pointer-fine:text-[14px]"
+        className="block w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-[16px] leading-snug outline-none placeholder:text-faint focus:border-fg pointer-fine:text-[14px]"
       />
-      <div className="mt-2 flex justify-end gap-1.5">
-        <button type="button" onClick={onCancel} className="h-10 rounded-full px-3.5 text-[14px] text-muted hover:bg-hover hover:text-fg pointer-fine:h-9">Cancel</button>
-        <button type="submit" disabled={!ready} className="h-10 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40 pointer-fine:h-9">Comment</button>
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        <button type="button" onClick={onCancel} className="mr-auto h-11 rounded-full px-3 text-[14px] text-muted hover:bg-hover hover:text-fg pointer-fine:mr-0 pointer-fine:h-8 pointer-fine:text-[13px]">Cancel</button>
+        {sends && (
+          <button type="button" disabled={!ready} onClick={() => onSave(true)} aria-keyshortcuts={ariaKeys('commentSend')} className="flex h-11 items-center gap-1.5 rounded-full bg-chip px-4 text-[14px] hover:bg-hover disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3 pointer-fine:text-[13px]">
+            Send to Claude{sendKey && <span aria-hidden className="text-[11.5px] text-faint">{sendKey}</span>}
+          </button>
+        )}
+        <button type="submit" disabled={!ready} aria-keyshortcuts={addKey ? ariaKeys('commentAdd') : undefined} className="flex h-11 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3.5 pointer-fine:text-[13px]">
+          Add comment{addKey && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{addKey}</span>}
+        </button>
       </div>
     </form>
   );

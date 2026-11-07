@@ -73,6 +73,8 @@ describe('the keyboard shortcuts sheet', () => {
         'Note box: add: Enter',
         'Note box: send now: Ctrl Enter',
         'Changes: send all comments: Ctrl Enter',
+        'Comment box: add comment: Enter',
+        'Comment box: send to Claude: Ctrl Enter',
       ],
     });
   });
@@ -99,6 +101,7 @@ describe('the keyboard shortcuts sheet', () => {
     expect(all['Message box']).toContain('New line: Enter');
     // Enter starts a new line in a note too: no key adds it.
     expect(all['Quotes and comments']!.some((row) => row.startsWith('Note box: add'))).toBe(false);
+    expect(all['Quotes and comments']!.some((row) => row.startsWith('Comment box: add comment'))).toBe(false);
     expect(all['Quotes and comments']).toContain('Note box: send now: Ctrl Enter');
   });
 

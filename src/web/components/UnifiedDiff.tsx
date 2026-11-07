@@ -1,11 +1,15 @@
 import { useId, useMemo, useRef, useState } from 'react';
 
+import { entries, LINES_ACTIONS, type LinesTarget } from '../lib/actions';
 import { headerOnly } from '../lib/diff-header';
 import { newId } from '../lib/ids';
+import { hasKeyboard } from '../lib/keyboard';
 import { markTipSeen, tipSeen } from '../lib/prefs';
-import { type CodeLine, commentKey, type DiffLine, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments, useCommentsChat } from '../lib/review';
+import { type CodeLine, commentKey, type DiffLine, lastLine, type LineComment, lineKey, lineNumber, parseDiff, setComments, useComments, useCommentsChat } from '../lib/review';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { CommentBox, CommentNote, useSendComments } from './Comments';
-import { useLinePick } from './line-pick';
+import { LinesBar } from './FileViewer';
+import { useLineDrag, useLinePick, useLineSelection } from './line-pick';
 
 const isCode = (line: { kind: string }): line is CodeLine => line.kind === 'add' || line.kind === 'del' || line.kind === 'same';
 
@@ -29,26 +33,66 @@ export function UnifiedDiff({ diff, path, cwd }: { diff: string; path: string; c
   return <DiffLines lines={lines} path={path} cwd={cwd} />;
 }
 
+/** The lines of one side of a diff numbered `from` to `to`: the new file's (added and unchanged), or the old one's removed lines. */
+function sideText(lines: readonly DiffLine[], kind: CodeLine['kind'], from: number, to: number): string {
+  return lines.filter(isCode)
+    .filter((line) => (kind === 'del' ? line.kind === 'del' && line.oldLine >= from && line.oldLine <= to : line.kind !== 'del' && line.newLine >= from && line.newLine <= to))
+    .map((line) => line.text)
+    .join('\n');
+}
+
+/**
+ * A comment on rows `from` to `to` (places in the diff): on the new file's lines, the removed ones
+ * left out, or, where only removed lines were picked, on the old file's, Desktop's "(before changes)".
+ */
+function commentOn(lines: readonly DiffLine[], from: number, to: number): Pick<LineComment, 'kind' | 'line' | 'to' | 'code'> | undefined {
+  const picked = lines.slice(Math.min(from, to), Math.max(from, to) + 1).filter(isCode);
+  const removed = picked.every((line) => line.kind === 'del');
+  const used = removed ? picked : picked.filter((line) => line.kind !== 'del');
+  const [first, last] = [used[0], used.at(-1)];
+  if (!first || !last) return undefined;
+  const kind = removed ? 'del' : used.some((line) => line.kind === 'add') ? 'add' : 'same';
+  return { kind, line: lineNumber(first), ...(lineNumber(last) > lineNumber(first) ? { to: lineNumber(last) } : {}), code: used.map((line) => line.text).join('\n') };
+}
+
 function DiffLines({ lines, path, cwd }: { lines: DiffLine[]; path: string; cwd: string }) {
   const chat = useCommentsChat(cwd);
   const all = useComments(chat);
   const comments = useMemo(() => all.filter((c) => c.path === path), [all, path]);
-  // What is typed follows a tap on another line, so a missed line costs nothing.
-  const [editing, setEditing] = useState<{ key: string; note: string }>();
+  // The rows a comment is being written on, by their place in the diff; what is typed follows a
+  // tap on another line, so a missed line costs nothing.
+  const [editing, setEditing] = useState<{ from: number; to: number; note: string }>();
+  // Rows a finger is picking (a long press, then a drag), before the box opens on them.
+  const [dragging, setDragging] = useState<{ from: number; to: number }>();
   const [cursor, setCursor] = useState<number>();
+  const [menu, setMenu] = useState<{ at: MenuAnchor; from: number; to: number }>();
   const [showHint] = useState(() => !tipSeen('line-comments'));
-  const box = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement | null>(null);
+  const [boxShown, setBoxShown] = useState<HTMLDivElement | null>(null);
   const id = useId();
   const sendAll = useSendComments();
-  const pick = useLinePick((line: CodeLine) => setEditing((current) => ({ key: lineKey(line), note: current?.note ?? '' })));
+  const selection = useLineSelection(box, 'data-row');
+  const open = (from: number, to = from) => setEditing((current) => ({ from: Math.min(from, to), to: Math.max(from, to), note: current?.note ?? '' }));
+  const pick = useLinePick((row: number) => open(row));
+  useLineDrag(boxShown, 'data-row', (anchor, end, done) => {
+    if (!done) setDragging({ from: Math.min(anchor, end), to: Math.max(anchor, end) });
+    else {
+      setDragging(undefined);
+      open(anchor, end);
+    }
+  });
 
   const digits = String(Math.max(...lines.map((line) => (isCode(line) ? lineNumber(line) : 0)))).length;
-  const onLine = (line: CodeLine) => comments.filter((c) => commentKey(c) === lineKey(line) && c.code === line.text);
-  const outdated = comments.filter((c) => !lines.some((line) => isCode(line) && commentKey(c) === lineKey(line) && c.code === line.text));
+  const inPlace = (c: LineComment) => sideText(lines, c.kind, c.line, lastLine(c)) === c.code;
+  const onLine = (line: CodeLine) => comments.filter((c) => commentKey(c) === lineKey(line) && inPlace(c));
+  const outdated = comments.filter((c) => !inPlace(c) || !lines.some((line) => isCode(line) && commentKey(c) === lineKey(line)));
   const codeAt = lines.flatMap((line, i) => (isCode(line) ? [i] : []));
+  const last = editing && [...codeAt].reverse().find((i) => i <= editing.to);
 
-  const save = (line: CodeLine, note: string, now: boolean) => {
-    setComments(chat, [...all, { id: newId(), path, kind: line.kind, line: lineNumber(line), code: line.text, note: note.trim() }]);
+  const save = (note: string, now: boolean) => {
+    const on = editing && commentOn(lines, editing.from, editing.to);
+    if (!on) return;
+    setComments(chat, [...all, { id: newId(), path, ...on, note: note.trim() }]);
     setEditing(undefined);
     markTipSeen('line-comments');
     box.current?.focus({ preventScroll: true });
@@ -65,48 +109,97 @@ function DiffLines({ lines, path, cwd }: { lines: DiffLine[]; path: string; cwd:
       document.getElementById(`${id}-${next}`)?.scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter' && cursor !== undefined) {
       e.preventDefault();
-      pick(lines[cursor] as CodeLine, true);
+      pick(cursor, true);
     }
   };
+  // Desktop's diff, on a selection or a right-click: Add comment and Copy, on the lines it covers.
+  const target = (from: number, to: number, text?: string): LinesTarget => ({
+    from,
+    to,
+    text: text ?? lines.slice(from, to + 1).filter(isCode).map((line) => line.text).join('\n'),
+    comment: () => {
+      window.getSelection()?.removeAllRanges();
+      open(from, to);
+    },
+  });
+  const numbered = (from: number, to: number) => {
+    const on = commentOn(lines, from, to);
+    return on ? { from: on.line, to: on.to ?? on.line } : { from, to };
+  };
+  const shownTarget = (t: LinesTarget, from: number, to: number): LinesTarget => ({ ...t, ...numbered(from, to) });
 
   return (
     <>
       {showHint && comments.length === 0 && (
-        <p className="px-2 pb-1.5 text-[12px] text-faint"><span className="pointer-fine:hidden">Tap</span><span className="hidden pointer-fine:inline">Click</span> a line to comment on it</p>
+        <p className="px-2 pb-1.5 text-[12px] text-faint">
+          <span className="pointer-fine:hidden">Tap a line, or hold one and drag, to comment on it</span>
+          <span className="hidden pointer-fine:inline">Click a line, or select lines, to comment on them</span>
+        </p>
       )}
       <div
-        ref={box}
+        ref={(el) => {
+          box.current = el;
+          setBoxShown(el);
+        }}
         role="group"
         tabIndex={0}
         aria-label={`Changes to ${path}`}
         onKeyDown={onKeyDown}
         onPointerDown={() => setCursor(undefined)}
-        className="overflow-hidden rounded-lg border border-line font-mono text-[12px] leading-[1.6]"
+        onContextMenu={(e) => {
+          const row = Number((e.target as Element).closest('[data-row]')?.getAttribute('data-row'));
+          if (!Number.isFinite(row) || !hasKeyboard() || (e.target as Element).closest('[data-comment-box]')) return;
+          e.preventDefault();
+          const range = selection && row >= selection.from && row <= selection.to ? selection : { from: row, to: row };
+          setMenu({ at: { x: e.clientX, y: e.clientY }, ...range });
+        }}
+        style={{ WebkitTouchCallout: 'none' }}
+        className="overflow-hidden rounded-lg border border-line font-mono text-[12px] leading-[1.6] [@media(hover:none)]:select-none"
       >
         {outdated.map((c) => <CommentNote key={c.id} comment={c} outdated onRemove={() => remove(c)} />)}
         {lines.map((line, i) => {
           if (line.kind === 'hunk') return <div key={i} className="bg-chip px-3 whitespace-pre-wrap break-words text-faint">{line.text}</div>;
           if (line.kind === 'note') return <div key={i} className="px-3 whitespace-pre-wrap break-words text-faint">{line.text}</div>;
-          const key = lineKey(line);
           const tone = line.kind === 'add' ? 'bg-add-bg text-add' : line.kind === 'del' ? 'bg-del-bg text-del' : '';
-          const marked = editing?.key === key || cursor === i;
+          const inRange = (range?: { from: number; to: number }) => Boolean(range && i >= range.from && i <= range.to);
+          const marked = inRange(editing) || inRange(dragging) || cursor === i;
           return (
             <div key={i}>
               <div
                 id={`${id}-${i}`}
-                onClick={() => pick(line)}
-                className={`flex cursor-pointer ${tone} ${marked ? 'shadow-[inset_3px_0_0_var(--fg)]' : 'pointer-fine:hover:shadow-[inset_3px_0_0_var(--faint)]'}`}
+                data-row={i}
+                onClick={(e) => {
+                  // Shift-click: the comment being written takes in the lines to here.
+                  if (e.shiftKey && editing) open(Math.min(editing.from, i), Math.max(editing.to, i));
+                  else pick(i);
+                }}
+                className={`group/line flex cursor-pointer ${tone} ${marked ? 'shadow-[inset_3px_0_0_var(--fg)]' : 'pointer-fine:hover:shadow-[inset_3px_0_0_var(--faint)]'}`}
               >
                 {/* The numbers take the line's own colour on a tinted line, where faint is too faint. */}
-                <span className={`shrink-0 pr-2 text-right tabular-nums select-none ${line.kind === 'same' ? 'text-faint' : ''}`} style={{ width: `${digits + 2}ch` }}>{lineNumber(line)}</span>
+                <span className={`relative shrink-0 pr-2 text-right tabular-nums select-none ${line.kind === 'same' ? 'text-faint' : ''}`} style={{ width: `${digits + 2}ch` }}>
+                  {lineNumber(line)}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={`Add comment on line ${lineNumber(line)}`}
+                    title="Add comment on this line"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      open(i);
+                    }}
+                    className="absolute inset-y-0 right-1 my-auto hidden size-4 place-items-center rounded bg-fg text-[12px] leading-none font-medium text-bg pointer-fine:group-hover/line:grid"
+                  >
+                    +
+                  </button>
+                </span>
                 <span className="min-w-0 flex-1 pr-3 whitespace-pre-wrap break-words">{line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}{line.text || ' '}</span>
               </div>
               {onLine(line).map((c) => <CommentNote key={c.id} comment={c} onRemove={() => remove(c)} />)}
-              {editing?.key === key && (
+              {editing && last === i && (
                 <CommentBox
                   note={editing.note}
-                  onNote={(note) => setEditing({ key, note })}
-                  onSave={(now) => save(line, editing.note, now)}
+                  onNote={(note) => setEditing({ ...editing, note })}
+                  onSave={(now) => save(editing.note, now)}
                   onCancel={() => {
                     setEditing(undefined);
                     box.current?.focus({ preventScroll: true });
@@ -117,7 +210,14 @@ function DiffLines({ lines, path, cwd }: { lines: DiffLine[]; path: string; cwd:
           );
         })}
       </div>
+      {selection && !editing && <LinesBar target={shownTarget(target(selection.from, selection.to, selection.from === selection.to ? selection.text : undefined), selection.from, selection.to)} place="sticky bottom-0 z-10 -mx-1 px-2 py-1.5" />}
+      <ActionMenu
+        open={Boolean(menu)}
+        onClose={() => setMenu(undefined)}
+        label="Lines"
+        entries={menu ? entries(LINES_ACTIONS, target(menu.from, menu.to), 'menu', 'pointer') : []}
+        at={menu?.at ?? null}
+      />
     </>
   );
 }
-
