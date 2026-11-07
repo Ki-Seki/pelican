@@ -21,6 +21,8 @@ import { folderBrings, forgetTrust, launchFor, NeedsTrust, rememberChoice } from
 
 let root: string;
 let notes: string;
+/** Whether this git runs a hook its config names (`hook.<name>.command`), as a recent one does: where it does not, what needs one is skipped. */
+let configHooks = false;
 const saved = { ...config };
 const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
 
@@ -71,6 +73,11 @@ beforeAll(async () => {
   // A proxy for git://, which git runs as it is, with the host and the port.
   await writeFile(path.join(root, 'proxy.sh'), `#!/bin/sh\necho git-proxy >> '${notes}'\nexit 1\n`);
   for (const file of ['note.sh', 'editor.sh', 'proxy.sh']) await chmod(path.join(root, file), 0o755);
+  const probe = path.join(root, 'probe');
+  await mkdir(probe);
+  gitIn(probe, ['init', '-q', '-b', 'main']);
+  gitIn(probe, ['-c', `hook.probe.command=${note('probe')}`, '-c', 'hook.probe.event=pre-commit', 'commit', '-q', '--allow-empty', '-m', 'probe']);
+  configHooks = (await ran()).includes('probe');
 });
 
 beforeEach(async () => {
@@ -108,6 +115,8 @@ type Case = {
   check?: (result: SpawnSyncReturns<string>, dir: string) => void | Promise<void>;
   /** What it notes as it runs, where that is not its name. */
   notes?: string;
+  /** Run only by a git that runs hooks its config names. */
+  configHook?: true;
 };
 
 const cases: Case[] = [
@@ -179,6 +188,7 @@ const cases: Case[] = [
   },
   {
     name: 'config-hook',
+    configHook: true,
     config: () => `[hook "evil"]\n\tcommand = ${note('config-hook')}\n\tevent = pre-commit\n`,
     item: () => `Git hook evil: ${note('config-hook')}`,
     run: (dir, env) => gitIn(dir, ['commit', '-q', '--allow-empty', '-m', 'hooked'], env),
@@ -242,7 +252,8 @@ const cases: Case[] = [
 
 describe('git programs past the usual ones', () => {
   for (const c of cases) {
-    it(`${c.name}: listed when the folder is asked about, run by git there otherwise, and none of the folder’s with the user’s settings only`, async () => {
+    it(`${c.name}: listed when the folder is asked about, run by git there otherwise, and none of the folder’s with the user’s settings only`, async (context) => {
+      if (c.configHook && !configHooks) context.skip();
       // Two copies: git runs it in one as it is, and in the other with the user's settings only.
       const plain = await repository(`${c.name}-plain`, c.config(), c.setup);
       const dir = await repository(c.name, c.config(), c.setup);
@@ -346,7 +357,8 @@ describe('what the folder’s config gives git that it cannot be told to leave o
 describe('the user’s own, by the same names', () => {
   it('stay theirs: their editor, their merge driver, and their hook, on their events alone', async () => {
     const global = path.join(root, 'gitconfig-own');
-    await writeFile(global, `[core]\n\teditor = ${editor()}\n[merge "evil"]\n\tdriver = ${note('users-merge')}\n[hook "evil"]\n\tcommand = ${note('users-hook')}\n\tevent = pre-commit\n`);
+    await writeFile(global, `[core]\n\teditor = ${editor()}\n[merge "evil"]\n\tdriver = ${note('users-merge')}\n${configHooks ? `[hook "evil"]\n\tcommand = ${note('users-hook')}\n\tevent = pre-commit\n` : ''}`);
+    const hook = configHooks ? ['users-hook'] : [];
     process.env.GIT_CONFIG_GLOBAL = global;
     const dir = await repository('own', `[core]\n\teditor = ${note('core-editor')}\n[merge "evil"]\n\tdriver = ${note('merge-driver')}\n[hook "evil"]\n\tcommand = ${note('config-hook')}\n\tevent = post-commit\n`, async (made) => {
       await writeFile(path.join(made, '.gitattributes'), '*.txt merge=evil\n');
@@ -360,12 +372,12 @@ describe('the user’s own, by the same names', () => {
     await rm(notes, { force: true });
     const env = { ...(await userOnly(dir)), GIT_CONFIG_GLOBAL: global };
     gitIn(dir, ['commit', '--allow-empty'], env);
-    expect(await ran()).toEqual(['users-hook', 'users-editor']);
+    expect(await ran()).toEqual([...hook, 'users-editor']);
     await rm(notes, { force: true });
     await writeFile(path.join(dir, 'a.txt'), 'zero\none\ntwo\nthree\n');
     gitIn(dir, ['commit', '-q', '-am', 'main'], env);
     gitIn(dir, ['merge', '--no-edit', 'other'], env);
     // The commit's pre-commit hook, then the merge's driver (a merge commit runs pre-merge-commit).
-    expect(await ran()).toEqual(['users-hook', 'users-merge']);
+    expect(await ran()).toEqual([...hook, 'users-merge']);
   });
 });
