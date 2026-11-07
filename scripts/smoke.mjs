@@ -7,7 +7,8 @@
 // build, and before the site is published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
-// CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken.
+// CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken;
+// PELICAN_SITE_PORT for the site's own server to take a port of yours rather than any free one.
 import { readdir, readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -56,7 +57,7 @@ async function serveFolder(root) {
       response.writeHead(404).end('not found');
     }
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(Number(process.env.PELICAN_SITE_PORT ?? 0), '127.0.0.1', resolve));
   return { base: `http://127.0.0.1:${server.address().port}/`, stop: () => server.close() };
 }
 
