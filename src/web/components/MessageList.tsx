@@ -959,6 +959,8 @@ export function MessageList({
   const atBottom = useRef(true);
   /** A finger is on the list: never move it under them. */
   const touching = useRef(false);
+  /** Something came while it was: the list catches up once the finger lifts, and only then. */
+  const heldBack = useRef(false);
   const lastTop = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const busy = Boolean(view.run?.busy);
@@ -986,7 +988,10 @@ export function MessageList({
     // Text being selected stays where it is, still following; the jump button says there is more.
     const selection = typeof getSelection === 'function' ? getSelection() : null;
     const selecting = Boolean(selection && !selection.isCollapsed && selection.anchorNode && el.contains(selection.anchorNode));
-    if (atBottom.current && !touching.current && !selecting) el.scrollTop = el.scrollHeight;
+    if (atBottom.current && !selecting) {
+      if (touching.current) heldBack.current = true;
+      else el.scrollTop = el.scrollHeight;
+    }
     lastTop.current = el.scrollTop;
     setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight > 80);
   };
@@ -1009,6 +1014,7 @@ export function MessageList({
       // was replaced mid-touch) must not keep the new prompt out of view.
       atBottom.current = true;
       touching.current = false;
+      heldBack.current = false;
     }
     lastSending.current = sending;
     if (snapshot.current) {
@@ -1081,13 +1087,17 @@ export function MessageList({
           if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary')) atBottom.current = false;
         }}
         onTouchStart={() => { touching.current = true; }}
+        // A tap's own click comes after its finger lifts: a list that moved then would take it
+        // from what was tapped. It moves only for what came while the finger was down.
         onTouchEnd={() => {
           touching.current = false;
-          settle();
+          if (heldBack.current) settle();
+          heldBack.current = false;
         }}
         onTouchCancel={() => {
           touching.current = false;
-          settle();
+          if (heldBack.current) settle();
+          heldBack.current = false;
         }}
         onWheel={(e) => { if (e.deltaY < 0) atBottom.current = false; }}
         className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"

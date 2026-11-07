@@ -122,6 +122,27 @@ describe('following the end of the conversation', () => {
     expect(screen.queryByLabelText('Jump to latest')).toBeNull();
   });
 
+  it('stays still under a tap: what came while a finger was down waits for it to lift, and only that moves it', () => {
+    const { container } = render(<MessageList sessionId="s" view={view()} mode="normal" />);
+    const { el, box, resized } = scroller(container);
+    resized(1000);
+    // Scrolled up, then back down near the end: following again, a little short of it.
+    box.top = 300;
+    fireEvent.scroll(el);
+    box.top = 590;
+    fireEvent.scroll(el);
+    // A tap: its click comes after the finger lifts, on what is under it then.
+    fireEvent.touchStart(el);
+    fireEvent.touchEnd(el);
+    expect(box.top).toBe(590);
+    // Steps arrive while a finger is down: the list catches up once it lifts.
+    fireEvent.touchStart(el);
+    resized(1300);
+    expect(box.top).toBe(590);
+    fireEvent.touchEnd(el);
+    expect(box.top).toBe(900);
+  });
+
   it('stops following when the reader scrolls up, and shows the jump button as more arrives', () => {
     const { container } = render(<MessageList sessionId="s" view={view()} mode="normal" />);
     const { el, box, resized } = scroller(container);
