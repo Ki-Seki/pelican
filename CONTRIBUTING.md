@@ -69,15 +69,25 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/workspace.ts`, `changes.ts`, `search.ts` | Changes and files: git status and diffs, what each turn changed from the transcript, file search |
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
-| `src/server/actions.ts`, `markdown.ts` | Branch, delete and Export as Markdown: prompts written as text, and a reply read as Markdown readers read it, kept to itself in any of them |
+| `src/server/actions.ts`, `markdown.ts` | Fork, delete and Export as Markdown: prompts written as text, and a reply read as Markdown readers read it, kept to itself in any of them |
+| `src/server/rewind.ts`, `rewound.ts` | Rewind to here and Undo rewind: the code from Claude Code's own copies, the conversation from just before the message, and the cut Pelican keeps until the next message |
+| `src/server/defaults.ts` | What new sessions start with, read from Claude Code's settings as Claude Code reads them, and written back as `/model` and `/config` write them |
+| `src/server/pull-requests.ts` | A pull request's card: what `gh` says of it, where it is installed and signed in |
+| `src/server/update.ts` | Updating from Settings: asking npm's registry, installing where npm installed Pelican, and starting again |
 | `src/server/terminals.ts`, `pty.ts` | Terminals: the shell in a PTY, the server's copy of its screen, its socket and flow control, and the optional PTY package |
 | `src/server/terminal-snapshot.ts` | The screen a page that comes back gets: xterm's serializer, fixed where it drew otherwise, and what it leaves out |
-| `src/shared/terminal-widths.ts`, `terminal-guards.ts` | What every terminal's xterm draws with, on the server and on a page: Unicode 11's widths with at most 16 marks on a character, and guards against output xterm throws on, or does too much with (counts far past the screen, links, titles) |
+| `src/shared/terminal-widths.ts`, `terminal-guards.ts` | What every terminal's xterm draws with, on the server and on a page: Unicode 11's widths with at most 11 marks on a character, and guards against output xterm throws on, or does too much with (counts far past the screen, links, titles) |
 | `src/web/components/WorkspaceTerminal.tsx`, `TerminalScreen.tsx` | The Terminal tab: its terminals, the phone's key row and line field, and the screen (xterm.js, loaded only by the tab) |
 | `src/web/lib/terminal-socket.ts`, `terminal-input.ts`, `terminal-cursor.ts`, `terminals.ts` | A page's connection to a terminal, what its keys and pastes send, its cursor, and Open, Run in terminal and Ctrl+` from the rest of the app |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
-| `src/server/demo.ts` | The made-up sessions of `--demo` |
+| `src/server/demo.ts`, `demo-*.ts`, `src/web/lib/demo.ts` | The made-up sessions of `--demo` and the site's live demo, and what the demo acts out in the page (Allow, a question, Rewind, Fork, Commit changes and Create PR) |
+| `src/web/lib/actions.ts`, `components/ActionMenu.tsx` | Each thing's one list of actions (a session, a prompt, a reply, a step, a path, the terminal), and the menu or sheet every way in shows it as |
+| `src/web/lib/keyboard.ts`, `components/Shortcuts.tsx` | Claude Desktop's web keys, in one table that the menus and the list of keys (⌘/) are made from |
+| `src/web/lib/commands.ts`, `components/CommandMenu.tsx` | The one list of commands behind `/` and ⌘K |
+| `src/web/lib/press.ts` | Long presses and left swipes on a phone, and right-clicks |
+| `src/web/lib/quote.ts`, `review.ts`, `src/shared/quoted.ts` | Quotes with notes and line comments, written and read back in Claude Desktop's formats |
+| `src/shared/requests.ts`, `src/web/lib/requests.ts` | Commit changes and Create PR, in Claude Desktop's own words, and the `<pr-created>` card |
 | `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
@@ -137,5 +147,6 @@ GitHub keeps showing the newest release first.
   why, not what.
 
 The pictures in `docs/` come from `npm run screenshots`, `node scripts/video.mjs` (needs ffmpeg)
-and `node scripts/icons.mjs`; redraw them rather than editing the files. The site and its live demo
+and `node scripts/icons.mjs`; redraw them rather than editing the files. The social card,
+`docs/shots/og.png`, is kept as uploaded: `npm run screenshots -- --og` draws one. The site and its live demo
 build with `node scripts/site.mjs <dir>`.

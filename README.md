@@ -47,6 +47,8 @@ On the computer where you use Claude Code, with Node 22.12 or newer and Claude C
 macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB
 to download and about 400 MB on disk, most of it the copy of Claude Code that the Agent SDK brings.
 The command is also called `pelican-cc`, for computers where Python's Pelican has `pelican`.
+Settings says when a newer Pelican is out, with what changed, and installs it where npm installed
+Pelican.
 
 ## On your phone
 
@@ -65,10 +67,10 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
 - **Every session, wherever you started it.** Live while it runs, with its whole history back past
   every compaction. When another app is working on one, or waits for you there, Pelican says which
   app; once it is idle, continue it here.
-- **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
-  works, quotes with notes and side chats as in Claude Desktop, `!` commands with their output live,
-  `/` commands and skills, `@` files, every model and permission mode, rewind and fork, subagents
-  and background tasks, MCP servers.
+- **All of Claude Code.** Approvals with the diff, plans and questions, send now or queue for later
+  while Claude works, quotes with notes and side chats as in Claude Desktop, `!` commands with their
+  output live, `/` commands and skills, `@` files, every model and permission mode, rewind and fork,
+  subagents, workflows and background tasks, MCP servers.
 - **What Claude makes, in place.** Charts and diagrams Claude draws, pages it writes and files it
   sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
   Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
@@ -86,7 +88,7 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   the conversation and the changes sit side by side, and the list hides when you want the room.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: the list with a pinned session; a chart Claude drew, in place, and a page it wrote, run; an edit waiting for approval, and what changed; a screenshot Claude sent; a session Claude Desktop is running">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: an edit waiting for approval; a passage of Claude's reply quoted with a note; the edit allowed and Claude's question answered with a tap; the session's menu and what changed; a workflow at work in the background, its card a tap away; a chart Claude drew, in place">
 </p>
 
 ## Compared with

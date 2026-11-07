@@ -13,15 +13,18 @@ settings; and updates from Settings.
   and `git status` see the files Claude is editing, and git by hand goes there. Ctrl+\` shows it, as
   in Desktop, and hides it again from inside it; Ctrl+Shift+\` opens a new one. Each terminal is a
   tab named after the program in front (zsh, npm, vim); + opens another, Open in terminal at the top
-  of a folder in Files, or in a folder's menu there, opens one there, and End hangs the shown one up, as closing a window does,
-  asking first while a program runs in it, also a job left in the background, but not for what your
-  prompt keeps running for itself (powerlevel10k's gitstatusd, pure's worker). On a computer you
-  type straight into it, with input methods, the emoji picker and dictation too, select to Quote
-  (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A right-click on it, or a long press on
-  a phone, opens Claude Desktop's terminal menu: Quote and Copy what is selected, Paste, Select all
-  and Clear terminal, with Select text on a phone. Its colors and font are Pelican's, light or dark,
-  and a program that asks for its colors, as delta or vim does to pick a theme, gets them. A screen
-  reader reads it.
+  of a folder in Files, or in a folder's menu there, opens one there, and End hangs the shown one
+  up, as closing a window does, asking first while a program runs in it, also a job left in the
+  background, but not for what your prompt keeps running for itself (powerlevel10k's gitstatusd,
+  pure's worker). On a computer you type straight into it, with input methods, the emoji picker and
+  dictation too, select to Quote (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A
+  right-click on it, or a long press on a phone, opens Claude Desktop's terminal menu: Quote and
+  Copy what is selected, Paste, Select all and Clear terminal, with Select text on a phone. Clear
+  terminal clears the screen and what scrolled off it, as `clear` does, on every page showing the
+  terminal and in the computer's copy, so a reload, or another page, shows it cleared, and a program
+  in front of the shell, such as vim or htop, draws its screen again, as after Ctrl+L. Its colors
+  and font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim
+  does to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
@@ -74,7 +77,6 @@ settings; and updates from Settings.
   tags (`<system-reminder>`…) escaped, so code cannot speak as Claude Code; 99 quotes with a note in
   a message. Desktop and the CLI see Pelican's quotes as replies, and Pelican shows Desktop's,
   comments without code too, and its own older ones, as quiet quotes.
-
 - **One list of actions for each thing, wherever you reach it.** A session, your prompt, Claude's
   reply, a step and a file's path each have one short list, in Claude Desktop's words and order,
   and every way in shows the same: on a computer a right-click, or ⋯ where the thing has one, with
@@ -91,9 +93,9 @@ settings; and updates from Settings.
   lines changed ("+31 −2", counted as Claude Code's `/diff` counts them: on a branch with commits
   beyond where it split from the default branch, those commits and what is not committed yet, else
   what is not committed), Files and Terminal, each with its name and key in its tooltip, each
-  showing its tab or hiding the pane while it shows it (Changes, asked for, shows Changes in a folder
-  git does not track too, and says why it is empty); on a phone one button, the lines changed or a
-  folder.
+  showing its tab or hiding the pane while it shows it (Changes, asked for, shows Changes in a
+  folder git does not track too, and says why it is empty); on a phone one button, the lines changed
+  or a folder.
 - **Side chats, kept with their session.** A session's side chats are the computer's to list, not
   one browser tab's, so your phone and your computer show the same ones, also after a reload. The
   side chat opens on the latest, called by its first question ("Side chat · Why not a class on
@@ -113,11 +115,18 @@ settings; and updates from Settings.
 - **The message box's +.** Add files or photos (⌘U), Commands, Files and agents, Shell command, and
   the session's MCP servers ("1 of 2 on"), which have a sheet of their own, also with `/mcp`; a line
   above the box says when one fails while Claude runs.
+- **While Claude works, Send and its other way side by side.** Send does what Settings › While
+  Claude works, Send says, Sends now (Claude reads it at its next step) or Queues for later (it goes
+  when the turn ends), and a quiet line above what you typed says so and offers the other as a
+  button of its own, Queue for later or Send now, a finger's 44 px on a phone; on a computer where
+  Enter sends, ⌘↵ (Ctrl+Enter) is that other way, as Desktop's ⌘↵ queues for later. Stop never hides
+  while Claude works: alone while the box is empty, quiet beside Send once you type.
 - **One list of commands, behind / and ⌘K.** This session's actions by Claude Code's names (`/btw`,
-  `/branch`, `/rewind`, `/rename`, `/export`, `/diff`, `/context`, `/mcp`, `/model`…), then
-  Pelican's (Pin, Archive, Files, Terminal, New session, Settings…), then Claude Code's commands and
-  skills. A command of your own takes its name from one of Pelican's. On a computer ⌘K opens the
-  list as a command menu, where typing a session's name finds it too; ⇧⌘K searches sessions.
+  `/branch`, `/rewind`, `/rename`, `/export`, `/diff`, `/context`, `/mcp`, `/model`, `/tasks`…),
+  then Pelican's (Pin, Archive, Files, Terminal, New session, Settings…), then Claude Code's
+  commands and skills. A command of your own takes its name from one of Pelican's. On a computer ⌘K
+  opens the list as a command menu, where typing a session's name finds it too; ⇧⌘K searches
+  sessions.
 - **Your prompt and Claude's reply carry their own.** Your prompt: a tap on a phone shows Copy ·
   Rewind to here · Fork from here under it; with a pointer they sit beside it, on hover, adding no
   height. Claude's reply: Copy · ⋯ · the time under it, always on a phone, and on a computer Copy ·
@@ -147,31 +156,33 @@ settings; and updates from Settings.
 - **Fork from here.** On your prompt, a new session up to just before it, with its words, its
   quotes, and its pictures and files waiting in the new session's box; on Claude's reply, a new
   session up to the end of it.
-- **Changes, as in Claude Desktop.** Show: All changes vs main, by Claude Code's `/diff` (the
-  branch since it split from the default branch, its commits and what is not committed yet, the
-  files not committed first; else what is not committed), then Uncommitted changes where that
-  differs, and the turns under their own heading. At its foot, Commit changes and Create PR ▾, with
-  Create draft PR under its ▾, remembered, as in Desktop, and no Push (Desktop has none; Create PR
-  pushes). A tap sends Desktop's own request at once, word for word, so Claude Code reads the same
-  request whichever app sent it (a steer, or queued, while Claude works, as Settings says); ⌘-click
-  (Ctrl-click), or a long press on a phone, puts it in the message box first, to read and change.
-  Create PR shows in the conversation as `/create-pr`, as in Desktop; Create PR is offered on a
-  branch other than the default one, where origin is on GitHub, or where there is no remote at all,
-  for which Desktop's request has Claude set one up first. The pull request Claude names in
-  Desktop's `<pr-created>` tag is a card, with View PR, and where gh on the computer is installed
-  and signed in, what GitHub says of it now: its title, open, a draft, merged or closed, its
-  branches and its checks, read again while they run. A file's row has its path's menu.
+- **Changes, as in Claude Desktop.** Show: All changes vs main, by Claude Code's `/diff` (the branch
+  since it split from the default branch, its commits and what is not committed yet, the files not
+  committed first; else what is not committed), then Uncommitted changes where that differs, and the
+  turns under their own heading. At its foot, Commit changes and Create PR ▾, with Create draft PR
+  under its ▾, remembered, as in Desktop, and no Push (Desktop has none; Create PR pushes). A tap
+  sends Desktop's own request at once, word for word, so Claude Code reads the same request
+  whichever app sent it; while Claude works it waits for the end of the turn as a queued message,
+  never steered into the work at hand, whatever Settings says for what you type, and its button says
+  it is queued, with Take back, which takes it out of the queue. ⌘-click (Ctrl-click), or a long
+  press on a phone, puts it in the message box first, to read and change. Create PR shows in the
+  conversation as `/create-pr`, as in Desktop; Create PR is offered on a branch other than the
+  default one, where origin is on GitHub, or where there is no remote at all, for which Desktop's
+  request has Claude set one up first. The pull request Claude names in Desktop's `<pr-created>` tag
+  is a card, with View PR, and where gh on the computer is installed and signed in, what GitHub says
+  of it now: its title, open, a draft, merged or closed, its branches and its checks, read again
+  while they run. A file's row has its path's menu.
 - **Lines of a file, and of a diff.** A tap or a click picks a line, Shift-click picks up to
   another, and on a phone a long press on a line, then a drag, picks the lines it goes over: a bar
   under them has Copy · Quote · Add comment, as a right-click on them does, and ⇧⌘L quotes them. A
   line number turns into Desktop's + under a pointer, a comment on that line at once. Comments use
   Desktop's box at the line, Cancel · Send to Claude · Add comment (↵ adds, ⌘↵ sends to Claude, with
   everything that waits), on one line or a few in a row, "at lines 10-12" as Desktop writes them; on
-  a diff, removed lines alone are its "before changes". A diff's selection and right-click offer Copy
-  and Add comment. A file's ⋯ has its path's menu, Attach as context included. On a phone, Quote in
-  Changes, Files or the Terminal opens in place as a sheet, with Add a note, Send now and Add, and
-  the view's foot then says what waits; beside the conversation the quote waits above the box at
-  once, as Desktop's Attach as context does.
+  a diff, removed lines alone are its "before changes". A diff's selection and right-click offer
+  Copy and Add comment. A file's ⋯ has its path's menu, Attach as context included. On a phone,
+  Quote in Changes, Files or the Terminal opens in place as a sheet, with Add a note, Send now and
+  Add, and the view's foot then says what waits; beside the conversation the quote waits above the
+  box at once, as Desktop's Attach as context does.
 - **Steps and paths.** A command step has Copy command · Run in terminal · Copy output · Start a
   side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
   context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
@@ -179,6 +190,19 @@ settings; and updates from Settings.
   list, from a long press, a right-click or ⋯; Run in terminal, there and on a step, is offered for
   a command that shows all it holds, as a code block's is. The rows of Files and of Changes have
   their path's menu too, a folder's with Open in terminal.
+- **What runs in the background, "1 in background".** Commands, agents and workflows Claude left
+  running, and the checks it stays running for, read "2 in background" in the session list and under
+  the title. ⌃B, as in Claude Desktop (Ctrl+Alt+B off a Mac, where Ctrl+B shows and hides the
+  session list), or `/tasks`, as Claude Code names it, opens their list above the message box with
+  the keys in it, and says so when nothing runs. A command has Output and Stop; an agent's row, and
+  a workflow's, leads to its card, where a workflow's one Stop is.
+- **Claude's to-do list, one line.** In the conversation each of Claude's task lists is a step,
+  "Tasks · 1 of 4 done", which opens to the list as it was then; the bar above the message box is
+  its live view, the task under way first.
+- **Claude's questions by number.** On a computer 1 to 9 pick an answer, as in Claude Desktop, the
+  number faint beside each option: the card takes the keys as it comes, unless you are typing
+  something, a number picks for the question the keys are in, or the first not answered yet, and a
+  letter starts that question's own answer under Other.
 - **The session list hides, and floats.** On a computer its button (or ⌘B, as in Desktop) hides it,
   remembered in this browser, and the conversation takes the whole width; pointing at the window's
   left edge or the button brings it over the conversation until the pointer leaves, a session is
@@ -186,7 +210,6 @@ settings; and updates from Settings.
   ⌘B brings it back.
 - **Back on a phone closes what is open.** Android's Back, and the browser's, closes the sheet or
   menu that is open, and goes no further.
-
 - **Update from Settings.** Pelican asks npm's registry for a newer version once a day, and when
   Settings opens, and says so there, quietly, with what changed, from the new version's
   CHANGELOG.md; offline it says nothing. Where npm installed Pelican into its global folder, Update
@@ -235,18 +258,37 @@ settings; and updates from Settings.
 - A session's effort shows as Claude Code applies it, its own default for the model included.
 - Keys are Claude Desktop's, as it takes them in a browser: ⌘K (Ctrl+K) opens the command menu and
   ⇧⌘K (Ctrl+Shift+K) searches sessions, which ⌘K did before; ⇧⌘O starts a session, ⇧⌘, opens
-  Settings, ⌘B shows or hides the session list; ⌥⌘R renames the open session, ⌥⌘O forks it and
-  ⌥⌘A archives it; ⌃⇧D shows Changes, ⇧⌘F Files and ⌃\` the terminal, on a Mac too; ⌘U adds files,
-  ⇧⌘I opens the model, ⇧⌘E its effort, ⌥⌘F turns fast mode on or off and ⌥⌘M opens the mode. ⌘,
-  and ⌘⇧D work as well where a browser passes them on, and keys a browser keeps for itself are left
-  to it. Off a Mac, Ctrl takes ⌘'s place.
+  Settings, ⌘B shows or hides the session list; ⌥⌘R renames the open session, ⌥⌘O forks it and ⌥⌘A
+  archives it, ⌃B lists what runs in the background (Ctrl+Alt+B off a Mac); ⌃⇧D shows Changes, ⇧⌘F
+  Files and ⌃\` the terminal, on a Mac too; ⌘U adds files, ⇧⌘I opens the model, ⇧⌘E its effort, ⌥⌘F
+  turns fast mode on or off and ⌥⌘M opens the mode; while Claude works, ⌘↵ is the other way to send,
+  Queue for later or Send now, where Enter sends; 1 to 9 pick an answer to Claude's question. ⌘, and
+  ⌘⇧D work as well where a browser passes them on, and keys a browser keeps for itself are left to
+  it. Off a Mac, Ctrl takes ⌘'s place.
 - The list of keys (⌘/ or Ctrl+/) is Desktop's: in its parts (General, This session, Panes, Message
-  box, Quotes and comments), wide on a computer, naming only the keys that work.
+  box, Quotes and comments, Questions), wide on a computer, naming only the keys that work, every
+  one of them, ⌘↵ by what it does with Settings' choice.
+- While Claude works, the Steer and Queue button beside Send, which named the way a message would
+  go, is gone: Send goes the way Settings says, and the line above what you typed offers the other
+  (Queue for later or Send now), as a button. Stop no longer gives way to Send once you type: both
+  show. Settings calls the choice While Claude works, Send: Sends now, or Queues for later (was
+  Messages sent while Claude works: Steer or Queue), and the default view Default transcript view
+  (was Sessions open in). Its Account is the account and the plan on one line; the plan's limits are
+  in Usage and activity and in a session's Context. A row of choices, there and in other sheets, is
+  a light track with the one picked raised, 44 px tall on a phone.
+- Claude's to-do list shows as one step line, "Tasks · 1 of 4 done", instead of a card each time the
+  list is new, changes or is done.
+- Work Claude left running between turns reads "1 in background", not "1 task", in the list and
+  under the title. A workflow's row above the message box has no Stop of its own: it leads to the
+  workflow's card, where Stop is.
+- The tip shown once in a browser for each way another app has the session (open, working or
+  waiting there) is gone: the status says it, and so does the empty message box.
 - Commit and Create PR send Claude Desktop's own requests at once, from the foot of Changes, instead
-  of putting a request of Pelican's in the message box (⌘-click or a long press still does); Push is
-  gone, as in Desktop. Changes opens on All changes, by `/diff`'s rule, instead of what is not
-  committed, which is Uncommitted changes now; Since main is All changes, and the turns are listed
-  without their T1, T2.
+  of putting a request of Pelican's in the message box (⌘-click or a long press still does), and
+  while Claude works wait for the end of the turn, queued, whatever Settings says; Push is gone, as
+  in Desktop. Changes opens on All changes, by `/diff`'s rule, instead of what is not committed,
+  which is Uncommitted changes now; Since main is All changes, and the turns are listed without
+  their T1, T2.
 - A tap on a line of a file or a diff picks it, for its bar, instead of opening a comment; on a diff
   it still opens one. A file's Mention is its ⋯'s Attach as context, which attaches the file as
   Desktop does (`@"path"`). The terminal's long press opens its menu; the screen as text is its
@@ -264,10 +306,10 @@ settings; and updates from Settings.
   hover Pin and Archive buttons are gone: they are in its ⋯, which shows in place of its time.
 - The header's ⋯ is gone, and so is the meter beside it: the title's ▾ opens the session's menu, and
   the context ring is by Send. The session menu's words are Desktop's: Fork (was Branch), Copy
-  resume command (was Continue in a terminal), Export (was Export as Markdown). Its MCP servers moved
-  to the message box's +, and its details to where each is used: the folder and branch under the
-  title, the session's totals in Context, the last turn's figures in its reply's ⋯, its start and
-  ID at the menu's foot. Archiving the open session from its menu offers Undo, as from the list.
+  resume command (was Continue in a terminal), Export (was Export as Markdown). Its MCP servers
+  moved to the message box's +, and its details to where each is used: the folder and branch under
+  the title, the session's totals in Context, the last turn's figures in its reply's ⋯, its start
+  and ID at the menu's foot. Archiving the open session from its menu offers Undo, as from the list.
 - Claude's reply no longer shows how long a turn took, its tokens and its cost under it: they are in
   its ⋯.
 - Editing a prompt is Rewind to here, which puts its words back in the box, or Fork from here, which
@@ -306,6 +348,10 @@ settings; and updates from Settings.
 - A session opened while its Claude waits, started for a rewind or a `!` command rather than a
   message, shows its own model, effort and mode, and the next message keeps them, instead of
   switching to Claude Code's defaults.
+- A session started in a folder reached through a link (on a Mac, `/tmp` is `/private/tmp`) runs in
+  the folder itself, as Claude Code records it, so its conversation, Changes and Terminal name one
+  folder alike: before, a reload could show its terminal as no longer running, beside a second one
+  started under the folder's other name.
 
 ### Security
 
@@ -329,6 +375,11 @@ settings; and updates from Settings.
   any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is written
   to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
   starts Pelican without them.
+- Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
+  tells the program in front of the shell, found with `ps` as End's question finds it, that the
+  window changed (SIGWINCH, as a resize does), and where that program is not this account's to
+  signal (`sudo vim`), changes the terminal's size by a row and back. Ctrl+L, which such programs
+  redraw on, would be a key typed into them: vim's insert mode takes it as a form feed.
 - A paste into a terminal, and the phone's line, leave out control characters, as xterm, kitty
   and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
   the shell's paste early and run without Enter.
@@ -386,8 +437,31 @@ settings; and updates from Settings.
   sheet on a phone. The demo and the site's live demo have two side chats on the dark theme
   session, the latest asked with a passage of Claude's reply, and the smoke test walks them on a
   computer and a phone, in the app and the site's live demo.
+- The docs say how Changes, Files and the Terminal work as Claude Desktop's do, Commit changes and
+  Create PR queued while Claude works, and Clear terminal on every page; how an agent Claude left
+  working in the background shows; and how, while Claude works, Send and its other way sit side by
+  side, what runs in the background is listed (⌃B, `/tasks`), the to-do list is a line and 1 to 9
+  answer a question. The coverage table has Send now or queue for later, the task list as a line,
+  background tasks with ⌃B and `/tasks`, and a pull request's status, Partly, as the card shows it.
+- The website's highlights say what Pelican does now, the terminal and quotes with notes among them,
+  and Settings' updates; its pictures and the README's, and the README's tour, are of 0.5.0. The
+  social card stays as uploaded, and the screenshot script draws one only when asked (`--og`).
+- The demo and the site's live demo have a session with two agents Claude left working in the
+  background, one finished, its report in its card, one at work, which finishes a while after the
+  session is opened, or stops when asked; "Fix the flaky login test" runs a `!` command and ends
+  with Commit changes and Create PR sent and the pull request's card, its repository's remote a
+  made-up one on GitHub that nothing contacts, and a request sent in either demo is acted out as
+  Claude would carry it out; and once the dark theme's waiting edit is allowed, Claude asks where
+  the theme's choice is kept, to answer with a tap, or 1 to 9 on a computer.
+- The browser smoke test walks Changes' Show, Commit changes and Create PR, a `!` command's list,
+  picked lines with Copy, Quote and Add comment, the quote in place on a phone and Desktop's comment
+  box, on a computer and a phone, in the app and the site's live demo.
+- CONTRIBUTING.md maps where 0.5.0's parts are: actions and menus, keys, commands, presses, quotes
+  and comments, requests, Rewind, what new sessions start with, a pull request's card and updates.
 - THIRD_PARTY_NOTICES names the terminal's xterm.js packages, built into the web app and the
   server; the PTY is installed as a package of its own, with its license, as the Agent SDK is.
+- The tests of Back closing a sheet wait for the step back to land, which on a busy computer takes
+  longer than the 20 ms they gave it.
 
 ## 0.4.1
 

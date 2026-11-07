@@ -153,8 +153,11 @@ can read your sessions and have Claude run commands as you, so treat access to i
   program floods the screen. Output xterm throws on stops neither Pelican nor a page's screen. A
   terminal lives in memory only: one unused for 12 hours with nothing running in it is closed,
   closing one hangs up its shell (SIGHUP, as closing a window does), and all end with Pelican.
-  Nothing runs in a terminal without you: the page sends its shell only what you type, paste or
-  click, a paste without its control characters, so text copied from a web page cannot end the
+  Clear terminal sends the shell nothing: Pelican clears its copy and the pages, then tells the
+  program in front of the shell, found with `ps`, that the window changed (SIGWINCH, as a resize
+  does), so it draws its screen again, or, where that group is not this account's to signal,
+  changes the terminal's size by a row and back. Nothing runs in a terminal without you: the page
+  sends its shell only what you type, paste or click, a paste without its control characters, so text copied from a web page cannot end the
   shell's paste early and run (the server's copy answers what a program asks of the terminal, once,
   a color too, from the colors the page says it draws in), and Run in terminal, on a shell command
   in Claude's reply (never in a file, or a tool's or a subagent's output), asks before it runs it,
