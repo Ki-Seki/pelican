@@ -22,7 +22,7 @@ beforeAll(() => {
 
 const { MessageList } = await import('../src/web/components/MessageList');
 const { QuoteTargetContext } = await import('../src/web/components/Quotes');
-const { PathLinksContext } = await import('../src/web/lib/path-links');
+const { forgetFound, PathLinksContext } = await import('../src/web/lib/path-links');
 const { RunInTerminal } = await import('../src/web/lib/terminals');
 const { waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { api } = await import('../src/web/lib/api');
@@ -31,6 +31,8 @@ afterEach(() => {
   cleanup();
   media = {};
   setWaiting('chat', []);
+  // Which files the folder holds is asked again, of the next test's own answers.
+  forgetFound();
   vi.restoreAllMocks();
 });
 

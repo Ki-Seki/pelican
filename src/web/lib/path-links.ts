@@ -90,6 +90,8 @@ const known = new Map<string, Map<string, { found: boolean; at: number }>>();
 const queued = new Map<string, Set<string>>();
 let flushing: ReturnType<typeof setTimeout> | undefined;
 let version = 0;
+/** Counts forgets: an answer to a question asked before the last one is not kept. */
+let asked = 0;
 const listeners = new Set<() => void>();
 
 function answer(cwd: string, paths: readonly string[], found: ReadonlySet<string>): void {
@@ -103,12 +105,16 @@ function answer(cwd: string, paths: readonly string[], found: ReadonlySet<string
 
 function flush(): void {
   flushing = undefined;
+  const now = asked;
   for (const [cwd, set] of queued) {
     queued.delete(cwd);
     const paths = [...set];
     for (let i = 0; i < paths.length; i += BATCH) {
       const batch = paths.slice(i, i + BATCH);
-      void api.exists(cwd, batch).then((found) => answer(cwd, batch, new Set(found)), () => answer(cwd, batch, new Set()));
+      const keep = (found: Iterable<string>) => {
+        if (now === asked) answer(cwd, batch, new Set(found));
+      };
+      void api.exists(cwd, batch).then(keep, () => keep([]));
     }
   }
 }
@@ -124,9 +130,16 @@ function ask(cwd: string, file: string): void {
   flushing ??= setTimeout(flush, 30);
 }
 
-/** Forgets what was found: the next look asks again (the tests, a folder that changed a lot). */
+/**
+ * Forgets what was found, and what is still being asked: the next look asks again (the tests,
+ * each a page of its own; a folder that changed a lot).
+ */
 export function forgetFound(): void {
   known.clear();
+  queued.clear();
+  clearTimeout(flushing);
+  flushing = undefined;
+  asked += 1;
   version += 1;
 }
 
