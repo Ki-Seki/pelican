@@ -409,8 +409,13 @@ describe('versions and what changed', () => {
     expect(nodeSatisfies(undefined, '1.0.0')).toBe(true);
     expect(shellWord('pelican-cc@0.5.1')).toBe('pelican-cc@0.5.1');
     expect(shellWord('~/.local')).toBe('~/.local');
+    expect(shellWord('~')).toBe('~');
     expect(shellWord('/Users/a b/.local')).toBe("'/Users/a b/.local'");
     expect(shellWord("it's")).toBe("'it'\\''s'");
+    // The ~ stays outside the quotes, where the shell expands it.
+    expect(shellWord('~/my projects/pelican')).toBe("~/'my projects/pelican'");
+    expect(shellWord("~/it's")).toBe("~/'it'\\''s'");
+    expect(shellWord('~user/x')).toBe("'~user/x'");
   });
 
   it('runs the npm of the Node running Pelican, not the first on PATH', async () => {
@@ -487,6 +492,34 @@ describe('how Pelican was installed, and what Settings offers', () => {
     for (const started of [script, path.join(linked, 'dist', 'server', 'index.js')]) {
       expect(await offered(started)).toMatchObject({ kind: 'source', self: false, folder: checkout, command: 'cd ~/pelican && git pull && npm ci && npm run build' });
     }
+  }, 30_000);
+
+  it('shows commands that work as shown for folders whose names have spaces, under the home folder too', async () => {
+    const home = path.join(dir, 'home');
+    /** What a shell makes of `words` (a command's start), run as the page shows it, with this home folder. */
+    const shells = ['/bin/sh', '/bin/bash', '/bin/zsh'].filter((shell) => existsSync(shell));
+    const said = (shell: string, words: string) => new Promise<string>((resolve) => {
+      execFile(shell, ['-c', `${words} && pwd -P`], { env: { HOME: home, PATH: '/usr/bin:/bin' }, cwd: dir }, (error, stdout, stderr) => resolve(error ? `failed: ${stderr}` : stdout.trim()));
+    });
+    // A checkout in ~/my projects/pelican: its cd goes there.
+    const checkout = path.join(home, 'my projects', 'pelican');
+    const script = await pelicanAt(checkout);
+    await mkdir(path.join(checkout, '.git'), { recursive: true });
+    const source = await offered(script);
+    expect(source.command).toBe("cd ~/'my projects/pelican' && git pull && npm ci && npm run build");
+    for (const shell of shells) expect(await said(shell, source.command!.split(' && ')[0]!), shell).toBe(checkout);
+    // A project's package, in ~/my app: the same.
+    await forget();
+    const project = await offered(await pelicanAt(path.join(home, 'my app', 'node_modules', 'pelican-cc')));
+    expect(project.command).toBe(`cd ~/'my app' && npm install pelican-cc@${NEXT}`);
+    for (const shell of shells) expect(await said(shell, project.command!.split(' && ')[0]!), shell).toBe(path.join(home, 'my app'));
+    // Another prefix in ~/Library/Application Support: the shell names the folder whole.
+    await forget();
+    const prefix = path.join(home, 'Library', 'Application Support', 'tool');
+    const other = await offered(await globalInstall(prefix), { global: path.join(dir, 'global') });
+    expect(other.command).toBe(`npm install --global --prefix ~/'Library/Application Support/tool' pelican-cc@${NEXT}`);
+    const word = /--prefix (.+) pelican-cc@/.exec(other.command!)![1]!;
+    for (const shell of shells) expect(await said(shell, `cd ${word}`), shell).toBe(prefix);
   }, 30_000);
 
   it('leaves a project’s package, Volta’s, pnpm’s, Yarn’s and Bun’s to them', async () => {

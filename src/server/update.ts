@@ -142,11 +142,17 @@ export const updateTiming = {
 // What the computer says, for messages: paths under the home folder as ~/…
 const tilde = (file: string) => (file === ctx().home ? '~' : file.startsWith(`${ctx().home}${path.sep}`) ? `~${file.slice(ctx().home.length)}` : file);
 
-/** A word of a shell command, quoted when it needs to be (a ~/ path stays bare where it can, so the shell expands it). */
+const quoted = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * A word of a shell command, quoted when it needs to be. A path under the home folder keeps its ~
+ * outside the quotes (`~/'my projects/pelican'`), as the shell expands only a bare one.
+ */
 export function shellWord(word: string): string {
   if (/^[\w./:@%+=,-]+$/.test(word)) return word;
-  if (/^~\/[\w./:@%+=,-]*$/.test(word)) return word;
-  return `'${word.replace(/'/g, `'\\''`)}'`;
+  if (word === '~' || /^~\/[\w./:@%+=,-]*$/.test(word)) return word;
+  if (word.startsWith('~/')) return `~/${quoted(word.slice(2))}`;
+  return quoted(word);
 }
 const command = (...words: string[]) => words.map(shellWord).join(' ');
 
