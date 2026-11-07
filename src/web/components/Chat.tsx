@@ -768,7 +768,7 @@ export function Chat({
       }
     }
   };
-  const requestRewind = (point: RewindPoint) => {
+  const requestRewind = (point: RewindPoint, trust?: TrustChoice) => {
     if (!sessionId) return;
     setSendError(undefined);
     if (busy) {
@@ -782,7 +782,7 @@ export function Chat({
     setRewind({ token, ...point, preview: 'pending', shown: false });
     // Desktop's pause: a check that answers within it asks nothing it need not.
     setTimeout(() => setRewind((now) => (now?.token === token ? { ...now, shown: true } : now)), REWIND_PAUSE_MS);
-    api.rewindCheck(sessionId, point.uuid).then((check) => {
+    api.rewindCheck(sessionId, point.uuid, trust).then((check) => {
       if (rewindToken.current !== token) return;
       if (check.files.length === 0 && check.conversationStays) {
         closeRewind();
@@ -796,6 +796,23 @@ export function Chat({
     }, (error: unknown) => {
       if (rewindToken.current !== token) return;
       closeRewind();
+      // Its check starts the session's Claude: in a folder nobody trusted, as a message does, it asks first.
+      if (error instanceof ApiError && error.trust) {
+        let settled = false;
+        setTrustAsk({
+          brings: error.trust.brings,
+          commands: error.trust.commands,
+          more: error.trust.more,
+          answer: (choice) => {
+            if (!settled) requestRewind(point, choice);
+            settled = true;
+          },
+          cancel: () => {
+            settled = true;
+          },
+        });
+        return;
+      }
       failed(error);
     });
   };

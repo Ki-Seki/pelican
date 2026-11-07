@@ -284,8 +284,12 @@ export const api = {
   shell: (id: string, command: string, trust?: TrustChoice) =>
     send<{ shell: LiveShell }>('POST', `sessions/${encodeURIComponent(id)}/shell`, { command, ...(trust ? { trust } : {}) }),
   stopShell: (id: string, shell: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/shell/${encodeURIComponent(shell)}/stop`),
-  /** What Rewind to here can put back for the prompt `uuid`, by Claude Code's own check: its dialog's choices. */
-  rewindCheck: (id: string, uuid: string) => send<RewindCheck>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun: true }),
+  /**
+   * What Rewind to here can put back for the prompt `uuid`, by Claude Code's own check: its dialog's
+   * choices. `trust`: the answer for a folder nobody trusted, as a message carries it.
+   */
+  rewindCheck: (id: string, uuid: string, trust?: TrustChoice) =>
+    send<RewindCheck>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun: true, ...(trust ? { trust } : {}) }),
   /** Rewind to here: back to before the prompt `uuid`, the code, the conversation or both. */
   rewind: (id: string, uuid: string, restore: RewindRestore) => send<RewindDone>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, restore }),
   /** Undo rewind: the messages come back, until the next message; the files stay as they are. */

@@ -25,6 +25,9 @@ const server = vi.hoisted(() => ({
   rewound: undefined as Rewound | undefined,
   run: null as RunState | null,
   failure: undefined as Error | undefined,
+  /** What each check carried as the folder's trust, and whether the folder still waits for an answer. */
+  checks: [] as Array<string | undefined>,
+  untrusted: false,
 }));
 
 const conversation = (): ChatMessage[] => [
@@ -58,8 +61,10 @@ vi.mock('../src/web/lib/api', async (original) => {
         const messages = cut < 0 ? all : all.slice(0, cut);
         return { messages, total: messages.length, offset: 0, ...(server.rewound ? { rewound: server.rewound } : {}) };
       },
-      rewindCheck: async () => {
+      rewindCheck: async (_id: string, _uuid: string, trust?: string) => {
+        server.checks.push(trust);
         await server.hold;
+        if (server.untrusted && !trust) throw new actual.ApiError('Trust this folder before Claude Code starts in it.', 409, false, { brings: ['hooks: SessionStart (.claude/settings.json)'] });
         if (server.failure) throw server.failure;
         return server.check!;
       },
@@ -110,7 +115,7 @@ afterEach(async () => {
   setWaiting(SESSION, []);
   setWaiting(FORKED, []);
   media = {};
-  Object.assign(server, { check: undefined, hold: undefined, rewinds: [], undos: 0, rewound: undefined, run: null, failure: undefined });
+  Object.assign(server, { check: undefined, hold: undefined, rewinds: [], undos: 0, rewound: undefined, run: null, failure: undefined, checks: [], untrusted: false });
   await new Promise((resolve) => setTimeout(resolve, 0));
   history.replaceState(null, '', '/');
 });
@@ -275,6 +280,18 @@ describe('Rewind to here', () => {
     fireEvent.click(rewindOn('Add a dark theme to the settings page'));
     await screen.findByText('It is the conversation’s first message: Fork from here starts it again in a new session.');
     expect(server.rewinds).toEqual([['u2', 'code']]);
+  });
+
+  it('asks first in a folder nobody trusted, as a message does, its check starting the session’s Claude', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    server.check = { files: [], insertions: 0, deletions: 0 };
+    server.untrusted = true;
+    open();
+    await loaded();
+    fireEvent.click(rewindOn('Now remember the choice'));
+    fireEvent.click(await screen.findByText('Trust and start'));
+    await waitFor(() => expect(server.rewinds).toEqual([['u2', 'conversation']]));
+    expect(server.checks).toEqual([undefined, 'trusted']);
   });
 
   it('acts on its turn’s prompt from a reply’s ⋯, on a phone', async () => {

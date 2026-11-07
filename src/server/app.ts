@@ -792,14 +792,19 @@ const RESTORES: readonly RewindRestore[] = ['both', 'conversation', 'code'];
  * Rewind to here (rewind.ts): back to before the prompt `uuid`, the code, the conversation or both
  * (`restore`), as Claude Code's /rewind and Claude Desktop do; `dryRun` says what it can put back
  * first, for its choices. Not while Claude works (409); while another app has the session open,
- * only the code.
+ * only the code. It starts the session's Claude, so a folder nobody trusted is asked about first,
+ * as for a message (409, needsTrust), and `trust` is the answer.
  */
 app.post('/api/sessions/:id/rewind', async (c) => {
-  const body = await c.req.json<{ uuid?: unknown; restore?: unknown; dryRun?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+  const body = await c.req.json<{ uuid?: unknown; restore?: unknown; dryRun?: unknown; trust?: unknown }>().catch(() => ({}) as Record<string, unknown>);
   const uuid = uuidOf(body.uuid);
   if (!uuid) return c.json({ error: 'Which message?' }, 400);
   const restore = RESTORES.find((r) => r === body.restore);
   if (body.dryRun !== true && !restore) return c.json({ error: 'Restore what: both, conversation or code?' }, 400);
+  if (body.trust === 'trusted' || body.trust === 'user-only') {
+    const folder = getRun(c.req.param('id'))?.cwd ?? (await sessionInfo(c.req.param('id')))?.cwd;
+    if (folder && (await isDirectory(folder))) await rememberChoice(folder, body.trust);
+  }
   try {
     return c.json(body.dryRun === true ? await checkRewind(c.req.param('id'), uuid) : await rewindTo(c.req.param('id'), uuid, restore!));
   } catch (error) {
