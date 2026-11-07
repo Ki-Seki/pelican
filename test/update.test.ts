@@ -22,7 +22,7 @@ import { LABEL } from '../src/server/service';
 import { startServer } from '../src/server/server';
 import { closeAllTerminals, testShell } from '../src/server/terminals';
 import {
-  fileInTar, integrityHolds, nodeSatisfies, npmBeside, type Ran, type RunningSources, servedBy, shellWord, type UpdateContext, updateInfo, updateTiming,
+  fileInTar, integrityHolds, nodeSatisfies, npmBeside, npmSaid, type Ran, type RunningSources, servedBy, shellWord, type UpdateContext, updateInfo, updateTiming,
   useRunningSources, useUpdateContext,
 } from '../src/server/update';
 
@@ -378,6 +378,24 @@ describe('versions and what changed', () => {
     const tar = gunzipSync(data);
     expect(fileInTar(tar, 'package/CHANGELOG.md')?.toString()).toContain(`## ${NEXT}`);
     expect(fileInTar(tar, 'package/missing.md')).toBeUndefined();
+  });
+
+  it('says in a line what npm said went wrong', () => {
+    const refused = [
+      'npm error code ECONNREFUSED', 'npm error syscall connect', 'npm error errno ECONNREFUSED',
+      'npm error FetchError: request to http://127.0.0.1:48089/pelican-cc failed, reason: connect ECONNREFUSED 127.0.0.1:48089',
+      'npm error     at ClientRequest.<anonymous> (/usr/local/lib/node_modules/npm/node_modules/minipass-fetch/lib/index.js:130:14) {',
+      "npm error   code: 'ECONNREFUSED',", "npm error   type: 'system',", 'npm error }', 'npm error',
+      "npm error If you are behind a proxy, please make sure that the 'proxy' config is set properly.  See: 'npm help config'",
+      'npm error A complete log of this run can be found in: /tmp/npm-cache/_logs/2026-11-07T07_49_26_284Z-debug-0.log',
+    ].join('\n');
+    expect(npmSaid({ code: 1, stdout: '', stderr: refused })).toBe('ECONNREFUSED: FetchError: request to http://127.0.0.1:48089/pelican-cc failed, reason: connect ECONNREFUSED 127.0.0.1:48089');
+    const missing = 'npm error code ETARGET\nnpm error notarget No matching version found for pelican-cc@9.9.9.\nnpm error notarget In most cases you or one of your dependencies are requesting a package version that doesn’t exist.\n';
+    expect(npmSaid({ code: 1, stdout: '', stderr: missing })).toBe('ETARGET: No matching version found for pelican-cc@9.9.9.');
+    expect(npmSaid({ code: 1, stdout: '', stderr: 'npm error code EACCES\nnpm error syscall rename\nnpm error path /usr/local/lib/node_modules/pelican-cc\nnpm error errno -13\nnpm error Error: EACCES: permission denied, rename' }))
+      .toBe('EACCES: Error: EACCES: permission denied, rename');
+    // Not npm's words: the end of what was printed.
+    expect(npmSaid({ code: 127, stdout: '', stderr: 'sh: npm: command not found' })).toBe('sh: npm: command not found');
   });
 
   it('knows which Node a version needs, and writes commands a shell takes as they are', () => {

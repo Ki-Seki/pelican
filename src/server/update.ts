@@ -581,6 +581,22 @@ function tail(ran: Ran): string {
 }
 
 /**
+ * What npm said went wrong, in a line: its error's code and first words (`ECONNREFUSED: request to
+ * … failed`), without its stack, its fields, its advice and where its log is.
+ */
+export function npmSaid(ran: Ran): string {
+  const said = `${ran.stderr}\n${ran.stdout}`.split('\n').flatMap((line) => {
+    const match = /^npm (?:error|ERR!)(?: (.*))?$/.exec(line.trimEnd());
+    return match ? [match[1] ?? ''] : [];
+  });
+  const code = said.map((line) => /^code (\S+)$/.exec(line)?.[1]).find(Boolean);
+  const message = said.find((line) => line && !/^\s/.test(line) && !/^(code|syscall|errno|path|dest|signal|command|cwd) /.test(line)
+    && !/^[{}]$/.test(line) && !/^(A complete log|If you are behind a proxy|In most cases|'?proxy'? config)/.test(line));
+  if (!code && !message) return tail(ran);
+  return clipped([code, message?.replace(/^(notarget|404|403|401) +/, '').trim()].filter(Boolean).join(': '), 400);
+}
+
+/**
  * npm installing exactly `version` of pelican-cc into `prefix`, from the registry checked: no
  * scripts, nothing else. `cached`: from what npm got moments ago, where it can (over this install,
  * after the same version was installed apart), so new work waits no longer than it must.
@@ -624,7 +640,7 @@ async function prepare(version: string, base: string, stop: AbortSignal): Promis
   try {
     const ran = await npmInstall(staging, version, base, { signal: stop });
     if (stop.aborted) return;
-    if (ran.code !== 0) throw new UpdateFailed(`npm could not install ${version}: ${tail(ran)}`);
+    if (ran.code !== 0) throw new UpdateFailed(`npm could not install ${version}: ${npmSaid(ran)}`);
     const folder = path.join(staging, 'lib', 'node_modules', PACKAGE_NAME);
     const problem = await startsAs(await scriptOf(folder).catch(() => path.join(folder, 'dist', 'server', 'index.js')), version, stop);
     if (problem && !stop.aborted) throw new UpdateFailed(`${version} does not start: ${problem}`);
@@ -699,7 +715,7 @@ async function commit(version: string, base: string, found: Install): Promise<vo
   state = { phase: 'installing', version };
   const ran = await npmInstall(prefix, version, base, { cached: true });
   // npm puts back what it was replacing when it fails.
-  if (ran.code !== 0) throw new UpdateFailed(`npm could not install ${version} over this install: ${tail(ran)}`);
+  if (ran.code !== 0) throw new UpdateFailed(`npm could not install ${version} over this install: ${npmSaid(ran)}`);
   state = { phase: 'checking', version };
   const problem = await startsAs(path.join(found.folder, found.scriptIn ?? path.join('dist', 'server', 'index.js')), version);
   if (problem) {
