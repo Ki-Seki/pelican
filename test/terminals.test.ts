@@ -271,6 +271,46 @@ describe('a terminal', () => {
     }, 30_000);
   }
 
+  // csh and tcsh take a `!` from the history in a file they read, too. Each reads its history file
+  // at start, as the .tcshrc of a home folder of its own here says to, holding a secret (made up).
+  for (const [name, file] of [['csh', '/bin/csh'], ['tcsh', '/bin/tcsh']] as const) {
+    it.skipIf(!existsSync(file))(`runs the command as it shows in ${name} too, its \`!\` taken from no history, and puts \`!\` back as it was, also after an error`, async () => {
+      const home = path.join(dir, `home-${name}`);
+      await mkdir(home, { recursive: true });
+      const history = path.join(home, 'history');
+      await writeFile(history, 'setenv AWS_SECRET_ACCESS_KEY AKIA-SCRATCH-NOT-REAL-1234\necho second\n');
+      await writeFile(path.join(home, '.tcshrc'), `set history = 100\nset savehist = 100\nset histfile = ${history}\nset prompt = 'PROMPT> '\n`);
+      const before = process.env.HOME;
+      Object.assign(testShell, { file, args: ['-i'] });
+      process.env.HOME = home;
+      try {
+        const shown = page((await open(work(), { command: 'echo "exfil: !?AWS_SECRET?" "!!" done-ok' })).id);
+        await shown.readied();
+        await shown.sees(/!! done-ok/, 10_000);
+        await pause(200);
+        expect(shown.output).not.toMatch(/AKIA-SCRATCH/);
+        expect(shown.lines().join('\n')).toContain('exfil: !?AWS_SECRET? !! done-ok');
+        // Typed at its prompt by you, `!` works as ever.
+        let from = shown.output.length;
+        shown.type('echo "ran !?second?"\r');
+        await shown.sees(/ran echo second/, 10_000, from);
+        // A command that stops on an error, which ends what csh reads: `!` is back all the same.
+        const failed = page((await open(work(), { command: 'echo "first !?AWS_SECRET?" $nope_undefined\necho never' })).id);
+        await failed.readied();
+        await failed.sees(/nope_undefined: Undefined variable/, 10_000);
+        await pause(300);
+        expect(failed.output).not.toMatch(/AKIA-SCRATCH|never\r\n/);
+        from = failed.output.length;
+        failed.type('echo "ran !?second?"\r');
+        await failed.sees(/ran echo second/, 10_000, from);
+      } finally {
+        if (before === undefined) delete process.env.HOME;
+        else process.env.HOME = before;
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 40_000);
+  }
+
   it('runs no command that does not show all it holds', async () => {
     // Keys a shell's line editor takes (Ctrl+U, Esc, a carriage return), or text turned around.
     for (const command of ['echo safe\u0015touch pwned', 'echo safe\u001b[201~', 'ls\rtouch pwned', 'echo \u202egnp.exe', 'ls\u009b']) {

