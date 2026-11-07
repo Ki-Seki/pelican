@@ -851,6 +851,10 @@ describe('a file open in Changes and files', () => {
     fireEvent.click(await within(pane).findByRole('button', { name: 'Quote' }));
     const chips = await screen.findByRole('list', { name: 'With your next message' });
     expect(within(chips).getByText('a.ts:1-2')).toBeTruthy();
+    // As wide as the box has room for, so a note reads in it (it stopped at 24rem), a little less beside others.
+    const chip = within(chips).getByText('a.ts:1-2').closest('li')!;
+    expect(chip.className).toContain('only:max-w-full');
+    expect(chip.className).toContain('max-w-[calc(100%-4rem)]');
     expect(box().value).toBe('First this.');
     getSelection()!.removeAllRanges();
     // It goes as Desktop attaches lines of a file: where they are, then the lines.
