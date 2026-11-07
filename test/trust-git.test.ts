@@ -112,6 +112,15 @@ describe('a git filter the repository’s config sets up', () => {
     expect(await ran()).toBe(false);
   });
 
+  it('in a file included on a condition of a megabyte with a line separator in it: listed, at once', async () => {
+    const condition = `onbranch:dev${'a'.repeat(1 << 20)}\u2028x`;
+    const { dir } = await unpacked('separator', `[includeIf "${condition}"]\n\tpath = ../.devfilters\n`, { '.devfilters': '[filter "evil"]\n\tclean = CMD\n' });
+    const started = performance.now();
+    const brings = await folderBrings(dir);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(brings).toEqual(expect.arrayContaining([expect.stringMatching(/^Git filter evil: /), 'Git config includes: ../.devfilters']));
+  });
+
   it('says that the config includes another file, even one that is not there yet', async () => {
     const { dir } = await unpacked('missing', '[include]\n\tpath = ../.later\n');
     expect(await folderBrings(dir)).toContain('Git config includes: ../.later');

@@ -454,8 +454,13 @@ function* fromMcp(file: unknown): Generator<Item> {
   }
 }
 
-/** Frontmatter keys that give a command, skill or agent powers of its own (Claude Code reads them in any case and with `_` for `-`). */
-const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|permission[-_]?mode)["']?[ \t]*:(.*)$/i;
+/**
+ * Frontmatter keys that give a command, skill or agent powers of its own (Claude Code reads them in
+ * any case and with `_` for `-`), and all of the line after one, a line separator (U+2028, U+2029)
+ * too, which YAML reads as text. As `(.*)$`, which stops at one, such a key went unread, and a line
+ * of keys before one took time with its square: 66 seconds for a skill of 1.1 MB.
+ */
+const POWERS = /(?:^|[{,])[ \t]*["']?(allowed[-_]?tools|hooks|mcp[-_]?servers|permission[-_]?mode)["']?[ \t]*:([\s\S]*)$/i;
 
 /**
  * The frontmatter of a command, a skill or an agent, found as Claude Code finds it (its
@@ -634,7 +639,8 @@ function nameParts(name: string): { section: string; subsection?: string; key: s
   return first === last ? { section, key: name.slice(last + 1) } : { section, subsection: name.slice(first + 1, last), key: name.slice(last + 1) };
 }
 
-const isInclude = (entry: GitEntry) => entry.name === 'include.path' || /^includeif\..+\.path$/.test(entry.name);
+/** `include.path`, or `includeif.<condition>.path` whatever the condition holds, a line separator too. */
+const isInclude = (entry: GitEntry) => entry.name === 'include.path' || /^includeif\.[\s\S]+\.path$/.test(entry.name);
 
 /** git found no repository there: nothing of a repository's config can run. */
 class NoRepository extends Error {}
