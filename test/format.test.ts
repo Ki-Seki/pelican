@@ -25,6 +25,12 @@ describe('format', () => {
   it('shortens paths under home and prints durations', () => {
     expect(shortPath('/Users/a/code/x', '/Users/a')).toBe('~/code/x');
     expect(shortPath('/Users/ab/x', '/Users/a')).toBe('/Users/ab/x');
+    // A Mac's /tmp is /private/tmp, where Claude Code records a session started in it: read as picked.
+    expect(shortPath('/private/tmp/checkout', '/Users/a')).toBe('/tmp/checkout');
+    expect(shortPath('/private/var/folders/x', '/Users/a')).toBe('/var/folders/x');
+    expect(shortPath('/private/tmp', '/Users/a')).toBe('/tmp');
+    expect(shortPath('/private/tmpfiles/x', '/Users/a')).toBe('/private/tmpfiles/x');
+    expect(shortPath('/private/stuff', '/Users/a')).toBe('/private/stuff');
     expect(duration(9_500)).toBe('9s');
     expect(duration(75_000)).toBe('1m 15s');
   });

@@ -1338,10 +1338,11 @@ export function Chat({
             </div>
             <div className="flex min-w-0 items-center gap-2 overflow-hidden text-[12px] text-faint">
               <StatusBadge status={status} runningIn={otherAtWork ? session?.runningIn : undefined} tasks={working} />
-              <span className="min-w-0 truncate font-mono" title={cwd}>{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</span>
+              {/* A long path gives way from its start, keeping the folder's name, and leaves the branch its room. */}
+              <span dir="rtl" className="min-w-0 truncate text-left font-mono" title={cwd}><bdi dir="ltr">{cwd ? (wide ? subtitle : baseName(cwd)) : ''}</bdi></span>
               {/* On a phone the line has room for the branch only when nothing else is going on. */}
               {session?.gitBranch && (wide || (status === 'idle' && working === 0)) && (
-                <span className="flex min-w-0 shrink-[2] items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
+                <span className="flex max-w-[45%] min-w-0 shrink-0 items-center gap-0.5"><GitBranch className="size-3 shrink-0" /><span className="truncate">{session.gitBranch}</span></span>
               )}
             </div>
           </button>
