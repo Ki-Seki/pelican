@@ -1,11 +1,11 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 import { revealHidden } from '../shared/hidden.js';
-import { promptParts } from '../shared/prompt-parts.js';
 import type { ChatMessage } from '../shared/protocol.js';
+import { hasQuotes, readPrompt } from '../shared/quoted.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
-import { shortPath } from '../web/lib/format.js';
+import { baseName, shortPath } from '../web/lib/format.js';
 import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
@@ -48,16 +48,38 @@ export async function remove(sessionId: string): Promise<void> {
   await refreshTranscriptIndex();
 }
 
+/** Lines as a quote, at each line ending a reader takes, a lone carriage return too. */
+const quoted = (text: string) => text.split(/\r\n?|\n/).map((line) => (line ? `> ${line}` : '>')).join('\n');
+
+/** A quote's lines under what they are from (a file and its lines, a terminal), as code, or its words as text. */
+const quoteBlock = (text: string | undefined, from?: string) => quoted(from ? [inlineCode(from), ...(text ? [codeBlock(text)] : [])].join('\n') : asText(text ?? ''));
+
 /**
- * A prompt as the conversation shows it: its words as text, and the quotes above them as quotes;
- * one from a file under where it is from, its lines as code, as the conversation shows them.
+ * A prompt as the conversation shows it (shared/quoted reads it, as Claude Desktop writes one): the
+ * files it attached by name; each quote as a quote, one of lines of a file or of a terminal under
+ * where they are from, as code, and the note on it after it as text; a comment on lines under the
+ * file and lines it is on, its code as code, and the comment after it; and its words as text. One
+ * with none of these reads as it was typed.
  */
-const prompt = (text: string) => promptParts(text).map((part) => {
-  if (part.kind === 'text') return asText(part.text);
-  const quote = part.from ? [inlineCode(part.from), ...(part.text ? [codeBlock(part.text)] : [])].join('\n') : asText(part.text);
-  // Every line in the quote, at each line ending a reader takes, a lone carriage return too.
-  return quote.split(/\r\n?|\n/).map((line) => (line ? `> ${line}` : '>')).join('\n');
-});
+const prompt = (text: string): string[] => {
+  const parts = readPrompt(text);
+  if (!hasQuotes(parts)) {
+    const typed = text.replace(/^\n+|\n+$/g, '');
+    return typed ? [asText(typed)] : [];
+  }
+  const files = parts.flatMap((part) => (part.kind === 'file' ? [`${baseName(part.path)}${part.folder ? '/' : ''}`] : []));
+  const blocks = files.length > 0 ? [`Attached: ${inlineText(files.join(', '))}`] : [];
+  for (const part of parts) {
+    if (part.kind === 'text') blocks.push(asText(part.text));
+    else if (part.kind === 'quote') blocks.push(quoteBlock(part.text, part.label), ...(part.note ? [asText(part.note)] : []));
+    else if (part.kind === 'comment') {
+      const [from, to] = part.lines;
+      const where = `${baseName(part.path)}:${from === to ? from : `${from}-${to}`}${part.removed ? ' · before changes' : ''}`;
+      blocks.push(quoted(part.code === undefined ? inlineCode(where) : `${inlineCode(where)}\n${codeBlock(part.code)}`), ...(part.note ? [asText(part.note)] : []));
+    }
+  }
+  return blocks;
+};
 
 /**
  * The files a call sent you that the conversation shows, as their cards do: what Claude Code

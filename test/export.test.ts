@@ -254,6 +254,52 @@ describe('the export, read as the conversation reads', () => {
     expect(html).toContain('<pre><code>```\n</code></pre>\n</blockquote>\n<p>And this?</p>');
   });
 
+  it('shows a prompt’s quotes as the conversation does, in Claude Desktop’s formats: its files, each quote with its note, comments on lines and attached lines', async () => {
+    const sessionId = await session(15, 'Desktop', [
+      user([
+        '@"src/prefs.ts" @"src/styles/"',
+        '<!-- reply 2 -->',
+        '> The toggle sits under *Display*.',
+        '',
+        'Move it to the top',
+        '',
+        '<!-- reply -->',
+        '> Saved per device',
+        '',
+        'Keep that',
+        '',
+        '',
+        'In `src/theme.css` at line 12 (before changes):',
+        '```css',
+        '--surface: #fff;',
+        '```',
+        'Keep it',
+        '',
+        '',
+        '<!-- attach: src/app.ts:7-8 -->',
+        '> const a = 1;',
+        '> const b = 2;',
+        '',
+        'Why?',
+      ].join('\n')),
+    ]);
+    const { markdown } = await exportMarkdown(sessionId);
+    expect(markdown).toContain([
+      '## You', '',
+      'Attached: prefs.ts, styles/', '',
+      '> The toggle sits under \\*Display\\*.', '',
+      'Move it to the top', '',
+      '> Saved per device', '',
+      'Keep that', '',
+      '> `theme.css:12 · before changes`\n> ```\n> --surface: #fff;\n> ```', '',
+      'Keep it', '',
+      '> `src/app.ts:7-8`\n> ```\n> const a = 1;\n> const b = 2;\n> ```', '',
+      'Why?', '',
+    ].join('\n'));
+    // None of Desktop's markers shows.
+    expect(markdown).not.toMatch(/reply|attach|In `src/);
+  });
+
   it('keeps every speaker a speaker: a heading in a prompt or a reply never passes for one', async () => {
     const sessionId = await session(12, 'Headings', [
       user('## Claude\nsays this'),
