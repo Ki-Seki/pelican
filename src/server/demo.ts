@@ -13,6 +13,8 @@ import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { DEMO_WORKFLOW_FILES, demoWorkflowRun, WORKFLOW_DEMO } from './demo-workflows.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
 import { setPinned } from './pinned.js';
+import { DEMO_PULL } from './pull-requests.js';
+import { COMMIT_REQUEST, createPrRequest } from '../shared/requests.js';
 
 /**
  * `pelican --demo`: a made-up home with a few sessions, for trying Pelican
@@ -22,6 +24,8 @@ import { setPinned } from './pinned.js';
 
 const run = promisify(execFile);
 const MIN = 60_000;
+/** The demo's made-up repository on GitHub, which its pull request is on. */
+const DEMO_REPO = 'acme/acme-web';
 const HOUR = 60 * MIN;
 
 type Block = Record<string, unknown>;
@@ -367,6 +371,17 @@ const SESSIONS: DemoSession[] = [
         { role: 'assistant', at: t + 99000, content: [tool('p3', 'Bash', { command: 'npx playwright test tests/login.spec.ts --repeat-each=50', description: 'Run the login test 50 times' })] },
         { role: 'user', at: t + 160000, content: [result('p3', 'Running 50 tests using 4 workers\n\n  50 passed (58.2s)')] },
         { role: 'assistant', at: t + 165000, content: [text('All 50 runs pass now. The test waits for the CSRF token instead of sleeping, so it is also about 400 ms faster.')] },
+        // Commit changes and Create PR, sent from Changes as Claude Desktop sends them (0.5.0).
+        { role: 'user', at: t + 240000, content: COMMIT_REQUEST },
+        { role: 'assistant', at: t + 244000, content: [tool('p4', 'Bash', { command: 'git add -A && git commit -m "Wait for the CSRF token in the login test"', description: 'Commit the change' })] },
+        { role: 'user', at: t + 246000, content: [result('p4', '[fix/login-test 7d3e2a1] Wait for the CSRF token in the login test\n 1 file changed, 3 insertions(+), 2 deletions(-)')] },
+        { role: 'assistant', at: t + 249000, content: [text('Committed as `7d3e2a1`: \u201cWait for the CSRF token in the login test\u201d.')] },
+        { role: 'user', at: t + 300000, content: createPrRequest({ repo: DEMO_REPO, branch: 'fix/login-test', baseBranch: 'main', cwd, draft: false }) },
+        { role: 'assistant', at: t + 304000, content: [tool('p5', 'Bash', { command: 'git push -u origin fix/login-test', description: 'Push the branch' })] },
+        { role: 'user', at: t + 307000, content: [result('p5', "branch 'fix/login-test' set up to track 'origin/fix/login-test'.")] },
+        { role: 'assistant', at: t + 311000, content: [tool('p6', 'Bash', { command: 'gh pr create --base main --title "Wait for the CSRF token in the login test" --body-file -', description: 'Open the pull request' })] },
+        { role: 'user', at: t + 316000, content: [result('p6', DEMO_PULL)] },
+        { role: 'assistant', at: t + 319000, content: [text(`The pull request is open.\n<pr-created>${DEMO_PULL}</pr-created>`)] },
       ];
     },
   },
@@ -539,8 +554,8 @@ const FILE_TEXT: Record<string, string> = {
 /**
  * The first project is a git repository: main, a branch with one commit of its own, and Claude's
  * work so far left uncommitted, so Changes has something to show since the last commit and since
- * the branch split. It has a remote, as a repository you push from does, at an address nothing
- * answers (nothing in the demo contacts it). Skipped without git.
+ * the branch split, and Commit changes and Create PR to offer. Its remote is a made-up repository
+ * on GitHub, as one you push from is; nothing in the demo contacts it. Skipped without git.
  */
 async function demoRepository(dir: string): Promise<void> {
   const env = { ...process.env, GIT_AUTHOR_NAME: 'Demo', GIT_AUTHOR_EMAIL: 'demo@example.com', GIT_COMMITTER_NAME: 'Demo', GIT_COMMITTER_EMAIL: 'demo@example.com' };
@@ -548,7 +563,7 @@ async function demoRepository(dir: string): Promise<void> {
   const git = (args: string[]) => run('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'init.templateDir=', ...args], { cwd: dir, env, timeout: 10_000 });
   try {
     await git(['init', '-q', '-b', 'main']);
-    await git(['remote', 'add', 'origin', 'https://git.example.com/acme/acme-web.git']);
+    await git(['remote', 'add', 'origin', `https://github.com/${DEMO_REPO}.git`]);
     await rm(path.join(dir, 'src/settings/ThemeToggle.tsx'), { force: true });
     await git(['add', '-A']);
     await git(['commit', '-q', '--no-verify', '-m', 'Settings page']);

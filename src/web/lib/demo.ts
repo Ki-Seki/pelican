@@ -3,9 +3,10 @@ import { useSyncExternalStore } from 'react';
 import { isSavedEffort, modelKey, type StartDefaults } from '../../shared/defaults';
 import { isPermissionMode } from '../../shared/modes';
 import type {
-  Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, Rewound, RewindCheck, RewindDone, RunSettings, RunState, SendMode, ServerInfo,
+  Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, PrStatus, Rewound, RewindCheck, RewindDone, RunSettings, RunState, SendMode, ServerInfo,
   SessionChanges, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
+import { COMMIT_REQUEST, requestShown } from '../../shared/requests';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
@@ -164,11 +165,57 @@ function reply(sessionId: string, message: ChatMessage): void {
   say(sessionId, message);
   const run = currentRun(sessionId) ?? idleRun(sessionId);
   runAs(sessionId, { ...run, busy: true, permissions: [], partial: [] });
+  const typedText = message.blocks.find((b) => b.type === 'text');
+  if (typedText?.type === 'text' && actRequest(sessionId, typedText.text)) return;
   const words = stories.get(sessionId)?.summary?.sideChatOf ? DEMO_SIDE_REPLY : DEMO_REPLY;
   later(sessionId, 1400, () => {
     say(sessionId, assistant([{ type: 'text', text: words }]));
     finish(sessionId, 1400);
   });
+}
+
+/** The pull requests the demo made in the page, by address, for their cards. */
+const demoPulls = new Map<string, PrStatus>();
+
+/** A command Claude runs in the demo's story, and what it printed: a step, as a turn shows one. */
+function ranCommand(sessionId: string, at: number, command: string, description: string, output: string): void {
+  later(sessionId, at, () => {
+    const id = `toolu_demo_${newId().slice(0, 12)}`;
+    say(sessionId, assistant([{ type: 'tool_use', id, name: 'Bash', input: { command, description } }]));
+    say(sessionId, user([{ type: 'tool_result', tool_use_id: id, content: output }]));
+  });
+}
+
+/**
+ * Commit changes and Create PR, sent from Changes, acted out as Claude would carry them out: the
+ * commit, or the push and the pull request, which the reply names in Desktop's tag, for its card.
+ * Nothing runs: the steps and the pull request are made up. Whether the text was one of them.
+ */
+function actRequest(sessionId: string, text: string): boolean {
+  const shown = requestShown(text);
+  if (text !== COMMIT_REQUEST && !shown) return false;
+  if (!shown) {
+    ranCommand(sessionId, 700, 'git add -A && git commit -m "Add a dark theme toggle to Settings"', 'Commit the changes', '[feat/dark-theme a1b2c3d] Add a dark theme toggle to Settings\n 3 files changed, 31 insertions(+), 2 deletions(-)');
+    later(sessionId, 1500, () => {
+      say(sessionId, assistant([{ type: 'text', text: 'Committed as `a1b2c3d`: \u201cAdd a dark theme toggle to Settings\u201d.' }]));
+      finish(sessionId, 1500);
+    });
+    return true;
+  }
+  const branch = /^Branch: (.+)$/m.exec(text)?.[1] ?? 'feat/dark-theme';
+  const base = /^Base branch: (.+)$/m.exec(text)?.[1] ?? 'main';
+  const repo = /^Repository: (.+)$/m.exec(text)?.[1] ?? 'acme/acme-web';
+  const title = stories.get(sessionId)?.summary?.title ?? titles.get(sessionId) ?? 'Changes from the demo';
+  const url = `https://github.com/${repo}/pull/${129 + demoPulls.size}`;
+  const draft = shown.endsWith('--draft');
+  demoPulls.set(url, { live: true, number: 129 + demoPulls.size, title, state: 'open', draft, head: branch, base, checks: 'running' });
+  ranCommand(sessionId, 700, `git push -u origin ${branch}`, 'Push the branch', `branch '${branch}' set up to track 'origin/${branch}'.`);
+  ranCommand(sessionId, 1400, `gh pr create${draft ? ' --draft' : ''} --base ${base} --title "${title}" --body-file -`, 'Open the pull request', url);
+  later(sessionId, 2100, () => {
+    say(sessionId, assistant([{ type: 'text', text: `The pull request is open${draft ? ', as a draft' : ''}.\n<pr-created>${url}</pr-created>` }]));
+    finish(sessionId, 2100);
+  });
+  return true;
 }
 
 function resultOf(request: PermissionRequest, decision: PermissionDecision): { content: string; is_error?: boolean } {
@@ -506,6 +553,11 @@ function changeDefaults(body: Record<string, unknown>): StartDefaults {
 
 function read(path: string): Promise<unknown> | undefined {
   if (changedDefaults && /^defaults(\?|$)/.test(path)) return Promise.resolve(startDefaults);
+  // A pull request the demo made in the page: as made up as the rest.
+  if (path.startsWith('pr?')) {
+    const made = demoPulls.get(new URLSearchParams(path.slice(3)).get('url') ?? '');
+    if (made) return Promise.resolve(made);
+  }
   const match = sessionPath.exec(path);
   const id = match ? decodeURIComponent(match[1]!) : undefined;
   const story = id ? stories.get(id) : undefined;

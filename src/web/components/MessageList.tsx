@@ -2,7 +2,7 @@ import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizont
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
-import { requestShown } from '../../shared/quoted';
+import { requestShown } from '../../shared/requests';
 import { api, apiUrl } from '../lib/api';
 import { modelName } from '../../shared/usage';
 import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget, STEP_ACTIONS } from '../lib/actions';

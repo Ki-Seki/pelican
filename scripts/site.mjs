@@ -86,6 +86,8 @@ for (const session of sessions) {
   // The files Claude sent, as their cards ask for them: on the site, a picture comes as data too.
   for (const block of (page?.messages ?? []).flatMap((message) => message.blocks)) {
     for (const file of block.type === 'tool_result' ? block.delivered?.files ?? [] : []) await save(`sessions/${q(session.id)}/sent?path=${q(file.path)}`);
+    // A pull request Claude named in Desktop's <pr-created> tag: its card's status, made up by the demo.
+    for (const [, url] of block.type === 'text' ? block.text.matchAll(/<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>/gi) : []) await save(`pr?url=${q(url)}`);
   }
   await save(`sessions/${q(session.id)}/mcp`);
   // What each turn changed, and each turn's diff of each of its files.
@@ -118,13 +120,12 @@ for (const cwd of folders) {
   await save(`commands?cwd=${q(cwd)}`);
   await save(`defaults?cwd=${q(cwd)}`);
   await save(`files?cwd=${q(cwd)}&q=`);
+  // Uncommitted changes, and all of them by Claude Code's /diff, which Changes shows first and the
+  // header counts.
   const git = await save(`git?cwd=${q(cwd)}`);
   for (const file of git?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}`);
-  // Since the branch split from the default branch, when it is on another branch.
-  if (git?.base && git.branch && git.branch !== git.base) {
-    const since = await save(`git?cwd=${q(cwd)}&scope=base`);
-    for (const file of since?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}&scope=base`);
-  }
+  const all = await save(`git?cwd=${q(cwd)}&scope=base`);
+  for (const file of all?.files ?? []) await save(`git/diff?cwd=${q(cwd)}&path=${q(file.path)}&scope=base`);
   // Every folder and small file, so the Files panel works all the way down.
   const walk = async (dir) => {
     const listing = await save(`tree?cwd=${q(cwd)}&path=${q(dir)}`);
@@ -143,6 +144,7 @@ const browse = async (dir) => {
   if (!listing) return;
   await save(`defaults?cwd=${q(listing.path)}`);
   await save(`git?cwd=${q(listing.path)}`);
+  await save(`git?cwd=${q(listing.path)}&scope=base`);
   for (const folder of listing.dirs ?? []) await browse(folder.path);
 };
 await browse(undefined);

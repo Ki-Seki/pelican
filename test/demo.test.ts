@@ -9,6 +9,7 @@ const { api, isDemoNote } = await import('../src/web/lib/api');
 const { addLocalMessage, getView, setRun } = await import('../src/web/lib/store');
 const { DEMO_NOTE } = await import('../src/web/lib/static-demo');
 const { FIRST_MESSAGE, NOTHING_TO_UNDO } = await import('../src/shared/rewind');
+const { COMMIT_REQUEST, createPrRequest } = await import('../src/shared/requests');
 
 const CWD = '/demo/code/acme-web';
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed') => ({ content, status, activeForm: `${content}ing` });
@@ -73,6 +74,26 @@ describe('the demo', () => {
     const messages = getView(SESSION).messages;
     expect(messages.find((m) => m.uuid === 'mine')).toMatchObject({ role: 'user', blocks: [{ type: 'text', text: 'Use the system setting' }] });
     expect(messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_REPLY });
+    expect(getView(SESSION).run?.busy).toBe(false);
+  });
+
+  it('acts out Commit changes and Create PR as Claude would carry them out, the pull request a card it can read', async () => {
+    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
+    vi.runAllTimers();
+    await api.send(SESSION, { text: COMMIT_REQUEST, attachments: [], settings: {}, uuid: 'commit' });
+    vi.runAllTimers();
+    let blocks = getView(SESSION).messages.flatMap((m) => m.blocks);
+    expect(blocks).toContainEqual(expect.objectContaining({ type: 'tool_use', name: 'Bash', input: expect.objectContaining({ command: expect.stringMatching(/^git add -A && git commit -m /) }) }));
+    expect(getView(SESSION).messages.at(-1)?.blocks[0]).toMatchObject({ type: 'text', text: expect.stringMatching(/^Committed as /) });
+    const request = createPrRequest({ repo: 'acme/acme-web', branch: 'feat/dark-theme', baseBranch: 'main', cwd: CWD, draft: true });
+    await api.send(SESSION, { text: request, attachments: [], settings: {}, uuid: 'pr' });
+    vi.runAllTimers();
+    blocks = getView(SESSION).messages.flatMap((m) => m.blocks);
+    expect(blocks).toContainEqual(expect.objectContaining({ type: 'tool_use', input: expect.objectContaining({ command: 'git push -u origin feat/dark-theme' }) }));
+    const said = getView(SESSION).messages.at(-1)?.blocks[0];
+    const url = said?.type === 'text' ? /<pr-created>(.+)<\/pr-created>/.exec(said.text)?.[1] : undefined;
+    expect(url).toMatch(/^https:\/\/github\.com\/acme\/acme-web\/pull\/\d+$/);
+    await expect(api.pr(url!)).resolves.toMatchObject({ live: true, state: 'open', draft: true, head: 'feat/dark-theme', base: 'main' });
     expect(getView(SESSION).run?.busy).toBe(false);
   });
 

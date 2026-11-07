@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GitStatus } from '../src/shared/protocol';
-import { promptGist, requestShown } from '../src/shared/quoted';
+import { promptGist } from '../src/shared/quoted';
+import { requestShown } from '../src/shared/requests';
 import { COMMIT_REQUEST, createPrRequest, prBase, readPrCreated, requestsFor } from '../src/web/lib/requests';
 
 // Claude Desktop's own texts (its Code tab's cached build, 2026-11: chunk c17fc4411 for Commit

@@ -51,8 +51,9 @@ export function readPull(json: string): PrStatus {
 }
 
 /** The demo's pull request, as its session names it: made up, and never looked up anywhere. */
+export const DEMO_PULL = 'https://github.com/acme/acme-web/pull/128';
 const DEMO_PULLS: Record<string, PrStatus> = {
-  'https://github.com/acme/acme-web/pull/128': { live: true, number: 128, title: 'Wait for the CSRF token in the login test', state: 'open', draft: false, head: 'fix/login-test', base: 'main', checks: 'running' },
+  [DEMO_PULL]: { live: true, number: 128, title: 'Wait for the CSRF token in the login test', state: 'open', draft: false, head: 'fix/login-test', base: 'main', checks: 'running' },
 };
 
 /**
