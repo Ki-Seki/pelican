@@ -787,16 +787,43 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
 async function unused(): Promise<Term | undefined> {
   const idle = [...terminals.values()].filter((t) => !t.used && !t.closed && t.viewers.size === 0).sort((a, b) => a.lastActive - b.lastActive);
   if (idle.length === 0) return undefined;
-  const parents = await processParents();
-  if (!parents) return undefined;
-  const busy = new Set(parents.values());
-  return idle.find((t) => !t.used && !t.closed && t.viewers.size === 0 && !busy.has(t.pid));
+  const table = await processTable();
+  return idle.find((t) => !t.used && !t.closed && t.viewers.size === 0 && somethingRuns(t, table) === false);
 }
 
 /**
- * A terminal, with whether a program runs in it now, for End to ask first while one does: another
- * than its shell in front, or a process of the shell's own (a job in the background, or one
- * stopped), as a terminal left alone stays while one runs. When ps cannot say, one does.
+ * Whether something runs in a terminal, as its user would say: a program in front (the PTY names
+ * another than the shell, or the terminal's foreground group is not the shell's), or a job the shell
+ * started in the background, running or stopped (a process of the shell's own on its terminal, as
+ * every job is). Not the shell's own helpers: gitstatusd, which powerlevel10k starts through a
+ * subshell that ends at once, so it belongs to no process of the terminal's, nor a worker on a
+ * terminal of its own (zsh-async's, on a zpty, for prompts such as pure). Undefined when it cannot
+ * be told: ps could not say, or did not list the shell.
+ */
+function somethingRuns(term: Term, table: ProcessTable | undefined): boolean | undefined {
+  if (term.exit) return false;
+  term.lookAtProgram();
+  if (term.program !== term.shell) return true;
+  return runsIn(term.pid, table);
+}
+
+/**
+ * Whether a program is in front of the shell `shell` in `table`, or a job of its own runs on its
+ * terminal; undefined when the table cannot tell (none, or one without the shell).
+ */
+export function runsIn(shell: number, table: ProcessTable | undefined): boolean | undefined {
+  const own = table?.get(shell);
+  if (!table || !own) return undefined;
+  if (own.tpgid > 0 && own.tpgid !== own.pgid) return true;
+  for (const row of table.values()) {
+    if (row.ppid === shell && row.tty === own.tty && !row.stat.startsWith('Z')) return true;
+  }
+  return false;
+}
+
+/**
+ * A terminal, with whether a program runs in it now (somethingRuns), for End to ask first while one
+ * does, as a terminal left alone stays while one runs. When that cannot be told, one does.
  * Undefined: no such terminal.
  */
 export async function terminalRunning(id: string): Promise<TerminalRunning | undefined> {
@@ -804,9 +831,9 @@ export async function terminalRunning(id: string): Promise<TerminalRunning | und
   if (!term) return undefined;
   term.lookAtProgram();
   if (term.exit || term.program !== term.shell) return { terminal: term.info(), running: !term.exit };
-  const parents = await processParents();
+  const table = await processTable();
   if (term.closed) return undefined;
-  return { terminal: term.info(), running: !parents || [...parents.values()].includes(term.pid) };
+  return { terminal: term.info(), running: somethingRuns(term, table) !== false };
 }
 
 /** Closes a terminal, hanging its shell up; false when there is no such terminal. */
@@ -855,33 +882,44 @@ export function attachTerminal(ws: WebSocket, query: URLSearchParams, stillSigne
 /** For tests: how a terminal's flow control stands. */
 export const terminalState = (id: string) => terminals.get(id)?.state();
 
-/** Each process's parent, from ps; undefined when ps cannot say. */
-function processParents(): Promise<Map<number, number> | undefined> {
+/**
+ * Each process as ps lists it: its parent, its group, the group in front on its terminal, its
+ * state (Z: ended, waiting to be reaped) and its terminal (`??` or `?` for none).
+ */
+export type ProcessTable = Map<number, { ppid: number; pgid: number; tpgid: number; stat: string; tty: string }>;
+
+/** Every process, from ps; undefined when ps cannot say. */
+function processTable(): Promise<ProcessTable | undefined> {
   return new Promise((resolve) => {
-    execFile('ps', ['-A', '-o', 'pid=,ppid='], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+    execFile('ps', ['-A', '-o', 'pid=,ppid=,pgid=,tpgid=,stat=,tty='], { timeout: 5000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
       if (error) return resolve(undefined);
-      const parents = new Map<number, number>();
-      for (const line of String(stdout).split('\n')) {
-        const [pid, ppid] = line.trim().split(/\s+/).map(Number);
-        if (Number.isInteger(pid) && Number.isInteger(ppid)) parents.set(pid!, ppid!);
-      }
-      resolve(parents);
+      resolve(parseProcessTable(String(stdout)));
     });
   });
 }
 
+/** What `ps -A -o pid=,ppid=,pgid=,tpgid=,stat=,tty=` printed, as a table; undefined for nothing usable. */
+export function parseProcessTable(text: string): ProcessTable | undefined {
+  const table: ProcessTable = new Map();
+  for (const line of text.split('\n')) {
+    const [pid, ppid, pgid, tpgid, stat, tty] = line.trim().split(/\s+/);
+    const numbers = [pid, ppid, pgid, tpgid].map(Number);
+    if (stat && tty && numbers.every(Number.isInteger)) table.set(numbers[0]!, { ppid: numbers[1]!, pgid: numbers[2]!, tpgid: numbers[3]!, stat, tty });
+  }
+  return table.size > 0 ? table : undefined;
+}
+
 /**
- * Closes the terminals nobody has shown or used for `idleMs` where nothing runs: ended, or a shell
- * with no process of its own (a job left in the background counts). When that cannot be told, the
- * terminal stays.
+ * Closes the terminals nobody has shown or used for `idleMs` where nothing runs (somethingRuns):
+ * ended, or a shell at its prompt with no job of its own (one left in the background counts). When
+ * that cannot be told, the terminal stays.
  */
 export async function closeIdleTerminals(now = Date.now()): Promise<void> {
   const idle = [...terminals.values()].filter((t) => t.viewers.size === 0 && now - t.lastActive >= terminalTiming.idleMs);
   if (idle.length === 0) return;
-  const parents = idle.some((t) => !t.exit) ? await processParents() : undefined;
-  const busy = new Set(parents?.values());
+  const table = idle.some((t) => !t.exit) ? await processTable() : undefined;
   for (const term of idle) {
     if (term.closed || term.viewers.size > 0 || now - term.lastActive < terminalTiming.idleMs) continue;
-    if (term.exit || (parents && !busy.has(term.pid))) term.close();
+    if (somethingRuns(term, table) === false) term.close();
   }
 }
