@@ -86,6 +86,8 @@ for (const session of sessions) {
   // The files Claude sent, as their cards ask for them: on the site, a picture comes as data too.
   for (const block of (page?.messages ?? []).flatMap((message) => message.blocks)) {
     for (const file of block.type === 'tool_result' ? block.delivered?.files ?? [] : []) await save(`sessions/${q(session.id)}/sent?path=${q(file.path)}`);
+    // The newest steps of each agent Claude left working in the background, as its card asks for them.
+    if (block.type === 'tool_result' && block.agent?.agentId) await save(`sessions/${q(session.id)}/agents/${q(block.agent.agentId)}`);
   }
   await save(`sessions/${q(session.id)}/mcp`);
   // What each turn changed, and each turn's diff of each of its files.

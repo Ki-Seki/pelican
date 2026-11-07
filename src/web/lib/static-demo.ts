@@ -70,8 +70,8 @@ export async function staticRequest(base: URL, path: string, init?: RequestInit)
     search = q.toLowerCase();
     wanted = `files?cwd=${encodeURIComponent(new URLSearchParams(params).get('cwd') ?? '')}&q=`;
   }
-  // A workflow agent's newest steps, asked again while it works: from the page the build saved.
-  const since = /^sessions\/[^/]+\/workflows\/[^/]+\/agents\/[^/]+$/.test(query ?? '') ? new URLSearchParams(params).get('after') : null;
+  // A workflow agent's newest steps, or a background agent's, asked again while it works: from the page the build saved.
+  const since = /^sessions\/[^/]+(?:\/workflows\/[^/]+)?\/agents\/[^/]+$/.test(query ?? '') ? new URLSearchParams(params).get('after') : null;
   if (since !== null) wanted = query!;
   const response = await fetch(new URL(`data/${requestKey(wanted)}.json`, base));
   if (!response.ok) throw new DemoRefusal('Not part of the demo');

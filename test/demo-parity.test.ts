@@ -1,15 +1,17 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { AGENTS_SESSION, LICENSES, OUTDATED, OUTDATED_DOING, OUTDATED_FINISHES_MS } from '../src/shared/demo-agents';
 import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
-import { sentFiles } from '../src/server/sessions';
+import { loadMessages, sentFiles } from '../src/server/sessions';
 import { readLastTurn } from '../src/server/transcripts';
 import { gitStatus } from '../src/server/workspace';
-import { workflowAgentPage, workflowView } from '../src/server/workflows';
+import { subagentPage, workflowAgentPage, workflowView } from '../src/server/workflows';
+import { agentOf, buildItems, type ToolCall } from '../src/web/lib/turns';
 
 const DEV = 'c4b7d2e9-8888-4c8d-9e1f-000000000010';
 const STOPPED = 'e6f9a3b1-9999-4e9f-a0b2-000000000011';
@@ -158,6 +160,41 @@ describe('the demo shows workflows', () => {
   });
 });
 
+describe('the demo shows agents Claude left working in the background', () => {
+  const callsIn = (messages: Awaited<ReturnType<typeof loadMessages>>): ToolCall[] =>
+    buildItems(messages).flatMap((i) => (i.kind === 'assistant' ? i.parts : [])).flatMap((p) => (p.kind === 'tool' ? [p.call] : []));
+
+  it('one finished, its report handed back and Claude Code’s notice of its end in the conversation; one at work, in the session’s run', async () => {
+    const rows = await rowsOf(transcriptOf('acme-web', AGENTS_SESSION));
+    // Each launch as Claude Code records it, next to its words for the model alone.
+    expect(rows.filter((row) => row.toolUseResult?.status === 'async_launched').map((row) => row.toolUseResult.agentId)).toEqual([LICENSES.agentId, OUTDATED.agentId]);
+    expect(rows.find((row) => row.isMeta && row.origin?.handback)?.origin).toMatchObject({ kind: 'peer', from: LICENSES.agentId, handbackReportText: LICENSES.report });
+    const [licenses, outdated] = callsIn(await loadMessages(AGENTS_SESSION));
+    expect(agentOf(licenses!)).toEqual({ background: true, mode: 'background', agentId: LICENSES.agentId });
+    expect(licenses?.ended).toMatchObject({ status: 'completed', usage: { toolUses: LICENSES.usage.toolUses, durationMs: LICENSES.usage.durationMs } });
+    expect(licenses?.report).toBe(LICENSES.report);
+    expect(outdated?.ended).toBeUndefined();
+    const run = demoRunState(AGENTS_SESSION);
+    expect(run?.tasks).toEqual([{ id: OUTDATED.agentId, description: OUTDATED.description, type: 'general-purpose', summary: OUTDATED_DOING, toolUseId: OUTDATED.call }]);
+    expect(run?.progress?.[OUTDATED.call]).toMatchObject({ summary: OUTDATED_DOING, lastTool: 'Read' });
+    expect(demoRunStatus(AGENTS_SESSION)).toBe('idle');
+    expect(demoRunTasks(AGENTS_SESSION)).toBe(1);
+  });
+
+  it('whose agents made as many tool calls as their figures say, the one at work on the step its progress names', async () => {
+    const calls = (page: Awaited<ReturnType<typeof subagentPage>>) => page!.messages.flatMap((m) => m.blocks).filter((b) => b.type === 'tool_use');
+    expect(calls(await subagentPage(AGENTS_SESSION, LICENSES.agentId, {})).length).toBe(LICENSES.usage.toolUses);
+    const working = await subagentPage(AGENTS_SESSION, OUTDATED.agentId, {});
+    const progress = demoRunState(AGENTS_SESSION)!.progress![OUTDATED.call]!;
+    expect(calls(working).length).toBe(progress.toolUses);
+    const last = working!.messages.at(-1)!.blocks.at(-1)!;
+    expect([last.type, last.type === 'tool_use' ? last.name : undefined]).toEqual(['tool_use', progress.lastTool]);
+    // What is new since a message, as its card asks for it while the agent works.
+    const since = await subagentPage(AGENTS_SESSION, OUTDATED.agentId, { after: working!.total - 2 });
+    expect([since!.offset, since!.messages.map((m) => m.uuid)]).toEqual([working!.total - 2, working!.messages.slice(-2).map((m) => m.uuid)]);
+  });
+});
+
 describe('in the demo’s page', async () => {
   // The page's own address, as in a browser.
   Object.assign(globalThis, { location: new URL('http://localhost:7860/') });
@@ -171,6 +208,40 @@ describe('in the demo’s page', async () => {
     await expect(api.stopTask(DEV, 'bash_1')).resolves.toEqual({ ok: true });
     expect(getView(DEV).run?.tasks).toBeUndefined();
     expect(getView(DEV).run?.busy).toBe(false);
+  });
+
+  it('Stop on the agent at work stops it, and Claude Code’s notice that you stopped it goes into the conversation', async () => {
+    setRun(AGENTS_SESSION, demoRunState(AGENTS_SESSION)!);
+    await expect(api.stopTask(AGENTS_SESSION, OUTDATED.agentId)).resolves.toEqual({ ok: true });
+    const view = getView(AGENTS_SESSION);
+    expect(view.run?.tasks).toBeUndefined();
+    expect(view.run?.progress).toBeUndefined();
+    const items = buildItems(view.messages);
+    expect(items.at(-1)).toMatchObject({ kind: 'notice', text: `Agent "${OUTDATED.description}" was stopped by user` });
+  });
+
+  it('the agent at work finishes a while after its session is first opened: its report, the notice of its end, Claude’s answer', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ session: null, run: demoRunState(AGENTS_SESSION) }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    try {
+      setRun(AGENTS_SESSION, demoRunState(AGENTS_SESSION)!);
+      const before = getView(AGENTS_SESSION).messages.length;
+      await api.session(AGENTS_SESSION);
+      await vi.advanceTimersByTimeAsync(OUTDATED_FINISHES_MS - 1000);
+      expect(getView(AGENTS_SESSION).run?.tasks?.map((t) => t.id)).toEqual([OUTDATED.agentId]);
+      await vi.advanceTimersByTimeAsync(5000);
+      const view = getView(AGENTS_SESSION);
+      expect(view.run?.tasks).toBeUndefined();
+      expect(view.run?.busy).toBe(false);
+      const added = view.messages.slice(before);
+      expect(added.map((m) => [m.role, Boolean(m.meta)])).toEqual([['user', true], ['user', false], ['assistant', false]]);
+      expect(added[0]?.handback).toEqual({ from: OUTDATED.agentId, report: OUTDATED.report });
+      expect(buildItems(added).filter((i) => i.kind === 'notice')).toMatchObject([{ text: `Agent "${OUTDATED.description}" finished` }]);
+      expect(added[2]?.blocks[0]).toMatchObject({ type: 'text', text: OUTDATED.reply });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('Stop on the workflow stops it as Claude Code would: the agents still at work stop with it', async () => {

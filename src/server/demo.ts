@@ -9,6 +9,7 @@ import type { ModelOption, RunState, SessionStatus, TaskOutput } from '../shared
 import { config } from './config.js';
 import type { LiveProcess } from './live.js';
 import { SETTINGS_DARK_SCREENSHOT, SETTINGS_SCREENSHOT } from './demo-image.js';
+import { AGENTS_DEMO, demoAgentsRun } from './demo-agents.js';
 import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { DEMO_WORKFLOW_FILES, demoWorkflowRun, WORKFLOW_DEMO } from './demo-workflows.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
@@ -685,6 +686,9 @@ FILE_TEXT['docs-site/docs/getting-started.md'] = GETTING_STARTED;
 
 // A review run as a workflow that finished, and the fixes it led to, still running.
 SESSIONS.push(WORKFLOW_DEMO);
+
+// Two agents Claude left working in the background: one finished, its report in its card; one at work.
+SESSIONS.push(AGENTS_DEMO);
 for (const [file, content] of Object.entries(DEMO_WORKFLOW_FILES)) {
   DEMO_FILES['acme-web']!.push(file);
   FILE_TEXT[`acme-web/${file}`] = content;
@@ -817,6 +821,8 @@ export function demoRunState(sessionId: string): RunState | undefined {
   if (devServer) return devServer;
   const workflows = demoWorkflowRun(sessionId, path.join(config.home, 'code', WORKFLOW_DEMO.project));
   if (workflows) return workflows;
+  const agents = demoAgentsRun(sessionId, path.join(config.home, 'code', AGENTS_DEMO.project));
+  if (agents) return agents;
   const first = SESSIONS[0]!;
   if (sessionId !== first.id) return undefined;
   const cwd = path.join(config.home, 'code', first.project);
