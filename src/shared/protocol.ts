@@ -34,6 +34,12 @@ export type SessionSummary = {
   temp?: boolean;
   /** A Claude Desktop side chat: a copy of this session (the id) with a question or two of its own. */
   sideChatOf?: string;
+  /**
+   * A side chat's first question, in its words, as Pelican names the side chat; and the message
+   * its own conversation starts at, after the copy of its session's. Neither before it asked one.
+   */
+  sideQuestion?: string;
+  sideStart?: string;
   /** Put away from the list in Pelican; the transcript is untouched. */
   archived?: boolean;
   /**
