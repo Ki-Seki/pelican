@@ -16,6 +16,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { OWN_EFFORT } from '../shared/defaults.js';
 import { plainError } from '../shared/errors.js';
 import { pickerValue } from '../shared/model-names.js';
 import type { PermissionMode } from '../shared/modes.js';
@@ -536,9 +537,18 @@ export class SessionRun {
    */
   given?: RunSettings;
 
+  /** Settings Claude Code gets before the first message: until then, that message waits. */
+  private beforeFirst?: Promise<void>;
+
   start(): void {
     const settings = this.given ?? this.settings;
     const ultracodeOff = this.given?.ultracode === false;
+    // A new session is given its model as picked: Default, picked where a file or the environment
+    // names another, starts on Claude Code's own default, as /model default does there.
+    const model = this.given ? this.given.model : sdkModel(settings.model);
+    // Default effort picked where a file sets one: Claude Code's own for the model, as /effort auto
+    // makes it, which only its session settings can say (null over the files' level).
+    const ownEffort = settings.effort === OWN_EFFORT;
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
@@ -549,8 +559,8 @@ export class SessionRun {
         resumeSessionAt: this.resumeAt.entry,
         ...(this.resumeAt.dropsTurn ? { resumeDropsTurn: this.resumeAt.dropsTurn } : {}),
       } : {}),
-      ...(sdkModel(settings.model) ? { model: sdkModel(settings.model) } : {}),
-      ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
+      ...(model ? { model } : {}),
+      ...(settings.effort && !ownEffort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
       allowDangerouslySkipPermissions: true,
       ...(settings.fast || settings.ultracode || ultracodeOff ? {
@@ -584,6 +594,11 @@ export class SessionRun {
       ...(this.sideChat ? sideChatOptions() : {}),
     };
     this.q = query({ prompt: this.input, options });
+    if (ownEffort) {
+      this.beforeFirst = this.q.applyFlagSettings({ effortLevel: null }).catch((error: Error) => {
+        console.warn('[pelican] could not start on Claude Code’s own effort', error.message);
+      });
+    }
     void this.pump();
     void sessionInfo(this.sessionId).then((info) => {
       if (info) this.title = sessionTitle(info) ?? '';
@@ -807,6 +822,7 @@ export class SessionRun {
     if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     if (this.sideChat && SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
     await this.applySettings(input.settings);
+    await this.beforeFirst;
     // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
     if (this.closed) throw new RunClosed();
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
@@ -1673,7 +1689,10 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
 }
 
 /** A message to a session there is: to its Claude, or to one started (resumed) for it. */
-async function sendTo(sessionId: string, target: { cwd?: string; sideChat?: boolean }, input: SendInput): Promise<string> {
+async function sendTo(sessionId: string, target: { cwd?: string; sideChat?: boolean }, sent: SendInput): Promise<string> {
+  // A session's own Default effort is no effort at all (applySettings): OWN_EFFORT is a new session's word.
+  const { effort, ...settings } = sent.settings;
+  const input = effort === OWN_EFFORT ? { ...sent, settings } : sent;
   const existing = await currentRun(sessionId);
   if (existing && (await sentTo(existing, input))) return sessionId;
   const info = await sessionInfo(sessionId);

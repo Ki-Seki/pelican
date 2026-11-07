@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DefaultSource, StartDefaults } from '../src/shared/defaults';
-import { effortFor, modelKey, startModeFor } from '../src/shared/defaults';
+import { effortFor, modelKey, OWN_EFFORT, startModeFor } from '../src/shared/defaults';
 import type { ModelOption } from '../src/shared/protocol';
 
 // Claude Code's settings are a folder of the test's own (test/setup.ts), never ~/.claude.
@@ -186,6 +186,27 @@ describe('reading Claude Code’s files', () => {
     // Sonnet has no fast mode here: none is asked for.
     expect(picked.given).toEqual({ model: 'sonnet', permissionMode: 'acceptEdits' });
     expect((await newSessionSettings(project, { model: 'default' }, models)).given).toEqual({ model: 'default', permissionMode: 'plan', fast: true });
+  });
+  it('gives Default, picked for a new session where a file names a model or an effort, as Claude Code’s own: its /model default and /effort auto', async () => {
+    await writeFile(path.join(project, '.claude', 'settings.json'), JSON.stringify({ model: 'haiku', effortLevel: 'low' }));
+    trusted.add(project);
+    expect((await newSessionSettings(project, {}, models)).shown).toMatchObject({ model: 'haiku' });
+    // Default: Claude Code's own model, with the effort the files keep for it.
+    const model = await newSessionSettings(project, { model: 'default' }, models);
+    expect(model.given.model).toBe('default');
+    expect(model.shown).toMatchObject({ model: 'default', effort: 'low' });
+    // Default effort: none of the files' own, as /effort auto, and so said to Claude Code.
+    const effort = await newSessionSettings(project, { model: 'sonnet', effort: OWN_EFFORT }, models);
+    expect(effort.given).toMatchObject({ model: 'sonnet', effort: OWN_EFFORT });
+    expect(effort.shown.effort).toBeUndefined();
+    expect((await newSessionSettings(project, { model: 'sonnet' }, models)).shown.effort).toBe('low');
+    // CLAUDE_CODE_EFFORT_LEVEL still comes first, as it does over /effort auto in Claude Code.
+    process.env.CLAUDE_CODE_EFFORT_LEVEL = 'high';
+    try {
+      expect((await newSessionSettings(project, { model: 'sonnet', effort: OWN_EFFORT }, models)).shown.effort).toBe('high');
+    } finally {
+      delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    }
   });
 });
 

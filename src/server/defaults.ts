@@ -6,7 +6,7 @@ import path from 'node:path';
 import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 
 import {
-  type DefaultChange, type DefaultSource, type EffortDefault, effortFor, type EffortTable, isSavedEffort, modelKey, type StartDefaults, type UserSettingsFile,
+  type DefaultChange, type DefaultSource, type EffortDefault, effortFor, type EffortTable, isSavedEffort, modelKey, OWN_EFFORT, type StartDefaults, type UserSettingsFile,
 } from '../shared/defaults.js';
 import { pickerValue } from '../shared/model-names.js';
 import { isPermissionMode, type PermissionMode, START_MODES } from '../shared/modes.js';
@@ -353,7 +353,9 @@ export function saveDefault(change: DefaultChange, models: () => Promise<ModelOp
  * What a new session in `cwd` runs with: what was picked for it, and from Claude Code's settings
  * what Pelican has to pass for Claude Code to start as in the terminal, the mode and fast mode
  * (which Claude Code run through the SDK leaves off unless asked). The model, effort and
- * Ultracode are Claude Code's to read; `shown` has them too, for the page.
+ * Ultracode are Claude Code's to read; `shown` has them too, for the page. Default picked where a
+ * file or the environment names a model or an effort is given as such (the model `default`, the
+ * effort OWN_EFFORT): Claude Code's own, as its /model default and /effort auto make it.
  */
 export async function newSessionSettings(
   cwd: string,
@@ -364,7 +366,11 @@ export async function newSessionSettings(
   const [defaults, models] = await Promise.all([readDefaults(cwd), listed()]);
   const model = picked.model ?? pickerValue(defaults.model.value, models);
   const option = models?.find((m) => m.value === model);
-  const effort = picked.effort ?? effortFor(defaults.effort, modelKey(model, models), option).level;
+  // Default picked where a file names another: the model's own, as /effort auto gives it, which
+  // CLAUDE_CODE_EFFORT_LEVEL still overrides, as in Claude Code.
+  const own = picked.effort === OWN_EFFORT;
+  const table = own ? { byModel: {}, ...(defaults.effort.env !== undefined ? { env: defaults.effort.env } : {}) } : defaults.effort;
+  const effort = (own ? undefined : picked.effort) ?? effortFor(table, modelKey(model, models), option).level;
   const fast = picked.fast ?? (defaults.fast.value && option?.supportsFast !== false);
   const mode = picked.permissionMode ?? (defaults.permissionMode.value === 'auto' && option?.supportsAuto === false ? 'default' : defaults.permissionMode.value);
   // Ultracode turned off for it where a file turns it on is said, or Claude Code would turn it on.

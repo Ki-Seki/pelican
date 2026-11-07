@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { DefaultChange, StartDefaults } from '../src/shared/defaults';
+import { type DefaultChange, OWN_EFFORT, type StartDefaults } from '../src/shared/defaults';
 import type { ModelOption, RunSettings } from '../src/shared/protocol';
 import { BUILT_IN } from './start-defaults';
 
@@ -234,6 +234,26 @@ describe('a new session', () => {
     fireEvent.click(within(lastSheet()).getByText('Done'));
     await send('Two');
     await waitFor(() => expect(calls.created.at(-1)?.settings).toEqual({ model: 'haiku' }));
+  });
+
+  it('sends Default, picked where Claude Code’s settings give another model or effort, as Claude Code’s own: /model default and /effort auto', async () => {
+    claudeCode.byFolder.set('/code/app', said({ model: { value: 'sonnet', source: 'project' }, effort: { byModel: { 'claude-sonnet-5-5': { level: 'low', source: 'project' } } } }));
+    chat();
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('SonnetLow'));
+    fireEvent.click(screen.getByLabelText('Model, effort and speed'));
+    fireEvent.click(within(lastSheet()).getByText('Default'));
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('Sonnet'));
+    fireEvent.click(within(lastSheet()).getByText('Done'));
+    await send('Three');
+    await waitFor(() => expect(calls.created.at(-1)?.settings).toEqual({ effort: OWN_EFFORT }));
+    cleanup();
+    chat();
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('SonnetLow'));
+    fireEvent.click(screen.getByLabelText('Model, effort and speed'));
+    fireEvent.click(within(lastSheet()).getByText('Default (recommended)'));
+    fireEvent.click(within(lastSheet()).getByText('Done'));
+    await send('Four');
+    await waitFor(() => expect(calls.created.at(-1)?.settings).toMatchObject({ model: 'default' }));
   });
 
   it('says plainly when Claude Code’s settings start it in Bypass', async () => {

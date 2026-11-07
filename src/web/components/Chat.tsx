@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { startModeFor } from '../../shared/defaults';
+import { OWN_EFFORT, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
@@ -606,8 +606,10 @@ export function Chat({
       // An effort the model does not offer (High on a model without efforts) is not sent. A new
       // session sends what was picked for it; Claude Code's settings give the rest, on the server.
       const offered = modelOf(models, shown);
-      const fit = (picked: RunSettings) => (picked.effort && offered && !offered.efforts.includes(picked.effort) ? { ...picked, effort: undefined } : picked);
-      const sent = fit(settings);
+      const fit = (picked: RunSettings) => (picked.effort && picked.effort !== OWN_EFFORT && offered && !offered.efforts.includes(picked.effort) ? { ...picked, effort: undefined } : picked);
+      // A new session's Default effort, picked where Claude Code's settings give another, is said as
+      // Claude Code says it: its own for the model, as /effort auto gives it.
+      const sent = fit(!sessionId && Object.hasOwn(settings, 'effort') && settings.effort === undefined ? { ...settings, effort: OWN_EFFORT } : settings);
       const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);

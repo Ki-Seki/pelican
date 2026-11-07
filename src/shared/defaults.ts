@@ -17,6 +17,12 @@ export const SAVED_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
 export type SavedEffort = (typeof SAVED_EFFORTS)[number];
 export const isSavedEffort = (value: unknown): value is SavedEffort => (SAVED_EFFORTS as readonly unknown[]).includes(value);
 
+/**
+ * A new session's effort picked as Default where Claude Code's settings would start it with another:
+ * the model's own, as `/effort auto` gives it (Claude Code's word for its default). Only a pick says it.
+ */
+export const OWN_EFFORT = 'auto';
+
 export type EffortDefault = { level?: string; source: DefaultSource };
 
 /**
