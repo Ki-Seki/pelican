@@ -34,9 +34,16 @@ const SEND_KEYS = keyText('commentsSend') ?? '';
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
 
+/**
+ * A tab asked for by name since the view last closed (the header's Changes, a tile, ⌃⇧D, /diff):
+ * the one to show, also where it has little to say, as a tab tapped in the view is.
+ */
+let asked = false;
+
 /** Forgets the tab last looked at: the view opens on Changes, as in a page just loaded (the tests, each a page of its own). */
 export function forgetLastTab(): void {
   lastTab = 'changes';
+  asked = false;
 }
 
 /** Without a trust sheet to ask with, a folder that needs trusting starts no terminal. */
@@ -61,6 +68,7 @@ export function useWorkspacePane(available: boolean) {
   const step = useWorkspaceStep();
   const open = available && (dockable ? workspacePane : Boolean(step));
   const show = useCallback((to?: WorkspaceStep) => {
+    asked = Boolean(to);
     if (dockable) {
       setPrefs({ workspacePane: true });
       if (to) goTo(to, false);
@@ -192,16 +200,18 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const git = status.data?.repo ? status.data : undefined;
 
   // Not a repository and no turn that changed files: there is nothing to compare, so the view
-  // starts in the files. Changes, tapped, still says why it is empty, until the view closes, which
+  // starts in the files. Changes, tapped or asked for, still says why it is empty, until the view closes, which
   // takes its step out of the address: the side chat, in its place beside the conversation for a
   // while, gives it back as it was.
   const nothingToCompare = status.data && !status.data.repo && !status.data.untrusted && turns.data?.turns.length === 0;
   const closed = !routed;
   useEffect(() => {
-    if (closed) tapped.current = false;
+    if (!closed) return;
+    tapped.current = false;
+    asked = false;
   }, [closed]);
   useEffect(() => {
-    if (open && nothingToCompare && tab === 'changes' && !shown && !tapped.current) goTo({ tab: 'files' }, false);
+    if (open && nothingToCompare && tab === 'changes' && !shown && !tapped.current && !asked) goTo({ tab: 'files' }, false);
   }, [open, nothingToCompare, tab, shown]);
 
   const back = shown ? (

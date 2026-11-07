@@ -97,6 +97,7 @@ beforeAll(() => {
 });
 
 const { Chat } = await import('../src/web/components/Chat');
+const { forgetLastTab } = await import('../src/web/components/Workspace');
 const { setPrefs } = await import('../src/web/lib/prefs');
 
 /** The title's ▾, which opens the session's menu. */
@@ -113,6 +114,8 @@ afterEach(async () => {
   sessionStorage.clear();
   media = {};
   setPrefs({ workspacePane: false });
+  // Each test a page of its own: the view opens on Changes, nothing asked for yet.
+  forgetLastTab();
   Object.assign(server, { side: [], sent: [], after: [], sideMessages: [], git: { repo: false }, turns: [{ uuid: 'u1', n: 1, text: 'Clean up the build', files: [{ path: 'src/cache.ts', added: 2, removed: 1 }], checkpoint: true }], drop: false, refuse: false, hold: undefined });
   history.replaceState(null, '', '/');
 });
@@ -332,7 +335,7 @@ describe('the side chat', () => {
     expect(changes()).not.toBeNull();
   });
 
-  it('in a folder git does not track, where no turn changed files, gives the place back to the Changes tab tapped there', async () => {
+  it('in a folder git does not track, where no turn changed files, starts in Files, and gives the place back to the Changes tab tapped or asked for', async () => {
     computer(1280);
     setPrefs({ workspacePane: true });
     server.turns = [];
@@ -367,11 +370,17 @@ describe('the side chat', () => {
     fireEvent.click(paneButton());
     expect(pane()).toBeNull();
     await stays();
-    // Closed for good and opened again, it starts in Files again.
+    // Closed for good and opened again from the header's Changes, it shows Changes, asked for by name.
     fireEvent.click(within(changes()!).getByRole('button', { name: 'Close' }));
     expect(changes()).toBeNull();
     fireEvent.click(paneButton());
-    await waitFor(() => expect(location.search).toContain('w=files'));
+    expect(await within(changes()!).findByText('This folder is not a git repository', {}, LAZY)).toBeTruthy();
+    await stays();
+    const header = within(document.querySelector('header')!).getByRole('button', { name: 'Changes' });
+    expect(header.getAttribute('aria-pressed')).toBe('true');
+    // Pressed again, it hides the pane, as the header's buttons do.
+    fireEvent.click(header);
+    expect(changes()).toBeNull();
   });
 
   describe('asked for a file or a turn’s changes', () => {
