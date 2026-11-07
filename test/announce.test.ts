@@ -33,6 +33,9 @@ describe('what screen readers are told', () => {
     expect(said.length).toBeLessThan(330);
     expect(said).not.toContain('#');
     expect(plainText('- one\n- two\n\n```ts\nconst a = 1;\n```')).toBe('one two const a = 1;');
+    // Desktop's pull request tag reads as the conversation shows it: a card, or its address among words.
+    expect(plainText('The pull request is open.\n<pr-created>https://github.com/acme/app/pull/7</pr-created>')).toBe('The pull request is open.');
+    expect(plainText('Done. <pr-created>https://github.com/acme/app/pull/7</pr-created>')).toBe('Done. https://github.com/acme/app/pull/7');
   });
 });
 

@@ -9,6 +9,12 @@ describe('a reply’s preview in the list', () => {
     expect(plainText('**Note:** keep *this* and _that_; a > b, 2 * 3 * 4 = 24')).toBe('Note: keep this and that; a > b, 2 * 3 * 4 = 24');
   });
 
+  it('reads Claude Desktop’s pull request tag as the conversation does: nothing on a line of its own, its address among words', () => {
+    expect(plainText('The pull request is open.\n<pr-created>https://github.com/acme/app/pull/7</pr-created>')).toBe('The pull request is open.');
+    expect(plainText('Done. <pr-created>https://github.com/acme/app/pull/7</pr-created>')).toBe('Done. https://github.com/acme/app/pull/7');
+    expect(plainText('Opened <pr-created> https://github.com/acme/app/pull/8 </pr-created> for review.')).toBe('Opened https://github.com/acme/app/pull/8 for review.');
+  });
+
   it('reads headings, quotes, tables, code and links as plain text', () => {
     const reply = '## Result\n\n> All green\n\n| test | ms |\n|---|:--:|\n| login | 42 |\n\n```ts\nrun();\n```\nSee [the log](https://ci.example/run_1).';
     expect(plainText(reply)).toBe('Result All green test ms login 42 run(); See the log.');

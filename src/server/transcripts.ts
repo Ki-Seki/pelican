@@ -90,6 +90,10 @@ const MAX_SCAN = 16 * 1024 * 1024;
  */
 export function plainText(markdown: string): string {
   return markdown
+    // Claude Desktop's tag for a pull request Claude made, which the conversation shows as a card: on
+    // a line of its own it reads as nothing, among words as its address, as there.
+    .replace(/^[ \t]*<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>[ \t]*$/gim, '')
+    .replace(/<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>/gi, '$1')
     .replace(/^ {0,3}(`{3,}|~{3,}).*$/gm, '')
     .replace(/^[\s|:-]*-{3,}[\s|:-]*$/gm, '')
     .replace(/^ {0,3}#{1,6}\s+/gm, '')
