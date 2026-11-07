@@ -158,6 +158,23 @@ describe('Settings › About, of updates', () => {
     expect(server.started).toEqual([['0.5.1', 'now', true]]);
   });
 
+  it('says that messages queued for the end of a turn are not sent, where an update now would end them', async () => {
+    server.info = {
+      ...NEWER,
+      busy: [
+        { kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' },
+        { kind: 'queued', title: 'Fix the build', detail: '2 messages for when this turn ends', sessionId: 's1' },
+      ],
+    };
+    render(<UpdateSection open />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 0.5.1' }));
+    expect(await screen.findByText('Updating restarts Pelican, which ends:')).toBeTruthy();
+    expect(screen.getByText('Queued')).toBeTruthy();
+    expect(screen.getByText(/2 messages for when this turn ends/)).toBeTruthy();
+    expect(screen.getByText('Transcripts, files, pins, settings and drafts stay; queued messages are not sent.')).toBeTruthy();
+    expect(screen.queryByText('Transcripts, files, pins, settings and drafts stay.')).toBeNull();
+  });
+
   it('says to stop Pelican and start it with the new version where npx, pnpm dlx or bunx runs it', async () => {
     server.info = {
       ...NEWER,

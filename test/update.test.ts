@@ -738,11 +738,11 @@ describe('the check', () => {
 });
 
 describe('what an update would end', () => {
-  it('lists Claude working or waiting, its background tasks, terminals with a program and ! commands', async () => {
+  it('lists Claude working or waiting, the messages queued for the end of its turn, its background tasks, terminals with a program and ! commands', async () => {
     useUpdateContext(context(await globalInstall(path.join(dir, 'global'))));
     useRunningSources({
       runs: () => [
-        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, tasks: [], checks: 0, unseen: false },
+        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, queued: 2, tasks: [], checks: 0, unseen: false },
         { sessionId: 's2', cwd: '/w/api', busy: true, waiting: true, tasks: [], checks: 0, unseen: false },
         {
           sessionId: 's3', cwd: '/w/web', busy: false, waiting: false, checks: 1, unseen: false,
@@ -761,6 +761,7 @@ describe('what an update would end', () => {
     const { busy } = await updateInfo(true);
     expect(busy).toEqual([
       { kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' },
+      { kind: 'queued', title: 'Fix the build', detail: '2 messages for when this turn ends', sessionId: 's1' },
       { kind: 'session', title: 'Ship the API', detail: 'Claude waits for you', sessionId: 's2' },
       { kind: 'work', title: 'Redo the site', detail: '2 agents, a workflow, a command and a check it scheduled in the background', sessionId: 's3' },
       { kind: 'work', title: 'ops', detail: 'work it keeps running in the background', sessionId: 's4' },

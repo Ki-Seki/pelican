@@ -24,7 +24,7 @@ function howItGoes(info: UpdateInfo): string {
   return `${where}: Pelican installs it, checks that it starts, and ${again}. Pages reconnect by themselves.`;
 }
 
-const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', work: 'Background', terminal: 'Terminal', command: 'Command' };
+const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', queued: 'Queued', work: 'Background', terminal: 'Terminal', command: 'Command' };
 
 /** What an update would end, one line each. */
 function EndsList({ busy }: { busy: Interruption[] }) {
@@ -175,7 +175,11 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
                   <div className="mt-2 rounded-xl border border-line px-3 py-2">
                     <div className="text-fg">Updating restarts Pelican, which ends:</div>
                     <EndsList busy={asking} />
-                    <div className="text-[12.5px] text-faint">Transcripts, files, pins, settings and drafts stay.</div>
+                    <div className="text-[12.5px] text-faint">
+                      {asking.some((item) => item.kind === 'queued')
+                        ? 'Transcripts, files, pins, settings and drafts stay; queued messages are not sent.'
+                        : 'Transcripts, files, pins, settings and drafts stay.'}
+                    </div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <button type="button" disabled={sending} onClick={() => take(() => api.startUpdate(version, 'now', true))} className={`${button} bg-danger text-bg`}>Update now</button>
                       <button type="button" disabled={sending} onClick={() => take(() => api.startUpdate(version, 'idle'))} className={`${button} bg-fg text-bg`}>Update when idle</button>

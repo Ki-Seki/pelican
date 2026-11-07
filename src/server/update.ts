@@ -516,7 +516,8 @@ export function nodeSatisfies(range: string | undefined, node = process.versions
 
 /** Where what an update would end is found; tests give stand-ins. */
 export type RunningSources = {
-  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; tasks: BackgroundTask[]; checks: number; unseen: boolean }>;
+  /** `queued`: messages sent to wait for the turn's end (Queue for later), which no restart keeps. */
+  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; queued?: number; tasks: BackgroundTask[]; checks: number; unseen: boolean }>;
   terminals: () => Promise<Array<{ program: string; cwd: string }>>;
   shells: () => Array<{ sessionId: string; command: string }>;
   title: (sessionId: string) => Promise<string | undefined>;
@@ -530,6 +531,7 @@ export const runningHere: RunningSources = {
       cwd: run.cwd,
       busy: run.busy,
       waiting: run.status() === 'waiting',
+      queued: shown.queued?.length ?? 0,
       tasks: shown.tasks ?? [],
       checks: shown.scheduled?.length ?? 0,
       // Work Claude Code keeps running and shows no one (watchers).
@@ -561,7 +563,10 @@ const clipped = (text: string, max = 80) => {
   return line.length > max || text.includes('\n') ? `${line.slice(0, max).trimEnd()}…` : line;
 };
 
-/** What an update would end now: Claude at work or waiting, its background work, terminals with a program, `!` commands. */
+/**
+ * What an update would end now: Claude at work or waiting, the messages queued for the end of its
+ * turn, its background work, terminals with a program, `!` commands.
+ */
 export async function whatWouldEnd(): Promise<Interruption[]> {
   const ended: Interruption[] = [];
   const titles = new Map<string, string>();
@@ -572,6 +577,7 @@ export async function whatWouldEnd(): Promise<Interruption[]> {
   for (const run of sources.runs()) {
     if (run.waiting) ended.push({ kind: 'session', title: await title(run.sessionId, run.cwd), detail: 'Claude waits for you', sessionId: run.sessionId });
     else if (run.busy) ended.push({ kind: 'session', title: await title(run.sessionId, run.cwd), detail: 'Claude is working', sessionId: run.sessionId });
+    if (run.queued) ended.push({ kind: 'queued', title: await title(run.sessionId, run.cwd), detail: `${count(run.queued, 'message')} for when this turn ends`, sessionId: run.sessionId });
     const workflows = run.tasks.filter((task) => task.type === 'local_workflow').length;
     const commands = run.tasks.filter((task) => task.type === 'local_bash' || task.type.startsWith('monitor')).length;
     const agents = run.tasks.length - workflows - commands;
