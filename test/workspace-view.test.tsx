@@ -163,6 +163,9 @@ describe('what Changes shows', () => {
     expect(onClose).toHaveBeenCalled();
     // What is behind the view takes nothing while it is open.
     expect(screen.getByRole('region', { name: 'Changes and files' }).closest('#root')).toBeNull();
+    // Typed in, the terminal's line keeps the room a phone's keyboard leaves on its side: the line
+    // saying Claude waits gives way, until the keyboard goes down (styles.css).
+    expect(screen.getByText('Claude wants to edit theme.css').closest('[data-gives-way]')).toBeTruthy();
   });
 });
 

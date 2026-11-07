@@ -34,16 +34,20 @@ settings; and updates from Settings.
   side it has that room whether you type or not, a dozen rows on a Pixel 7, a tap on the screen
   showing them again, and doing only that: what comes back takes no tap for half a second, so
   neither that tap nor one made at once lands on End or Files under the finger; the keys and the
-  line share one row there, which the keyboard leaves room for. A
-  row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a
-  finger's size each, scrolling sideways on a narrow phone, and a key there sends what you typed
-  first, so tab completes it. A line typed while the connection comes back stays until it can go. A
+  line share one row there, and with the keyboard up the line saying Claude waits, and what waits
+  for your next message, give way to them until it goes down. Where the keyboard leaves room under
+  the screen for the line alone (66 px in Chrome on a Pixel 7), the keys and the line sit beside the
+  screen instead, the keys over the line, each as tall as that room allows (30 px there, about as
+  tall as the keyboard's own keys), and the screen keeps three rows. A row of keys has what a
+  phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a finger's size each,
+  scrolling sideways on a narrow phone, and a key there sends what you typed first, so tab
+  completes it. A line typed while the connection comes back stays until it can go. A
   full-screen program such as vim or htop gets every key as you type it, a password prompt hides
   what you type, a swipe scrolls back and ↓ comes back to the newest output, a pinch sets the size,
   and the menu's Select text opens the screen as text, to select from, quote or copy; Quote there
   opens the quote in place, with Add a note, Send now and Add, and the view says above the keys what
-  waits for your next message. The keys, the tabs and the line are a finger's 44 px. A screen reader
-  hears what a line printed.
+  waits for your next message. The keys, the tabs and the line are a finger's 44 px, beside the
+  screen as tall as the room allows. A screen reader hears what a line printed.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing

@@ -145,6 +145,50 @@ body {
   }
 }
 
+/* Typing in the terminal's line on a phone on its side, its keyboard up (data-keyboard,
+   lib/viewport): the line saying Claude waits, and what waits for the next message, give way to the
+   screen and the line, and come back with the keyboard down. Where under the screen there is room
+   for the line alone (66 px left in Chrome on a Pixel 7: data-short tiny), the keys and the line sit
+   beside the screen instead, the keys over the line, each as tall as that room allows, up to a
+   finger's 44 px, and the screen keeps three rows (WorkspaceTerminal). */
+@media (orientation: landscape) and (pointer: coarse) {
+  :root[data-keyboard] [data-workspace]:has([data-terminal-line]:focus) [data-gives-way] {
+    display: none;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) {
+    --key-h: clamp(28px, calc((var(--app-h, 66px) - 6px) / 2), 44px);
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-terminal-body] {
+    flex-direction: row;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-phone-keys] {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    width: min(26rem, 46%);
+    flex-shrink: 0;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+    padding: 2px 0;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-keys-and-line] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-keys-and-line] > [role='toolbar'] {
+    flex: none;
+    padding-right: 0.5rem;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-line-form] {
+    width: auto;
+  }
+  :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) [data-keys-and-line] :is(button, input) {
+    height: var(--key-h);
+  }
+}
+
 /* Rows that came back under a finger take no pointer for a moment (lib/settle): the tap that
    brought them back, and one made at once, land on nothing of theirs. */
 [data-settling] [data-makes-room],

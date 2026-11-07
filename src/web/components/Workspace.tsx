@@ -377,8 +377,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // on its own. Beside the conversation its chips are in view above the message box, so the foot
   // is only Send now; on a phone, where the view covers the box, it says what waits.
   const count = waitingCount(waiting);
+  // Typing in the terminal's line with a phone on its side and its keyboard up, it gives way to the screen and the line (styles.css).
   const footer = waiting.length > 0 && (
-    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits || footInTerminal ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
+    <div data-gives-way className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits || footInTerminal ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
       {!docked && (
         <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
           {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
@@ -531,8 +532,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       {terminal}
       <div ref={setFoot} className="shrink-0" />
       {!footInTerminal && footer}
-      {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
-      <div aria-live="polite" className="shrink-0">
+      {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. Typing */}
+      {/* in the terminal's line with a phone on its side and its keyboard up, it gives way (styles.css). */}
+      <div aria-live="polite" data-gives-way className="shrink-0">
         {needsYou && (
           <button type="button" onClick={onClose} className="pb-safe flex min-h-12 w-full items-center gap-2.5 border-t border-line bg-panel px-4 pt-2 text-left text-[14px]">
             <span className="size-2 shrink-0 rounded-full bg-wait" />

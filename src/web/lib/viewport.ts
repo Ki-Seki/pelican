@@ -2,6 +2,18 @@
 const SHORT = 520;
 /** And too short for the terminal's key row and line together: a phone on its side with its keyboard up (66 px left in Chrome). */
 const TINY = 120;
+/**
+ * A touch screen's keyboard is up where what can be seen is less than this part of the screen's
+ * height: no browser bar takes that much, and a keyboard takes more (on a phone on its side, its
+ * height is the screen's shorter side; iOS keeps screen.width and screen.height upright).
+ */
+const KEYBOARD = 0.6;
+
+/** Whether what can be seen, `height` CSS px of a touch screen, is what its keyboard leaves. */
+export function keyboardUp(height: number, screenWidth: number, screenHeight: number, landscape: boolean): boolean {
+  const tall = landscape ? Math.min(screenWidth, screenHeight) : Math.max(screenWidth, screenHeight);
+  return tall > 0 && height < KEYBOARD * tall;
+}
 
 /**
  * Keeps the app as tall as what can be seen, in --app-h. iOS Safari lays its keyboard over the
@@ -23,6 +35,11 @@ export function fitToVisibleViewport(): () => void {
     // keyboard over the page, so the page's own height says nothing of it.
     if (height < SHORT) root.setAttribute('data-short', height < TINY ? 'tiny' : '');
     else root.removeAttribute('data-short');
+    // On a phone on its side what can be seen is short whether its keyboard is up or not: the
+    // terminal's line, typed in, keeps the room the keyboard leaves (data-keyboard, styles.css).
+    const media = (query: string) => typeof window.matchMedia === 'function' && window.matchMedia(query).matches;
+    if (media('(pointer: coarse)') && keyboardUp(height, screen.width, screen.height, media('(orientation: landscape)'))) root.setAttribute('data-keyboard', '');
+    else root.removeAttribute('data-keyboard');
     if (vv.scale <= 1.01 && (window.scrollY !== 0 || window.scrollX !== 0)) window.scrollTo(0, 0);
   };
   fit();
@@ -33,5 +50,6 @@ export function fitToVisibleViewport(): () => void {
     vv.removeEventListener('scroll', fit);
     root.style.removeProperty('--app-h');
     root.removeAttribute('data-short');
+    root.removeAttribute('data-keyboard');
   };
 }
