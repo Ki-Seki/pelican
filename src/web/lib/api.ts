@@ -394,8 +394,8 @@ export const api = {
     }
     return ((await response.json()) as { attachment: Attachment }).attachment;
   },
-  /** Every terminal, and whether this Pelican runs any (the first ask loads the PTY). */
-  terminals: () => request<TerminalList>('terminals'),
+  /** Every terminal, and whether this Pelican runs any (the first ask loads the PTY); with `folder`, how terminals name it. */
+  terminals: (folder?: string) => request<TerminalList>(folder ? `terminals?folder=${encodeURIComponent(folder)}` : 'terminals'),
   /** A new terminal: the user's shell in a folder, at this size, with a command to run there or none. */
   openTerminal: (body: NewTerminal) => send<{ terminal: TerminalInfo }>('POST', 'terminals', body).then((r) => r.terminal),
   /** A terminal, and whether a program runs in it now, a job in the background too. */

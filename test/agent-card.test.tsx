@@ -13,10 +13,18 @@ import type { SessionView } from '../src/web/lib/store';
 Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
 Object.assign(window, { matchMedia: (query: string) => ({ matches: query === '(min-width: 640px)', media: query, addEventListener() {}, removeEventListener() {} }) });
 Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+// A step's menu opens in a dialog, which jsdom does not show.
+HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) {
+  this.setAttribute('open', '');
+};
+HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) {
+  this.removeAttribute('open');
+};
 
 const { api } = await import('../src/web/lib/api');
 const { setRun } = await import('../src/web/lib/store');
 const { MessageList } = await import('../src/web/components/MessageList');
+const { RunInTerminal } = await import('../src/web/lib/terminals');
 
 const SESSION = 'dddddddd-0000-4000-8000-0000000000a9';
 const at = Date.now() - 10 * 60_000;
@@ -252,5 +260,32 @@ describe('a foreground agent’s card', () => {
     fireEvent.click(within(step).getByText('Steps it took'));
     await within(step).findByText('file2.ts');
     expect(pages).toHaveBeenCalledWith(SESSION, 'ag1');
+  });
+
+  it('offers no Run in terminal on a command its agent ran, where the conversation’s own steps have it', async () => {
+    serve(() => [
+      { uuid: 'b1', role: 'assistant', blocks: [{ type: 'tool_use', id: 'tb1', name: 'Bash', input: { command: 'ls -la && touch SUBAGENT_STEP_RAN', description: 'List the files' } }] },
+      { uuid: 'b1r', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 'tb1', content: 'README.md' }] },
+    ]);
+    const call: ChatMessage = { uuid: 'a-fg', role: 'assistant', timestamp: at, blocks: [{ type: 'tool_use', id: 'toolu_fg', name: 'Agent', input: { description: 'Look around', subagent_type: 'general-purpose', prompt: 'Look around the shop.' } }] };
+    const done: ChatMessage = { uuid: 'r-fg', role: 'user', timestamp: at + 1000, blocks: [{ type: 'tool_result', tool_use_id: 'toolu_fg', content: 'All clear.\nagentId: ag1 (use SendMessage with to: \'ag1\' to continue this agent)' }] };
+    const own: ChatMessage[] = [
+      { uuid: 'a-own', role: 'assistant', timestamp: at + 2000, blocks: [{ type: 'tool_use', id: 'toolu_own', name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }] },
+      { uuid: 'r-own', role: 'user', timestamp: at + 3000, blocks: [{ type: 'tool_result', tool_use_id: 'toolu_own', content: 'ok' }] },
+    ];
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view: SessionView = { messages: [call, done, ...own], offset: 0, total: 4, loaded: true, loadingOlder: false };
+    render(<QueryClientProvider client={client}><RunInTerminal.Provider value={vi.fn()}><MessageList sessionId={SESSION} view={view} mode="verbose" /></RunInTerminal.Provider></QueryClientProvider>);
+    const items = (name: string) => {
+      fireEvent.click(screen.getByRole('button', { name: `More for ${name}` }));
+      return within(screen.getByRole('menu', { name })).getAllByRole('menuitem').map((item) => item.textContent);
+    };
+    expect(items('Run Run the tests')).toContain('Run in terminal');
+    const agentStep = screen.getByRole('button', { name: /^Agent · general-purpose/ }).closest('[data-step]') as HTMLElement;
+    fireEvent.click(within(agentStep).getByText('Steps it took'));
+    await within(agentStep).findByText('List the files');
+    const list = items('Run List the files');
+    expect(list).toContain('Copy command');
+    expect(list).not.toContain('Run in terminal');
   });
 });

@@ -8,7 +8,7 @@ import vm from 'node:vm';
 import xtermHeadless, { type Terminal } from '@xterm/headless';
 import { describe, expect, it } from 'vitest';
 
-import { guardOutput, LINKS } from '../src/shared/terminal-guards';
+import { dropPendingOutput, guardOutput, LINKS, outputPieces, PIECE, screenWork, wideMost } from '../src/shared/terminal-guards';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 
@@ -250,4 +250,135 @@ describe('the guards', () => {
     expect(inside(t)._inputHandler._iconName).toBe('');
     expect(cells(t).rows[0]!.trimEnd()).toBe(' after');
   });
+
+  it('do a reset (RIS) once in a run of them, also across two outputs, the screen as after one', async () => {
+    const counted = (t: Terminal) => {
+      const core = (t as unknown as { _core: { reset: () => void } })._core;
+      const reset = core.reset.bind(core);
+      const done = { resets: 0 };
+      core.reset = () => {
+        done.resets += 1;
+        reset();
+      };
+      return done;
+    };
+    const { t } = screen();
+    const resets = counted(t);
+    await write(t, `\u001b[1;31mfirst${'\u001bc'.repeat(5000)}`);
+    await write(t, `${'\u001bc'.repeat(3)}\u001b[?1049hsecond`);
+    expect(resets.resets).toBe(1);
+    const plain = screen({ plain: true });
+    await write(plain.t, `\u001b[1;31mfirst${'\u001bc'.repeat(5)}`);
+    await write(plain.t, `${'\u001bc'.repeat(3)}\u001b[?1049hsecond`);
+    expect(cells(t)).toEqual(cells(plain.t));
+    expect(t.buffer.active.type).toBe('alternate');
+    // Something drawn between two, each is done: the screen is as xterm leaves it.
+    await write(t, '\u001bcx\u001bcy\u001b\u001bcz');
+    expect(resets.resets).toBe(4);
+    expect(cells(t).rows[0]!.trimEnd()).toBe(' z');
+    // In bytes as a page gets them, the same.
+    const bytes = screen();
+    const byteResets = counted(bytes.t);
+    await new Promise<void>((resolve) => bytes.t.write(new TextEncoder().encode(`caf\u00e9${'\u001bc'.repeat(100)}ok`), resolve));
+    expect(byteResets.resets).toBe(1);
+    expect(cells(bytes.t).rows[0]!.trimEnd()).toBe(' ok');
+  });
+
+  it('let go of output not taken in yet, for a terminal closed or a screen taken away', async () => {
+    const { t } = screen();
+    // As xterm keeps it, for this to reach: the version is pinned, and this fails should it move.
+    const writing = (t as unknown as { _core: { _writeBuffer: { _writeBuffer: unknown[]; _callbacks: unknown[] } } })._core._writeBuffer;
+    expect(Array.isArray(writing._writeBuffer) && Array.isArray(writing._callbacks)).toBe(true);
+    let called = 0;
+    for (let n = 0; n < 50; n += 1) t.write(`line ${n}\r\n`, () => (called += 1));
+    expect(writing._writeBuffer.length).toBe(50);
+    dropPendingOutput(t);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(called).toBe(0);
+    expect(cells(t).rows.join('').trim()).toBe('');
+    // It takes output again as ever.
+    await write(t, 'after');
+    expect(cells(t).rows[0]!.trimEnd()).toBe(' after');
+  });
+});
+
+describe('output in pieces', () => {
+  /** Each piece's text, and how many sequences that work over the whole screen it holds. */
+  const cut = (data: string, cols = 500, rows = 300) => outputPieces(data, cols, rows).map((piece) => [piece.data, piece.wide] as const);
+  const wideIn = (data: string) => cut(data).reduce((sum, [, wide]) => sum + wide, 0);
+
+  it('counts the sequences that work over the whole screen, and only those', () => {
+    const wide = [
+      '\u001bc', '\u001b#8', '\u001b[2J', '\u001b[J', '\u001b[?2J', '\u001b[300S', '\u001b[T', '\u001b[300L', '\u001b[5M', '\u001b[2^',
+      "\u001b[500'}", "\u001b[3'~", '\u001b[?1049h', '\u001b[?47l', '\u001b[?1047h', '\u001b[?1;3h', '\u001b[?5h', '\u009b2J', '\u009b300S',
+    ];
+    for (const sequence of wide) expect(wideIn(`a${sequence}b`), JSON.stringify(sequence)).toBe(1);
+    const light = [
+      '\u001b[1;31m', '\u001b[H', '\u001b[2K', '\u001b[10@', '\u001b[500b', '\u001b[?25h', '\u001b[?2004h', '\u001b[1;24r', '\u001b[!p', '\u001bD', '\u001bM',
+      '\u001b(B', '\u001b]0;a [2J title\u0007', '\u001bP$q2J\u001b\\', '\u001b]8;;https://e/?c\u001b\\', '\u001b[>4;1m', '\u001b[?1S', '\u001b[>0T', '\u0085', '\u008d',
+    ];
+    for (const sequence of light) expect(wideIn(`a${sequence}b`), JSON.stringify(sequence)).toBe(0);
+    // A sequence cut off, or ended by another, counts where it starts; ESC in a string ends it.
+    expect(wideIn('\u001b[3\u001b[2J')).toBe(1);
+    expect(wideIn('\u001b]0;title\u001bc')).toBe(1);
+    expect(wideIn('\u001b[2\u0018J')).toBe(0);
+  });
+
+  it('holds at most so many of them, as many as cost about the same work at the size, and at most 512 characters, cut between characters', () => {
+    expect(wideMost(500, 300)).toBe(Math.floor(PIECE.work / screenWork(500, 300)));
+    expect(wideMost(500, 300)).toBeGreaterThanOrEqual(1);
+    expect(wideMost(80, 24)).toBeGreaterThan(50);
+    const flood = 'x\u001bc'.repeat(1000);
+    const pieces = cut(flood);
+    expect(pieces.map(([data]) => data).join('')).toBe(flood);
+    for (const [data, wide] of pieces) {
+      expect(wide).toBeLessThanOrEqual(wideMost(500, 300));
+      expect(data.length).toBeLessThanOrEqual(PIECE.characters);
+    }
+    // Text alone goes in pieces of 512, never cutting a character in two.
+    const text = `${'a'.repeat(511)}\u{1f600}${'b'.repeat(600)}`;
+    const parts = cut(text).map(([data]) => data);
+    expect(parts.join('')).toBe(text);
+    expect(parts[0]).toBe('a'.repeat(511));
+    // So too in UTF-8, as a page gets it: no piece starts within a character.
+    const bytes = new TextEncoder().encode(`${'\u00e9'.repeat(300)}\u001b[2J${'\u4e2d'.repeat(200)}`);
+    const byteParts = outputPieces(bytes, 500, 300);
+    expect(Buffer.concat(byteParts.map((piece) => piece.data))).toEqual(Buffer.from(bytes));
+    for (const piece of byteParts) {
+      expect(piece.data.length).toBeLessThanOrEqual(PIECE.characters);
+      expect(piece.data[0]! & 0xc0).not.toBe(0x80);
+    }
+    expect(byteParts.reduce((sum, piece) => sum + piece.wide, 0)).toBe(1);
+    // In UTF-8 a C1 introducer is two bytes, C2 9B; a 9B within a character is not one.
+    expect(outputPieces(new TextEncoder().encode('\u009b2J'), 500, 300)[0]!.wide).toBe(1);
+    expect(outputPieces(new TextEncoder().encode('\u201b2J'), 500, 300)[0]!.wide).toBe(0);
+    // Nothing to cut: one piece, empty, for what waits on the output before it.
+    expect(cut('')).toEqual([['', 0]]);
+  });
+
+  it('take a flood of them a little at a time, each piece soon done at 500 by 300', () => {
+    /** How long a piece takes, the middle one of them (a pause to collect garbage aside), on a screen and its scrollback full of text, cut so. */
+    const pieceTime = (flood: string, pieces: (data: string) => string[]) => {
+      const t = new HeadlessTerminal({ cols: 500, rows: 300, scrollback: 2000, allowProposedApi: true, logLevel: 'off' });
+      guardOutput(t);
+      const now = (data: string) => (t as unknown as { _core: { writeSync: (data: string) => void } })._core.writeSync(data);
+      now(`${'y'.repeat(499)}\r\n`.repeat(2300));
+      const times: number[] = [];
+      for (const data of pieces(flood)) {
+        const start = performance.now();
+        now(data);
+        times.push(performance.now() - start);
+      }
+      t.dispose();
+      return times.sort((a, b) => a - b)[Math.floor(times.length / 2)]!;
+    };
+    for (const sequence of ['\u001b[300S', 'x\u001bc', '\u001b#8', "\u001b[500'}"]) {
+      const flood = sequence.repeat(Math.ceil(2048 / sequence.length));
+      const bounded = pieceTime(flood, (data) => outputPieces(data, 500, 300).map((piece) => piece.data));
+      const by512 = pieceTime(flood, (data) => data.match(/[^]{1,512}/g)!);
+      // Pieces of 512 characters, as before: 30 to 100 ms each here. Now a few; as busy as the
+      // computer is, a fraction of that.
+      expect(bounded, JSON.stringify(sequence)).toBeLessThan(by512 / 3);
+    }
+  }, 60_000);
 });

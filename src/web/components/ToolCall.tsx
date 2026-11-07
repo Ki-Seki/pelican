@@ -3,7 +3,7 @@ import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-quer
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
-import { commandRunnable, TERMINAL_LIMITS } from '../../shared/terminal';
+import { commandRunnable } from '../../shared/terminal';
 import type { BackgroundTask, ChatMessage, DeliveredFile, MessagesPage, TaskProgress } from '../../shared/protocol';
 import { durationText, type TaskNotice, tokensText } from '../../shared/workflows';
 import { entries, PATH_ACTIONS, STEP_ACTIONS, type StepTarget } from '../lib/actions';
@@ -13,7 +13,7 @@ import { addWaiting } from '../lib/drafts';
 import { hasKeyboard } from '../lib/keyboard';
 import { type Press, useLongPress } from '../lib/press';
 import { quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
-import { RunInTerminal } from '../lib/terminals';
+import { isPowerShell, RunInTerminal, TerminalShell } from '../lib/terminals';
 import { duration, formatBytes } from '../lib/format';
 import { useFileLink, usePathLinks } from '../lib/path-links';
 import { useSessionId } from '../lib/session-context';
@@ -32,6 +32,7 @@ import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { STEP_LINK } from './PathLink';
 import { usePathTarget } from './PathMenu';
 import { QuoteTargetContext, SwipeQuote } from './Quotes';
+import { RunQuestion } from './RunCommand';
 import { joinedPage, WorkflowCard } from './WorkflowCard';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -587,8 +588,10 @@ function AgentSteps({ agentId, cwd, live = false, watch = false, startOpen = fal
       </div>
       {open && (error || failed) && <div className="py-1 text-[12px] text-danger">{((error ?? failed) as Error).message}</div>}
       {open && data && steps.length === 0 && offset === 0 && <div className="py-1 text-[12px] text-faint">{following ? 'No steps yet.' : 'No steps were recorded.'}</div>}
-      {/* At work, its last step may be running still. */}
-      {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={live} /> : null))}
+      {/* At work, its last step may be running still. A subagent's steps offer no Run in terminal. */}
+      <RunInTerminal.Provider value={undefined}>
+        {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={live} /> : null))}
+      </RunInTerminal.Provider>
     </div>
   );
 }
@@ -939,15 +942,14 @@ function useStepFile(call: ToolCall) {
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
-/** A command Run in terminal may run: one that shows all it holds, as an approval reads it, and no longer than a terminal takes. */
-const runnable = (command: string) => command.trim() !== '' && command.length <= TERMINAL_LIMITS.command && commandRunnable(command);
-
 /**
  * A command's list (lib/actions STEP_ACTIONS), for a step Claude ran and a `!` command alike: Copy
- * command, Run in terminal (a new terminal in the session's folder, for a command that shows all it
- * holds), Copy output, Start a side chat and Quote output.
+ * command, Run in terminal, Copy output, Start a side chat and Quote output. Run in terminal (a new
+ * terminal in the session's folder) is offered where `ask` is, which asks its question first, the
+ * whole command shown, never the step's description of it (RunCommand), and only for a command
+ * that shows all it holds (shared/terminal.ts commandRefusal), where there is a terminal to run it.
  */
-export function useCommandTarget(command: string, output: string, key: string): StepTarget {
+export function useCommandTarget(command: string, output: string, key: string, ask?: () => void): StepTarget {
   const quoteTo = useContext(QuoteTargetContext);
   const runIn = useContext(RunInTerminal);
   const from = { what: 'step' as const, key };
@@ -955,7 +957,7 @@ export function useCommandTarget(command: string, output: string, key: string): 
     kind: 'command',
     command,
     ...(output ? { output } : {}),
-    ...(runIn && runnable(command) ? { runInTerminal: () => runIn(command) } : {}),
+    ...(runIn && ask && commandRunnable(command) ? { runInTerminal: ask } : {}),
     ...(quoteTo?.sideChat ? {
       sideChatOpen: quoteTo.sideChat.open,
       sideChat: (passage?: string) => {
@@ -1020,7 +1022,13 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
   const isAgent = call.name === 'Agent' || call.name === 'Task';
   const commandText = isCommand ? str(call.input.command) : '';
   const commandOutput = isCommand && (outcome.kind === 'done' || outcome.kind === 'failed') ? cleanOutput(resultText(call.result)).trim() : '';
-  const commandTarget = useCommandTarget(commandText, commandOutput, call.id);
+  // Run in terminal asks first, in place, showing the command itself: not on a step you denied, and
+  // only in the shell it is written for, PowerShell's in PowerShell and a POSIX shell's elsewhere.
+  const runIn = useContext(RunInTerminal);
+  const [asking, setAsking] = useState(false);
+  const shell = useContext(TerminalShell);
+  const runsHere = call.name === 'PowerShell' ? isPowerShell(shell) : !isPowerShell(shell);
+  const commandTarget = useCommandTarget(commandText, commandOutput, call.id, isCommand && outcome.kind !== 'denied' && runsHere ? () => setAsking(true) : undefined);
   const stepTarget = (): StepTarget | undefined => {
     if (isAgent) return { kind: 'agent', viewOutput: () => setOpen(true) };
     if (!isCommand || !commandText) return undefined;
@@ -1164,6 +1172,20 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
         </button>
       )}
       {agent ? <AgentLine state={agent} /> : outcome.kind === 'pending' && running && (call.name === 'Agent' || call.name === 'Task') && <AgentProgress toolUseId={call.id} />}
+      {asking && runIn && commandText && (
+        <RunQuestion
+          command={commandText}
+          className="mt-1 mb-2 ml-5.5"
+          onRun={() => {
+            setAsking(false);
+            runIn(commandText);
+          }}
+          onCancel={() => {
+            setAsking(false);
+            requestAnimationFrame(() => toggle.current?.focus({ preventScroll: true }));
+          }}
+        />
+      )}
       {outcome.kind === 'denied' && outcome.note && <div className="mb-1.5 ml-5.5"><Note text={outcome.note} /></div>}
       {open && (
         <div className="animate-fade mt-1 mb-2 ml-5.5">

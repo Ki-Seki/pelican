@@ -4,7 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,7 +14,7 @@ import WebSocket from 'ws';
 
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
-import { TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
+import { commandRunnable, TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
 import { MARKS_PER_CHARACTER } from '../src/shared/terminal-widths';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
@@ -113,6 +113,9 @@ describe('a terminal', () => {
     expect(terminal).toMatchObject({ cwd: work(), program: 'bash', viewers: 0 });
     const listed = await api('GET', `/api/terminals?cwd=${encodeURIComponent(work())}`);
     expect(listed.body).toMatchObject({ available: true, terminals: [{ id: terminal.id, cwd: work() }] });
+    // Which shell a terminal runs, for Run in terminal to offer a step only to the shell it is written for.
+    expect(listed.body.shell).toBe('bash');
+    expect((await api('GET', '/api/info')).body.terminal).toEqual({ available: true, shell: 'bash' });
     expect((await api('GET', `/api/terminals?cwd=${encodeURIComponent(dir)}`)).body.terminals).toEqual([]);
 
     const shown = await atPrompt(terminal.id);
@@ -159,6 +162,27 @@ describe('a terminal', () => {
     expect(late.closed?.code).toBe(TERMINAL_CLOSE.gone);
   }, 30_000);
 
+  it('belongs to the folder itself, links followed, as the session there does: opened under a link’s name, it is listed under both', async () => {
+    // A new session's page in a folder reached through a link (on a Mac, /tmp is /private/tmp): the
+    // session starts in the folder itself, and its page lists the terminal opened before it did.
+    const link = path.join(dir, 'link-to-work');
+    await symlink(work(), link);
+    try {
+      const terminal = await open(link);
+      expect(terminal.cwd).toBe(work());
+      const shown = await atPrompt(terminal.id);
+      shown.type('pwd -P\r');
+      await shown.sees(new RegExp(`\\r\\n${literally(work())}\\r\\n`));
+      for (const name of [link, work()]) {
+        const listed = await api('GET', `/api/terminals?cwd=${encodeURIComponent(name)}&folder=${encodeURIComponent(name)}`);
+        expect(listed.body).toMatchObject({ terminals: [{ id: terminal.id, cwd: work() }], folder: work() });
+      }
+      expect((await api('GET', '/api/terminals')).body).not.toHaveProperty('folder');
+    } finally {
+      await rm(link);
+    }
+  }, 20_000);
+
   it('when Pelican stops, its pages lose the connection as to a server going away, to come back and start again', async () => {
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
@@ -177,18 +201,75 @@ describe('a terminal', () => {
     await until(() => shown.lines().includes('ran 42'), 10_000, 'the command');
   }, 20_000);
 
-  it('types a command as a paste where the shell takes pastes, so its lines go in together, then Enter', async () => {
+  it('has the shell read the command from a file of its own, readable by this account alone, its lines together, then Enter', async () => {
     // A shell that says it takes pastes, as zsh does, and writes down all it is sent.
     const typed = path.join(dir, 'typed');
     Object.assign(testShell, { file: '/bin/sh', args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
+    try {
+      const terminal = await open(work(), { command: 'echo one\necho two' });
+      await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
+      // Typed: `.` and the file, which holds the command as it was shown.
+      const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
+      expect(file).toBeDefined();
+      expect(readFileSync(file!, 'utf8')).toBe('echo one\necho two\n');
+      expect((await stat(file!)).mode & 0o777).toBe(0o600);
+      expect((await stat(path.dirname(file!))).mode & 0o777).toBe(0o700);
+      // Gone with the terminal.
+      await api('DELETE', `/api/terminals/${terminal.id}`);
+      await until(() => !existsSync(file!), 5000, 'the file to go');
+    } finally {
+      Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+    }
+  }, 20_000);
+
+  it('types the command as a paste for a shell that reads no file of commands, so its lines go in together, then Enter', async () => {
+    const typed = path.join(dir, 'typed-elsewhere');
+    const shell = path.join(dir, 'elvish');
+    await symlink('/bin/sh', shell);
+    Object.assign(testShell, { file: shell, args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
     try {
       await open(work(), { command: 'echo one\necho two' });
       await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
       expect(readFileSync(typed, 'utf8')).toBe('\u001b[200~echo one\necho two\u001b[201~\r');
     } finally {
       Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      await rm(shell);
     }
   }, 20_000);
+
+  // As in the review: a history file holding a secret (made up here), and a command in Claude's
+  // reply that would print it, or send it off, were a `!` in it expanded from the history. zsh reads
+  // its history file at start with an rc file of its own (here an empty one), as a login shell does.
+  for (const [name, file, args] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i']], ['zsh', '/bin/zsh', ['-d', '-i']]] as const) {
+    it.skipIf(!existsSync(file))(`runs the command as it shows, with no \`!\` in it taken from ${name}’s history`, async () => {
+      const history = path.join(dir, `history-${name}`);
+      await writeFile(history, 'export AWS_SECRET_ACCESS_KEY=AKIA-SCRATCH-NOT-REAL-1234\necho second\n');
+      const zdotdir = path.join(dir, `zdotdir-${name}`);
+      await mkdir(zdotdir, { recursive: true });
+      await writeFile(path.join(zdotdir, '.zshrc'), '');
+      const before = { HISTFILE: process.env.HISTFILE, ZDOTDIR: process.env.ZDOTDIR };
+      Object.assign(testShell, { file, args: [...args] });
+      Object.assign(process.env, { HISTFILE: history, ZDOTDIR: zdotdir });
+      try {
+        const shown = page((await open(work(), { command: 'echo "exfil: !?AWS_SECRET?" "!!" "!-2" done-$((6 * 7))' })).id);
+        await shown.readied();
+        await shown.sees(/done-42/, 10_000);
+        await pause(200);
+        expect(shown.output).not.toMatch(/AKIA-SCRATCH/);
+        expect(shown.lines().join('\n')).toContain('exfil: !?AWS_SECRET? !! !-2 done-42');
+        // The shell has the history all the same: typed at its prompt by you, `!` works as ever.
+        const from = shown.output.length;
+        shown.type('echo "ran !?second?"\r');
+        await shown.sees(/ran echo second/, 10_000, from);
+      } finally {
+        for (const [variable, value] of Object.entries(before)) {
+          if (value === undefined) delete process.env[variable];
+          else process.env[variable] = value;
+        }
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 30_000);
+  }
 
   it('runs no command that does not show all it holds', async () => {
     // Keys a shell's line editor takes (Ctrl+U, Esc, a carriage return), or text turned around.
@@ -196,7 +277,26 @@ describe('a terminal', () => {
       const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command });
       expect(refused.status, JSON.stringify(command)).toBe(400);
     }
+    // Laid out so that its question would leave a tail out of sight: padded with spaces or tabs,
+    // pushed down by blank lines, a line or a command too long to take in. As the page reads it.
+    const marker = path.join(dir, 'HIDDEN_TAIL_RAN');
+    const padded = [
+      `ls -la${' '.repeat(300)}; touch ${marker}`, `ls${'\t'.repeat(60)}; touch ${marker}`, `ls${'\n'.repeat(200)}touch ${marker}`,
+      `ls\n\n\n\ntouch ${marker}`, `echo ${'x'.repeat(500)}; touch ${marker}`,
+      [...Array.from({ length: 50 }, (_, i) => `echo ${i}`), `touch ${marker}`].join('\n'),
+    ];
+    for (const command of padded) {
+      expect(commandRunnable(command)).toBe(false);
+      const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command });
+      expect(refused.status, command.slice(0, 40)).toBe(400);
+      expect(refused.body.error).toMatch(/out of sight|shows/);
+    }
     expect((await api('GET', '/api/terminals')).body.terminals).toEqual([]);
+    await pause(300);
+    expect(existsSync(marker)).toBe(false);
+    // What the page offers, the server runs.
+    const offered = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command: `ls${' '.repeat(16)}# aligned\n\n\necho done` });
+    expect(offered.status).toBe(201);
   });
 
   it('shows on several pages at once, each in step, at the size of the page last typed in or resized', async () => {
@@ -223,6 +323,30 @@ describe('a terminal', () => {
     await computer.sees(/40 120\r\n/, 10_000, from);
     expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
   }, 20_000);
+});
+
+describe('the size a terminal is drawn at', () => {
+  it('stays the page’s last typed in when another page shows it again with nobody typing there, unless that one is alone', async () => {
+    const terminal = await open();
+    const phone = await atPrompt(terminal.id, { cols: 40, rows: 20 });
+    const computer = await atPrompt(terminal.id, { cols: 120, rows: 40 });
+    expect(computer.ready).toMatchObject({ cols: 40, rows: 20 });
+    // The computer's Terminal tab is picked again after Files: it says its size as it shows, which
+    // the shell does not take from the phone, and the computer is told nothing new.
+    computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
+    let from = computer.output.length;
+    computer.type('stty size\r');
+    await computer.sees(/\r\n20 40\r\n/, 10_000, from);
+    expect(phone.messages.filter((m) => m.type === 'size')).toEqual([]);
+    expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
+    // Alone, as the phone has gone, it takes its own size, and is told it so it draws at it.
+    await phone.close();
+    computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
+    await until(() => computer.messages.some((m) => m.type === 'size' && m.cols === 120 && m.rows === 40), 5000, 'its size said back');
+    from = computer.output.length;
+    computer.type('stty size\r');
+    await computer.sees(/\r\n40 120\r\n/, 10_000, from);
+  }, 30_000);
 });
 
 describe('Clear terminal', () => {
@@ -260,14 +384,21 @@ describe('Clear terminal', () => {
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
     // A full-screen program that draws its screen when told the window changed, as vim and htop do.
-    shown.type(`node -e "process.stdout.write('\\u001b[?1049h\\u001b[HFIRST'); process.on('SIGWINCH', () => process.stdout.write('\\u001b[H\\u001b[2JDRAWN AGAIN')); process.stdin.on('data', (d) => process.stdout.write(' typed ' + JSON.stringify(String(d)))); setInterval(() => {}, 1000)"\r`);
-    await shown.sees(/FIRST/);
+    // What it prints is spelled in escapes, so the shell's echo of the command line holds none of
+    // it: only the program's output meets the waits below, and only a key typed into it prints
+    // " typed ". The line is typed in two parts, so its echo comes in two, as a busy computer's can.
+    const program = `node -e "process.stdout.write('\\u001b[?1049h\\u001b[H\\x46IRST'); process.on('SIGWINCH', () => process.stdout.write('\\u001b[H\\u001b[2J\\x44RAWN AGAIN')); process.stdin.on('data', (d) => process.stdout.write(' \\x74yped ' + JSON.stringify(String(d)))); setInterval(() => {}, 1000)"\r`;
+    const half = program.indexOf('process.stdin');
+    shown.type(program.slice(0, half));
+    await pause(300);
+    shown.type(program.slice(half));
+    await shown.sees(/\u001b\[\?1049h\u001b\[HFIRST/);
     const from = shown.output.length;
     shown.send({ type: 'clear' });
-    await shown.sees(/DRAWN AGAIN/, 10_000, from);
+    await shown.sees(/\u001b\[2JDRAWN AGAIN/, 10_000, from);
     // Nothing was typed into it: Ctrl+L would have been, a form feed in vim's insert mode.
     await pause(200);
-    expect(shown.output.slice(from)).not.toMatch(/typed/);
+    expect(shown.output).not.toMatch(/ typed /);
     const back = page(terminal.id);
     await back.readied();
     await until(() => back.screen.buffer.active.type === 'alternate' && written(back)[0] === 'DRAWN AGAIN', 5000, 'the program’s screen');
@@ -385,9 +516,10 @@ describe('a page that comes back', () => {
     terminalTiming.cutMs = 30;
     const terminal = await open();
     const first = await atPrompt(terminal.id);
-    // A title begun and never ended, as `cat` of a binary file can leave one, then quiet.
+    // A title begun and never ended, as `cat` of a binary file can leave one, then quiet: waited
+    // for as printed (ESC ]), not as the echo of the command line writes it.
     first.type(`printf 'A\\033]0;never ended'; sleep 60\r`);
-    await first.sees(/never ended/);
+    await first.sees(/A\u001b\]0;never ended/);
     const realNow = Date.now;
     try {
       for (let join = 0; join < 12; join += 1) {
@@ -537,6 +669,48 @@ describe('what a program asks of the terminal', () => {
   });
 });
 
+describe('output that works over the whole screen', () => {
+  it('has the shell wait for the copy of the screen by the time its work takes, not only its bytes, and none of it is taken in once the terminal is closed', async () => {
+    const terminal = await open(work(), { cols: 500, rows: 300 });
+    // A page that acknowledges what it gets at once, drawing nothing: only the server's copy works.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?id=${terminal.id}&cols=500&rows=300`, { headers: signedIn() });
+    let output = '';
+    ws.on('message', (data, binary) => {
+      if (!binary) return;
+      output += String(data);
+      ws.send(JSON.stringify({ type: 'ack', bytes: (data as Buffer).length }));
+    });
+    try {
+      await until(() => output.includes('PROMPT$'), 10_000, 'the prompt');
+      // Each line scrolls the whole screen by its rows: a few KB of them is seconds of work at this size.
+      ws.send(Buffer.from("yes $'\\e[300S' | head -c 3000000; echo FLOOD-$((40 + 2))\r"));
+      await until(() => terminalState(terminal.id)?.paused === true, 30_000, 'the shell to wait');
+      const state = terminalState(terminal.id)!;
+      // It waits on the work, long before a megabyte of it lags, as it did.
+      expect(state.received - state.parsed).toBeLessThan(terminalTiming.copyHigh / 4);
+      // Pelican answers meanwhile.
+      const asked = performance.now();
+      expect((await api('GET', '/api/terminals')).status).toBe(200);
+      expect(performance.now() - asked).toBeLessThan(3000);
+      // Closed, the copy takes in nothing more of what it had been given.
+      const input = (state.copy as unknown as { _core: { _inputHandler: { parse: (...args: unknown[]) => unknown } } })._core._inputHandler;
+      const parse = input.parse.bind(input);
+      let parsedAfter = 0;
+      input.parse = (...args: unknown[]) => {
+        parsedAfter += 1;
+        return parse(...args);
+      };
+      expect((await api('DELETE', `/api/terminals/${terminal.id}`)).status).toBe(200);
+      parsedAfter = 0;
+      await pause(500);
+      expect(parsedAfter).toBe(0);
+      expect(output).not.toContain('FLOOD-42');
+    } finally {
+      ws.terminate();
+    }
+  }, 60_000);
+});
+
 describe('flow control', () => {
   it('pauses the shell while a page is far behind, so nothing piles up, and goes on when it catches up', async () => {
     terminalTiming.stallMs = 60_000;
@@ -663,18 +837,25 @@ describe('output xterm throws on', () => {
 });
 
 describe('the shell’s environment', () => {
-  it('leaves out what is Pelican’s, npm’s, Claude Code’s mark and the outer terminal’s, and adds the folder’s launch settings', () => {
+  it('leaves out what is Pelican’s, npm’s, Claude Code’s own and the outer terminal’s, and adds the folder’s launch settings', () => {
+    // Made-up values: a Claude Code session's id, its messaging socket and token, as Pelican started
+    // from one has them, and the entrypoint the Agent SDK sets in Pelican's own process.
     const outer = {
       PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock', HTTPS_PROXY: 'http://proxy.example:3128', ANTHROPIC_MODEL: 'claude-opus-5-5',
       PELICAN_AUTH: 'none', PELICAN_STATE_DIR: '/state', npm_config_cache: '/cache', npm_lifecycle_event: 'dev', CLAUDECODE: '1',
+      INIT_CWD: '/home/someone/project', NODE: '/usr/local/bin/node',
       CLAUDE_AGENT_SDK_VERSION: '0.3.318', NoDefaultCurrentDirectoryInExePath: '1', CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_SESSION_ID: 'made-up-session', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/made-up.sock',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-token',
       TERM: 'dumb', TERM_PROGRAM: 'vscode', VSCODE_GIT_ASKPASS_MAIN: '/vscode/askpass-main.js', GIT_ASKPASS: '/vscode/askpass.sh',
       CLAUDE_CODE_SSE_PORT: '51234', ITERM_SESSION_ID: 'w0t0p0', TMUX: '/tmp/tmux-501/default,1,0', SHLVL: '2',
       XPC_SERVICE_NAME: 'io.github.ki-seki.pelican', INVOCATION_ID: 'abc', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c',
     };
     const launch = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false' };
     expect(shellEnvironment(outer, launch, '/bin/zsh')).toEqual({
-      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example', CLAUDE_CODE_USE_BEDROCK: '1',
+      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock', HTTPS_PROXY: 'http://proxy.example:3128', ANTHROPIC_MODEL: 'claude-opus-5-5',
       GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
       TERM: 'xterm-256color', COLORTERM: 'truecolor', SHELL: '/bin/zsh',
     });
@@ -683,10 +864,13 @@ describe('the shell’s environment', () => {
     expect(shellEnvironment({ LC_ALL: 'C' }, undefined, '/bin/bash')).not.toHaveProperty('LANG');
   });
 
-  it('is Pelican’s, without Pelican’s settings, npm’s, Claude Code’s mark and the outer terminal’s', async () => {
+  it('is Pelican’s, without Pelican’s settings, npm’s, Claude Code’s own and the outer terminal’s', async () => {
     const before = { ...process.env };
+    // Made-up values only, for what a Claude Code session Pelican was started from would hand down.
     Object.assign(process.env, {
       PELICAN_TERMINAL_TEST: 'secret', npm_config_terminal_test: 'npm', npm_lifecycle_event: 'dev', CLAUDECODE: '1', CLAUDE_AGENT_SDK_VERSION: '0.3.318',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_SESSION_ID: 'made-up-session', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/made-up.sock',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-token', INIT_CWD: '/made/up', NODE: '/made/up/node',
       TERM_PROGRAM: 'Elsewhere', ITERM_SESSION_ID: 'w0t0p0', XPC_SERVICE_NAME: 'com.example.pelican', KEPT_FOR_THE_SHELL: 'kept',
     });
     try {
@@ -696,7 +880,12 @@ describe('the shell’s environment', () => {
       await shown.sees(/END-42\r\n/);
       const names = shown.output.split('\r\n').map((line) => line.split('=')[0]);
       expect(names).toContain('KEPT_FOR_THE_SHELL');
-      for (const gone of ['PELICAN_TERMINAL_TEST', 'npm_config_terminal_test', 'npm_lifecycle_event', 'CLAUDECODE', 'CLAUDE_AGENT_SDK_VERSION', 'TERM_PROGRAM', 'ITERM_SESSION_ID', 'XPC_SERVICE_NAME']) {
+      expect(names.filter((name) => name?.startsWith('CLAUDE_CODE_'))).toEqual([]);
+      expect(shown.output).not.toMatch(/made-up/);
+      for (const gone of [
+        'PELICAN_TERMINAL_TEST', 'npm_config_terminal_test', 'npm_lifecycle_event', 'CLAUDECODE', 'CLAUDE_AGENT_SDK_VERSION', 'INIT_CWD', 'NODE',
+        'TERM_PROGRAM', 'ITERM_SESSION_ID', 'XPC_SERVICE_NAME',
+      ]) {
         expect(names).not.toContain(gone);
       }
       expect(shown.output).toMatch(/\r\nTERM=xterm-256color\r\n/);

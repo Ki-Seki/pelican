@@ -8,11 +8,11 @@ import { ArrowDown, Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
-import { guardOutput } from '../../shared/terminal-guards';
+import { dropPendingOutput, guardOutput, outputPieces } from '../../shared/terminal-guards';
 import { loadWidths } from '../../shared/terminal-widths';
 import { announce } from '../lib/announce';
 import { api, checkSignedIn } from '../lib/api';
-import { ariaKeys, isApple, isKey, keyText } from '../lib/keyboard';
+import { ariaKeys, isApple, isKey, keyText, MOD } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { showCursor } from '../lib/terminal-cursor';
 import {
@@ -135,6 +135,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [reconnecting, setReconnecting] = useState(false);
   /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output, stopping a swipe's glide. */
   const [scrolledBack, setScrolledBack] = useState(false);
+  /**
+   * A link in the output, and where it goes, which its text need not say (a program's OSC 8 link
+   * reads as any words): pointed at, said at the foot of the screen before a click opens it; tapped
+   * on a touch screen, asked about first, opening once Open is tapped.
+   */
+  const [link, setLink] = useState<{ address: WebAddress; asking: boolean }>();
   const stopGlide = useRef<() => void>(() => undefined);
   /** After a line sent from the phone's field: where its output starts, read out once the shell is quiet. */
   const reading = useRef<{ from: IMarker; quiet?: ReturnType<typeof setTimeout>; latest: ReturnType<typeof setTimeout> } | undefined>(undefined);
@@ -149,13 +155,23 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   /** The shell was sized for another page since this one last fitted it. */
   const sizedElsewhere = useRef(false);
 
-  /** Fits the screen to its box and tells the shell, unless the box is not on screen. */
-  const fit = () => {
+  /**
+   * Fits the screen to its box and tells the shell, unless the box is not on screen. `shown`: it
+   * shows again (its tab picked again), its box as it was, with nobody typing or resizing here: a
+   * size another page gave the shell since stays, as the shell keeps the size of the page last
+   * typed in or resized, unless this page is alone, which the server knows: it is asked, and says
+   * the size back when it takes it.
+   */
+  const fit = (shown = false) => {
     const t = term.current;
     const dims = fitter.current?.proposeDimensions();
     if (!t || !dims || hiddenNow.current || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
-    sizedElsewhere.current = false;
     const { cols, rows } = clampSize(dims.cols, dims.rows);
+    if (shown && sizedElsewhere.current) {
+      if (cols !== t.cols || rows !== t.rows) connection.current?.resize(cols, rows, true);
+      return;
+    }
+    sizedElsewhere.current = false;
     if (cols === t.cols && rows === t.rows) return;
     t.resize(cols, rows);
     connection.current?.resize(cols, rows);
@@ -188,6 +204,19 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
   useLayoutEffect(() => {
     const el = box.current!;
+    const links = {
+      activate: (event: MouseEvent, uri: string) => {
+        const address = webAddress(uri);
+        if (!address) return;
+        if (touch) setLink({ address, asking: true });
+        else if (isApple ? event.metaKey : event.ctrlKey) openAddress(address);
+      },
+      hover: (_event: MouseEvent, uri: string) => {
+        const address = webAddress(uri);
+        if (!touch && address) setLink((now) => (now?.asking ? now : { address, asking: false }));
+      },
+      leave: () => setLink((now) => (now?.asking ? now : undefined)),
+    };
     const t = new Terminal({
       fontFamily: monoFont(),
       fontSize: fontSize(),
@@ -207,12 +236,13 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       // xterm would log an error for every character it does not take where it comes (a DEL), and
       // a browser with its console open keeps each one: output of millions would fill the page.
       logLevel: 'off',
-      // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key.
-      linkHandler: { activate: (event, uri) => openLink(event, uri, touch), allowNonHttpProtocols: false },
+      // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key,
+      // and is asked first. Where it goes is said before either.
+      linkHandler: { ...links, allowNonHttpProtocols: false },
     });
     const fitAddon = new FitAddon();
     t.loadAddon(fitAddon);
-    t.loadAddon(new WebLinksAddon((event, uri) => openLink(event, uri, touch)));
+    t.loadAddon(new WebLinksAddon(links.activate, { hover: links.hover, leave: links.leave }));
     // The widths the server's copy counts cells with: an emoji takes two, and a cell at most 11
     // combining marks, so output reaching the page as it is printed grows no cell without bound.
     loadWidths(t, Unicode11Addon);
@@ -314,13 +344,22 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     const themed = new MutationObserver(recolor);
     themed.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
+    // The box's size changed: resized on screen, which takes the shell's size, or only shown again
+    // after another tab, where it had none, which does not (fit's `shown`).
     let sizing = 0;
+    fit();
+    const area = () => (el.clientWidth || el.clientHeight ? { width: el.clientWidth, height: el.clientHeight } : undefined);
+    let fitted = area();
     const resized = new ResizeObserver(() => {
       cancelAnimationFrame(sizing);
-      sizing = requestAnimationFrame(fit);
+      sizing = requestAnimationFrame(() => {
+        const now = area();
+        const resizedHere = Boolean(fitted && now && (now.width !== fitted.width || now.height !== fitted.height));
+        fitted = now;
+        if (now) fit(!resizedHere);
+      });
     });
     resized.observe(el);
-    fit();
 
     const gestures = touch ? touchGestures(el, t, fit, () => events.current.onMenu(null)) : undefined;
     // A right-click with a pointer: the terminal's own menu, Desktop's, at the pointer.
@@ -364,6 +403,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       connection.current?.stop();
       connection.current = undefined;
       term.current = undefined;
+      // What it had yet to draw goes with it: xterm would go on taking it in, disposed.
+      dropPendingOutput(t);
       t.dispose();
     };
     // Made once; what changes reaches it through refs.
@@ -407,12 +448,20 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
           events.current.onProgram(id, screen.program);
           if (screen.exit) ended(screen.exit);
         },
-        output: (data, written) => t.write(data, written),
+        // In pieces of bounded work (outputPieces): xterm takes each whole, and the page's taps and
+        // keys are answered between them, however hard the output is to draw.
+        output: (data, written) => {
+          const pieces = outputPieces(data, t.cols, t.rows);
+          pieces.forEach((piece, at) => t.write(piece.data, at === pieces.length - 1 ? written : undefined));
+        },
         // Cleared here or on another page: once what came before it is on the screen.
         clear: () => t.write('', () => t.clear()),
+        // Another page's size, or this one's said back as the shell took it on showing again.
         size: (cols, rows) => t.write('', () => {
           const size = clampSize(cols, rows);
-          sizedElsewhere.current = true;
+          const own = fitter.current?.proposeDimensions();
+          const mine = own && Number.isFinite(own.cols) && Number.isFinite(own.rows) ? clampSize(own.cols, own.rows) : undefined;
+          sizedElsewhere.current = !mine || mine.cols !== size.cols || mine.rows !== size.rows;
           t.resize(size.cols, size.rows);
         }),
         program: (program) => events.current.onProgram(id, program),
@@ -456,15 +505,20 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       window.removeEventListener('online', comeBack);
       c.stop();
       if (connection.current === c) connection.current = undefined;
+      // What this terminal's output had yet to draw goes: the next one shown starts from its own screen.
+      if (term.current === t) dropPendingOutput(t);
+      // A link of this terminal's no longer shows, nor is asked about.
+      setLink(undefined);
       // Taken away with the screen, the terminal is gone already.
       if (term.current === t) t.clearSelection();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // Shown again after another tab: fitted to the box it has now.
+  // Shown again after another tab: fitted to the box it has now, without taking the shell's size
+  // from another page (fit's `shown`).
   useEffect(() => {
-    if (!hidden) fit();
+    if (!hidden) fit(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden]);
 
@@ -537,6 +591,43 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       {reconnecting && (
         <div className="pointer-events-none absolute top-2 right-3 z-10 flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-muted shadow-sm">
           <Loader2 className="size-3 animate-spin" /> Reconnecting
+        </div>
+      )}
+      {link && !link.asking && (
+        // Where the link pointed at goes, as a browser says it at the foot of its window.
+        <div role="status" className="pointer-events-none absolute bottom-2 left-3 z-10 max-w-[calc(100%-1.5rem)] truncate rounded-md border border-line bg-panel px-2 py-1 font-mono text-[12px] text-muted shadow-sm">
+          <span className="text-fg">{link.address.origin}</span>{link.address.rest}
+          <span className="font-sans text-faint"> · {MOD}-click to open</span>
+        </div>
+      )}
+      {link?.asking && (
+        <div
+          role="dialog"
+          aria-label="Open this link?"
+          className="absolute inset-x-2 bottom-2 z-20 rounded-xl border border-line bg-panel p-3 text-[13px] shadow-lg"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            setLink(undefined);
+          }}
+        >
+          <p className="text-muted">Open this link in a new tab?</p>
+          <p className="mt-1 max-h-24 overflow-y-auto font-mono text-[12.5px] break-all">
+            <span className="font-semibold text-fg">{link.address.origin}</span>{link.address.rest}
+          </p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" onClick={() => setLink(undefined)} className="h-11 shrink-0 rounded-full bg-chip px-4 pointer-fine:h-9">Cancel</button>
+            <button
+              type="button"
+              onClick={() => {
+                openAddress(link.address);
+                setLink(undefined);
+              }}
+              className="h-11 shrink-0 rounded-full bg-fg px-4 font-medium text-bg pointer-fine:h-9"
+            >
+              Open
+            </button>
+          </div>
         </div>
       )}
       {scrolledBack && (
@@ -621,11 +712,28 @@ function rowsAsText(el: HTMLElement, t: Terminal): () => void {
   };
 }
 
-/** A link in the output: opened in a new tab, with Cmd or Ctrl held on a computer, on a tap on a phone. */
-function openLink(event: MouseEvent, uri: string, touch: boolean): void {
-  if (!touch && !(isApple ? event.metaKey : event.ctrlKey)) return;
-  if (!/^https?:\/\//i.test(uri)) return;
-  window.open(uri, '_blank', 'noopener,noreferrer');
+/**
+ * Where a link in the output goes, as the browser reads it (its host as the browser asks for it,
+ * an international name in its xn-- form, so one made to look like another does not), split for
+ * showing: its origin, and the rest. Only http and https; anything else is no link here.
+ */
+export type WebAddress = { href: string; origin: string; rest: string };
+
+export function webAddress(uri: string): WebAddress | undefined {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+  const login = url.username || url.password ? `${url.username}${url.password ? ':\u2026' : ''}@` : '';
+  return { href: url.href, origin: `${url.protocol}//${login}${url.host}`, rest: `${url.pathname}${url.search}${url.hash}` };
+}
+
+/** A link in the output, opened in a new tab: where it was said to go, with no way back to Pelican. */
+function openAddress(address: WebAddress): void {
+  window.open(address.href, '_blank', 'noopener,noreferrer');
 }
 
 /** A new size, within bounds, and the screen fitted to it (or not yet, while a pinch goes on); whether it changed. */

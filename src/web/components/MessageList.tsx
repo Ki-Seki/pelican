@@ -19,7 +19,7 @@ import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
-import { InReply } from '../lib/terminals';
+import { InReply, isPowerShell, RunInTerminal, TerminalShell } from '../lib/terminals';
 import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, runsInBackground, type SentFile } from '../lib/turns';
 import { openImage } from './Lightbox';
@@ -28,6 +28,7 @@ import { loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PrCard } from './PrCard';
 import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
 import { type RewindPoint, RewoundMarker } from './Rewind';
+import { RunQuestion } from './RunCommand';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { AgentEnded, sentFilesOf, ToolCallView, ToolTarget, useCommandTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
@@ -629,7 +630,13 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
   // A command's own list, as a command step has (lib/actions): a long press, a right-click, ⋯.
   const [menu, setMenu] = useState<MenuAt>();
   const touch = useMedia('(hover: none)');
-  const target = useCommandTarget(item.command, recorded, item.key);
+  // Run in terminal asks first, in place, the whole command shown; only where the terminal's shell
+  // is not PowerShell, as a `!` command is a POSIX shell's.
+  const runIn = useContext(RunInTerminal);
+  const [asking, setAsking] = useState(false);
+  const shell = useContext(TerminalShell);
+  const target = useCommandTarget(item.command, recorded, item.key, isPowerShell(shell) ? undefined : () => setAsking(true));
+  const more = useRef<HTMLButtonElement>(null);
   const press = useLongPress<HTMLDivElement>((p) => setMenu(menuAt(p, p.element)), { nativeMenu: browsersOwn });
   const whole = useMemo(() => (saved.text === undefined ? undefined : cleanOutput(saved.text).replace(/^\s*\n/, '').trimEnd()), [saved.text]);
   const output = all && whole !== undefined ? whole : recorded;
@@ -653,6 +660,7 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
         {item.ended && <span className="shrink-0 font-sans text-[11px] text-faint">{item.ended === 'stopped' ? 'Stopped' : 'Failed'}</span>}
         {item.timestamp && <span className="shrink-0 font-sans text-[11px] text-faint">{clockTime(item.timestamp)}</span>}
         <button
+          ref={more}
           type="button"
           aria-label={`More for ${commandName(item.command)}`}
           aria-haspopup="menu"
@@ -673,6 +681,20 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
         focusFirst={Boolean(menu?.keys)}
         {...(menu?.lift ? { lift: menu.lift } : {})}
       />
+      {asking && runIn && (
+        <RunQuestion
+          command={item.command}
+          className="mx-2 mb-2"
+          onRun={() => {
+            setAsking(false);
+            runIn(item.command);
+          }}
+          onCancel={() => {
+            setAsking(false);
+            requestAnimationFrame(() => more.current?.focus({ preventScroll: true }));
+          }}
+        />
+      )}
       {output && (
         // Clipped, its last lines sit at the bottom of the box, the start fading out above them.
         <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${clipped ? 'flex max-h-60 flex-col justify-end overflow-hidden [mask-image:linear-gradient(to_top,black_75%,transparent)]' : ''}`}>

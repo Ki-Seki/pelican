@@ -10,10 +10,18 @@ import type { SessionView } from '../src/web/lib/store';
 let wide = false;
 Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
 Object.assign(window, { matchMedia: (query: string) => ({ matches: wide && query === '(min-width: 640px)', media: query, addEventListener() {}, removeEventListener() {} }) });
+// A step's menu opens in a dialog, which jsdom does not show.
+HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) {
+  this.setAttribute('open', '');
+};
+HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) {
+  this.removeAttribute('open');
+};
 
 const { api } = await import('../src/web/lib/api');
 const { setRun } = await import('../src/web/lib/store');
 const { MessageList } = await import('../src/web/components/MessageList');
+const { RunInTerminal } = await import('../src/web/lib/terminals');
 
 const SESSION = 'cccccccc-0000-4000-8000-000000000001';
 const META = "export const meta = {\n  name: 'demo-review',\n  description: 'Review the demo app, then check each finding',\n  phases: [\n    { title: 'Review', detail: 'one agent per area' },\n    { title: 'Verify' },\n    { title: 'Report' },\n  ],\n}\nreturn await agent('Review it')\n";
@@ -51,11 +59,11 @@ const runWith = (workflow: Workflow): RunState => ({
   tasks: [{ id: 'w1', description: 'demo-review', type: 'local_workflow', summary: '1/2 agents' }], workflows: { toolu_w: workflow },
 });
 
-function show(messages: ChatMessage[], mode: 'normal' | 'thinking' | 'verbose' = 'normal') {
+function show(messages: ChatMessage[], mode: 'normal' | 'thinking' | 'verbose' = 'normal', runInTerminal?: (command: string) => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const tree = (list: ChatMessage[]) => {
     const view: SessionView = { messages: list, offset: 0, total: list.length, loaded: true, loadingOlder: false };
-    return <QueryClientProvider client={client}><MessageList sessionId={SESSION} view={view} mode={mode} /></QueryClientProvider>;
+    return <QueryClientProvider client={client}><RunInTerminal.Provider value={runInTerminal}><MessageList sessionId={SESSION} view={view} mode={mode} /></RunInTerminal.Provider></QueryClientProvider>;
   };
   const shown = render(tree(messages));
   /** The same page, its conversation grown. */
@@ -212,6 +220,21 @@ describe('a workflow agent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
     await waitFor(() => expect(screen.getByText('file1.ts')).toBeTruthy());
     expect(pages).toHaveBeenCalledWith(SESSION, 'toolu_w', 'a1', 2);
+  });
+
+  it('offers no Run in terminal on a command one of its agents ran', async () => {
+    vi.spyOn(api, 'workflowAgent').mockResolvedValue(page([
+      { uuid: 'b1', role: 'assistant', blocks: [{ type: 'tool_use', id: 'tb1', name: 'Bash', input: { command: 'ls -la && touch WORKFLOW_STEP_RAN', description: 'List the files' } }] },
+      { uuid: 'b1r', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 'tb1', content: 'README.md' }] },
+    ], 0, { prompt: 'Review the server.' }));
+    wide = true;
+    show([call(), launched()], 'verbose', vi.fn());
+    await waitFor(() => expect(phases()).not.toBeNull());
+    fireEvent.click(within(phases()!).getByText('review:1'));
+    fireEvent.click(await screen.findByRole('button', { name: /^More for Run List the files/ }));
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toContain('Copy command');
+    expect(items).not.toContain('Run in terminal');
   });
 });
 

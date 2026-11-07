@@ -15,7 +15,7 @@ import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, PermissionDecision, RewindRestore, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { revealHidden } from '../shared/hidden.js';
-import { commandRunnable, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
+import { commandRefusal, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, remove } from './actions.js';
 import { forget, keep } from './kept.js';
@@ -737,12 +737,26 @@ app.post('/api/sessions/:id/shell', async (c) => {
 });
 
 /**
+ * A folder as terminals name it: its links followed, as a session started there names it (on a
+ * Mac, /tmp is /private/tmp), so a terminal opened under one name shows under the other too.
+ */
+const terminalFolder = async (dir: string): Promise<string> => (path.isAbsolute(dir) ? realpath(dir).catch(() => dir) : dir);
+
+/**
  * Terminals (terminals.ts): those of a folder, the session's (all of them without `cwd`), and
- * whether this Pelican runs any. The first ask loads the PTY.
+ * whether this Pelican runs any. The first ask loads the PTY. With `folder`, the page's own folder,
+ * it says how terminals name that one (TerminalList.folder).
  */
 app.get('/api/terminals', async (c) => {
   const ready = await terminalsReady();
-  return c.json({ ...ready, terminals: ready.available ? listTerminals(c.req.query('cwd')) : [] });
+  if (!ready.available) return c.json({ ...ready, terminals: [] });
+  const cwd = c.req.query('cwd');
+  const folder = c.req.query('folder');
+  return c.json({
+    ...ready,
+    terminals: listTerminals(cwd === undefined ? undefined : await terminalFolder(cwd)),
+    ...(folder ? { folder: await terminalFolder(folder) } : {}),
+  });
 });
 
 /**
@@ -755,18 +769,20 @@ app.post('/api/terminals', async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   if (typeof body.cwd !== 'string' || !sizeAllowed(body.cols, body.rows)) return c.json({ error: 'Say where, and the size' }, 400);
   if (body.trust !== undefined && body.trust !== 'trusted' && body.trust !== 'user-only') return c.json({ error: 'trust must be trusted or user-only' }, 400);
-  if (body.command !== undefined && (typeof body.command !== 'string' || !body.command.trim() || body.command.length > TERMINAL_LIMITS.command)) {
-    return c.json({ error: `The command must be some text, up to ${TERMINAL_LIMITS.command} characters` }, 400);
-  }
-  if (typeof body.command === 'string' && !commandRunnable(body.command)) {
-    return c.json({ error: 'The command holds characters a shell would take as keys, or that cannot be seen' }, 400);
+  // Run in terminal: only a command whose question showed all of it, as the page reads it.
+  if (body.command !== undefined) {
+    const refused = typeof body.command === 'string' ? commandRefusal(body.command) : `The command must be some text, up to ${TERMINAL_LIMITS.command} characters`;
+    if (refused) return c.json({ error: refused }, 400);
   }
   const colors = body.colors === undefined ? undefined : terminalColors(body.colors);
   if (body.colors !== undefined && !colors) return c.json({ error: 'colors must be a text, a background and a cursor color and 16 more, each #rrggbb' }, 400);
   const ready = await terminalsReady();
   if (!ready.available) return c.json({ error: ready.reason }, terminalsRefused() ? 403 : 503);
-  const cwd = await checkedFolder(body.cwd);
-  if (!cwd) return c.json({ error: 'No such folder' }, 404);
+  const checked = await checkedFolder(body.cwd);
+  if (!checked) return c.json({ error: 'No such folder' }, 404);
+  // The folder itself, as the session there names it: one opened on a new session's page, under a
+  // link's name, is the session's once it starts.
+  const cwd = await terminalFolder(checked);
   if (body.trust) await rememberChoice(cwd, body.trust);
   const launch = await launchFor(cwd);
   try {

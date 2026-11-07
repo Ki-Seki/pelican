@@ -43,7 +43,7 @@ import {
   syncRun,
   useSessionView,
 } from '../lib/store';
-import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
+import { askForTerminal, RunInTerminal, TerminalShell, useTerminalsAvailable, useTerminalShell, wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import { buildItems, splitFiles, type Item } from '../lib/turns';
@@ -939,8 +939,10 @@ export function Chat({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cwd, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
-  // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
+  // Run in terminal, from a command in a reply or a step, once asked: a new terminal in the
+  // session's folder runs it, in the shell the terminal runs.
   const terminals = useTerminalsAvailable();
+  const terminalShell = useTerminalShell();
   const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {
     askForTerminal(cwd, command);
     makeWay(() => showWorkspace({ tab: 'terminal' }));
@@ -1260,6 +1262,7 @@ export function Chat({
   return (
     <PathLinksContext.Provider value={links}>
     <RunInTerminal.Provider value={runInTerminal}>
+    <TerminalShell.Provider value={terminalShell}>
     <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
@@ -1594,6 +1597,7 @@ export function Chat({
       )}
     </div>
     </CommentsChat.Provider>
+    </TerminalShell.Provider>
     </RunInTerminal.Provider>
     </PathLinksContext.Provider>
   );

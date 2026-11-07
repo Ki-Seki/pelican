@@ -61,6 +61,10 @@ let silent = false;
 const opened: Array<Record<string, unknown>> = [];
 const closed: string[] = [];
 let refuse: ((body: Record<string, unknown>) => Error | undefined) | undefined;
+/** A folder as the computer names it once its links are followed (on a Mac, /tmp is /private/tmp). */
+let followed: ((folder: string) => string) | undefined;
+/** The folders the list was asked to say the names of. */
+const asked: Array<string | undefined> = [];
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
@@ -68,7 +72,11 @@ vi.mock('../src/web/lib/api', async (original) => {
     ...actual,
     api: {
       ...actual.api,
-      terminals: async () => (slow ? slow() : structuredClone(list)),
+      terminals: async (folder?: string) => {
+        asked.push(folder);
+        const now = slow ? await slow() : structuredClone(list);
+        return folder && followed ? { ...now, folder: followed(folder) } : now;
+      },
       terminal: async (id: string) => {
         if (unreachable) throw new TypeError('Failed to fetch');
         if (silent) return new Promise(() => undefined);
@@ -80,7 +88,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         opened.push(body);
         const error = refuse?.(body);
         if (error) throw error;
-        const terminal: TerminalInfo = { id: `t${opened.length + 10}`, cwd: body.cwd as string, program: 'zsh', viewers: 0, createdAt: Date.now() };
+        const terminal: TerminalInfo = { id: `t${opened.length + 10}`, cwd: followed?.(body.cwd as string) ?? (body.cwd as string), program: 'zsh', viewers: 0, createdAt: Date.now() };
         list.terminals.push(terminal);
         return terminal;
       },
@@ -127,6 +135,8 @@ beforeEach(() => {
   typed.length = 0;
   pasted.length = 0;
   refuse = undefined;
+  followed = undefined;
+  asked.length = 0;
   coarse = false;
   offline = false;
   focused = 0;
@@ -178,6 +188,34 @@ describe('the Terminal tab', () => {
     // The program in front changes the name.
     act(() => screenProps.onProgram('t1', 'vim'));
     await waitFor(() => expect(tabs()).toEqual(['vim', 'npm · web']));
+  });
+
+  it('shows a folder reached through a link as the computer names it, as its session will: no second terminal once the session starts', async () => {
+    // A new session's page in /tmp/app, which is /private/tmp/app: the terminal the computer started
+    // there, under the folder's own name, is this page's, and the session's page shows the same one.
+    followed = (folder) => folder.replace(/^\/tmp\//, '/private/tmp/');
+    list.terminals = [terminal('t1', { cwd: '/private/tmp/app' }), terminal('t2', { cwd: '/private/tmp/app/web', program: 'npm' }), terminal('t3', { cwd: '/private/tmp/other' })];
+    const { view, client } = tab({ cwd: '/tmp/app' });
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'npm · web']));
+    expect(asked).toContain('/tmp/app');
+    expect(opened).toEqual([]);
+    view.unmount();
+    tab({ cwd: '/private/tmp/app' });
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'npm · web']));
+    expect(opened).toEqual([]);
+    client.clear();
+  });
+
+  it('keeps a terminal it opened in a folder whose link leads outside its own, as its tab', async () => {
+    followed = (folder) => (folder === `${CWD}/data` ? '/volumes/data' : folder);
+    list.terminals = [terminal('t1')];
+    askForTerminal(`${CWD}/data`);
+    tab();
+    await waitFor(() => expect(opened).toEqual([{ cwd: `${CWD}/data`, cols: 90, rows: 30 }]));
+    await waitFor(() => expect(tabs()).toEqual(['zsh', 'zsh · data']));
+    expect(shows()).toBe('t11');
+    // Not one of another folder's, to end to make room.
+    expect(screen.queryByRole('list', { name: 'Terminals in other folders' })).toBeNull();
   });
 
   it('ends a shell at its prompt at once, and asks first when a program runs in it', async () => {

@@ -17,14 +17,16 @@ settings; and updates from Settings.
   up, as closing a window does, asking first while a program runs in it, also a job left in the
   background, but not for what your prompt keeps running for itself (powerlevel10k's gitstatusd,
   pure's worker). On a computer you type straight into it, with input methods, the emoji picker and
-  dictation too, select to Quote (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A
-  right-click on it, or a long press on a phone, opens Claude Desktop's terminal menu: Quote and
-  Copy what is selected, Paste, Select all and Clear terminal, with Select text on a phone. Clear
-  terminal clears the screen and what scrolled off it, as `clear` does, on every page showing the
-  terminal and in the computer's copy, so a reload, or another page, shows it cleared, and a program
-  in front of the shell, such as vim or htop, draws its screen again, as after Ctrl+L. Its colors
-  and font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim
-  does to pick a theme, gets them. A screen reader reads it.
+  dictation too, select to Quote (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A link
+  in it says where it goes before it opens: pointed at, at the foot of the screen, before ⌘-click
+  (Ctrl-click) opens it, and tapped on a phone, in a question with Open, as a program's link can
+  read as any words. A right-click on it, or a long press on a phone, opens Claude Desktop's
+  terminal menu: Quote and Copy what is selected, Paste, Select all and Clear terminal, with Select
+  text on a phone. Clear terminal clears the screen and what scrolled off it, as `clear` does, on
+  every page showing the terminal and in the computer's copy, so a reload, or another page, shows it
+  cleared, and a program in front of the shell, such as vim or htop, draws its screen again, as
+  after Ctrl+L. Its colors and font are Pelican's, light or dark, and a program that asks for its
+  colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
@@ -41,7 +43,8 @@ settings; and updates from Settings.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
-  the size the shell has on another page. A shell that ends keeps its last screen, with Start again;
+  the size the shell has on another page, as showing its tab again after Changes or Files does not
+  either, unless no other page shows it. A shell that ends keeps its last screen, with Start again;
   so does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
   hours with nothing running in it closes on its own, and one nobody typed into that no page shows
   makes room when 10 run; with 10 in use, the Terminal tab lists those in other folders, to end one,
@@ -50,12 +53,17 @@ settings; and updates from Settings.
   Ctrl+C gets through at once.
 - **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or `fish`
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
-  session's folder, pasted there, so its lines go in together. Only Claude's replies offer it, not a
-  file or a tool's output, and only for a command with nothing hidden in it, as an approval reads
-  one. Quote puts what you selected in the terminal, or its screen, above the message box as a quote
-  from the terminal, as Claude Desktop attaches one, naming its tab, with a note if you add one; of
-  a long one, its first 1,500 characters, as Desktop cuts any quote. Claude sees a terminal only
-  that way. `!` commands go into the conversation as before.
+  session's folder, which reads it from a file of its own (`.` or `source`), so its lines go in
+  together and run as they read: a `!` in it is not taken from your shell's history, as bash and zsh
+  take one in what is typed at their prompt. The question shows the whole command, wrapped, its
+  lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
+  the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
+  command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
+  sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider than 500
+  columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above
+  the message box as a quote from the terminal, as Claude Desktop attaches one, naming its tab, with
+  a note if you add one; of a long one, its first 1,500 characters, as Desktop cuts any quote.
+  Claude sees a terminal only that way. `!` commands go into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
   output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one
   is open), which opens the side chat with the passage attached, and Quote. On a computer they sit
@@ -192,9 +200,12 @@ settings; and updates from Settings.
   side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
   context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
   Download file, a folder Open in terminal. A `!` command in the conversation has a command step's
-  list, from a long press, a right-click or ⋯; Run in terminal, there and on a step, is offered for
-  a command that shows all it holds, as a code block's is. The rows of Files and of Changes have
-  their path's menu too, a folder's with Open in terminal.
+  list, from a long press, a right-click or ⋯; Run in terminal, there and on a step, asks first in
+  place, as a code block's does, showing the whole command, never the step's description of it, and
+  is offered for a command that shows all it holds, as a code block's is; not on a step you denied,
+  nor on the steps of a subagent or a workflow, and a PowerShell step's only where the terminal runs
+  PowerShell. The rows of Files and of Changes have their path's menu too, a folder's with Open in
+  terminal.
 - **What runs in the background, "1 in background".** Commands, agents and workflows Claude left
   running, and the checks it stays running for, read "2 in background" in the session list and under
   the title. ⌃B, as in Claude Desktop (Ctrl+Alt+B off a Mac, where Ctrl+B shows and hides the
@@ -367,7 +378,9 @@ settings; and updates from Settings.
 - A session started in a folder reached through a link (on a Mac, `/tmp` is `/private/tmp`) runs in
   the folder itself, as Claude Code records it, so its conversation, Changes and Terminal name one
   folder alike: before, a reload could show its terminal as no longer running, beside a second one
-  started under the folder's other name.
+  started under the folder's other name. A terminal belongs to the folder itself too, so one opened
+  on the New session page, before the first message, is the session's terminal once it starts,
+  rather than running on unseen, counting toward the 10, beside a second one.
 
 ### Security
 
@@ -395,9 +408,12 @@ settings; and updates from Settings.
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
   none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
-  (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there as in
-  any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is written
-  to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
+  (`npm_*`, `INIT_CWD`, `NODE`), Claude Code's own (`CLAUDECODE` and `CLAUDE_CODE_*`, such as how it
+  was started, or the id, messaging socket and token of a Claude Code session Pelican was started
+  from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
+  most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk but a
+  command Run in terminal runs, for its shell to read, readable by you alone and removed with its
+  terminal. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
   starts Pelican without them.
 - Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
   tells the program in front of the shell, found with `ps` as End's question finds it, that the
@@ -415,10 +431,16 @@ settings; and updates from Settings.
   still draws whole; the latest 2,048 links (the computer keeps none), no title, and at most 20
   lines' worth of output for a screen reader to read out, also of output with no line feed in it; a
   sequence that repeats a character, scrolls, inserts or deletes lines or moves by tab stops does so
-  at most a screen's worth of times (REP a line's), however large a count it gives, and the
-  computer's copy takes output in a little at a time; so no output grows Pelican's memory, or a
-  page's, without bound, or holds the rest of Pelican up for more than a moment; and output xterm
-  throws on stops neither Pelican nor a page's screen.
+  at most a screen's worth of times (REP a line's), however large a count it gives; the computer's
+  copy, and a page's screen, take output in pieces of bounded work, at most 512 characters and at
+  most as many sequences that work over the whole screen (a reset, DECALN, erasing it, scrolling it,
+  inserting or deleting lines or columns, the alternate screen) as cost about the same at its size,
+  a reset right after a reset not done again, and the shell waits while the computer's copy has more
+  than a quarter of a second of such work before it; a terminal closed takes nothing more in. So no
+  output grows Pelican's memory, or a page's, without bound, or holds the rest of Pelican, or a
+  page, up for more than a moment: 100 KB of resets at 500x300 held requests up for a third of a
+  second, and kept Pelican busy for 15 seconds after the terminal was closed. Output xterm throws on
+  stops neither Pelican nor a page's screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
@@ -449,7 +471,17 @@ settings; and updates from Settings.
 - Run in terminal reads a command as an approval does: it is offered, and the server runs it, only
   for one with no control character a shell takes as a key and nothing an approval would write out,
   such as a character that hides or turns text around, or a space other than a plain one where a
-  shell reads it as part of a word.
+  shell reads it as part of a word. Its question shows the whole command, wrapped, never only what
+  fits a block that scrolls sideways, and a command laid out to put part of it out of sight is
+  neither offered nor run, by the page's reading and the server's alike: a run of more than 16
+  blanks (300 spaces after `ls -la` hid a `; touch …` that ran), more than 2 blank lines in a row, a
+  line wider than 500 columns, or more than 50 lines. The command is not typed at the shell's
+  prompt, where bash, zsh and csh expand a `!` from the history, double quotes and all, so
+  `echo "!?SECRET?"` printed a secret from the history file: the shell reads it from a file of its
+  own, readable by you alone and removed with the terminal. A step's Run in terminal, and a `!`
+  command's, asks the same question, the command itself shown rather than the step's description of
+  it, and is never offered on a step you denied, on a subagent's or a workflow's step, or for a
+  PowerShell step where the terminal's shell is not PowerShell.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
   the few lines of @lydell's own against those read for this version, that this version pins each

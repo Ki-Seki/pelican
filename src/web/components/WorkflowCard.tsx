@@ -11,6 +11,7 @@ import {
 import { api } from '../lib/api';
 import { useSessionId } from '../lib/session-context';
 import { useSessionView } from '../lib/store';
+import { RunInTerminal } from '../lib/terminals';
 import { buildItems, outcomeOf, resultText, type ToolCall } from '../lib/turns';
 import { fenced, resultMarkdown, revealWorkflow, useNow, useOnScreen, useRevealed, useWide } from '../lib/workflows';
 import { Markdown } from './Markdown';
@@ -365,7 +366,10 @@ function AgentDetail({ agent, status, callId, cwd, onScreen, verbose }: { agent:
       </div>
       {pages.error && <div className="pb-1 text-danger">{pages.error.message}</div>}
       {pages.page && steps.length === 0 && <div className="pb-1 text-faint">{running ? 'No tool calls yet.' : 'No tool calls.'}</div>}
-      {shown.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={running} /> : null))}
+      {/* A workflow's agents' steps offer no Run in terminal. */}
+      <RunInTerminal.Provider value={undefined}>
+        {shown.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={running} /> : null))}
+      </RunInTerminal.Provider>
     </div>
   );
   const ended = (result || outcome || agent.error) && (
