@@ -11,8 +11,8 @@ vi.mock('../src/web/lib/api', async (original) => {
     ...actual,
     api: {
       ...actual.api,
-      models: async () => ({ models: [], signedIn: true }),
-      usage: async () => [],
+      models: async () => ({ models: [], signedIn: true, account: { email: 'me@example.com', plan: 'max' } }),
+      usage: async () => [{ type: 'five_hour', status: 'allowed', utilization: 0.4 }],
       planUsage: async () => null,
       defaults: async () => (await import('./start-defaults')).BUILT_IN,
       phoneAddress: async () => undefined,
@@ -45,7 +45,30 @@ afterEach(() => {
   asked.ranges = [];
 });
 
+const { setPrefs, getPrefs } = await import('../src/web/lib/prefs');
+
 describe('Settings', () => {
+  it('says what each applies to, in Claude Desktop’s words: Default transcript view, and While Claude works, Send', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <SettingsSheet open onClose={() => {}} info={{ version: '0.5.0', machine: 'studio', demo: true } as never} notifications="off" onToggleNotifications={() => {}} onSignOut={() => {}} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText('Default transcript view')).toBeTruthy();
+    expect(screen.queryByText('Sessions open in')).toBeNull();
+    expect(screen.getByText('While Claude works, Send')).toBeTruthy();
+    expect(screen.getByText('Claude reads it at its next step.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Queues for later' }));
+    expect(getPrefs().sendWhileBusy).toBe('queue');
+    expect(screen.getByText('It goes once the turn ends.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sends now' }));
+    expect(getPrefs().sendWhileBusy).toBe('steer');
+    // The account and its plan on one line; the plan's limits are in Usage and in Context, not here.
+    expect(await screen.findByText(/· Max plan/)).toBeTruthy();
+    expect(screen.queryByText('5-hour')).toBeNull();
+    setPrefs({ sendWhileBusy: 'steer' });
+  });
+
   it('opens Usage and activity, whose page loads when Settings opens rather than with it', async () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

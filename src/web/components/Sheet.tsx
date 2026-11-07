@@ -197,20 +197,23 @@ export function Segmented<T extends string | undefined>({
   value: T;
   onChange: (value: T) => void;
 }) {
+  // A light track with the one picked raised, as the panes' tabs are: the only black on a sheet is its one action.
   return (
-    <div className="grid auto-cols-fr grid-flow-col gap-1 px-3 pb-1">
-      {options.map((option) => (
-        <button
-          key={option.value ?? '*'}
-          type="button"
-          title={option.title}
-          aria-pressed={option.value === value}
-          onClick={() => onChange(option.value)}
-          className={`h-9 min-w-0 rounded-full px-1 text-[13.5px] ${option.value === value ? 'bg-fg text-bg' : 'bg-chip text-muted hover:text-fg'}`}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="px-3 pb-1">
+      <div className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-full bg-chip p-0.5">
+        {options.map((option) => (
+          <button
+            key={option.value ?? '*'}
+            type="button"
+            title={option.title}
+            aria-pressed={option.value === value}
+            onClick={() => onChange(option.value)}
+            className={`h-11 min-w-0 truncate rounded-full px-1 text-[13.5px] pointer-fine:h-8 ${option.value === value ? 'bg-panel font-medium text-fg shadow-[0_1px_3px_rgba(0,0,0,0.10)]' : 'text-muted hover:text-fg'}`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

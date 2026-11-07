@@ -54,7 +54,7 @@ export function SettingsSheet({
 }) {
   const prefs = usePrefs();
   const { data: models } = useQuery({ queryKey: ['models'], queryFn: api.models, staleTime: 10 * 60_000, enabled: open });
-  const { bars: planBars, windows, plan } = usePlanLimits(open);
+  const { bars: planBars } = usePlanLimits(open);
   const account = models?.account;
   const [modelOpen, setModelOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
@@ -104,8 +104,8 @@ export function SettingsSheet({
         options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
       />
 
-      {/* A session's own view is in its menu; this is the one the others open in. */}
-      <SheetHeading>Sessions open in</SheetHeading>
+      {/* A session's own view is in its menu (Transcript view); this is the one sessions open in. */}
+      <SheetHeading>Default transcript view</SheetHeading>
       <Segmented<ViewMode>
         value={prefs.view}
         onChange={(view) => setPrefs({ view })}
@@ -137,14 +137,15 @@ export function SettingsSheet({
       {file?.state === 'skipped' && <SheetNote tone="warn">{file.problem} A change here still goes in, as Claude Code’s own do.</SheetNote>}
       {unread && <SheetNote tone="warn">Claude Code’s settings could not be read: {(unread as Error).message}</SheetNote>}
 
-      <SheetHeading>Messages sent while Claude works</SheetHeading>
+      {/* What Send does while Claude works; the message box offers the other way beside it. */}
+      <SheetHeading>While Claude works, Send</SheetHeading>
       <Segmented<Prefs['sendWhileBusy']>
         value={prefs.sendWhileBusy}
         onChange={(sendWhileBusy) => setPrefs({ sendWhileBusy })}
-        options={[{ value: 'steer', label: 'Steer' }, { value: 'queue', label: 'Queue' }]}
+        options={[{ value: 'steer', label: 'Sends now' }, { value: 'queue', label: 'Queues for later' }]}
       />
       <p className="px-3 pt-1 text-[12px] leading-snug text-faint">
-        {prefs.sendWhileBusy === 'steer' ? 'Claude reads them at its next step.' : 'They are sent when the turn ends.'}
+        {prefs.sendWhileBusy === 'steer' ? 'Claude reads it at its next step.' : 'It goes once the turn ends.'}
       </p>
 
       <SheetHeading>Enter key</SheetHeading>
@@ -174,17 +175,14 @@ export function SettingsSheet({
         />
       ))}
 
+      {/* The account and its plan, on one line; the plan's limits are in Usage and activity, and in a session's Context. */}
       <SheetHeading>Account</SheetHeading>
-      {account && (
-        <div className="px-3 pb-1 text-[13px] leading-relaxed text-muted">
+      {account && (account.email || account.plan || account.organization) && (
+        <div className="truncate px-3 pb-1 text-[13px] leading-relaxed text-muted" title={[account.email, account.organization].filter(Boolean).join(' · ')}>
           {account.email && <span className="text-fg">{account.email}</span>}
-          {account.plan && <> · {PLAN[account.plan] ?? account.plan}</>}
-          {account.organization && <div className="text-faint">{account.organization}</div>}
+          {account.plan && <>{account.email ? ' · ' : ''}{PLAN[account.plan] ?? account.plan} plan</>}
+          {account.organization && <span className="text-faint"> · {account.organization}</span>}
         </div>
-      )}
-      {planBars}
-      {account && windows === 0 && !plan?.extra && (
-        <p className="px-3 text-[12px] leading-snug text-faint">{plan === null ? 'No plan limits apply to this account (an API key, Bedrock or Vertex).' : 'Usage limits show up here after Claude has worked in Pelican.'}</p>
       )}
       <SheetOption label="Usage and activity" trailing={<ChevronRight className="size-4 text-faint" />} onSelect={() => setUsageOpen(true)} />
 
