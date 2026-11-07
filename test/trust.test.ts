@@ -284,5 +284,7 @@ describe('starting a session', () => {
     expect(response.status).toBe(200);
     const { sessionId } = await response.json() as { sessionId: string };
     expect(getRun(sessionId)?.cwd).toBe(plain);
+    // Its Claude starts: wait for it here, so what it writes is not read by the test after this one.
+    await waitFor(launched);
   });
 }, 20_000);

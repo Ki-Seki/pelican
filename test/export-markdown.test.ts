@@ -495,9 +495,11 @@ describe('a reply in the export', () => {
       ['a line of HTML with blanks in it', `<div>\na${' '.repeat(120_000)}b\n</div>`],
       ['a line of HTML with tabs in it', `<div>\na${'\t'.repeat(120_000)}b\n</div>`],
     ] as const) {
-      const started = performance.now();
+      // Time spent working, not time passed: a busy computer slows the clock, not the work.
+      const started = process.cpuUsage();
       reply(said);
-      expect(performance.now() - started, name).toBeLessThan(1500);
+      const spent = process.cpuUsage(started);
+      expect((spent.user + spent.system) / 1000, name).toBeLessThan(1500);
     }
     // Written, it is at most a few times its size, however it is made to grow: a long address its links by reference use
     // again and again, and lazy lines in footnotes in containers, each written inside them.
@@ -512,10 +514,11 @@ describe('a reply in the export', () => {
     }
     // A prompt is text: a megabyte of the characters an email or a link is made of, read once.
     for (const c of ['+', '.', 'a@', 'www.']) {
-      const started = performance.now();
+      const started = process.cpuUsage();
       asText(c.repeat(megabyte / c.length));
       inlineText(c.repeat(megabyte / c.length));
-      expect(performance.now() - started, c).toBeLessThan(1500);
+      const spent = process.cpuUsage(started);
+      expect((spent.user + spent.system) / 1000, c).toBeLessThan(1500);
     }
   }, 60_000);
 });
