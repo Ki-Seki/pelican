@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { Attachment, ChatMessage, RewindCheck, RewindDone, RewindRestore, Rewound, RunState } from '../src/shared/protocol';
+import type { Attachment, ChatMessage, RecordedSettings, RewindCheck, RewindDone, RewindRestore, Rewound, RunState } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const FORKED = '44444444-2222-4333-8444-555555555555';
@@ -24,6 +24,8 @@ const server = vi.hoisted(() => ({
   undos: 0,
   rewound: undefined as Rewound | undefined,
   run: null as RunState | null,
+  /** What the session's last turn ran with, by its transcript. */
+  recorded: {} as RecordedSettings,
   failure: undefined as Error | undefined,
   /** What each check carried as the folder's trust, and whether the folder still waits for an answer. */
   checks: [] as Array<string | undefined>,
@@ -53,7 +55,7 @@ vi.mock('../src/web/lib/api', async (original) => {
         session: { id, title: 'Add a dark theme to the settings page', cwd: CWD, project: 'acme-web', lastActivity: at + 3000, status: 'idle' },
         run: server.run,
         tasks: [],
-        settings: {},
+        settings: server.recorded,
       }),
       messages: async () => {
         const all = conversation();
@@ -108,14 +110,16 @@ beforeAll(() => {
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft, saveDraft, waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { CommandMenu, showCommandMenu } = await import('../src/web/components/CommandMenu');
+const { setRun } = await import('../src/web/lib/store');
 
 afterEach(async () => {
   cleanup();
+  setRun(SESSION, undefined);
   localStorage.clear();
   setWaiting(SESSION, []);
   setWaiting(FORKED, []);
   media = {};
-  Object.assign(server, { check: undefined, hold: undefined, rewinds: [], undos: 0, rewound: undefined, run: null, failure: undefined, checks: [], untrusted: false });
+  Object.assign(server, { check: undefined, hold: undefined, rewinds: [], undos: 0, rewound: undefined, run: null, recorded: {}, failure: undefined, checks: [], untrusted: false });
   await new Promise((resolve) => setTimeout(resolve, 0));
   history.replaceState(null, '', '/');
 });
@@ -292,6 +296,20 @@ describe('Rewind to here', () => {
     fireEvent.click(await screen.findByText('Trust and start'));
     await waitFor(() => expect(server.rewinds).toEqual([['u2', 'conversation']]));
     expect(server.checks).toEqual([undefined, 'trusted']);
+  });
+
+  it('leaves the session’s model and mode as they were, though the Claude it started again has run no turn yet', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    // Opened again after a rewind: its Claude waits for the next message, told nothing so far, and
+    // the page hears of it (the socket) before it reads the session.
+    server.rewound = { prompt: 'u2', at: Date.now() };
+    server.run = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] };
+    server.recorded = { model: 'claude-opus-5-5', effort: 'medium', permissionMode: 'acceptEdits' };
+    setRun(SESSION, server.run);
+    open();
+    await screen.findByText('Done. The toggle sits under Display.');
+    await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Accept edits'));
+    expect(screen.getByLabelText('Model, effort and speed').textContent).toContain('Med');
   });
 
   it('acts on its turn’s prompt from a reply’s ⋯, on a phone', async () => {

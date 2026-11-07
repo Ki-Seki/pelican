@@ -215,6 +215,9 @@ settings.
 - On a phone, a tap near the end of the conversation lands on what was tapped: the conversation no
   longer moves under the lifting finger to reach its end, unless something arrived while the finger
   was down, as the last reply's actions, now always under it, are tapped there.
+- A session opened while its Claude waits, started for a rewind or a `!` command rather than a
+  message, shows its own model, effort and mode, and the next message keeps them, instead of
+  switching to Claude Code's defaults.
 
 ### Security
 

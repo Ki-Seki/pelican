@@ -27,7 +27,7 @@ import { defaultChange, forModel, modeNote, modelNote } from '../lib/defaults';
 import { getPrefs, markSeen, markTipSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, VIEW_OPTIONS, viewMode, viewOf } from '../lib/prefs';
 import { messageWith, olderQuote, promptGist, readMessage, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { CommentsChat } from '../lib/review';
-import { fromRecorded } from '../lib/settings';
+import { fromRecorded, runningWith } from '../lib/settings';
 import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
@@ -411,7 +411,7 @@ export function Chat({
   // the rest being what Claude Code's settings start it with (below).
   const [settings, setSettings] = useState<RunSettings>(() => {
     if (!sessionId) return carry ?? {};
-    return getView(sessionId).run?.settings ?? sessionChoice(sessionId)?.settings ?? {};
+    return runningWith(getView(sessionId).run) ?? sessionChoice(sessionId)?.settings ?? {};
   });
   const [draft, setDraftText] = useState<ComposerDraft>();
   const [note, setNote] = useState<string>();
@@ -465,7 +465,7 @@ export function Chat({
   // used yet; else what its last turn ran with (its transcript), the model named as it was picked
   // here. New sessions start as Claude Code's settings start them (Settings, lib/defaults.ts).
   const chosen = useRef(Boolean(carry));
-  const runSettings = view.run?.settings;
+  const runSettings = runningWith(view.run);
   const runKey = JSON.stringify(runSettings ?? null);
   useEffect(() => {
     if (runSettings) setSettings((current) => ({ ...current, ...runSettings }));

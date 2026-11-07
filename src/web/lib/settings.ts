@@ -20,3 +20,13 @@ export function fromRecorded(recorded: RecordedSettings | undefined, models: Mod
   if (recorded.permissionMode) out.permissionMode = recorded.permissionMode;
   return out;
 }
+
+/**
+ * What a session's Claude runs with, as its run says, once it says anything. One started for
+ * something other than a message (Rewind to here's check of the files, a rewind or its undo, a `!`
+ * command's record) has run no turn and been told nothing: until it is, the session's own
+ * settings stand, not Claude Code's defaults, which the next message would otherwise carry.
+ */
+export function runningWith(run: { settings: RunSettings } | undefined): RunSettings | undefined {
+  return run && Object.keys(run.settings).length > 0 ? run.settings : undefined;
+}
