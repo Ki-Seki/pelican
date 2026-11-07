@@ -66,16 +66,16 @@ settings; and updates from Settings.
   take one in what is typed at their prompt. Under the line that reads the file, the new tab shows
   the command itself, dimmed, as a terminal shows what was typed, then what it prints (in sh's
   family, bash and zsh among them, and fish). Your shell's history keeps the command itself, for Up
-  and Enter to run it again, rather than the line that read its file (bash, zsh and fish 4). The
-  question shows the whole command, wrapped, its lines numbered and counted, and the blanks a line
-  is padded with drawn, so nothing of it sits past the block's edge. Only Claude's replies offer it,
-  not a file or a tool's output, and only for a command with nothing hidden in it, as an approval
-  reads one, nor laid out to put part of it out of sight: a run of more than 16 blanks, more than 2
-  blank lines in a row, a line wider than 500 columns, or more than 50 lines. Quote puts what you
-  selected in the terminal, or its screen, above the message box as a quote from the terminal, as
-  Claude Desktop attaches one, naming its tab, with a note if you add one; of a long one, its first
-  1,500 characters, as Desktop cuts any quote. Claude sees a terminal only that way. `!` commands go
-  into the conversation as before.
+  and Enter to run it again, rather than the line that read its file (bash and fish 4, and zsh set
+  to HIST_IGNORE_SPACE, as oh-my-zsh sets it). The question shows the whole command, wrapped, its
+  lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
+  the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
+  command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
+  sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider than 500
+  columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above
+  the message box as a quote from the terminal, as Claude Desktop attaches one, naming its tab, with
+  a note if you add one; of a long one, its first 1,500 characters, as Desktop cuts any quote.
+  Claude sees a terminal only that way. `!` commands go into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
   output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one is
   open), which opens the side chat with the passage attached, and Quote. On a computer they sit
