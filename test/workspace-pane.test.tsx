@@ -6,13 +6,15 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
 const CWD = '/code/app';
+/** The terminals asked for, by what the page sent. */
+const opened: Array<Record<string, unknown>> = [];
 
 // The terminal's screen (xterm.js) is stood in for: the tab around it is what is tried here.
 vi.mock('../src/web/components/TerminalScreen', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
   return {
     TerminalScreen: forwardRef(function Stand(props: { id?: string }, ref) {
-      useImperativeHandle(ref, () => ({ size: () => ({ cols: 80, rows: 24 }), focus: () => undefined, input: () => undefined, paste: () => undefined, text: () => ({ before: '', screen: '', after: '' }) }));
+      useImperativeHandle(ref, () => ({ size: () => ({ cols: 80, rows: 24 }), colors: () => undefined, focus: () => undefined, input: () => undefined, paste: () => undefined, text: () => ({ before: '', screen: '', after: '' }) }));
       return <div data-terminal tabIndex={-1} data-shows={props.id ?? ''} />;
     }),
   };
@@ -31,7 +33,11 @@ vi.mock('../src/web/lib/api', async (original) => {
       git: async () => ({ repo: true, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 0 }] }),
       changes: async () => ({ turns: [], lines: {} }),
       tree: async () => [],
-      terminals: async () => ({ available: true, terminals: [{ id: 't1', cwd: CWD, program: 'zsh', viewers: 0, createdAt: 1 }] }),
+      terminals: async () => ({ available: true, terminals: [{ id: 't1', cwd: CWD, program: 'zsh', viewers: 0, createdAt: 1 }, ...opened.map((body, i) => ({ id: `t${i + 2}`, cwd: body.cwd as string, program: 'zsh', viewers: 0, createdAt: i + 2 }))] }),
+      openTerminal: async (body: Record<string, unknown>) => {
+        opened.push(body);
+        return { id: `t${opened.length + 1}`, cwd: body.cwd, program: 'zsh', viewers: 0, createdAt: opened.length + 1 };
+      },
       session: async (id: string) => ({
         session: { id, title: 'Clean up the build', cwd: CWD, project: 'app', lastActivity: Date.now() - 60_000, status: 'idle' },
         run: null,
@@ -140,6 +146,22 @@ describe('Changes and files beside the conversation', () => {
     key(terminal, { key: '`', code: 'Backquote', ctrlKey: true });
     expect(pane()).toBeNull();
     expect(document.activeElement).toBe(screen.getByLabelText('Message Claude'));
+  });
+
+  it('opens a new terminal in the session’s folder with Ctrl+Shift+`, as Claude Desktop’s New terminal does, from the terminal too', async () => {
+    computer();
+    opened.length = 0;
+    await session();
+    key(window, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(pane()).not.toBeNull());
+    expect(within(pane()!).getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => expect(opened).toEqual([expect.objectContaining({ cwd: CWD })]), LAZY);
+    // Pressed in the terminal, another, and the terminal stays.
+    const terminal = await waitFor(() => document.querySelector<HTMLElement>('[data-terminal]')!, LAZY);
+    terminal.focus();
+    key(terminal, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(opened).toHaveLength(2), LAZY);
+    expect(pane()).not.toBeNull();
   });
 
   it('closed with its X, gives the keys to the button that shows it', async () => {

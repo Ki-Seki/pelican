@@ -728,7 +728,6 @@ export function Chat({
   // session's folder, as Desktop's New terminal does. The side chat makes way first.
   const paneTab = shownTab(useWorkspaceStep());
   const { setOpen: setPaneOpen } = workspace;
-  const terminals = useTerminalsAvailable();
   useEffect(() => {
     if (!cwd) return undefined;
     const onKey = (e: KeyboardEvent) => {
@@ -741,15 +740,16 @@ export function Chat({
         composer.current?.focus();
         return;
       }
-      // Where this Pelican runs none, the tab says why.
-      if (fresh && terminals) askForTerminal(cwd);
+      // The tab starts it once it knows terminals run here, and otherwise says why.
+      if (fresh) askForTerminal(cwd);
       wantTerminalFocus();
       makeWay(() => showWorkspace({ tab: 'terminal' }));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cwd, terminals, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
+  }, [cwd, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
   // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
+  const terminals = useTerminalsAvailable();
   const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {
     askForTerminal(cwd, command);
     makeWay(() => showWorkspace({ tab: 'terminal' }));
