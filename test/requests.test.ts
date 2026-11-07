@@ -108,6 +108,13 @@ describe('a pull request Claude made', () => {
     expect(pr('https://evil.example/go?to=https://github.com/acme/web/pull/1')).toBeUndefined();
   });
 
+  it('makes at most five cards for a reply: the tags past them stay as their addresses', () => {
+    const urls = Array.from({ length: 7 }, (_, i) => `https://github.com/acme/web/pull/${i + 1}`);
+    const read = readPrCreated(`Opened them all.\n${urls.map((url) => `<pr-created>${url}</pr-created>`).join('\n')}\nDone.`);
+    expect(read.prs.map((pr) => pr.number)).toEqual([1, 2, 3, 4, 5]);
+    expect(read.text).toBe(`Opened them all.\n${urls.slice(5).join('\n')}\nDone.`);
+  });
+
   it('leaves a tag still being written out until it is whole', () => {
     expect(readPrCreated('Done.\n<pr-created>https://github.com/acme/we', true).text).toBe('Done.');
     expect(readPrCreated('Done.\n<pr-created>https://github.com/acme/web/pull/3</pr-created>', true).prs).toHaveLength(1);

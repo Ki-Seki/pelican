@@ -198,8 +198,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   number,title,state,isDraft,headRefName,baseRefName,statusCheckRollup`, run directly (never through
   a shell), only for an address of the form `https://github.com/<owner>/<repo>/pull/<n>`, from the
   system's temporary folder (no repository), with gh's prompts off and none of Pelican's settings in
-  its environment, within 10 seconds, and at most every 30 seconds for one pull request, whatever
-  pages ask. It reads; it changes nothing. The demo asks nothing. Only such an address's card
+  its environment, within 10 seconds, at most four at once, and at most every 30 seconds for one
+  pull request, whatever pages ask: an answer is kept for 30 seconds, for at most 256 pull requests,
+  and one asked about past them gets no status until an answer is that old. A reply has at most
+  five cards. It reads; it changes nothing. The demo asks nothing. Only such an address's card
   names a repository as GitHub's: a card for any other names its host first, whole, as the browser
   would open it (a name in another script as its punycode, without a user name), so a host made to
   look like GitHub's reads as what it is.

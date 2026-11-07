@@ -358,8 +358,9 @@ settings; and updates from Settings.
 - A pull request's card asks GitHub what it says of it now with `gh pr view <address> --json …`, the
   GitHub CLI as you, only where it is installed and signed in, only for an address of the form
   `https://github.com/<owner>/<repo>/pull/<n>` that Claude named in Desktop's `<pr-created>` tag,
-  from no repository, with no prompt and within 10 seconds, at most every half minute for a pull
-  request; it changes nothing. Only such an address's card names its repository as GitHub's: any other's names
+  from no repository, with no prompt and within 10 seconds, at most four at once and at most every
+  half minute for a pull request, however many cards pages show (a reply has at most five); it
+  changes nothing. Only such an address's card names its repository as GitHub's: any other's names
   its host first, as the browser would open it, so a host made to look like GitHub's
   (`github-com.pr-review.example`) does not pass for it. Pelican runs no git that changes anything:
   Commit changes and Create PR are requests to Claude, which runs git and gh under your permission

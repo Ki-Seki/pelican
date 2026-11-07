@@ -51,6 +51,9 @@ const TAG = /<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>/gi;
 const PULL_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d{1,10})(?:\/|$)/;
 const WORD = /[A-Za-z0-9_-]/;
 
+/** At most this many cards for one reply: the tags past them stay as their addresses. */
+export const PR_CARDS = 5;
+
 /**
  * A pull request's address, read as the browser that opens it reads it: its host (a name in
  * another script as its punycode, without a user name or password), `owner/name` and number.
@@ -76,10 +79,14 @@ export function pullOf(url: string): PrCreated | undefined {
 export function readPrCreated(text: string, streaming = false): { text: string; prs: PrCreated[] } {
   if (!text.includes('<pr-created>')) return { text, prs: [] };
   const prs: PrCreated[] = [];
-  /** The pull request a tag names, for a card, once however often it is named. */
+  /** The pull request a tag names, for a card: none once the reply has as many as it may have. */
   const card = (url: string) => {
     const pr = pullOf(url);
-    if (pr && !prs.some((other) => other.url === pr.url)) prs.push(pr);
+    if (!pr) return undefined;
+    if (!prs.some((other) => other.url === pr.url)) {
+      if (prs.length >= PR_CARDS) return undefined;
+      prs.push(pr);
+    }
     return pr;
   };
   let out = text.replace(/^[ \t]*<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>[ \t]*(?:\r?\n|$)/gim, (whole: string, url: string) => {
