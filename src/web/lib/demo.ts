@@ -1,12 +1,16 @@
 import { useSyncExternalStore } from 'react';
 
+import { isSavedEffort, modelKey, type StartDefaults } from '../../shared/defaults';
+import { isPermissionMode } from '../../shared/modes';
 import type {
-  Block, ChatMessage, MessagesPage, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus, SessionSummary, Workflow,
+  Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus,
+  SessionSummary, Workflow,
 } from '../../shared/protocol';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
 import { shortTitle } from '../../shared/titles';
 import { answerLocally, ApiError } from './api';
+import { fromDefaults } from './defaults';
 import { newId } from './ids';
 import { DEMO_NOTE, DemoRefusal, INSTALL_URL, STATIC_DEMO } from './static-demo';
 import { addLocalMessage, getView, setRun } from './store';
@@ -237,7 +241,8 @@ function create(body: SendBody): { sessionId: string } {
     status: 'running',
     ...(body.scratch ? { scratch: true } : {}),
   };
-  runAs(id, idleRun(id, body.settings));
+  // What was picked for it, the rest as the demo's Claude Code settings start a session.
+  runAs(id, idleRun(id, startDefaults ? { ...fromDefaults(startDefaults, demoModels), ...body.settings } : body.settings));
   reply(id, user(body.text ? [{ type: 'text', text: body.text }] : [], { uuid: body.uuid }));
   return { sessionId: id };
 }
@@ -357,7 +362,33 @@ function summarize(session: SessionSummary): SessionSummary {
 
 const sessionPath = /^sessions\/([^/?]+)(\/[^?]*)?(?:\?(.*))?$/;
 
+/**
+ * What new sessions start with in the demo: its server's answer (Claude Code's own defaults, from
+ * no file), then what was changed here, in the page alone. No settings file is read or written.
+ */
+let startDefaults: StartDefaults | undefined;
+let changedDefaults = false;
+let demoModels: ModelOption[] | undefined;
+
+function changeDefaults(body: Record<string, unknown>): StartDefaults {
+  if (!startDefaults) throw new DemoRefusal(DEMO_NOTE);
+  const next = structuredClone(startDefaults);
+  const effort = body.effort as { model?: unknown; level?: unknown } | undefined;
+  if (typeof body.model === 'string') next.model = body.model === 'default' ? { value: 'default', source: 'built-in' } : { value: body.model, source: 'user' };
+  else if (effort && typeof effort.model === 'string') {
+    const key = modelKey(effort.model, demoModels);
+    if (isSavedEffort(effort.level)) next.effort.byModel[key] = { level: effort.level, source: 'user' };
+    else delete next.effort.byModel[key];
+  } else if (typeof body.fast === 'boolean') next.fast = { value: body.fast, source: body.fast ? 'user' : 'built-in', perSession: false };
+  else if (isPermissionMode(body.permissionMode) && body.permissionMode !== 'bypassPermissions') next.permissionMode = { value: body.permissionMode, source: 'user' };
+  else throw new DemoRefusal(DEMO_NOTE);
+  startDefaults = next;
+  changedDefaults = true;
+  return next;
+}
+
 function read(path: string): Promise<unknown> | undefined {
+  if (changedDefaults && /^defaults(\?|$)/.test(path)) return Promise.resolve(startDefaults);
   const match = sessionPath.exec(path);
   const id = match ? decodeURIComponent(match[1]!) : undefined;
   const story = id ? stories.get(id) : undefined;
@@ -370,6 +401,8 @@ function read(path: string): Promise<unknown> | undefined {
 }
 
 function adjust(path: string, data: unknown): unknown {
+  if (path === 'models') demoModels = (data as { models?: ModelOption[] }).models;
+  if (/^defaults(\?|$)/.test(path) && !changedDefaults) startDefaults = data as StartDefaults;
   if (path === 'sessions') {
     const { sessions } = data as { sessions: SessionSummary[] };
     for (const session of sessions) folders.set(session.id, session.cwd);
@@ -400,6 +433,7 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
   const id = match ? decodeURIComponent(match[1]!) : undefined;
   const rest = match?.[2] ?? '';
   if (path === 'sessions' && init.method === 'POST') return create(body as SendBody);
+  if (path === 'defaults') return changeDefaults(body);
   if (id && rest === '/messages') return send(id, body as SendBody);
   if (id && rest === '/side') return side(id, body as { question?: string; uuid?: string; settings?: RunSettings });
   if (id && rest.startsWith('/permissions/')) return decide(id, decodeURIComponent(rest.slice('/permissions/'.length)), body as PermissionDecision);

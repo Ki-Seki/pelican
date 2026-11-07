@@ -9,7 +9,8 @@ import { bodyLimit } from 'hono/body-limit';
 import { compress } from 'hono/compress';
 
 import pkg from '../../package.json' with { type: 'json' };
-import { isPermissionMode, START_MODES, startMode } from '../shared/modes.js';
+import { type DefaultChange, isSavedEffort } from '../shared/defaults.js';
+import { isPermissionMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
 import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
@@ -25,7 +26,8 @@ import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { defaultMode, knownModels, listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
+import { newSessionSettings, readDefaults, saveDefault, SettingsRefused } from './defaults.js';
+import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { exactBytes } from './open.js';
 import { findPhoneAddress } from './phone.js';
@@ -369,7 +371,7 @@ async function claudeStarted(sessionId: string): Promise<void> {
   }
 }
 
-async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown; startMode?: unknown }, key: string): Promise<Edited | EditFailure> {
+async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown }, key: string): Promise<Edited | EditFailure> {
   const info = await sessionInfo(id);
   if (!info?.cwd || !(await isDirectory(info.cwd))) return { error: 'The session’s folder is missing', status: 404 };
   if (getRun(id)?.busy) return { error: 'Stop Claude before editing an earlier prompt.', status: 409 };
@@ -384,9 +386,9 @@ async function makeEdit(id: string, before: string, body: { text: string; settin
   const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
   const settings = cleanSettings(body.settings);
   if (!entry && settings.permissionMode === 'bypassPermissions') {
-    // The mode a new session there starts in: the page's pick in Settings, else Claude Code's own default, else Auto.
-    const picked = START_MODES.find((mode) => mode === body.startMode);
-    settings.permissionMode = startMode(picked, await defaultMode(info.cwd), knownModels()?.find((m) => m.value === (settings.model ?? 'default')));
+    // The mode a new session there starts in, as Claude Code's settings give it: Bypass only where they do.
+    const { permissionMode: _picked, ...rest } = settings;
+    settings.permissionMode = (await newSessionSettings(info.cwd, rest)).given.permissionMode;
   }
   const attachments = await imagesOf(id, before, body.keepImages);
   const message = { text: body.text, attachments, settings, uuid: key };
@@ -423,7 +425,7 @@ async function makeEdit(id: string, before: string, body: { text: string; settin
  */
 app.post('/api/sessions/:id/edit', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown; startMode?: unknown }>()
+  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown }>()
     .catch(() => ({}) as Record<string, unknown>);
   const key = uuidOf(body.uuid);
   const before = uuidOf(body.before);
@@ -434,7 +436,7 @@ app.post('/api/sessions/:id/edit', async (c) => {
   // Registered before anything is awaited, so a second request with this id waits for this one.
   let work = editing.get(key) as Promise<Edited | EditFailure> | undefined;
   if (!work) {
-    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages, startMode: body.startMode }, key);
+    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages }, key);
     work = made;
     editing.set(key, made as Promise<Edited>);
     void made.then((result) => {
@@ -572,12 +574,51 @@ app.get('/api/commands', async (c) => {
   return c.json(live ?? await listCompletions(cwd));
 });
 
-/** What a new session in a folder starts with, from the user's Claude Code settings (no folder: a scratch session). */
+/**
+ * What a new session in a folder starts with, from Claude Code's settings, and where each value
+ * comes from (no folder: a scratch session, and Settings). The demo's are its own, from no file.
+ */
 app.get('/api/defaults', async (c) => {
   const asked = c.req.query('cwd');
   const cwd = asked ? await checkedFolder(asked) : undefined;
   if (asked && !cwd) return c.json({ error: 'No such folder' }, 404);
-  return c.json({ permissionMode: (await defaultMode(cwd)) ?? null });
+  return c.json(await readDefaults(cwd));
+});
+
+/** One change, of one kind, as Claude Code's /model, /effort, /fast or /config makes it; or why not. */
+function defaultChange(raw: unknown): DefaultChange | string {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'Nothing to change';
+  const body = raw as Record<string, unknown>;
+  const keys = Object.keys(body).filter((key) => key !== 'cwd');
+  if (keys.length !== 1) return 'Change one thing at a time';
+  if (typeof body.model === 'string') return { model: body.model };
+  if (typeof body.fast === 'boolean') return { fast: body.fast };
+  if (isPermissionMode(body.permissionMode)) return { permissionMode: body.permissionMode };
+  const effort = body.effort as { model?: unknown; level?: unknown } | undefined;
+  if (effort && typeof effort === 'object' && typeof effort.model === 'string' && (effort.level === null || isSavedEffort(effort.level))) {
+    return { effort: { model: effort.model, level: effort.level } };
+  }
+  return 'Not a change Pelican makes';
+}
+
+/**
+ * Changes Claude Code's user settings (CLAUDE_CONFIG_DIR/settings.json) as its own command would,
+ * and answers with what a new session in `cwd` starts with now. Never Bypass, never another file.
+ */
+app.post('/api/defaults', async (c) => {
+  const raw = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+  const change = defaultChange(raw);
+  if (typeof change === 'string') return c.json({ error: change }, 400);
+  const asked = typeof raw?.cwd === 'string' ? raw.cwd : undefined;
+  const cwd = asked ? await checkedFolder(asked) : undefined;
+  if (asked && !cwd) return c.json({ error: 'No such folder' }, 404);
+  try {
+    await saveDefault(change);
+  } catch (error) {
+    if (error instanceof SettingsRefused) return c.json({ error: error.message }, error.status);
+    throw error;
+  }
+  return c.json(await readDefaults(cwd));
 });
 
 /** What `/usage` shows in Claude Code: asked of claude.ai when Settings opens, kept a minute. */

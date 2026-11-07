@@ -1,9 +1,16 @@
 import { Loader2, Sparkles, Zap } from 'lucide-react';
+import type { ReactNode } from 'react';
 
+import { effortOf, isSavedEffort, type StartDefaults } from '../../shared/defaults';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { ModelOption, RunSettings } from '../../shared/protocol';
 import { EFFORT_LABELS, EFFORT_SHORT } from '../lib/prefs';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
+
+/** A line of small print in a sheet: where a value comes from, or what a pick does. */
+export const SheetNote = ({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'warn' }) => (
+  <p className={`px-3 pt-2 text-[12px] leading-snug ${tone === 'warn' ? 'text-wait' : 'text-faint'}`}>{children}</p>
+);
 
 export const modelOf = (models: ModelOption[] | undefined, settings: RunSettings): ModelOption | undefined =>
   models?.find((m) => m.value === (settings.model ?? 'default')) ?? models?.[0];
@@ -21,9 +28,24 @@ export function ModelSummary({ settings, models }: { settings: RunSettings; mode
   );
 }
 
-/** Model, effort, fast mode and Ultracode: for one session in its composer, or for new sessions in Settings. */
+/** What a pick in a session's model sheet does besides, and why one was not saved. */
+export function SavedForNewSessions({ problem }: { problem?: string | undefined }) {
+  return (
+    <>
+      <SheetNote>As in Claude Code, a model, an effort or fast mode picked here is saved for new sessions too. Max effort and Ultracode stay with this session.</SheetNote>
+      {problem && <SheetNote tone="warn">{problem}</SheetNote>}
+    </>
+  );
+}
+
+/**
+ * Model, effort, fast mode and Ultracode: for one session in its composer, or (`forNewSessions`) for
+ * what new sessions start with, in Settings, which offers only what Claude Code keeps as a default:
+ * no Max effort, which is for one session, and no Ultracode, which no command saves. `defaults`:
+ * Claude Code's settings, which give a newly picked model its own effort, as /model does.
+ */
 export function ModelSheet({
-  open, onClose, title = 'Model', settings, models, onChange,
+  open, onClose, title = 'Model', settings, models, onChange, defaults, forNewSessions = false, note, footer,
 }: {
   open: boolean;
   onClose: () => void;
@@ -31,10 +53,17 @@ export function ModelSheet({
   settings: RunSettings;
   models: ModelOption[] | undefined;
   onChange: (settings: RunSettings) => void;
+  defaults?: StartDefaults;
+  forNewSessions?: boolean;
+  /** Where the values come from, when that is not plain. */
+  note?: ReactNode;
+  /** What a pick does besides, and anything that went wrong saving one. */
+  footer?: ReactNode;
 }) {
   const model = modelOf(models, settings);
-  const efforts = model?.efforts ?? [];
-  const canUltra = efforts.includes('xhigh');
+  const efforts = (model?.efforts ?? []).filter((e) => !forNewSessions || isSavedEffort(e));
+  const canUltra = !forNewSessions && (model?.efforts ?? []).includes('xhigh');
+  const fastPerSession = forNewSessions && defaults?.fast.perSession;
   const set = (patch: Partial<RunSettings>) => onChange({ ...settings, ...patch });
   return (
     <Sheet open={open} onClose={onClose} title={title} done>
@@ -47,14 +76,19 @@ export function ModelSheet({
           label={m.label}
           description={m.description}
           selected={m.value === model?.value}
-          onSelect={() => onChange({
-            ...settings,
-            model: m.value,
-            effort: settings.effort && m.efforts.includes(settings.effort) ? settings.effort : undefined,
-            fast: m.supportsFast ? settings.fast : false,
-            ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
-            ...(settings.permissionMode === 'auto' && m.supportsAuto === false ? { permissionMode: 'default' as const } : {}),
-          })}
+          onSelect={() => {
+            if (m.value === model?.value) return;
+            // The effort goes with the model, as in Claude Code: the one its settings keep for it.
+            const effort = defaults ? effortOf(defaults, m.value, models).level : settings.effort;
+            onChange({
+              ...settings,
+              model: m.value,
+              effort: effort && m.efforts.includes(effort) ? effort : undefined,
+              fast: m.supportsFast ? settings.fast : false,
+              ultracode: m.efforts.includes('xhigh') ? settings.ultracode : false,
+              ...(settings.permissionMode === 'auto' && m.supportsAuto === false ? { permissionMode: 'default' as const } : {}),
+            });
+          }}
         />
       ))}
       {efforts.length > 0 && (
@@ -71,7 +105,7 @@ export function ModelSheet({
         </>
       )}
       {(model?.supportsFast || canUltra) && <div className="h-2" />}
-      {model?.supportsFast && (
+      {model?.supportsFast && !fastPerSession && (
         <SheetToggle
           icon={<Zap className={`size-4 ${settings.fast ? 'fill-current text-wait' : 'text-faint'}`} />}
           label="Fast mode"
@@ -89,6 +123,8 @@ export function ModelSheet({
           onChange={(ultracode) => set({ ultracode })}
         />
       )}
+      {note && <SheetNote>{note}</SheetNote>}
+      {footer}
     </Sheet>
   );
 }
@@ -99,7 +135,7 @@ export function ModelSheet({
  * offered (Don't ask, which Claude Code's settings can give), so the list says where it is.
  */
 export function ModeSheet({
-  open, onClose, title = 'When Claude wants to act', offered, value, model, onPick,
+  open, onClose, title = 'When Claude wants to act', offered, value, model, onPick, note, footer,
 }: {
   open: boolean;
   onClose: () => void;
@@ -108,6 +144,9 @@ export function ModeSheet({
   value: PermissionMode;
   model: ModelOption | undefined;
   onPick: (mode: PermissionMode) => void;
+  /** Why it starts in this mode, when that is not plain. */
+  note?: ReactNode;
+  footer?: ReactNode;
 }) {
   const available = offered.filter((m) => m !== 'auto' || model?.supportsAuto !== false);
   const modes = available.includes(value) ? available : [value, ...available];
@@ -119,6 +158,8 @@ export function ModeSheet({
           onClose();
         }} />
       ))}
+      {note && <SheetNote tone={value === 'bypassPermissions' ? 'warn' : 'plain'}>{note}</SheetNote>}
+      {footer}
     </Sheet>
   );
 }

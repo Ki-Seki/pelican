@@ -13,7 +13,6 @@ import type {
   ModelOption,
   PlanUsage,
   PermissionDecision,
-  PermissionMode,
   RecordedSettings,
   RewindResult,
   RunSettings,
@@ -31,6 +30,7 @@ import type {
 } from '../../shared/protocol';
 import { useSyncExternalStore } from 'react';
 
+import type { DefaultChange, StartDefaults } from '../../shared/defaults';
 import type { Todo } from '../../shared/tasks';
 import type { NewTerminal, TerminalInfo, TerminalList, TerminalRunning } from '../../shared/terminal';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
@@ -255,10 +255,10 @@ export const api = {
   /**
    * Edit the prompt `before` and send it again: the last prompt in place (`inPlace`), an earlier
    * one on a branch made just before it (a new session for the first prompt). `uuid` is made once
-   * per edit, so a retry gets the same result. `startMode`: the mode Settings picked for new
-   * sessions, for a branch of a session in Bypass, which never starts in it.
+   * per edit, so a retry gets the same result. A branch of a session in Bypass starts in the mode
+   * Claude Code's settings start new sessions in.
    */
-  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[]; startMode?: PermissionMode }) =>
+  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[] }) =>
     send<{ sessionId: string; inPlace: boolean }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body),
   /**
    * A side question about the session, as Claude Desktop asks one: a side chat is made from the
@@ -296,8 +296,10 @@ export const api = {
   taskOutput: (id: string, task: string) => request<TaskOutput>(`sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task)}/output`),
   /** Takes back a prompt waiting for the turn to end. */
   unqueue: (id: string, uuid: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}/queued/${encodeURIComponent(uuid)}`),
-  /** The mode a new session starts in, from Claude Code's settings (no folder: a scratch session). */
-  defaults: (cwd?: string) => request<{ permissionMode: PermissionMode | null }>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
+  /** What a new session in `cwd` starts with, from Claude Code's settings, and whence (no folder: a scratch session, and Settings). */
+  defaults: (cwd?: string) => request<StartDefaults>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
+  /** Saves one change in Claude Code's user settings, as its /model, /effort, /fast or /config would; answers with the defaults for `cwd` now. */
+  saveDefault: (change: DefaultChange, cwd?: string) => send<StartDefaults>('POST', 'defaults', { ...change, ...(cwd ? { cwd } : {}) }),
   /** The last messages of an Agent call's subagent's transcript, or those before message `before`. */
   subagent: (id: string, agent: string, before?: number) =>
     request<MessagesPage>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}${before !== undefined ? `?before=${before}` : ''}`),

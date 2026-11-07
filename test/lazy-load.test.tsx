@@ -24,7 +24,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       models: async () => ({ models: [], signedIn: true }),
       usage: async () => [],
       planUsage: async () => null,
-      defaults: async () => ({ permissionMode: null }),
+      defaults: async () => (await import('./start-defaults')).BUILT_IN,
       // Still being read: the page is there, its figures to come.
       usageStats: () => new Promise(() => {}),
       git: async () => ({ repo: true, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 0 }] }),

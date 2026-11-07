@@ -208,6 +208,29 @@ can read your sessions and have Claude run commands as you, so treat access to i
   subagent's own transcript in that folder. An agent's steps come a page at a time, at most 768 KB
   of them (a message larger than 128 KB has its parts cut, saying how many were left out), and its
   pictures are left out.
+- **Of Claude Code's settings, Pelican writes four keys of one file, when you pick them.** What
+  new sessions start with is Claude Code's own settings: Pelican reads them through the Agent SDK's
+  `resolveSettings`, the user's, a folder's (only once the folder is trusted, as a session there
+  would) and managed ones, which runs nothing. Settings › New sessions start with, and a model, an
+  effort or fast mode picked in a session's model sheet, change Claude Code's user settings file
+  (`settings.json` in `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json`) as Claude Code's own
+  `/model`, `/effort`, `/fast` and `/config` do, and nothing else: `model`,
+  `modelSettings.<model>.effortLevel` (Low to Extra high), `fastMode` (true, or taken out) and
+  `permissions.defaultMode` (Manual, Accept edits, Plan or Auto). Bypass is never written: the
+  server refuses it, as it refuses any other key, two changes at once, a model Claude Code does not
+  list and Max effort. Only a signed-in request from Pelican's own page gets there, and the demo
+  neither reads nor writes the file. The file is read, the change merged in with every other key
+  kept as it was, and the whole written as Claude Code writes it (two-space JSON and a newline): to
+  a temporary file beside it with its permissions, synced, then renamed over it, so no program
+  ever reads half a file; a symlinked file is written at its target, the link kept. Just before
+  the rename the file is read again: if it changed meanwhile (Claude Code saving `/model`), the
+  change is made again on top of what is there, never over it, and after five tries Pelican gives
+  up and says so. A file that is not valid JSON, holds no object or is larger than 2 MB is left as
+  it is, and Settings says so. Pelican writes no folder's settings and no managed settings, and
+  never a key that grants anything, such as `permissions.allow` or hooks. Where your own or managed
+  settings make Bypass the default, new sessions start in it, as Claude Code's do, and Settings and
+  the new session's mode sheet say so; a folder's own Bypass or Auto is not taken, as in Claude
+  Code.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.

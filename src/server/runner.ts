@@ -46,6 +46,7 @@ import { describeAlways, sessionModeOf } from './approvals.js';
 import { sdkPackage } from './claude-code.js';
 import { config } from './config.js';
 import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
+import { newSessionSettings } from './defaults.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
@@ -474,8 +475,15 @@ export class SessionRun {
     return changed;
   }
 
+  /**
+   * What a new session passes Claude Code, where it is less than it runs with: the model, effort
+   * and Ultracode Claude Code's settings give are Claude Code's to read (defaults.ts).
+   */
+  given?: RunSettings;
+
   start(): void {
-    const settings = this.settings;
+    const settings = this.given ?? this.settings;
+    const ultracodeOff = this.given?.ultracode === false;
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
@@ -486,11 +494,12 @@ export class SessionRun {
       ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
       allowDangerouslySkipPermissions: true,
-      ...(settings.fast || settings.ultracode ? {
+      ...(settings.fast || settings.ultracode || ultracodeOff ? {
         settings: {
           ...(settings.fast ? { fastMode: true } : {}),
-          // Ultracode needs workflows; both are session settings, like the CLI's --settings.
-          ...(settings.ultracode ? { ultracode: true, enableWorkflows: true } : {}),
+          // Ultracode needs workflows; both are session settings, like the CLI's --settings. Off is
+          // said only for a new session it was turned off for: a settings file may turn it on.
+          ...(settings.ultracode ? { ultracode: true, enableWorkflows: true } : ultracodeOff ? { ultracode: false } : {}),
         },
       } : {}),
       includePartialMessages: true,
@@ -942,6 +951,26 @@ export class SessionRun {
     this.settings = next;
     if (init.permissionMode) this.noteMode(init.permissionMode);
     if (changed) this.emit();
+    void this.noteApplied();
+  }
+
+  /**
+   * The effort and Ultracode Claude Code runs with, which its init leaves out run through the SDK:
+   * get_settings says them as applied, after its settings, the model and any cap.
+   */
+  private async noteApplied(): Promise<void> {
+    // A control request the SDK has but does not type yet.
+    const q = this.q as (Query & { getSettings?: () => Promise<{ applied?: { effort?: unknown; ultracode?: unknown } } | undefined> }) | undefined;
+    if (!q?.getSettings || this.applying > 0) return;
+    const applied = await q.getSettings().then((answer) => answer?.applied, () => undefined);
+    if (!applied || this.applying > 0 || this.closed) return;
+    const next = { ...this.settings };
+    if (typeof applied.effort === 'string') next.effort = applied.effort;
+    else if (applied.effort === null) delete next.effort;
+    if (typeof applied.ultracode === 'boolean') next.ultracode = applied.ultracode;
+    if (JSON.stringify(next) === JSON.stringify(this.settings)) return;
+    this.settings = next;
+    this.emit();
   }
 
   /** Whether auto mode can carry out a plan with the model this session runs, when that is known. */
@@ -1552,10 +1581,14 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
   }
   const cwd = target.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`Not a folder: ${cwd ?? '(none)'}`);
-  const run = new SessionRun(randomUUID(), cwd, input.settings, false, undefined, await launchFor(cwd));
+  const launch = await launchFor(cwd);
+  // What was picked for it, and the rest as Claude Code's settings give it.
+  const { given, shown } = await newSessionSettings(cwd, input.settings);
+  const run = new SessionRun(randomUUID(), cwd, shown, false, undefined, launch);
+  run.given = given;
   runs.set(run.sessionId, run);
   run.start();
-  await run.send(input);
+  await run.send({ ...input, settings: shown });
   return run.sessionId;
 }
 

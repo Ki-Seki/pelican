@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
+import { startModeFor } from '../../shared/defaults';
+import { pickerValue } from '../../shared/model-names';
+import { MODE_INFO } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
@@ -14,7 +16,8 @@ import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { composing, hasKeyboard, isKey } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
-import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
+import { defaultChange, forModel, modeNote, modelNote } from '../lib/defaults';
+import { getPrefs, markSeen, markTipSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
 import { messageWith, olderQuote, promptGist, readMessage, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { CommentsChat } from '../lib/review';
 import { fromRecorded } from '../lib/settings';
@@ -40,7 +43,7 @@ import type { Item } from '../lib/turns';
 import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
-import { modelOf } from './ModelSheet';
+import { modelOf, SavedForNewSessions } from './ModelSheet';
 import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
@@ -62,6 +65,8 @@ import { prefetchWorkspace } from './WorkspaceTabs';
  */
 const CLEAR = /^\/(clear|reset|new)(\s|$)/;
 const carried = new Map<string, RunSettings>();
+
+const SETTING_KEYS = ['model', 'effort', 'fast', 'ultracode', 'permissionMode'] as const;
 
 function localMessage(uuid: string, text: string, attachments: Attachment[]): ChatMessage {
   const blocks: Block[] = [];
@@ -384,14 +389,11 @@ export function Chat({
     carried.delete(viewId);
     return settings;
   });
+  // A session's own settings; for a new session, what was picked for it here (or came with it),
+  // the rest being what Claude Code's settings start it with (below).
   const [settings, setSettings] = useState<RunSettings>(() => {
-    // The mode is the session's own; a new session's is worked out below.
-    const { permissionMode: _start, ...base } = sessionId ? loadDefaults() : newSessionDefaults();
-    if (!sessionId) return carry ? { ...base, ...carry } : base;
-    const live = getView(sessionId).run?.settings;
-    if (live) return { ...base, ...live };
-    const choice = sessionChoice(sessionId);
-    return choice ? { ...base, ...choice.settings } : base;
+    if (!sessionId) return carry ?? {};
+    return getView(sessionId).run?.settings ?? sessionChoice(sessionId)?.settings ?? {};
   });
   const [draft, setDraftText] = useState<ComposerDraft>();
   const [note, setNote] = useState<string>();
@@ -430,7 +432,7 @@ export function Chat({
   // shows, most specific first: what Claude runs with for it here right now (kept up to date,
   // also when plan mode ends or another tab changes them); else a choice made here that no turn has
   // used yet; else what its last turn ran with (its transcript), the model named as it was picked
-  // here. New sessions start from the defaults in Settings, which only Settings changes.
+  // here. New sessions start as Claude Code's settings start them (Settings, lib/defaults.ts).
   const chosen = useRef(Boolean(carry));
   const runSettings = view.run?.settings;
   const runKey = JSON.stringify(runSettings ?? null);
@@ -447,44 +449,68 @@ export function Chat({
     if (runSettings || chosen.current || !sessionId) return;
     const choice = session ? sessionChoice(sessionId) : undefined;
     if (choice && session && choice.at > session.lastActivity) setSettings((current) => ({ ...current, ...choice.settings }));
-    else if (recorded) setSettings({ ...loadDefaults(), permissionMode: undefined, ...recorded });
+    else if (recorded) setSettings({ permissionMode: undefined, ...recorded });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, recordedKey, session?.lastActivity, Boolean(runSettings)]);
 
-  // A new session starts in the mode picked in Settings, else the one Claude Code's settings give
-  // for its folder (permissions.defaultMode), else Auto, Manual for a model without Auto
-  // (startMode): worked out afresh until a mode is picked for it here.
-  const [modePicked, setModePicked] = useState(() => Boolean(sessionId) || carry?.permissionMode !== undefined);
-  const [pickedStart] = useState(() => loadDefaults().permissionMode);
+  // What Claude Code's settings start a new session with in its folder (a scratch session: none),
+  // read as the session would; in a session, its folder's, for the model sheet. Nothing of
+  // Pelican's own: a new session sends only what was picked for it, and the server asks Claude
+  // Code for the rest (defaults.ts).
   const defaultsQuery = (folder: string | undefined) => ({
     queryKey: ['defaults', folder ?? ''],
     queryFn: () => api.defaults(folder),
     staleTime: 30_000,
     retry: false,
   });
-  const { data: defaults } = useQuery({ ...defaultsQuery(scratch ? undefined : newCwd), enabled: !sessionId && (scratch || Boolean(newCwd)) });
-  const startingMode = (next: RunSettings, claudeCode: PermissionMode | null | undefined) => startMode(pickedStart, claudeCode ?? undefined, modelOf(modelList?.models, next));
-  const shown = modePicked ? settings : { ...settings, permissionMode: startingMode(settings, defaults?.permissionMode) };
-  /** The mode a new session starts in, in `folder`, once Claude Code's settings there are known. */
-  const startModeIn = async (folder: string | undefined, next: RunSettings) => {
-    const claudeCode = await queryClient.fetchQuery(defaultsQuery(folder)).then((d) => d.permissionMode, () => undefined);
-    return startingMode(next, claudeCode);
-  };
-  /** What a branch, an edited earlier prompt or a /clear goes on with: these settings, never Bypass. */
+  const defaultsFolder = sessionId ? session?.cwd || view.run?.cwd : scratch ? undefined : newCwd;
+  const { data: defaults } = useQuery({ ...defaultsQuery(defaultsFolder), enabled: sessionId ? Boolean(defaultsFolder) : scratch || Boolean(newCwd) });
+  const models = modelList?.models;
+  const optionOf = (next: RunSettings) => models?.find((m) => m.value === (next.model ?? 'default'));
+  /** A new session on `model`, as Claude Code's settings start it. */
+  const startOn = (model: string): RunSettings => ({ model, ...(defaults ? forModel(defaults, model, models) : {}) });
+  const startModel = defaults ? pickerValue(defaults.model.value, models) : 'default';
+  const shown: RunSettings = sessionId ? settings : { ...startOn(settings.model ?? startModel), ...settings };
+  /** The mode a new session in `folder` starts in on the model of `next`: Bypass only where Claude Code's settings say so. */
+  const startModeIn = async (folder: string | undefined, next: RunSettings) =>
+    queryClient.fetchQuery(defaultsQuery(folder)).then((d) => startModeFor(d, optionOf(next)), () => 'default' as const);
+  /** What a branch, an edited earlier prompt or a /clear goes on with: these settings, Bypass only as a new session would start. */
   const branchSettings = async (): Promise<RunSettings> =>
     (settings.permissionMode === 'bypassPermissions' ? { ...settings, permissionMode: await startModeIn(cwd, settings) } : settings);
 
+  // A pick of a model, an effort or fast mode is saved for new sessions too, as /model, /effort and
+  // /fast save it in Claude Code; Max effort, Ultracode and the mode stay with the session.
+  const [saveProblem, setSaveProblem] = useState<string>();
+  const saveForNewSessions = (before: RunSettings, next: RunSettings) => {
+    const change = defaultChange(before, next, defaults?.fast.perSession);
+    if (!change) return;
+    setSaveProblem(undefined);
+    api.saveDefault(change, defaultsFolder)
+      .then((fresh) => {
+        queryClient.setQueryData(['defaults', defaultsFolder ?? ''], fresh);
+        void queryClient.invalidateQueries({ queryKey: ['defaults'], predicate: (q) => q.queryKey[1] !== (defaultsFolder ?? '') });
+      })
+      .catch((error: Error) => setSaveProblem(isDemoNote(error) ? error.message : `Not saved for new sessions: ${error.message}`));
+  };
+
   const changeSettings = (next: RunSettings) => {
     chosen.current = true;
-    // A model without Auto moves a worked-out Auto to Manual; only a mode picked here stays put.
-    if (!modePicked && next.permissionMode !== shown.permissionMode && next.permissionMode !== startingMode(next, defaults?.permissionMode)) setModePicked(true);
-    setSettings(next);
-    // It stays with this session when you leave and come back; a new session's goes with it once sent.
-    if (sessionId) saveSessionChoice(sessionId, next);
-    // A Claude running for this session switches now (from its next step), not at the next message.
-    if (sessionId && view.run) {
-      void api.applySettings(sessionId, next).catch(() => undefined);
+    const before = shown;
+    if (sessionId) {
+      setSettings(next);
+      // It stays with this session when you leave and come back.
+      saveSessionChoice(sessionId, next);
+      // A Claude running for this session switches now (from its next step), not at the next message.
+      if (view.run) void api.applySettings(sessionId, next).catch(() => undefined);
+    } else {
+      // A new session keeps as picked what is not what Claude Code would start it with; a model
+      // without Auto moving a worked-out Auto to Manual is no pick.
+      const start = { ...startOn(next.model ?? startModel), model: startModel };
+      const picks: RunSettings = {};
+      for (const key of SETTING_KEYS) if (next[key] !== start[key]) Object.assign(picks, { [key]: next[key] });
+      setSettings(picks);
     }
+    saveForNewSessions(before, next);
   };
 
   /**
@@ -520,11 +546,11 @@ export function Chat({
     // Queued, it waits in the strip above the composer: in the conversation once Claude gets it.
     if (!(busy && mode === 'queue')) addLocalMessage(viewId, localMessage(uuid, said, attachments));
     try {
-      // A new session's mode, with Claude Code's settings for its folder read first.
-      // An effort the model does not offer (High on a model without efforts) is not sent.
-      const offered = modelOf(modelList?.models, settings);
-      const fitted = settings.effort && offered && !offered.efforts.includes(settings.effort) ? { ...settings, effort: undefined } : settings;
-      const sent = modePicked ? fitted : { ...fitted, permissionMode: await startModeIn(scratch ? undefined : newCwd, fitted) };
+      // An effort the model does not offer (High on a model without efforts) is not sent. A new
+      // session sends what was picked for it; Claude Code's settings give the rest, on the server.
+      const offered = modelOf(models, shown);
+      const fit = (picked: RunSettings) => (picked.effort && offered && !offered.efforts.includes(picked.effort) ? { ...picked, effort: undefined } : picked);
+      const sent = fit(settings);
       const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
@@ -532,7 +558,7 @@ export function Chat({
         if (from === 'box') clearDraft(viewId, text);
       } else if (newCwd || scratch) {
         const { sessionId: created } = await api.create({ ...body, ...(scratch ? { scratch: true } : { cwd: newCwd }) });
-        saveSessionChoice(created, sent);
+        saveSessionChoice(created, fit(shown));
         if (from === 'box') clearDraft(viewId, text);
         // What is left in the box, typed since or waiting above it to be put back, goes on with
         // the session it was for, not with the next new session in this folder.
@@ -677,9 +703,8 @@ export function Chat({
     }
     try {
       // The server decides: the last prompt is replaced here; an earlier one branches, and a
-      // branch never starts in Bypass but in the mode a new session would (given the one
-      // picked in Settings).
-      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages, ...(pickedStart ? { startMode: pickedStart } : {}) });
+      // branch of a session in Bypass starts in the mode a new session would.
+      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages });
       saveSessionChoice(result.sessionId, result.inPlace ? settings : await branchSettings());
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       if (result.inPlace) {
@@ -878,8 +903,7 @@ export function Chat({
   };
 
   // Another folder picked for a new session before it starts: what is typed goes along, and so
-  // do the settings picked here; the mode only when one was picked, and never Bypass, which was
-  // picked for the other folder.
+  // do the settings picked here, but Bypass, which was picked for the other folder.
   const startIn = (start: Start) => {
     const next = `new:${'scratch' in start ? 'scratch' : start.cwd}`;
     // The folder it is in already: nothing moves, and nothing is set aside for a later new session there.
@@ -888,7 +912,7 @@ export function Chat({
     moveDraft(viewId, next);
     if (chosen.current) {
       const { permissionMode, ...rest } = settings;
-      carried.set(next, modePicked && permissionMode && permissionMode !== 'bypassPermissions' ? { ...rest, permissionMode } : rest);
+      carried.set(next, permissionMode && permissionMode !== 'bypassPermissions' ? { ...rest, permissionMode } : rest);
     }
     onStartIn(start);
   };
@@ -1039,6 +1063,12 @@ export function Chat({
         settings={shown}
         onSettings={changeSettings}
         models={modelList?.models}
+        {...(defaults ? { defaults } : {})}
+        sheetNotes={{
+          // For a new session, where its folder's or managed settings decide; for any, what a pick saves.
+          ...(!sessionId && defaults ? { model: modelNote(defaults, models, shown.model), mode: settings.permissionMode === undefined ? modeNote(defaults, optionOf(shown)) : undefined } : {}),
+          modelFooter: <SavedForNewSessions problem={saveProblem} />,
+        }}
         onSend={(text, attachments, mode) => void send(text, attachments, mode, 'box')}
         {...(sessionId && !sideChat ? {
           onShell: (command: string) => void shell(command),

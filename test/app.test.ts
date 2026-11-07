@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -314,5 +314,49 @@ describe('making a folder for a new session', () => {
     config.demo = true;
     const demo = await ask('/api/dirs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent, name: 'demo' }) });
     expect(demo.ok).toBe(false);
+  });
+});
+
+describe('what new sessions start with', () => {
+  const json = { 'content-type': 'application/json' };
+  const settingsFile = () => path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json');
+  const save = (body: unknown, headers: Record<string, string> = {}, signedIn = true) =>
+    ask('/api/defaults', { method: 'POST', body: JSON.stringify(body), headers: { ...json, ...headers } }, signedIn);
+
+  it('changes Claude Code’s user settings only for a signed-in request from Pelican’s page, and never in the demo', async () => {
+    await mkdir(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+    await writeFile(settingsFile(), '{"theme":"dark"}');
+    expect((await save({ permissionMode: 'plan' }, {}, false)).status).toBe(401);
+    expect((await save({ permissionMode: 'plan' }, { 'x-pelican': '' })).status).toBe(403);
+    expect((await save({ permissionMode: 'plan' }, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await save({ permissionMode: 'plan' }, { origin: 'https://evil.example' })).status).toBe(403);
+    config.demo = true;
+    expect((await save({ permissionMode: 'plan' })).status).toBe(403);
+    // The demo's are its own, Claude Code's defaults from no file: the user's file is not read.
+    expect(await (await ask('/api/defaults')).json()).toMatchObject({ model: { value: 'default', source: 'built-in' }, permissionMode: { value: 'auto', source: 'built-in' } });
+    config.demo = false;
+    expect(await readFile(settingsFile(), 'utf8')).toBe('{"theme":"dark"}');
+    expect(await (await ask('/api/defaults')).json()).toMatchObject({ file: { path: settingsFile(), state: 'ok' } });
+    const saved = await save({ permissionMode: 'plan' });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ permissionMode: { value: 'plan', source: 'user' } });
+    expect(await readFile(settingsFile(), 'utf8')).toBe(`${JSON.stringify({ theme: 'dark', permissions: { defaultMode: 'plan' } }, null, 2)}\n`);
+  });
+
+  it('refuses Bypass, more than one change at a time, and changes it does not make', async () => {
+    expect((await save({ permissionMode: 'bypassPermissions' })).status).toBe(400);
+    expect((await save({ fast: true, permissionMode: 'plan' })).status).toBe(400);
+    expect((await save({ hooks: { Stop: [] } })).status).toBe(400);
+    expect((await save({ effort: { model: 'default', level: 'max' } })).status).toBe(400);
+    expect((await save({ permissionMode: 'plan', cwd: '/no/such/folder' })).status).toBe(404);
+  });
+
+  it('leaves a file that does not parse as it is, and says why', async () => {
+    await writeFile(settingsFile(), '{ nope');
+    const response = await save({ fast: true });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toMatch(/as it is: It is not valid JSON/);
+    expect(await readFile(settingsFile(), 'utf8')).toBe('{ nope');
+    await rm(settingsFile());
   });
 });

@@ -14,7 +14,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       models: async () => ({ models: [], signedIn: true }),
       usage: async () => [],
       planUsage: async () => null,
-      defaults: async () => ({ permissionMode: null }),
+      defaults: async () => (await import('./start-defaults')).BUILT_IN,
       phoneAddress: async () => undefined,
       // Still being read: the page is there, its figures to come.
       usageStats: (range: string) => {

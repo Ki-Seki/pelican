@@ -1,9 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
-import { START_MODES } from '../../shared/modes';
 import type { RunSettings } from '../../shared/protocol';
 
-const SETTINGS_KEY = 'pelican:settings';
 const PREFS_KEY = 'pelican:prefs';
 
 const read = <T>(key: string, fallback: T): T => {
@@ -23,39 +21,8 @@ const write = (key: string, value: unknown) => {
   }
 };
 
-/**
- * What a new session starts with, set in Settings (a choice in a session stays in that session);
- * remembered per browser. The permission mode is there only once one was picked in Settings;
- * until then new sessions start in the one Claude Code's settings give, else Auto (startMode).
- */
-/** The effort new sessions start with until another is picked in Settings (owner's decision). */
-export const START_EFFORT = 'high';
-
-type StoredDefaults = Partial<Omit<RunSettings, 'effort'>> & { effort?: string | null };
-
-/** What was picked in Settings, as it is kept: effort null is Default picked there (Claude Code's own for the model). */
-export function loadDefaults(): RunSettings {
-  const raw = read<StoredDefaults>(SETTINGS_KEY, {});
-  return {
-    model: raw.model ?? 'default',
-    ...(raw.effort ? { effort: raw.effort } : {}),
-    fast: Boolean(raw.fast),
-    ultracode: Boolean(raw.ultracode),
-    ...(raw.permissionMode && START_MODES.includes(raw.permissionMode) ? { permissionMode: raw.permissionMode } : {}),
-  };
-}
-
-/** What a new session starts with: Settings' picks, with High effort until an effort is picked there. */
-export function newSessionDefaults(): RunSettings {
-  const picked = 'effort' in read<StoredDefaults>(SETTINGS_KEY, {});
-  const defaults = loadDefaults();
-  return picked || defaults.effort ? defaults : { ...defaults, effort: START_EFFORT };
-}
-
-export function saveDefaults({ permissionMode, effort, ...settings }: RunSettings): void {
-  // Default is kept as a pick of its own (null), so it is not taken for nothing picked yet.
-  write(SETTINGS_KEY, { ...settings, effort: effort ?? null, ...(permissionMode && START_MODES.includes(permissionMode) ? { permissionMode } : {}) });
-}
+// What new sessions start with is Claude Code's to say (lib/defaults.ts). The picks this browser
+// kept under 'pelican:settings' before 0.5.0 are no longer read.
 
 const TIPS_KEY = 'pelican:tips-seen';
 

@@ -28,7 +28,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       models: async () => ({ models: [], signedIn: true }),
       usage: async () => [],
-      defaults: async () => ({ permissionMode: null }),
+      defaults: async () => (await import('./start-defaults')).BUILT_IN,
       completions: async () => ({ commands: [], agents: [] }),
       git: async () => ({ repo: true, branch: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 0 }] }),
       changes: async () => ({ turns: [], lines: {} }),

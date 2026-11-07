@@ -1,17 +1,19 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, LogOut } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 
-import { MODE_INFO, START_MODES, startMode } from '../../shared/modes';
+import { type DefaultChange, SOURCE_LABEL, startModeFor } from '../../shared/defaults';
+import { MODE_INFO, START_MODES } from '../../shared/modes';
 import type { RunSettings, ServerInfo } from '../../shared/protocol';
 import { qrSvg } from '../../shared/qr';
 import { api, appBase, type AuthState } from '../lib/api';
-import { untilTime } from '../lib/format';
+import { defaultChange, fromDefaults, modelNote, modelSources, modeNote } from '../lib/defaults';
+import { shortPath, untilTime } from '../lib/format';
 import { hasKeyboard, MOD } from '../lib/keyboard';
 import { retried } from '../lib/load';
 import type { NotificationState } from '../lib/notifications';
-import { newSessionDefaults, type Prefs, saveDefaults, setPrefs, type Theme, usePrefs, VIEW_OPTIONS, type ViewMode } from '../lib/prefs';
-import { ModelSheet, ModelSummary, ModeSheet, modelOf } from './ModelSheet';
+import { type Prefs, setPrefs, type Theme, usePrefs, VIEW_OPTIONS, type ViewMode } from '../lib/prefs';
+import { ModelSheet, ModelSummary, ModeSheet, modelOf, SheetNote } from './ModelSheet';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
 
@@ -64,8 +66,6 @@ export function SettingsSheet({
       ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
     }));
   const account = models?.account;
-  // What new sessions start with. Changed only here: a choice in a session stays with that session.
-  const [defaults, setDefaults] = useState(newSessionDefaults);
   const [modelOpen, setModelOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
@@ -77,15 +77,31 @@ export function SettingsSheet({
     if (!open) setUsageOpen(false);
     else void loadUsage().catch(() => undefined);
   }, [open]);
-  const keep = (next: RunSettings) => {
-    setDefaults(next);
-    saveDefaults(next);
+  // What new sessions start with is Claude Code's settings (the user's own and managed ones, as a
+  // session in no project folder reads them), shared with the terminal and Claude Desktop; a change
+  // here goes into the user's file, as Claude Code's own /model, /effort, /fast and /config put it.
+  const queryClient = useQueryClient();
+  const { data: defaults, error: unread } = useQuery({ queryKey: ['defaults', ''], queryFn: () => api.defaults(), enabled: open, staleTime: 30_000, retry: false });
+  const [pending, setPending] = useState<RunSettings>();
+  const [problem, setProblem] = useState<string>();
+  const start: RunSettings = pending ?? (defaults ? fromDefaults(defaults, models?.models) : { model: 'default' });
+  const model = modelOf(models?.models, start);
+  const mode = defaults ? startModeFor(defaults, model) : undefined;
+  const save = (change: DefaultChange | undefined, next: RunSettings) => {
+    if (!change) return;
+    setPending(next);
+    setProblem(undefined);
+    api.saveDefault(change)
+      .then((fresh) => {
+        queryClient.setQueryData(['defaults', ''], fresh);
+        // Each folder's new sessions start from these too.
+        void queryClient.invalidateQueries({ queryKey: ['defaults'], predicate: (q) => q.queryKey[1] !== '' });
+      })
+      .catch((error: Error) => setProblem(error.message))
+      .finally(() => setPending(undefined));
   };
-  // Until a mode is picked here, new sessions start in the one Claude Code's settings give, else
-  // Auto: the row shows that, as a session in no project folder would start.
-  const { data: claudeCode } = useQuery({ queryKey: ['defaults', ''], queryFn: () => api.defaults(), enabled: open, staleTime: 30_000, retry: false });
-  const model = modelOf(models?.models, defaults);
-  const mode = startMode(defaults.permissionMode, claudeCode?.permissionMode ?? undefined, model);
+  const file = defaults?.file;
+  const where = file ? shortPath(file.path, info?.home) : '~/.claude/settings.json';
   // On this computer's own address, the phone needs another one: the server's, when it knows one.
   const onLoopback = isLoopback(location.hostname);
   const { data: phoneAddress } = useQuery({ queryKey: ['phone-address'], queryFn: api.phoneAddress, enabled: open && onLoopback && !info?.demo, staleTime: 60_000 });
@@ -130,18 +146,30 @@ export function SettingsSheet({
         options={[...VIEW_OPTIONS]}
       />
 
-      {/* Each session keeps its own model and mode; this is what new ones start with. */}
+      {/* Each session keeps its own model and mode; this is what new ones start with, from Claude Code's settings. */}
       <SheetHeading>New sessions start with</SheetHeading>
       <SheetOption
         label="Model"
-        trailing={<span className="flex min-w-0 items-center gap-1 text-[13px] text-muted"><ModelSummary settings={defaults} models={models?.models} /><ChevronRight className="size-4 text-faint" /></span>}
+        {...(defaults ? { description: modelSources(defaults, models?.models) } : {})}
+        trailing={<span className="flex min-w-0 items-center gap-1 text-[13px] text-muted"><ModelSummary settings={start} models={models?.models} /><ChevronRight className="size-4 text-faint" /></span>}
         onSelect={() => setModelOpen(true)}
       />
       <SheetOption
         label="Mode"
-        trailing={<span className="flex min-w-0 items-center gap-1 text-[13px] text-muted">{MODE_INFO[mode].label}<ChevronRight className="size-4 text-faint" /></span>}
+        {...(defaults ? { description: SOURCE_LABEL[defaults.permissionMode.source] } : {})}
+        trailing={<span className="flex min-w-0 items-center gap-1 text-[13px] text-muted">{mode ? MODE_INFO[mode].label : '…'}<ChevronRight className="size-4 text-faint" /></span>}
         onSelect={() => setModeOpen(true)}
       />
+      {defaults && mode === 'bypassPermissions' && <SheetNote tone="warn">{modeNote(defaults, model)}</SheetNote>}
+      <SheetNote>
+        Claude Code’s own settings, which the terminal and Claude Desktop read too. A change here is saved in{' '}
+        <span className="font-mono break-all">{where}</span>, as Claude Code’s /model, /effort, /fast and /config save it.
+      </SheetNote>
+      {file?.state === 'invalid' && (
+        <SheetNote tone="warn">Claude Code skips this file and Pelican changes nothing in it: {file.problem}</SheetNote>
+      )}
+      {file?.state === 'skipped' && <SheetNote tone="warn">{file.problem} A change here still goes in, as Claude Code’s own do.</SheetNote>}
+      {unread && <SheetNote tone="warn">Claude Code’s settings could not be read: {(unread as Error).message}</SheetNote>}
 
       <SheetHeading>Messages sent while Claude works</SheetHeading>
       <Segmented<Prefs['sendWhileBusy']>
@@ -231,23 +259,28 @@ export function SettingsSheet({
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>
       </div>
       {info?.auth && <SheetOption icon={<LogOut className="size-4" />} label="Sign out" danger onSelect={onSignOut} />}
-      {/* The mode picked here stays as picked when the model changes; one without Auto starts in Manual. */}
+      {/* Only what Claude Code keeps as a default: no Max effort and no Ultracode, which are a session's; never Bypass. */}
       <ModelSheet
         open={modelOpen}
         onClose={() => setModelOpen(false)}
         title="New sessions start with"
-        settings={{ ...defaults, permissionMode: undefined }}
+        settings={{ ...start, permissionMode: undefined }}
         models={models?.models}
-        onChange={(next) => keep({ ...next, permissionMode: defaults.permissionMode })}
+        onChange={(next) => save(defaultChange(start, next, defaults?.fast.perSession), next)}
+        forNewSessions
+        {...(defaults ? { defaults, note: modelNote(defaults, models?.models, start.model) } : {})}
+        footer={problem && <SheetNote tone="warn">{problem}</SheetNote>}
       />
       <ModeSheet
         open={modeOpen}
         onClose={() => setModeOpen(false)}
         title="New sessions start with"
         offered={START_MODES}
-        value={mode}
+        value={mode ?? 'default'}
         model={model}
-        onPick={(permissionMode) => keep({ ...defaults, permissionMode })}
+        onPick={(permissionMode) => save({ permissionMode }, start)}
+        {...(defaults ? { note: modeNote(defaults, model) } : {})}
+        footer={problem && <SheetNote tone="warn">{problem}</SheetNote>}
       />
       {usageUsed && (
         <Suspense fallback={null}>

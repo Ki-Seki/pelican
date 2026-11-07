@@ -1,10 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 
-import { filterEscalatingDefaultMode, query, resolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import type { AccountInfo, AgentInfo, McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SettingSource, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import type { AccountInfo, AgentInfo, McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
-import { isPermissionMode, type PermissionMode } from '../shared/modes.js';
 import type { Account, Agent, Command, McpServer, ModelOption, PlanUsage } from '../shared/protocol.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
@@ -170,25 +169,6 @@ export async function claudeCodeStatus(): Promise<{ version?: string; signedIn: 
   } catch (error) {
     return { error: (error as Error).message };
   }
-}
-
-/**
- * The mode new sessions start in, as Claude Code decides it from the settings: the folder's own
- * once Claude has run there (an escalating mode only from the user's own files, as Claude Code
- * does), else the user's. Bypass is left out: Pelican enters it only when it is picked.
- * Reading settings starts nothing.
- */
-export async function defaultMode(cwd?: string): Promise<PermissionMode | undefined> {
-  if (config.demo) return undefined;
-  const dir = cwd ? await realpath(cwd).catch(() => undefined) : undefined;
-  const read = async (settingSources: SettingSource[]) => {
-    const resolved = await resolveSettings({ cwd: dir ?? os.homedir(), settingSources });
-    return filterEscalatingDefaultMode(resolved).permissions?.defaultMode;
-  };
-  const trusted = dir ? await folderTrusted(dir) : false;
-  const mode = (await read(trusted ? ['user', 'project', 'local'] : ['user']).catch(() => undefined))
-    ?? (trusted ? await read(['user']).catch(() => undefined) : undefined);
-  return isPermissionMode(mode) && mode !== 'bypassPermissions' ? mode : undefined;
 }
 
 const DEMO_COMMANDS: Command[] = [

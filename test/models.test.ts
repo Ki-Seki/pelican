@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Claude Code's settings are read from a folder of the test's own, never ~/.claude.
 const scratch = vi.hoisted(() => {
@@ -13,19 +13,12 @@ const scratch = vi.hoisted(() => {
   return base;
 });
 
-const trusted = new Set<string>();
-vi.mock('../src/server/trust', () => ({ claudeRanIn: async (dir: string) => trusted.has(dir), folderTrusted: async (dir: string) => trusted.has(dir) }));
+vi.mock('../src/server/trust', () => ({ claudeRanIn: async () => false, folderTrusted: async () => false }));
 
-const { defaultMode, signedInFrom, startError, toCompletions } = await import('../src/server/models');
-
-let project: string;
-const settings = (file: string, defaultMode: string) => writeFile(file, JSON.stringify({ permissions: { defaultMode } }));
+const { signedInFrom, startError, toCompletions } = await import('../src/server/models');
 
 beforeAll(async () => {
   await mkdir(path.join(scratch, 'claude'), { recursive: true });
-  // Claude Code names folders by their real path (macOS's /tmp is /private/tmp).
-  project = await realpath(await mkdtemp(path.join(scratch, 'project-')));
-  await mkdir(path.join(project, '.claude'), { recursive: true });
 });
 afterAll(() => rm(scratch, { recursive: true, force: true }));
 
@@ -49,41 +42,6 @@ describe('Claude Code that cannot start', () => {
       .toMatch(/^Pelican could not find Claude Code at \/opt\/claude\. Set PELICAN_CLAUDE_PATH/);
     expect(startError('Claude Code executable not found at /x/claude. Is options.pathToClaudeCodeExecutable set?')).toMatch(/at \/x\/claude\. Set PELICAN_CLAUDE_PATH/);
     expect(startError('Something else')).toBeUndefined();
-  });
-});
-
-describe('the mode a new session starts in', () => {
-  const user = () => path.join(scratch, 'claude', 'settings.json');
-  // Each starts with no mode set, in a folder Claude has not worked in.
-  beforeEach(async () => {
-    await rm(user(), { force: true });
-    await rm(path.join(project, '.claude', 'settings.json'), { force: true });
-    trusted.clear();
-  });
-
-  it('is the user’s permissions.defaultMode, or none', async () => {
-    expect(await defaultMode(project)).toBeUndefined();
-    await settings(path.join(scratch, 'claude', 'settings.json'), 'plan');
-    expect(await defaultMode(project)).toBe('plan');
-    expect(await defaultMode()).toBe('plan');
-  });
-
-  it('takes a folder’s own setting only once Claude has worked there, and never an escalating one from the repository', async () => {
-    await settings(user(), 'plan');
-    await settings(path.join(project, '.claude', 'settings.json'), 'dontAsk');
-    expect(await defaultMode(project)).toBe('plan');
-    trusted.add(project);
-    expect(await defaultMode(project)).toBe('dontAsk');
-    // A repository cannot turn approvals off for whoever opens it: the user's own mode applies.
-    await settings(path.join(project, '.claude', 'settings.json'), 'acceptEdits');
-    expect(await defaultMode(project)).toBe('plan');
-  });
-
-  it('is never Bypass: Pelican enters it only when it is picked', async () => {
-    await settings(path.join(scratch, 'claude', 'settings.json'), 'bypassPermissions');
-    expect(await defaultMode(project)).toBeUndefined();
-    await settings(path.join(scratch, 'claude', 'settings.json'), 'auto');
-    expect(await defaultMode(project)).toBe('auto');
   });
 });
 

@@ -136,7 +136,7 @@ for (const cwd of folders) {
   await walk('');
 }
 // A new session's folder sheet, browsed from the demo's home down, and what the empty chat of a
-// new session in any of those folders asks: the mode it starts in, and its changes. The home is
+// new session in any of those folders asks: what it starts with, and its changes. The home is
 // the top of the demo's world, so its listing has no way up.
 const browse = async (dir) => {
   const listing = await (dir === undefined ? save('dirs', ({ parent, ...home }) => home) : save(`dirs?path=${q(dir)}`));

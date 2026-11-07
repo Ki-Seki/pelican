@@ -186,3 +186,28 @@ describe('advance', () => {
     expect(advance([todo('Only', 'pending')])).toBeUndefined();
   });
 });
+
+describe('what new sessions start with, in the demo', () => {
+  it('is the demo server’s answer, Claude Code’s defaults from no file, changed in the page alone', async () => {
+    const { BUILT_IN } = await import('./start-defaults');
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      fetched.push(`${init?.method ?? 'GET'} ${url}`);
+      return new Response(JSON.stringify(BUILT_IN), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      expect(await api.defaults()).toMatchObject({ model: { value: 'default', source: 'built-in' }, permissionMode: { value: 'auto' } });
+      expect(await api.saveDefault({ model: 'sonnet' })).toMatchObject({ model: { value: 'sonnet', source: 'user' } });
+      expect(await api.saveDefault({ effort: { model: 'sonnet', level: 'high' } })).toMatchObject({ effort: { byModel: { sonnet: { level: 'high', source: 'user' } } } });
+      expect(await api.saveDefault({ permissionMode: 'plan' })).toMatchObject({ permissionMode: { value: 'plan', source: 'user' } });
+      // A new session's folder gets the same, from the page.
+      expect(await api.defaults(CWD)).toMatchObject({ model: { value: 'sonnet' }, permissionMode: { value: 'plan' } });
+      const bypass = await api.saveDefault({ permissionMode: 'bypassPermissions' }).catch((error: unknown) => error);
+      expect(isDemoNote(bypass)).toBe(true);
+      // The demo's server was asked once, to read; nothing was sent to change anything.
+      expect(fetched).toEqual(['GET http://localhost:7860/api/defaults']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
