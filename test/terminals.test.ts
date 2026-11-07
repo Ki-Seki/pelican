@@ -333,12 +333,14 @@ describe('the size a terminal is drawn at', () => {
     expect(computer.ready).toMatchObject({ cols: 40, rows: 20 });
     // The computer's Terminal tab is picked again after Files: it says its size as it shows, which
     // the shell does not take from the phone, and the computer is told nothing new.
+    // What either page was told before (as the computer joined) is not what this is about.
+    const [phoneHeard, computerHeard] = [phone.messages.length, computer.messages.length];
     computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
     let from = computer.output.length;
     computer.type('stty size\r');
     await computer.sees(/\r\n20 40\r\n/, 10_000, from);
-    expect(phone.messages.filter((m) => m.type === 'size')).toEqual([]);
-    expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
+    expect(phone.messages.slice(phoneHeard).filter((m) => m.type === 'size')).toEqual([]);
+    expect(computer.messages.slice(computerHeard).filter((m) => m.type === 'size')).toEqual([]);
     // Alone, as the phone has gone, it takes its own size, and is told it so it draws at it.
     await phone.close();
     computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });

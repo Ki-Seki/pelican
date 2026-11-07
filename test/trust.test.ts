@@ -9,7 +9,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { StartDefaults } from '../src/shared/defaults';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
-import { getRun } from '../src/server/runner';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 import {
   claudeCodeTrusts, FULL_SETTINGS, folderBrings, folderTrusted, forgetTrust, launchFor, NeedsTrust, pelicanChoice, rememberChoice, trustQuestion,
@@ -282,9 +281,9 @@ describe('starting a session', () => {
     await symlink(plain, link).catch(() => undefined);
     const response = await create({ cwd: link, trust: 'trusted' });
     expect(response.status).toBe(200);
-    const { sessionId } = await response.json() as { sessionId: string };
-    expect(getRun(sessionId)?.cwd).toBe(plain);
-    // Its Claude starts: wait for it here, so what it writes is not read by the test after this one.
-    await waitFor(launched);
+    expect(((await response.json()) as { sessionId: string }).sessionId).toBeTruthy();
+    // Its Claude starts in the folder itself (it may have ended by now, as the stand-in does at once),
+    // and waiting for it here keeps what it writes from the test after this one.
+    expect(await waitFor(launched)).toContain(`cwd=${plain}\n`);
   });
 }, 20_000);

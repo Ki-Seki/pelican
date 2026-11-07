@@ -13,7 +13,7 @@ let root: string;
 const saved = { ...config };
 const gitEnv = (extra: Record<string, string> = {}) => ({ ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1', ...extra });
 const gitIn = (dir: string, args: string[], extra: Record<string, string> = {}) =>
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, env: gitEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], { cwd: dir, env: gitEnv(extra), stdio: ['ignore', 'pipe', 'pipe'] }).toString();
 
 async function unpacked(name: string, configText: string, files: Record<string, string> = {}) {
   const dir = path.join(root, name);
