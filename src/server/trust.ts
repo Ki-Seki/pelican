@@ -561,30 +561,41 @@ type Budget = { files: number; entries: number; bytes: number };
 const budgetFor = (): Budget => ({ files: 500, entries: 10_000, bytes: 32 * 1024 * 1024 });
 const spent = (budget: Budget) => budget.files < 0 || budget.entries < 0 || budget.bytes < 0;
 
-/** The Markdown files in a folder and its subfolders, as Claude Code finds them (through links too). */
-async function markdownIn(root: string, budget: Budget): Promise<string[]> {
+/**
+ * The Markdown files in a folder and its subfolders, as Claude Code finds them (through links too):
+ * a name that ends in `.md`, as its search for commands and agents takes one, and among `skills` a
+ * skill's SKILL.md in any case, as it opens that name and a Mac's file system finds SKILL.MD by it
+ * (where case counts, one it would not open is read too). Ten folders down at most: `deep` says
+ * there were more.
+ */
+async function markdownIn(root: string, budget: Budget, skills: boolean): Promise<{ files: string[]; deep: boolean }> {
   const files: string[] = [];
   const seen = new Set<string>();
+  let deep = false;
   const walk = async (dir: string, depth: number): Promise<void> => {
     const key = await realpath(dir).catch(() => dir);
-    if (seen.has(key) || depth > 10) return;
+    if (seen.has(key)) return;
+    if (depth > 10) {
+      deep = true;
+      return;
+    }
     seen.add(key);
     for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (spent(budget) || (budget.entries -= 1) < 0) return;
       const full = path.join(dir, entry.name);
       const isDir = entry.isSymbolicLink() ? await stat(full).then((s) => s.isDirectory(), () => false) : entry.isDirectory();
       if (isDir) await walk(full, depth + 1);
-      else if (entry.name.endsWith('.md') && (budget.files -= 1) >= 0) files.push(full);
+      else if ((entry.name.endsWith('.md') || (skills && /^skill\.md$/i.test(entry.name))) && (budget.files -= 1) >= 0) files.push(full);
     }
   };
   await walk(root, 0);
-  return files;
+  return { files, deep };
 }
 
 /**
  * What a folder's own commands, skills and agents bring (see fromMarkdown), to `found`, each item
- * by its file's path from `from`. Past the budget, what is left of them is not read, and each
- * folder of them is named (Brings.more).
+ * by its file's path from `from`. Past the budget, or deeper than it reads commands and agents,
+ * what is left of them is not read, and each folder of them is named (Brings.more).
  */
 async function fromClaudeFolder(dir: string, from: string, budget: Budget, found: Gathered): Promise<void> {
   for (const [kind, what] of MARKDOWN) {
@@ -593,7 +604,10 @@ async function fromClaudeFolder(dir: string, from: string, budget: Budget, found
       if (await exists(root)) found.more.add(path.relative(from, root));
       continue;
     }
-    for (const file of await markdownIn(root, budget)) {
+    const { files, deep } = await markdownIn(root, budget, kind === 'skills');
+    // Claude Code finds a command or an agent however deep it is, a skill only as <name>/SKILL.md.
+    if (deep && kind !== 'skills') found.more.add(path.relative(from, root));
+    for (const file of files) {
       const skill = /^skill\.md$/i.test(path.basename(file));
       // A skill is its SKILL.md; the other files in its folder are documents Claude may read.
       if (kind === 'skills' && !skill && path.dirname(file) !== root) continue;
