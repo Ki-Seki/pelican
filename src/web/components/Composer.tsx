@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Paperclip, Quote, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
+import type { StartDefaults } from '../../shared/defaults';
 import { MODE_INFO, OFFERED_MODES } from '../../shared/modes';
 import type { Agent, Attachment, Command, ModelOption, RunSettings, SendMode } from '../../shared/protocol';
 import { api, apiUrl, isDemoNote } from '../lib/api';
@@ -288,12 +289,18 @@ export function Composer({
   onSideChat,
   side = false,
   atBottom = true,
+  defaults,
+  sheetNotes,
   ref,
 }: {
   busy: boolean;
   settings: RunSettings;
   onSettings: (settings: RunSettings) => void;
   models: ModelOption[] | undefined;
+  /** Claude Code's settings for new sessions here: a model picked in the sheet takes its effort from them. */
+  defaults?: StartDefaults;
+  /** Small print for the model and mode sheets: where values come from, what a pick saves, what went wrong. */
+  sheetNotes?: { model?: ReactNode; modelFooter?: ReactNode; mode?: ReactNode };
   onSend: (text: string, attachments: Attachment[], mode: SendMode) => void;
   /** Runs a `!` command in the session's folder; without it, `!` is ordinary text. */
   onShell?: (command: string) => void;
@@ -868,8 +875,17 @@ export function Composer({
 
       {!side && (
         <>
-          <ModelSheet open={sheet === 'model'} onClose={() => setSheet(undefined)} settings={settings} models={models} onChange={onSettings} />
-          <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} />
+          <ModelSheet
+            open={sheet === 'model'}
+            onClose={() => setSheet(undefined)}
+            settings={settings}
+            models={models}
+            onChange={onSettings}
+            {...(defaults ? { defaults } : {})}
+            note={sheetNotes?.model}
+            footer={sheetNotes?.modelFooter}
+          />
+          <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} offered={OFFERED_MODES} value={permission} model={model} onPick={(m) => set({ permissionMode: m })} note={sheetNotes?.mode} />
         </>
       )}
     </div>

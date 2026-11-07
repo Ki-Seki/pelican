@@ -101,22 +101,24 @@ describe('editing a prompt', () => {
     expect(calls.send).toEqual(['new session']);
   });
 
-  it('starts a branch of a session in Bypass in the mode a new session would, never in Bypass', async () => {
+  it('starts a branch of a session in Bypass in the mode Claude Code’s settings start a new session in', async () => {
     const bypass = { settings: { permissionMode: 'bypassPermissions' } };
+    const settings = path.join(root, 'claude', 'settings.json');
+    await rm(settings, { force: true });
     await edit(3, key(5), bypass);
-    // No mode picked in Settings and none in Claude Code's settings: Auto.
+    // No mode in Claude Code's settings: its own default, Auto, as the terminal starts.
     expect(calls.modes).toEqual(['auto']);
-    await edit(3, key(6), { ...bypass, startMode: 'plan' });
-    expect(calls.modes.at(-1)).toBe('plan');
-    // A pick of Bypass is no pick.
-    await edit(3, key(7), { ...bypass, startMode: 'bypassPermissions' });
-    expect(calls.modes.at(-1)).toBe('auto');
-    await writeFile(path.join(root, 'claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }));
+    await writeFile(settings, JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }));
     await edit(3, key(8), bypass);
     expect(calls.modes.at(-1)).toBe('acceptEdits');
+    // Where the user's own settings make Bypass the default, a new session starts in it, as in Claude Code.
+    await writeFile(settings, JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+    await edit(3, key(10), bypass);
+    expect(calls.modes.at(-1)).toBe('bypassPermissions');
     // Another mode is the session's own: the branch goes on in it.
-    await edit(3, key(9), { settings: { permissionMode: 'plan' }, startMode: 'auto' });
+    await edit(3, key(9), { settings: { permissionMode: 'plan' } });
     expect(calls.modes.at(-1)).toBe('plan');
+    await rm(settings, { force: true });
   });
 
   it('leaves no branch behind when Claude cannot start', async () => {

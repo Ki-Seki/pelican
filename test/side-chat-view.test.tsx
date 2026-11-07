@@ -35,7 +35,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       models: async () => ({ models: [], signedIn: true }),
       usage: async () => [],
-      defaults: async () => ({ permissionMode: null }),
+      defaults: async () => (await import('./start-defaults')).BUILT_IN,
       completions: async () => ({ commands: [], agents: [] }),
       git: async () => server.git,
       tree: async () => [],
