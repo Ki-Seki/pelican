@@ -383,8 +383,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
         </span>
       )}
+      {/* Beside the conversation, the message box's Send is the one black button: this one is quiet. */}
       {onSendComments && (
-        <button type="button" onClick={onSendComments} aria-keyshortcuts={ariaKeys('commentsSend')} title={`Send now (${SEND_KEYS})`} className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg pointer-fine:h-9">
+        <button type="button" onClick={onSendComments} aria-keyshortcuts={ariaKeys('commentsSend')} title={`Send now (${SEND_KEYS})`} className={`flex h-11 shrink-0 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium pointer-fine:h-9 ${docked ? 'bg-chip text-fg hover:bg-hover' : 'bg-fg text-bg'}`}>
           Send now
           {docked && SEND_KEYS && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{SEND_KEYS}</span>}
         </button>

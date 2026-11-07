@@ -395,11 +395,12 @@ describe('the side chat', () => {
     // Stacked, the name says enough: the line under it goes.
     expect(within(pane()!).queryByText('Reads this session · changes nothing')).toBeNull();
     const handle = screen.getByRole('separator', { name: 'Resize the side chat' });
-    expect(handle.getAttribute('aria-valuenow')).toBe('42');
+    // The pane gets the larger part, until the handle moves.
+    expect(handle.getAttribute('aria-valuenow')).toBe('55');
     fireEvent.keyDown(handle, { key: 'ArrowDown' });
     fireEvent.keyDown(handle, { key: 'ArrowDown' });
-    expect(handle.getAttribute('aria-valuenow')).toBe('52');
-    expect(localStorage.getItem('pelican:side-chat-split')).toBe('0.52');
+    expect(handle.getAttribute('aria-valuenow')).toBe('65');
+    expect(localStorage.getItem('pelican:side-chat-split')).toBe('0.65');
     // The pane closed, the side chat takes the whole column, and back.
     fireEvent.click(within(changesPane()!).getByRole('button', { name: 'Close' }));
     expect(pane()).not.toBeNull();
@@ -413,7 +414,7 @@ describe('the side chat', () => {
     session();
     await loaded();
     toggle();
-    expect(screen.getByRole('separator', { name: 'Resize the side chat' }).getAttribute('aria-valuenow')).toBe('52');
+    expect(screen.getByRole('separator', { name: 'Resize the side chat' }).getAttribute('aria-valuenow')).toBe('65');
     // Its Close leaves the pane the whole column; the pane's, the side chat.
     fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
     expect(pane()).toBeNull();

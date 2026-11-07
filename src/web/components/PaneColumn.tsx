@@ -13,16 +13,23 @@ import { type KeyboardEvent, type PointerEvent, type ReactNode, useLayoutEffect,
  * either way, so neither the pane nor the side chat starts again when the other comes or goes.
  */
 
-/** Where the handle sits, as a share of the column's height from its top, until it is dragged: the side chat gets the larger part. */
-export const SPLIT = 0.42;
+/**
+ * Where the handle sits, as a share of the column's height from its top, until it is dragged: the
+ * pane gets the larger part, room for Changes' files and its Commit changes and Create PR, or a
+ * terminal's rows; the side chat its question box and an answer's first lines.
+ */
+export const SPLIT = 0.55;
 /** As far as the handle goes, by the keys or a drag; the height each part keeps at least is in place() too. */
 const MIN_SPLIT = 0.15;
 const MAX_SPLIT = 0.85;
 /** One press of an arrow key on the handle. */
 const STEP = 0.05;
-/** Room each part keeps however the handle is dragged or the window shrinks: the pane its tabs, the side chat its box and a line or two. */
-const PANE_MIN = '120px';
-const SIDE_MIN = '220px';
+/**
+ * Room each part keeps however the handle is dragged or the window shrinks: the pane its tabs and
+ * a few files, or a dozen of a terminal's rows; the side chat its box and a few lines.
+ */
+const PANE_MIN = '300px';
+const SIDE_MIN = '240px';
 const KEY = 'pelican:side-chat-split';
 
 const clampSplit = (value: number) => Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, value));
