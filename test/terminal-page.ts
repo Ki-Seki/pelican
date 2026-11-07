@@ -75,6 +75,9 @@ export class Page {
           this.screen.write(message.snapshot);
         } else if (message.type === 'size') {
           this.screen.resize(message.cols, message.rows);
+        } else if (message.type === 'clear') {
+          // Clear terminal, as TerminalScreen does: once the output before it is on the screen.
+          this.screen.write('', () => this.screen.clear());
         }
         return;
       }

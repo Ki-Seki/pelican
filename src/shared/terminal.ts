@@ -7,8 +7,8 @@
 //   GET    /api/terminals/:id   → TerminalRunning, or 404: End asks first while a program runs
 //   DELETE /api/terminals/:id   → { ok: true }: the shell is hung up (SIGHUP), as closing a window does
 //   WS     api/terminal?id=…&cols=…&rows=…   (relative to the page, as api/ws)
-//     → `ready` first, then the shell's output as binary frames, and size, program, exit and tick
-//     ← keystrokes and pastes as binary frames (at most TERMINAL_LIMITS.frame bytes each), resize, ack
+//     → `ready` first, then the shell's output as binary frames, and size, program, exit, clear and tick
+//     ← keystrokes and pastes as binary frames (at most TERMINAL_LIMITS.frame bytes each), resize, ack, colors, clear
 //
 // The server answers what programs ask of the terminal itself, from its copy of the screen: device
 // attributes (CSI c, CSI > c), status and the cursor's position (CSI n, CSI ? n), a mode's state
@@ -89,6 +89,12 @@ export type TerminalServerMessage =
   | { type: 'program'; program: string }
   /** The shell ended. */
   | ({ type: 'exit' } & TerminalExit)
+  /**
+   * Clear terminal, asked on a page: clear the screen and what scrolled off it here, keeping the
+   * line the cursor is on as the first (xterm's clear), once the output before it is written, as the
+   * server's copy does at the same place in the output.
+   */
+  | { type: 'clear' }
   /** Every 25 seconds, so a page can tell a quiet terminal from a socket that died. */
   | { type: 'tick' };
 
@@ -107,7 +113,13 @@ export type TerminalClientMessage =
    * The colors this page draws in, said on each connection and when they change: a program is
    * answered in those of the page last typed in, as the shell takes its size, else the last said.
    */
-  | { type: 'colors'; colors: TerminalColors };
+  | { type: 'colors'; colors: TerminalColors }
+  /**
+   * Clear terminal: the screen and its scrollback, as `clear` clears them, on every page and in the
+   * server's copy, so a page that comes back, or another, shows it cleared; a program in front of
+   * the shell (vim, htop) draws its screen again, as it does after Ctrl+L.
+   */
+  | { type: 'clear' };
 
 export const TERMINAL_LIMITS = {
   /** Terminals one Pelican runs at once; ended ones make room. */
@@ -211,6 +223,7 @@ export function terminalClientMessage(text: string): TerminalClientMessage | und
     const colors = terminalColors(value.colors);
     return colors ? { type: 'colors', colors } : undefined;
   }
+  if (value?.type === 'clear') return { type: 'clear' };
   return undefined;
 }
 
@@ -240,6 +253,8 @@ export function terminalServerMessage(text: string): TerminalServerMessage | und
     }
     case 'tick':
       return { type: 'tick' };
+    case 'clear':
+      return { type: 'clear' };
     default:
       return undefined;
   }

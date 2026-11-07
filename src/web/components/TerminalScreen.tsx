@@ -44,7 +44,10 @@ export type ScreenHandle = {
   selection: () => string;
   selectAll: () => void;
   clearSelection: () => void;
-  /** Clears the screen and what scrolled off it, here, as Desktop's Clear terminal does; the shell is not told. */
+  /**
+   * Clears the screen and what scrolled off it, as Desktop's Clear terminal does: here at once, and
+   * on the computer, whose copy is cleared and every page with it; a program in front draws again.
+   */
   clear: () => void;
 };
 
@@ -405,6 +408,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
           if (screen.exit) ended(screen.exit);
         },
         output: (data, written) => t.write(data, written),
+        // Cleared here or on another page: once what came before it is on the screen.
+        clear: () => t.write('', () => t.clear()),
         size: (cols, rows) => t.write('', () => {
           const size = clampSize(cols, rows);
           sizedElsewhere.current = true;
@@ -509,7 +514,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     selection: () => (term.current?.hasSelection() ? term.current.getSelection() : ''),
     selectAll: () => term.current?.selectAll(),
     clearSelection: () => term.current?.clearSelection(),
-    clear: () => term.current?.clear(),
+    clear: () => {
+      term.current?.clear();
+      connection.current?.clear();
+    },
   }), []);
 
   const quoteKey = keyText('quoteSelection');

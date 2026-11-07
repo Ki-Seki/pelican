@@ -32,6 +32,8 @@ export type ConnectionEvents = {
   size: (cols: number, rows: number) => void;
   program: (program: string) => void;
   exit: (exit: TerminalExit) => void;
+  /** Clear terminal, here or on another page: clear the screen once the output before it is on it. */
+  clear: () => void;
   state: (state: Connection) => void;
   /** The server let go of this page for being signed out: the app asks, and shows the sign-in. */
   signedOut?: () => void;
@@ -66,6 +68,8 @@ export class TerminalConnection {
   private unacked = 0;
   private opened = false;
   private stopped = false;
+  /** Clear terminal, asked while there was no connection: said once there is one again. */
+  private clearing = false;
   private readonly now: () => number;
 
   constructor(private readonly options: ConnectionOptions) {
@@ -116,6 +120,15 @@ export class TerminalConnection {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
   }
 
+  /**
+   * Clear terminal: the server clears its copy of the screen and has every page clear theirs, this
+   * one too, where the output is now; asked while there is no connection, once there is one.
+   */
+  clear(): void {
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'clear' }));
+    else this.clearing = true;
+  }
+
   /** The colors this page draws in now (light or dark); a connection made later says them too. */
   colors(colors: TerminalColors | undefined): void {
     if (colors && this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'colors', colors }));
@@ -151,6 +164,12 @@ export class TerminalConnection {
         this.opened = true;
         this.options.events.ready(event);
         this.options.events.state({ kind: 'open' });
+        if (this.clearing) {
+          this.clearing = false;
+          ws.send(JSON.stringify({ type: 'clear' }));
+        }
+      } else if (event.type === 'clear') {
+        this.options.events.clear();
       } else if (event.type === 'size') {
         this.options.events.size(event.cols, event.rows);
       } else if (event.type === 'program') {

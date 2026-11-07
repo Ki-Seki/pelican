@@ -52,6 +52,7 @@ function connect(size = { cols: 80, rows: 24 }) {
     size: vi.fn(),
     program: vi.fn(),
     exit: vi.fn(),
+    clear: vi.fn(),
     state: (state: Connection) => states.push(state),
   };
   const connection = new TerminalConnection({
@@ -98,13 +99,31 @@ describe('a terminal’s connection', () => {
     expect(socket().sent.at(-1)).toBe(JSON.stringify({ type: 'resize', cols: 90, rows: 20 }));
   });
 
+  it('asks the computer to clear the terminal for every page, and clears when told; asked with no connection, once there is one', () => {
+    const { connection, events, socket } = connect();
+    socket().open();
+    socket().text(ready);
+    connection.clear();
+    expect(socket().sent.at(-1)).toBe(JSON.stringify({ type: 'clear' }));
+    socket().text({ type: 'clear' });
+    expect(events.clear).toHaveBeenCalledTimes(1);
+    socket().end(1006);
+    connection.clear();
+    vi.advanceTimersByTime(1000);
+    socket().open();
+    expect(socket().sent.some((d) => d === JSON.stringify({ type: 'clear' }))).toBe(false);
+    // Once the screen has come, drawn as it was: then cleared, there and everywhere.
+    socket().text(ready);
+    expect(socket().sent.filter((d) => d === JSON.stringify({ type: 'clear' }))).toHaveLength(1);
+  });
+
   it('says the colors the page draws in on each connection, and again when they change', () => {
     const colors = { foreground: '#171717', background: '#fafafa', cursor: '#171717', ansi: Array.from({ length: 16 }, () => '#000000') };
     const connection = new TerminalConnection({
       url: () => 'ws://pelican/api/terminal?id=t1&cols=80&rows=24',
       size: () => ({ cols: 80, rows: 24 }),
       colors: () => colors,
-      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), state: vi.fn() },
+      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), clear: vi.fn(), state: vi.fn() },
       WebSocket: FakeSocket as unknown as typeof WebSocket,
     });
     connection.start();
@@ -162,7 +181,7 @@ describe('a terminal’s connection', () => {
     const connection = new TerminalConnection({
       url: () => 'ws://pelican/api/terminal?id=t1&cols=80&rows=24',
       size: () => ({ cols: 80, rows: 24 }),
-      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), state: vi.fn(), signedOut },
+      events: { ready: vi.fn(), output: vi.fn(), size: vi.fn(), program: vi.fn(), exit: vi.fn(), clear: vi.fn(), state: vi.fn(), signedOut },
       WebSocket: FakeSocket as unknown as typeof WebSocket,
     });
     connection.start();

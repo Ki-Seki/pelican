@@ -70,6 +70,9 @@ export const terminalTiming = {
 /** How long a closed terminal's shell has to hang up its jobs before Pelican lets go of its PTY. */
 const HANGUP_MS = 1000;
 
+/** A size changed by a row to have a program draw again is put back this soon after (redrawProgram). */
+const REDRAW_MS = 60;
+
 /**
  * The copy of the screen takes in output this many characters at a time: xterm takes in a piece
  * whole, and some output takes long (a screen's worth of scrolling for every few bytes), so
@@ -256,6 +259,11 @@ class Term {
   private saidColors = 0;
   private typist?: Viewer;
   private readonly setColors = new Map<number, [number, number, number]>();
+  /**
+   * Where in the output a page's Clear terminal falls (in bytes received), until the copy has
+   * cleared there: a page still waiting for its first screen gets the clear at its place.
+   */
+  private clears: number[] = [];
 
   constructor(readonly cwd: string, private readonly pty: Pty, shell: string, cols: number, rows: number, colors?: TerminalColors) {
     this.cols = cols;
@@ -477,15 +485,24 @@ class Term {
       this.send(viewer, { type: 'ready', id: this.id, cols: this.screen.cols, rows: this.screen.rows, snapshot, program: this.program, ...(final ? { exit: final } : {}) });
       // A size the copy has yet to come to in the output.
       if (this.screen.cols !== this.cols || this.screen.rows !== this.rows) this.send(viewer, { type: 'size', cols: this.cols, rows: this.rows });
-      let skip = this.parsed - at;
+      // The output after the screen, from where the copy is, each Clear terminal the copy has yet to
+      // come to at its place in it.
+      let pos = at;
+      let next = 0;
+      const clearsUpTo = (upTo: number) => {
+        for (; next < this.clears.length && this.clears[next]! <= upTo; next += 1) if (this.clears[next]! >= this.parsed) this.send(viewer, { type: 'clear' });
+      };
       for (const chunk of held) {
-        if (skip >= chunk.length) {
-          skip -= chunk.length;
-          continue;
+        const end = pos + chunk.length;
+        for (let from = Math.max(pos, this.parsed); from < end;) {
+          clearsUpTo(from);
+          const stop = next < this.clears.length && this.clears[next]! < end ? Math.max(this.clears[next]!, from + 1) : end;
+          this.sendOutput(viewer, chunk.subarray(from - pos, stop - pos));
+          from = stop;
         }
-        this.sendOutput(viewer, skip > 0 ? chunk.subarray(skip) : chunk);
-        skip = 0;
+        pos = end;
       }
+      clearsUpTo(Math.max(pos, this.parsed));
       if (this.exit && !final) this.send(viewer, { type: 'exit', ...this.exit });
     }
     this.pressure();
@@ -581,7 +598,70 @@ class Term {
       this.saidColors += 1;
       viewer.colors = { said: message.colors, turn: this.saidColors };
       this.colors = message.colors;
+    } else if (message?.type === 'clear') {
+      this.clear();
     }
+  }
+
+  /**
+   * Clear terminal, from a page: the screen and its scrollback cleared, the line the cursor is on
+   * kept as the first (xterm's clear, as `clear` leaves the prompt), on every page and in the copy,
+   * at this place in the output, so a page that comes back, or another, shows it cleared. A program
+   * in front of the shell is then told the window changed (SIGWINCH), as a resize tells it, and
+   * draws its screen again (vim, htop, less, claude), as it does after Ctrl+L: Ctrl+L itself would
+   * be a key typed into it, a form feed in vim's insert mode.
+   */
+  private clear(): void {
+    if (this.closed) return;
+    this.lastActive = Date.now();
+    const at = this.received;
+    // After the output before it, to the pages that have their screen; one still waiting for it
+    // gets it with its screen (cut).
+    this.tell({ type: 'clear' });
+    this.clears.push(at);
+    this.screen.write('', () => {
+      this.clears.splice(this.clears.indexOf(at), 1);
+      this.screen.clear();
+      if (!this.exit && !this.closed) void this.redrawProgram();
+    });
+  }
+
+  /**
+   * Has the program in front of the shell, if any, draw its screen again: its process group, the
+   * terminal's foreground one, is told the window changed. Where that is not this account's to
+   * signal (`sudo vim`), or ps cannot say and a full-screen program shows, the size changes by a
+   * row and back, which the system tells it of itself.
+   */
+  private async redrawProgram(): Promise<void> {
+    const table = await processTable();
+    if (this.closed || this.exit) return;
+    const own = table?.get(this.pid);
+    const front = own && own.tpgid > 0 && own.tpgid !== own.pgid ? own.tpgid : undefined;
+    if (own && !front) return;
+    if (front) {
+      try {
+        process.kill(-front, 'SIGWINCH');
+        return;
+      } catch {
+        // Not ours to signal: the size, below.
+      }
+    } else if (this.screen.buffer.active.type !== 'alternate') {
+      return;
+    }
+    const { cols, rows } = this;
+    try {
+      this.pty.resize(cols, Math.max(TERMINAL_LIMITS.rows.min, rows - 1));
+    } catch {
+      return;
+    }
+    setTimeout(() => {
+      if (this.closed || this.exit) return;
+      try {
+        this.pty.resize(this.cols, this.rows);
+      } catch {
+        // It has just ended.
+      }
+    }, REDRAW_MS).unref();
   }
 
   /** The shell takes the size of the page that last said one; the others are told. */

@@ -225,6 +225,68 @@ describe('a terminal', () => {
   }, 20_000);
 });
 
+describe('Clear terminal', () => {
+  /** The lines that hold anything, on a page's screen and in what scrolled off it. */
+  const written = (shown: Page) => shown.lines().map((line) => line.trimEnd()).filter(Boolean);
+
+  it('clears the screen and its scrollback on every page and in the copy, the prompt kept, so a page that comes back shows it cleared', async () => {
+    const terminal = await open();
+    const asker = await atPrompt(terminal.id);
+    const other = await atPrompt(terminal.id);
+    asker.type('seq 1 60\r');
+    await asker.sees(/60\r\nPROMPT\$ $/);
+    await until(() => written(other).includes('60'), 5000, 'the other page');
+    asker.send({ type: 'clear' });
+    // Every page is told, after the output before it, and clears as the copy does: the line the
+    // cursor is on stays, at the top, and nothing scrolled off is kept.
+    await until(() => asker.messages.some((m) => m.type === 'clear') && other.messages.some((m) => m.type === 'clear'), 5000, 'the clear');
+    for (const shown of [asker, other]) {
+      await until(() => written(shown).length === 1, 5000, 'a cleared screen');
+      expect(written(shown)).toEqual(['PROMPT$']);
+    }
+    // A page that comes in now gets the screen as it is: cleared.
+    const back = page(terminal.id);
+    await back.readied();
+    await until(() => written(back).length > 0, 5000, 'the screen');
+    expect(written(back)).toEqual(['PROMPT$']);
+    // The shell goes on from there.
+    back.type('echo after\r');
+    await back.sees(/after\r\n/);
+    await until(() => written(back).includes('after'), 5000, 'the output after it');
+    expect(written(back)[0]).toBe('PROMPT$ echo after');
+  }, 30_000);
+
+  it('has a program in front draw its screen again, as after Ctrl+L, with no key typed into it', async () => {
+    const terminal = await open();
+    const shown = await atPrompt(terminal.id);
+    // A full-screen program that draws its screen when told the window changed, as vim and htop do.
+    shown.type(`node -e "process.stdout.write('\\u001b[?1049h\\u001b[HFIRST'); process.on('SIGWINCH', () => process.stdout.write('\\u001b[H\\u001b[2JDRAWN AGAIN')); process.stdin.on('data', (d) => process.stdout.write(' typed ' + JSON.stringify(String(d)))); setInterval(() => {}, 1000)"\r`);
+    await shown.sees(/FIRST/);
+    const from = shown.output.length;
+    shown.send({ type: 'clear' });
+    await shown.sees(/DRAWN AGAIN/, 10_000, from);
+    // Nothing was typed into it: Ctrl+L would have been, a form feed in vim's insert mode.
+    await pause(200);
+    expect(shown.output.slice(from)).not.toMatch(/typed/);
+    const back = page(terminal.id);
+    await back.readied();
+    await until(() => back.screen.buffer.active.type === 'alternate' && written(back)[0] === 'DRAWN AGAIN', 5000, 'the program’s screen');
+  }, 30_000);
+
+  it('gives a page still waiting for its first screen the clear at its place in the output', async () => {
+    const terminal = await open();
+    const asker = await atPrompt(terminal.id);
+    asker.type('seq 1 30\r');
+    await asker.sees(/30\r\nPROMPT\$ $/);
+    // A page comes in with the clear asked at the same moment: whatever its screen holds, it ends cleared.
+    const late = page(terminal.id);
+    asker.send({ type: 'clear' });
+    await late.readied();
+    await until(() => written(late).length === 1, 5000, 'a cleared screen');
+    expect(written(late)).toEqual(['PROMPT$']);
+  }, 30_000);
+});
+
 describe('a page that comes back', () => {
   it('gets the screen as it was, a full-screen program’s with its modes, and goes on from there', async () => {
     const terminal = await open();
