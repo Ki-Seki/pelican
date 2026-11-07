@@ -292,8 +292,11 @@ app.post('/api/sessions', async (c) => {
   const body = sendBody(await c.req.json().catch(() => undefined));
   if (typeof body === 'string') return c.json({ error: body }, 400);
   // A scratch session gets its folder only when its first message is sent, so backing out leaves nothing behind.
-  const cwd = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
-  if (!cwd) return c.json({ error: 'No such folder' }, 400);
+  const given = body.scratch ? await createScratchFolder() : await checkedFolder(body.cwd);
+  if (!given) return c.json({ error: 'No such folder' }, 400);
+  // The folder as Claude Code records it, links followed (/tmp is /private/tmp on a Mac): the session's
+  // run and its transcript name one folder alike, as its terminals and Changes then do.
+  const cwd = await realpath(given).catch(() => given);
   // A folder Pelican made is trusted; any other that nobody trusted is asked about first, every new
   // session, until the answer is to trust it.
   if (body.scratch) await rememberChoice(cwd, 'trusted');

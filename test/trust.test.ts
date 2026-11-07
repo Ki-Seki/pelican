@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
+import { getRun } from '../src/server/runner';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 import {
   claudeCodeTrusts, FULL_SETTINGS, folderBrings, folderTrusted, forgetTrust, launchFor, NeedsTrust, pelicanChoice, rememberChoice, trustQuestion,
@@ -222,5 +223,14 @@ describe('starting a session', () => {
 
   it('takes only the two answers', async () => {
     expect((await create({ cwd: repo, trust: 'yes' })).status).toBe(400);
+  });
+
+  it('in a folder reached through a link, runs in the folder itself, as Claude Code records it', async () => {
+    const link = path.join(root, 'linked');
+    await symlink(plain, link).catch(() => undefined);
+    const response = await create({ cwd: link, trust: 'trusted' });
+    expect(response.status).toBe(200);
+    const { sessionId } = await response.json() as { sessionId: string };
+    expect(getRun(sessionId)?.cwd).toBe(plain);
   });
 }, 20_000);
