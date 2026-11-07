@@ -94,10 +94,10 @@ settings.
   the session's MCP servers ("1 of 2 on"), which have a sheet of their own, also with `/mcp`; a line
   above the box says when one fails while Claude runs.
 - **One list of commands, behind / and ⌘K.** This session's actions by Claude Code's names (`/btw`,
-  `/branch`, `/rename`, `/export`, `/diff`, `/context`, `/mcp`, `/model`…), then Pelican's (Pin,
-  Archive, Files, Terminal, New session, Settings…), then Claude Code's commands and skills. A
-  command of your own takes its name from one of Pelican's. On a computer ⌘K opens the list as a
-  command menu, where typing a session's name finds it too; ⇧⌘K searches sessions.
+  `/branch`, `/rewind`, `/rename`, `/export`, `/diff`, `/context`, `/mcp`, `/model`…), then
+  Pelican's (Pin, Archive, Files, Terminal, New session, Settings…), then Claude Code's commands and
+  skills. A command of your own takes its name from one of Pelican's. On a computer ⌘K opens the
+  list as a command menu, where typing a session's name finds it too; ⇧⌘K searches sessions.
 - **Your prompt and Claude's reply carry their own.** Your prompt: a tap on a phone shows Copy ·
   Rewind to here · Fork from here under it; with a pointer they sit beside it, on hover, adding no
   height. Claude's reply: Copy · ⋯ · the time under it, always on a phone, and on a computer Copy ·
@@ -105,8 +105,28 @@ settings.
   Markdown, Start a side chat, Quote message, Rewind to here and Fork from here, the turn's figures
   at its foot. A right-click puts what was clicked first: a selection's Copy and Quote selection, a
   code block's Copy code, a path's own menu; links and pictures keep the browser's.
-- **Fork from here.** On your prompt, a new session up to just before it, with its words (and what
-  it quoted) waiting in the new session's box; on Claude's reply, a new session up to the end of it.
+- **Rewind to here, as in Claude Code and Claude Desktop.** On your prompt, or on Claude's reply
+  (its turn's prompt), it goes back to before that message: the code, the conversation, or both.
+  Where Claude changed files after it, Desktop's dialog asks, "Rewind to this message?", with its
+  three choices, Code and conversation (first), Conversation only and Code only, which files go
+  back and how many lines change, and its words: "Changes made through shell commands aren't
+  reverted. Commits stay in place." Where nothing changed, there is nothing to choose, and one tap
+  rewinds, as in Desktop. The files go back from Claude Code's own copies of them, as `/rewind`'s
+  Restore code does. The conversation goes back as the CLI's Restore conversation does: the
+  session's Claude starts again from just before the message, and the message's words, its quotes
+  and its pictures and files go back in the message box, to change and send. A "Rewound here"
+  marker sits at the cut, with Undo rewind, which brings the messages back (the files stay as they
+  are) until you send your next message; it takes the words back out of the box while they are as
+  the rewind put them. Code and conversation is all or nothing: code that cannot go back leaves the
+  conversation whole. Not while Claude works, and, while another app has the session open, the
+  code alone, as Desktop does; the conversation's first message, and one before a compaction, can
+  go back in code only.
+- **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
+  message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
+  A turn in Changes ends with its prompt's Rewind to here.
+- **Fork from here.** On your prompt, a new session up to just before it, with its words, its
+  quotes, and its pictures and files waiting in the new session's box; on Claude's reply, a new
+  session up to the end of it.
 - **Steps and paths.** A command step has Copy command · Run in terminal · Copy output · Start a
   side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
   context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
@@ -136,9 +156,9 @@ settings.
   Bypass count only from your own or managed settings, never from a folder's (a folder's Bypass
   starts in Manual), as in Claude Code. Where your own or managed settings make Bypass the default,
   new sessions start in it, as Claude Code's do, and Settings and the new session's mode sheet say
-  so; a branch, an edited earlier prompt or a `/clear` of a session in Bypass starts as a new
-  session would. Settings › New sessions start with shows all this and where each value comes from,
-  and a new session's model and mode sheets say when the folder's or managed settings decide.
+  so; a fork, Fork from here or a `/clear` of a session in Bypass starts as a new session would.
+  Settings › New sessions start with shows all this and where each value comes from, and a new
+  session's model and mode sheets say when the folder's or managed settings decide.
 - **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
   mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
   as `/model`, `/effort`, `/fast` and `/config` save it, so new sessions in the terminal and in
@@ -177,8 +197,11 @@ settings.
   title, the session's totals in Context, the last turn's figures in its reply's ⋯, its start and
   ID at the menu's foot. Archiving the open session from its menu offers Undo, as from the list.
 - Claude's reply no longer shows how long a turn took, its tokens and its cost under it: they are in
-  its ⋯. A prompt's Rewind is called Rewind to here, and puts the files back as before, until the
-  next part of 0.5.0 makes it Desktop's; Edit and send again stays in a prompt's menu until then.
+  its ⋯.
+- Editing a prompt is Rewind to here, which puts its words back in the box, or Fork from here, which
+  puts them in a new session's, as in Claude Desktop and the CLI: Edit, and its box in place of the
+  prompt, are gone. A prompt's Rewind, and a turn's Rewind code in Changes, which put files back,
+  are Rewind to here, whose Code only does that.
 - The message box's paperclip is its +, where Add files or photos is.
 - ⌃⇧D shows Changes, and hides the pane while it shows them; the pane's other tabs have their own
   buttons and keys. Below 1280px, where a pane beside the conversation hides the session list, the
@@ -235,6 +258,10 @@ settings.
 - The docs describe where every action is: each thing's list and its ways in, the session menu,
   the header's buttons, Context, the message box's +, the command menu, the keys, the session list
   hiding and floating, and Back on a phone.
+- The docs describe Rewind to here, Undo rewind and `/rewind`, and the coverage table has Rewind
+  with the code and the conversation, without Summarize from here.
+- The demo and the site's live demo act out Rewind to here, Undo rewind, Fork and Fork from here in
+  the page, and the smoke test walks them, on a computer and a phone.
 - The browser smoke test walks the ways in, in the app and the site's live demo: on a computer a
   row's ⋯ and right-click, the title's menu, the message box's + and /, ⌘K, a prompt's, a reply's,
   a step's and a path's menus, a link's right-click left to the browser, ⌘/ and the session list
