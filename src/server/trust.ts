@@ -790,6 +790,21 @@ const UNREAD_GIT = 'Git config that git could not read';
 
 const BOOLEAN = ['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''];
 
+/** A whole number as git reads one: a sign, decimal, octal or hex digits, and k, m or g. */
+const GIT_NUMBER = /^\s*[+-]?(0x[0-9a-f]+|0[0-7]*|[1-9]\d*)[kmg]?$/i;
+
+/**
+ * A value as git reads a yes or a no where a setting takes either or a program (git_parse_maybe_bool):
+ * true or false, or undefined for what is neither, a program's name.
+ */
+function gitBoolean(value: string): boolean | undefined {
+  const text = value.toLowerCase();
+  if (['true', 'yes', 'on'].includes(text)) return true;
+  if (['false', 'no', 'off', ''].includes(text)) return false;
+  const number = GIT_NUMBER.exec(value)?.[1];
+  return number === undefined ? undefined : /[1-9a-f]/i.test(number.replace(/^0x/i, ''));
+}
+
 /** A command git runs through a shell, written after a `!` or not, as its item. */
 const shellValue = (label: string, value: string): Item => (value.startsWith('!') ? runs(`${label}!`, value.slice(1), 'shell') : runs(label, value, 'shell'));
 
@@ -991,16 +1006,25 @@ function canonical(name: string): string {
 }
 
 /**
+ * The pager a command of git's gets in place of the folder's pager.<cmd>: the user's own core.pager,
+ * else the one in PAGER, else less. A yes would not do: git keeps the command it read before, the
+ * folder's, when told only to page (pager_command_config), so `true` left `git log` in a terminal
+ * running the folder's program; a program, or a no, takes its place.
+ */
+const pagerFor = (own: Map<string, string>): string => [own.get('core.pager'), process.env.PAGER || undefined].find((pager) => pager !== undefined && gitBoolean(pager) !== true) ?? 'less';
+
+/**
  * Git settings, for Claude Code and every git it starts, that turn off what the repository's own
  * config and hooks folder make git run (gitProgram): the folder's settings are left out, so are its
  * programs. Each such setting gets the user's own value from their system and global config, as
  * git would read it without the repository's, or else one that runs nothing of the folder's: no
  * filter, file-system monitor or hooks; an external diff or a diff driver's command of nothing, so
  * `git diff` stops rather than run one (`--no-ext-diff` shows it); `cat` as a text converter,
- * which shows a file as it is; the pager in PAGER, or less; ssh; no password prompt; the format's
- * own signing program; an alias of nothing. Credential helpers are emptied, then given the user's
- * own again. Names as git spells them, so `[filter.Evil]` is turned off as `filter.evil`. A config
- * git could not read in full cannot be turned off, so nothing starts.
+ * which shows a file as it is; the pager in PAGER, or less, also for each command the folder gives
+ * a pager of its own (pagerFor), unless the user's own says not to page it; ssh; no password
+ * prompt; the format's own signing program; an alias of nothing. Credential helpers are emptied,
+ * then given the user's own again. Names as git spells them, so `[filter.Evil]` is turned off as
+ * `filter.evil`. A config git could not read in full cannot be turned off, so nothing starts.
  */
 async function gitOff(dir: string): Promise<Record<string, string>> {
   const top = await gitRoot(dir);
@@ -1028,7 +1052,7 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
     else if (section === 'diff' && key === 'command') turnOff(`diff.${subsection}.command`, '');
     else if (section === 'diff' && key === 'textconv') turnOff(`diff.${subsection}.textconv`, 'cat');
     else if (section === 'core' && key === 'pager') turnOff('core.pager', process.env.PAGER || 'less');
-    else if (section === 'pager') turnOff(`pager.${key}`, 'true');
+    else if (section === 'pager') turnOff(`pager.${key}`, '');
     else if (section === 'core' && key === 'sshcommand') turnOff('core.sshCommand', 'ssh');
     else if (section === 'core' && key === 'askpass') turnOff('core.askPass', '');
     else if (section === 'credential') helpers = true;
@@ -1040,7 +1064,12 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
   if (neutral.size === 0 && !helpers) return {};
   const mine = await userGitConfig(top);
   const own = new Map(mine.map((entry) => [canonical(entry.name), entry.value]));
-  const off: Array<[string, string]> = [...neutral.entries()].map(([name, [spelled, value]]) => [spelled, own.get(name) ?? value]);
+  const off: Array<[string, string]> = [...neutral.entries()].map(([name, [spelled, value]]) => {
+    const theirs = own.get(name);
+    // The user's own pager for the command, or theirs not to page it; else their pager (pagerFor).
+    if (name.startsWith('pager.')) return [spelled, theirs !== undefined && gitBoolean(theirs) !== true ? theirs : pagerFor(own)];
+    return [spelled, theirs ?? value];
+  });
   // The folder's credential helpers emptied, then the user's own, as they come.
   if (helpers) {
     off.push(['credential.helper', '']);

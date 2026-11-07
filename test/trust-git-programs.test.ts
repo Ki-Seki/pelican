@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
+import { loadPty } from '../src/server/pty';
 import { folderBrings, forgetTrust, launchFor, NeedsTrust, rememberChoice } from '../src/server/trust';
 import { gitDiff, gitStatus } from '../src/server/workspace';
 
@@ -47,6 +48,17 @@ const HOSTILE = (note: (name: string) => string) => `[diff]
 [alias "co"]
 \tcommand = !${note('alias-co')}
 `;
+
+/**
+ * Git as it runs in Pelican's terminal: its output a terminal (a PTY), so it pages, as Claude's Bash
+ * tool, with none, does not.
+ */
+async function inTerminal(cwd: string, args: string[], extra: Record<string, string>): Promise<void> {
+  const spawn = await loadPty();
+  const env = Object.fromEntries(Object.entries(gitEnv(extra)).filter((pair): pair is [string, string] => pair[1] !== undefined));
+  const pty = spawn('git', args, { name: 'xterm-256color', cols: 80, rows: 24, cwd, env });
+  await new Promise<void>((resolve) => pty.onExit(() => resolve()));
+}
 
 let dir: string;
 let notes: string;
@@ -146,7 +158,7 @@ describe('the programs a repository’s git config and hooks folder bring', () =
     expect(gitIn(dir, ['log', '-p', '--', 'a.txt'], env).stdout).toContain('+one');
     // The pager is the user's, or less; so is each command's.
     expect(gitIn(dir, ['var', 'GIT_PAGER'], env).stdout.trim()).toBe('less');
-    expect(value('pager.log')).toBe('true');
+    expect(value('pager.log')).toBe('less');
     // SSH as ssh, no password prompt, the format's own signing program.
     expect(value('core.sshCommand')).toBe('ssh');
     expect(value('core.askPass')).toBe('');
@@ -157,6 +169,24 @@ describe('the programs a repository’s git config and hooks folder bring', () =
     gitIn(dir, ['credential', 'fill'], env, 'protocol=https\nhost=example.com\n\n');
     gitIn(dir, ['commit', '-q', '--allow-empty', '-m', 'three'], env);
     expect(await ran()).toEqual([]);
+  });
+
+  it('leave no pager.<cmd> of the folder’s on, which git keeps when told only to page: git log in a terminal pages with the user’s pager, or as they say', async () => {
+    const note = (name: string) => `${path.join(root, 'note.sh')} ${name}`;
+    const global = path.join(root, 'gitconfig-pager');
+    // The user's own: no pager.log, a yes (which git would take as "page, with the command before"),
+    // a no, or a pager of their own for it.
+    for (const [mine, expected] of [['', ['users-pager']], ['[pager]\n\tlog = true\n', ['users-pager']], ['[pager]\n\tlog = false\n', []], [`[pager]\n\tlog = ${note('users-log-pager')}; cat\n`, ['users-log-pager']]] as const) {
+      await writeFile(global, mine);
+      process.env.GIT_CONFIG_GLOBAL = global;
+      process.env.PAGER = `${note('users-pager')}; cat`;
+      forgetTrust();
+      await rememberChoice(dir, 'user-only');
+      const env = (await launchFor(dir)).env ?? {};
+      await rm(notes, { force: true });
+      await inTerminal(dir, ['log', '-1'], env);
+      expect(await ran(), mine).toEqual(expected);
+    }
   });
 
   it('give way to the user’s own settings of the same names, credential helpers and all', async () => {
