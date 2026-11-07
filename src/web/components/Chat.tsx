@@ -397,6 +397,7 @@ export function Chat({
   onBack,
   onOpen,
   onStartIn,
+  lead,
 }: {
   sessionId?: string;
   newCwd?: string;
@@ -410,6 +411,8 @@ export function Chat({
   onOpen: (id: string, replace?: boolean) => void;
   /** Opens a new, empty session somewhere else, in place of this one (`push`: after it, Back comes back here). */
   onStartIn: (start: Start, push?: boolean) => void;
+  /** Before the title, on a computer while the session list is hidden: the button that shows it. */
+  lead?: ReactNode;
 }) {
   const viewId = sessionId ?? `new:${scratch ? 'scratch' : newCwd}`;
   const view = useSessionView(viewId);
@@ -1146,12 +1149,12 @@ export function Chat({
     <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
-        {/* Also while Changes and files, or the side chat, has folded the list away beside the conversation. */}
-        {(!wide || workspace.folded || side.folded) && (
+        {!wide && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
         )}
+        {lead}
         <h2 className="flex min-w-0 flex-1">
           {/* The title with ▾ is the session's one menu; a session that has not started has none. */}
           <button

@@ -132,20 +132,14 @@ body {
 }
 
 /* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px
-   the session list folds away while it is open, so the conversation keeps its room: the pane marks
-   the page (data-pane), App marks its columns (data-layout, data-list). */
+   the session list is hidden while it is open, so the conversation keeps its room, as when it is
+   hidden by hand: the pane marks the page (data-pane), and App hides the list until asked back. */
 :root {
   --pane-w: clamp(360px, 34vw, 640px);
 }
 @media (max-width: 1279.98px) {
   :root {
     --pane-w: clamp(360px, 40vw, 520px);
-  }
-  :root[data-pane='docked'] [data-layout='wide'] {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  :root[data-pane='docked'] [data-layout='wide'] > [data-list] {
-    display: none;
   }
 }
 

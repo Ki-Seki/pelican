@@ -49,6 +49,7 @@ describe('the keyboard shortcuts sheet', () => {
         'New session: Ctrl Shift O',
         'Settings: Ctrl Shift ,',
         'Keyboard shortcuts: Ctrl /',
+        'Show or hide the sidebar: Ctrl B',
         'Close a menu or sheet: Esc',
       ],
       'This session': ['Rename: Ctrl Alt R', 'Fork: Ctrl Alt O', 'Archive: Ctrl Alt A', 'Side chat: Ctrl ;', 'Transcript view: Ctrl O'],

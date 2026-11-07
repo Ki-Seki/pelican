@@ -171,12 +171,6 @@ export function useSideChat(available: boolean, pane: Pane, keysBack?: () => voi
     if (!available) return undefined;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.repeat) return;
-      if (isKey(e, 'searchSessions') && docked && !roomy) {
-        // Finding a session needs the list, which the side chat has folded away: it goes, and the
-        // list comes back for the search (App focuses it).
-        toggle(false);
-        return;
-      }
       if (!isKey(e, 'sideChat')) return;
       // A sheet that is open keeps the keys, unless it is the side chat's own.
       if (!open && document.querySelector('dialog[open]')) return;

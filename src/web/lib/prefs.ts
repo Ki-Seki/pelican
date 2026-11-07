@@ -96,13 +96,15 @@ export type Prefs = {
   sessionViews: Record<string, ViewMode>;
   /** On a wide screen, Changes and files stays open beside the conversation, from one session to the next. */
   workspacePane: boolean;
+  /** On a computer, the session list beside the conversation, or hidden (⌘B), floating in when pointed at. */
+  sidebar: 'shown' | 'hidden';
   /** The terminal's font size, its one setting: set with a pinch on the terminal, or Ctrl and the wheel. */
   terminalFontSize: number;
 };
 
 const DEFAULT_PREFS: Prefs = {
   theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, showSideChats: false, listGroup: 'time', listDensity: 'detailed',
-  sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false, terminalFontSize: 13,
+  sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false, sidebar: 'shown', terminalFontSize: 13,
 };
 
 /**

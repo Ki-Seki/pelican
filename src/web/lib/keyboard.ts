@@ -113,6 +113,8 @@ export const KEYS = {
   newSession: { label: 'New session', group: 'General', scope: 'page', keys: ['mod+shift+o'] },
   settings: { label: 'Settings', group: 'General', scope: 'page', keys: ['mod+shift+,'], also: ['mod+,'] },
   shortcuts: { label: 'Keyboard shortcuts', group: 'General', scope: 'page', keys: ['mod+/'] },
+  // Claude Desktop's key for showing and hiding the session list.
+  sidebar: { label: 'Show or hide the sidebar', group: 'General', scope: 'page', keys: ['mod+b'] },
   close: { label: 'Close a menu or sheet', group: 'General', scope: 'dialog', keys: ['escape'] },
 
   rename: { label: 'Rename', group: 'This session', scope: 'page', keys: ['mod+alt+r'] },
@@ -120,7 +122,8 @@ export const KEYS = {
   archive: { label: 'Archive', group: 'This session', scope: 'page', keys: ['mod+alt+a'] },
   sideChat: { label: 'Side chat', group: 'This session', scope: 'page', keys: ['mod+;'] },
   transcriptView: { label: 'Transcript view', group: 'This session', scope: 'page', keys: ['ctrl+o'] },
-  backgroundTasks: { label: 'Background tasks', group: 'This session', scope: 'page', keys: ['ctrl+b'], soon: true },
+  // A Mac's alone: elsewhere Control is the shortcut key, and Ctrl+B shows and hides the sidebar.
+  backgroundTasks: { label: 'Background tasks', group: 'This session', scope: 'page', keys: ({ apple }) => (apple === false ? [] : ['ctrl+b']), soon: true },
 
   // Control on a Mac too, as in Desktop's web build: ⌘⇧D is the browser's (bookmark all tabs).
   changes: { label: 'Changes', group: 'Panes', scope: 'page', keys: ['ctrl+shift+d'], also: ['mod+shift+d'] },

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Keyboard, Loader2, MessageSquare, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { Keyboard, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Settings as SettingsIcon } from 'lucide-react';
 import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
@@ -10,7 +10,7 @@ import { Login } from './components/Login';
 import { type Offline, OfflineLine, offlineWords, retryNow, useOffline } from './components/Offline';
 import { PreviewOverlay } from './components/Preview';
 import { FolderPicker } from './components/NewSession';
-import { SessionList } from './components/SessionList';
+import { SessionList, UndoLine } from './components/SessionList';
 import { askSideChat } from './components/SideChat';
 import { Sheet } from './components/Sheet';
 import { shortcutsShown, ShortcutsSheet, showShortcuts } from './components/Shortcuts';
@@ -19,7 +19,7 @@ import { api, appBase, type AuthState, whenSignedOut } from './lib/api';
 import { startDemo } from './lib/demo';
 import { type CommandItem, useCommandPart } from './lib/commands';
 import { forgetDrafts } from './lib/drafts';
-import { isKey } from './lib/keyboard';
+import { ariaKeys, isKey, withKey } from './lib/keyboard';
 import { retried } from './lib/load';
 import { whenSettled } from './lib/sheet-history';
 import { useMedia } from './lib/media';
@@ -30,7 +30,7 @@ import {
   notificationState,
   onNotificationOpen,
 } from './lib/notifications';
-import { applyTheme } from './lib/prefs';
+import { applyTheme, setPrefs, usePrefs } from './lib/prefs';
 import { socket } from './lib/socket';
 import { defaultStart, newSessionQuery } from './lib/start';
 import { STATIC_DEMO } from './lib/static-demo';
@@ -120,8 +120,44 @@ function useRoute() {
   };
 }
 
+/** Whether a pane (Changes and files, or the side chat) sits beside the conversation: the page's mark of it. */
+function usePaneDocked(): boolean {
+  const [docked, setDocked] = useState(() => document.documentElement.dataset.pane === 'docked');
+  useEffect(() => {
+    const read = () => setDocked(document.documentElement.dataset.pane === 'docked');
+    const observer = new MutationObserver(read);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-pane'] });
+    read();
+    return () => observer.disconnect();
+  }, []);
+  return docked;
+}
+
 /** A sheet or menu that is open, and not on its way out (a key pressed just after one closed is the page's). */
 const OPEN_DIALOG = 'dialog[open]:not([data-closing])';
+
+/** How long the floating list stays once the pointer has left it, so a pointer passing over its edge does not close it. */
+const PEEK_LEAVE_MS = 200;
+
+/** The button that hides and shows the session list on a computer, with Desktop's ⌘B. */
+function SidebarButton({ shown, onToggle, onPeek, onLeave }: { shown: boolean; onToggle: () => void; onPeek?: () => void; onLeave?: () => void }) {
+  const label = shown ? 'Hide sidebar' : 'Show sidebar';
+  const Icon = shown ? PanelLeftClose : PanelLeftOpen;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={withKey(label, 'sidebar')}
+      aria-keyshortcuts={ariaKeys('sidebar')}
+      onClick={onToggle}
+      onPointerEnter={(e) => e.pointerType === 'mouse' && onPeek?.()}
+      onPointerLeave={(e) => e.pointerType === 'mouse' && onLeave?.()}
+      className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg"
+    >
+      <Icon className="size-[18px]" />
+    </button>
+  );
+}
 
 /** The sign-in gate: shown until this browser signs in, unless the server asks no one to (--no-auth, the demo). */
 export function App() {
@@ -221,9 +257,65 @@ function Main() {
     said.current = offline;
   }, [offline, info?.machine]);
 
+  // The session list on a computer: shown beside the conversation, or hidden (⌘B, its button),
+  // remembered in this browser. Where a pane beside the conversation leaves too little room for it
+  // (under 1280px), it is hidden the same way until it is asked back. Hidden, it floats over the
+  // conversation while the pointer is at the window's left edge or on its button (`peek`), or from
+  // the keyboard (⇧⌘K), until the pointer leaves it, a session is picked, or Esc.
+  const prefs = usePrefs();
+  const roomy = useMedia('(min-width: 1280px)');
+  const paneDocked = usePaneDocked();
+  const [askedBack, setAskedBack] = useState(false);
+  const folds = paneDocked && !roomy;
+  if (!folds && askedBack) setAskedBack(false);
+  const collapsed = wide && (prefs.sidebar === 'hidden' || (folds && !askedBack));
+  const [peek, setPeek] = useState<'pointer' | 'keys'>();
+  if (!collapsed && peek) setPeek(undefined);
+  const leaving = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const peekNow = useCallback((by: 'pointer' | 'keys') => {
+    clearTimeout(leaving.current);
+    setPeek((was) => (was === 'keys' ? was : by));
+  }, []);
+  const peekLeave = useCallback(() => {
+    clearTimeout(leaving.current);
+    // A menu opened from it (a row's) keeps it, as a pointer on it does.
+    leaving.current = setTimeout(() => setPeek((was) => (was === 'pointer' && !document.querySelector(OPEN_DIALOG) ? undefined : was)), PEEK_LEAVE_MS);
+  }, []);
+  useEffect(() => () => clearTimeout(leaving.current), []);
+  const toggleSidebar = useCallback(() => {
+    setPeek(undefined);
+    if (collapsed) {
+      if (prefs.sidebar === 'hidden') setPrefs({ sidebar: 'shown' });
+      if (folds) setAskedBack(true);
+    } else if (folds) {
+      setAskedBack(false);
+    } else {
+      setPrefs({ sidebar: 'hidden' });
+    }
+  }, [collapsed, folds, prefs.sidebar]);
+  const aside = useRef<HTMLElement>(null);
+  // Floating, Esc, a click outside it, or picking a session puts it away.
+  useEffect(() => {
+    if (!peek) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || document.querySelector(OPEN_DIALOG)) return;
+      e.preventDefault();
+      setPeek(undefined);
+    };
+    const onDown = (e: PointerEvent) => {
+      if (!aside.current?.contains(e.target as Node) && !(e.target as Element).closest?.('[data-sidebar-button]')) setPeek(undefined);
+    };
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('pointerdown', onDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('pointerdown', onDown, true);
+    };
+  }, [peek]);
+
   // Desktop's keys for the whole page: ⌘K the command menu, ⇧⌘K finds a session (on a phone the
-  // list comes first), ⇧⌘O starts one, ⇧⌘, opens Settings, ⌘/ lists the keys. A sheet that is open
-  // keeps the others.
+  // list comes first; hidden, it floats in), ⇧⌘O starts one, ⇧⌘, opens Settings, ⌘B shows or hides
+  // the list, ⌘/ lists the keys. A sheet that is open keeps the others.
   const chatOpen = Boolean(sessionId || isNew);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -242,6 +334,7 @@ function Main() {
       if (isKey(e, 'searchSessions')) {
         e.preventDefault();
         if (!wide && chatOpen) navigate('');
+        if (collapsed) peekNow('keys');
         setTimeout(() => {
           const search = document.getElementById('session-search');
           if (search instanceof HTMLInputElement) {
@@ -255,11 +348,14 @@ function Main() {
       } else if (isKey(e, 'settings')) {
         e.preventDefault();
         setSettingsOpen(true);
+      } else if (isKey(e, 'sidebar') && wide) {
+        e.preventDefault();
+        toggleSidebar();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [wide, chatOpen, navigate, queryClient]);
+  }, [wide, chatOpen, navigate, queryClient, collapsed, peekNow, toggleSidebar]);
 
   // The page's own commands, in the / list and ⌘K (lib/commands); the open chat adds its session's.
   const pageCommands = useMemo<CommandItem[]>(() => [
@@ -269,7 +365,8 @@ function Main() {
     },
     { id: 'settings', group: 'pelican', label: 'Settings', icon: SettingsIcon, name: 'config', description: 'Settings', key: 'settings', run: () => setSettingsOpen(true) },
     { id: 'shortcuts', group: 'pelican', label: 'Keyboard shortcuts', icon: Keyboard, key: 'shortcuts', only: 'pointer', run: () => showShortcuts(true) },
-  ], [navigate, queryClient]);
+    ...(wide ? [{ id: 'sidebar', group: 'pelican' as const, label: collapsed ? 'Show sidebar' : 'Hide sidebar', icon: collapsed ? PanelLeftOpen : PanelLeftClose, key: 'sidebar' as const, only: 'pointer' as const, run: toggleSidebar }] : []),
+  ], [navigate, queryClient, wide, collapsed, toggleSidebar]);
   useCommandPart('page', pageCommands);
 
   const toggleNotifications = () => {
@@ -306,18 +403,32 @@ function Main() {
     <SessionList
       machine={info?.machine ?? ''}
       selectedId={sessionId}
-      onOpen={(id) => open(id)}
-      onNew={(start) => navigate(newSessionQuery(start))}
+      onOpen={(id) => {
+        setPeek(undefined);
+        open(id);
+      }}
+      onNew={(start) => {
+        setPeek(undefined);
+        navigate(newSessionQuery(start));
+      }}
       onSettings={() => setSettingsOpen(true)}
       onSideChat={(id) => {
+        setPeek(undefined);
         askSideChat(id);
         if (id !== sessionId) open(id);
       }}
       onGone={(id) => id === sessionId && navigate('')}
       connected={connected}
       banner={banner}
+      {...(wide ? { top: <SidebarButton shown={!collapsed} onToggle={toggleSidebar} /> } : {})}
     />
   );
+  // While the list is hidden: in the conversation's header, and where a page has none.
+  const sidebarButton = collapsed ? (
+    <span data-sidebar-button className="contents">
+      <SidebarButton shown={false} onToggle={toggleSidebar} onPeek={() => peekNow('pointer')} onLeave={peekLeave} />
+    </span>
+  ) : undefined;
 
   let main: React.ReactNode;
   if (sessionId || (isNew && (newCwd || scratch))) {
@@ -334,6 +445,7 @@ function Main() {
         onBack={() => navigate('')}
         onOpen={open}
         onStartIn={(start, push) => navigate(newSessionQuery(start), !push)}
+        {...(sidebarButton ? { lead: sidebarButton } : {})}
       />
     );
   } else if (isNew) {
@@ -346,6 +458,7 @@ function Main() {
             </button>
           </div>
         )}
+        {sidebarButton && <div className="shrink-0 px-2 py-1.5">{sidebarButton}</div>}
         <div className="min-h-0 flex-1 overflow-y-auto">
           <FolderPicker
             home={info?.home}
@@ -376,12 +489,30 @@ function Main() {
     // minmax(0, 1fr): the conversation's column never grows past the window to fit its content,
     // which pushed Changes and files, docked at its right edge, out of view.
     return (
-      <div data-layout="wide" className="app-height grid grid-cols-[minmax(300px,360px)_minmax(0,1fr)] overflow-hidden">
-        {/* data-list: folds away under 1280px while Changes and files is beside the conversation (styles.css). */}
-        <aside data-list className="min-h-0 border-r border-line">{list}</aside>
-        <main className="min-h-0 min-w-0">
+      <div
+        data-layout="wide"
+        data-sidebar={collapsed ? 'hidden' : 'shown'}
+        className={`app-height relative grid overflow-hidden ${collapsed ? 'grid-cols-[minmax(0,1fr)]' : 'grid-cols-[minmax(300px,360px)_minmax(0,1fr)]'}`}
+      >
+        <aside
+          ref={aside}
+          data-list
+          aria-label="Sessions"
+          {...(collapsed && !peek ? { inert: true, 'aria-hidden': true } : {})}
+          onPointerEnter={() => collapsed && peekNow('pointer')}
+          onPointerLeave={(e) => collapsed && e.pointerType === 'mouse' && peekLeave()}
+          className={collapsed
+            ? `absolute inset-y-0 left-0 z-40 w-[360px] max-w-[85vw] border-r border-line bg-bg shadow-[6px_0_28px_rgba(0,0,0,0.12)] transition-[translate,opacity] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none ${peek ? 'translate-x-0' : 'pointer-events-none -translate-x-full opacity-0'}`
+            : 'min-h-0 border-r border-line'}
+        >
+          {list}
+        </aside>
+        {/* Hidden, the list floats in from the window's left edge. */}
+        {collapsed && !peek && <div aria-hidden data-sidebar-edge className="absolute inset-y-0 left-0 z-30 w-2" onPointerEnter={(e) => e.pointerType === 'mouse' && peekNow('pointer')} />}
+        <main className="relative min-h-0 min-w-0">
           {main ?? (
             <div className="flex h-full items-center justify-center">
+              {sidebarButton && <div className="absolute top-1.5 left-2">{sidebarButton}</div>}
               <div className="text-center">
                 <MessageSquare className="mx-auto size-8 text-faint" />
                 <div className="mt-3 text-[15px] text-muted">Pick a session, or start a new one</div>
@@ -391,6 +522,8 @@ function Main() {
               </div>
             </div>
           )}
+          {/* The list's line with Undo, while the list that has it is out of sight. */}
+          {collapsed && !peek && <UndoLine className="absolute bottom-0 left-0 z-20 w-[360px] max-w-full" />}
         </main>
         {settings}
         <ShortcutsSheet />

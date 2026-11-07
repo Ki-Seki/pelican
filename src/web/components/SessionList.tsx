@@ -474,6 +474,7 @@ export function SessionList({
   onGone,
   connected,
   banner,
+  top,
 }: {
   machine: string;
   selectedId?: string;
@@ -487,6 +488,8 @@ export function SessionList({
   onGone?: (id: string) => void;
   connected: boolean;
   banner?: React.ReactNode;
+  /** Beside the list's title, before Settings: the button that hides and shows the list, on a computer. */
+  top?: React.ReactNode;
 }) {
   const prefs = usePrefs();
   const isUnread = useSeen();
@@ -675,6 +678,7 @@ export function SessionList({
             </div>
             <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount} sessions` : ''}</div>
           </div>
+          {top}
           <button type="button" aria-label="Settings" onClick={onSettings} className="grid size-11 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg pointer-fine:size-10">
             <Settings className="size-[18px]" />
           </button>

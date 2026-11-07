@@ -82,20 +82,14 @@ export function useWorkspacePane(available: boolean) {
   useEffect(() => {
     if (!available) return undefined;
     const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (isKey(e, 'changes')) {
-        e.preventDefault();
-        if (showsChanges) hide();
-        else show({ tab: 'changes' });
-      } else if (isKey(e, 'searchSessions') && open && dockable && !roomy) {
-        // Finding a session needs the list, which the pane has folded away: it goes, and the list
-        // comes back for the search (App focuses it).
-        hide();
-      }
+      if (e.repeat || !isKey(e, 'changes')) return;
+      e.preventDefault();
+      if (showsChanges) hide();
+      else show({ tab: 'changes' });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [available, showsChanges, show, hide, open, dockable, roomy]);
+  }, [available, showsChanges, show, hide]);
   const docked = dockable && open;
   const toggle = useRef<HTMLButtonElement>(null);
   const wasDocked = useRef(docked);

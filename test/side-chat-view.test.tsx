@@ -452,25 +452,24 @@ describe('the side chat', () => {
     });
   });
 
-  it('sits beside the conversation from 1024px, as Changes and files does, the session list folding away below 1280px', async () => {
+  it('sits beside the conversation from 1024px, as Changes and files does, which the page hides the session list for below 1280px', async () => {
     computer(1024);
     session();
     await loaded();
+    // A computer's header has no way back: the session list is beside it, or its button is (App).
     expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
     act(() => {
       fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
     expect(pane()).not.toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Side chat' })).toBeNull();
+    // Marked on the page, which hides the list for it below 1280px, as when hidden by hand.
     expect(document.documentElement.dataset.pane).toBe('docked');
-    // The list is folded away: the way back to it is in the header, and Cmd/Ctrl+Shift+K brings it back.
-    expect(screen.getByRole('button', { name: 'Back to sessions' })).toBeTruthy();
     act(() => {
-      fireEvent.keyDown(window, { key: 'K', ctrlKey: true, shiftKey: true });
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
     expect(pane()).toBeNull();
     expect(document.documentElement.dataset.pane).toBeUndefined();
-    expect(screen.queryByRole('button', { name: 'Back to sessions' })).toBeNull();
   });
 
   it('beside the conversation on a tablet, keeps its box clear of the home indicator, as the conversation’s box beside it is; a phone’s sheet keeps clear itself', async () => {

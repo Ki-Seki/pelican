@@ -186,7 +186,7 @@ describe('Claude Desktop’s web keys', () => {
 /** Every chord a key is pressed with, shown or taken too, as held on one kind of keyboard. */
 const held = (id: KeyId, apple: boolean, enterSends: boolean) => {
   const def = KEYS[id] as { also?: readonly string[] };
-  return [...new Set([...chordsOf(id, { enterSends }), ...(def.also ?? [])].map((chord) => normalize(chord, apple)))];
+  return [...new Set([...chordsOf(id, { enterSends, apple }), ...(def.also ?? [])].map((chord) => normalize(chord, apple)))];
 };
 const scopeOf = (id: KeyId): KeyScope => KEYS[id].scope;
 
@@ -245,6 +245,7 @@ describe('the key table', () => {
       'New session: ⇧ ⌘ O',
       'Settings: ⇧ ⌘ ,',
       'Keyboard shortcuts: ⌘ /',
+      'Show or hide the sidebar: ⌘ B',
       'Close a menu or sheet: esc',
     ]);
   });
@@ -256,6 +257,18 @@ describe('the key table', () => {
     expect(keys(true, 'newLine')).toEqual(['Shift Enter']);
     expect(keys(false, 'send')).toEqual(['Ctrl Enter']);
     expect(keys(false, 'newLine')).toEqual(['Enter']);
+  });
+});
+
+describe('the sidebar’s key', () => {
+  it('is ⌘B, as in Claude Desktop, Ctrl+B elsewhere; Background tasks’ ⌃B is then a Mac’s alone', () => {
+    expect(chordsOf('sidebar')[0]).toBe('mod+b');
+    expect(isKey({ key: 'b', code: 'KeyB', metaKey: true }, 'sidebar', APPLE)).toBe(true);
+    expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'sidebar', OTHER)).toBe(true);
+    // On a Mac Control+B is another key, Background tasks' once it comes; elsewhere it is the sidebar's.
+    expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'sidebar', APPLE)).toBe(false);
+    expect(chordsOf('backgroundTasks', { enterSends: true, apple: true })).toEqual(['ctrl+b']);
+    expect(chordsOf('backgroundTasks', { enterSends: true, apple: false })).toEqual([]);
   });
 });
 
