@@ -147,26 +147,31 @@ settings; and updates from Settings.
   marker sits at the cut, with Undo rewind, which brings the messages back (the files stay as they
   are) until you send your next message; it takes the words back out of the box while they are as
   the rewind put them. Code and conversation is all or nothing: code that cannot go back leaves the
-  conversation whole. Not while Claude works, and, while another app has the session open, the
-  code alone, as Desktop does; the conversation's first message, and one before a compaction, can
-  go back in code only.
+  conversation as it was, an earlier rewind's cut and all. Not while Claude works, and, while
+  another app has the session open, the code alone, as Desktop does; the conversation's first
+  message (also after a SessionStart hook's context), and one before a compaction, can go back in
+  code only. A rewind, Undo rewind and a message go one at a time: one sent from another page
+  while a rewind starts Claude again goes after the cut, and a second rewind meanwhile says Claude
+  is working. A rewind leaves the session's name as it was.
 - **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
   message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
   A turn in Changes ends with its prompt's Rewind to here.
 - **Fork from here.** On your prompt, a new session up to just before it, with its words, its
-  quotes, and its pictures and files waiting in the new session's box; on Claude's reply, a new
-  session up to the end of it.
+  quotes, and its pictures and files waiting in the new session's box, after anything typed there
+  already; on Claude's reply, a new session up to the end of it.
 - **Changes, as in Claude Desktop.** Show: All changes vs main, by Claude Code's `/diff` (the branch
   since it split from the default branch, its commits and what is not committed yet, the files not
   committed first; else what is not committed), then Uncommitted changes where that differs, and the
   turns under their own heading. At its foot, Commit changes and Create PR ▾, with Create draft PR
   under its ▾, remembered, as in Desktop, and no Push (Desktop has none; Create PR pushes). A tap
   sends Desktop's own request at once, word for word, so Claude Code reads the same request
-  whichever app sent it; while Claude works it waits for the end of the turn as a queued message,
-  never steered into the work at hand, whatever Settings says for what you type, and its button says
-  it is queued, with Take back, which takes it out of the queue. ⌘-click (Ctrl-click), or a long
+  whichever app sent it, once however quickly it is tapped again; while Claude works it waits for
+  the end of the turn as a queued message, never steered into the work at hand, whatever Settings
+  says for what you type, each as a message of its own, and its button says it is queued, with Take
+  back, which takes it out of the queue. ⌘-click (Ctrl-click), or a long
   press on a phone, puts it in the message box first, to read and change. Create PR shows in the
-  conversation as `/create-pr`, as in Desktop; Create PR is offered on a branch other than the
+  conversation as `/create-pr`, as in Desktop, also among prompts Claude Code took in together, and
+  so in Export as Markdown; Create PR is offered on a branch other than the
   default one, where origin is on GitHub, or where there is no remote at all, for which Desktop's
   request has Claude set one up first. The pull request Claude names in Desktop's `<pr-created>` tag
   is a card, with View PR, and where gh on the computer is installed and signed in, what GitHub says
@@ -202,7 +207,8 @@ settings; and updates from Settings.
 - **Claude's questions by number.** On a computer 1 to 9 pick an answer, as in Claude Desktop, the
   number faint beside each option: the card takes the keys as it comes, unless you are typing
   something, a number picks for the question the keys are in, or the first not answered yet, and a
-  letter starts that question's own answer under Other.
+  letter starts that question's own answer under Other. A question of one choice takes a pick or
+  your own words, never both, as in Desktop.
 - **The session list hides, and floats.** On a computer its button (or ⌘B, as in Desktop) hides it,
   remembered in this browser, and the conversation takes the whole width; pointing at the window's
   left edge or the button brings it over the conversation until the pointer leaves, a session is
@@ -244,7 +250,11 @@ settings; and updates from Settings.
   new sessions start in it, as Claude Code's do, and Settings and the new session's mode sheet say
   so; a fork, Fork from here or a `/clear` of a session in Bypass starts as a new session would.
   Settings › New sessions start with shows all this and where each value comes from, and a new
-  session's model and mode sheets say when the folder's or managed settings decide.
+  session's model and mode sheets say when the folder's or managed settings decide. Default picked
+  for a new session where a file names another model, or effort, is Claude Code's own, as
+  `/model default` and `/effort auto` make it there. A model's effort set under an alias of it
+  (`opus`) counts for it, and `maxEffortLevel` caps it, as in Claude Code; a model the picker does
+  not list, such as `opus[1m]`, shows as itself, with its model's efforts.
 - **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
   mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
   as `/model`, `/effort`, `/fast` and `/config` save it, so new sessions in the terminal and in
@@ -322,7 +332,8 @@ settings; and updates from Settings.
   way back to the list is its button in the header, not ‹, and ⇧⌘K brings it over the conversation
   to search.
 - Export as Markdown shows a prompt's quotes and their notes, comments on lines and attached files
-  as the conversation does, Claude Desktop's and Pelican's alike, never their markers.
+  as the conversation does, Claude Desktop's and Pelican's alike, never their markers; a Create PR
+  request as `/create-pr`, and a pull request Claude made as its card names it, a link.
 - The side chat no longer puts Changes and files away beside the conversation from 1280px: both
   show, one above the other, and a file or a turn's changes opened from an answer opens above it.
   Its New is New side chat, in its name's ▾; its sheet on a phone closes with ×, as it does beside
