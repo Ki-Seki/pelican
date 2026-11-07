@@ -28,16 +28,18 @@ settings; and updates from Settings.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
-  while you type, the screen takes the room of the header and tabs above it. A row of keys has what
-  a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a finger's size each,
-  scrolling sideways on a narrow phone, and a key there sends what you typed first, so tab completes
-  it. A line typed while the connection comes back stays until it can go. A full-screen program such
-  as vim or htop gets every key as you type it, a password prompt hides what you type, a swipe
-  scrolls back and ↓ comes back to the newest output, a pinch sets the size, and the menu's Select
-  text opens the screen as text, to select from, quote or copy; Quote there opens the quote in
-  place, with Add a note, Send now and Add, and the view says above the keys what waits for your
-  next message. The keys, the tabs and the line are a finger's 44 px. A screen reader hears what a
-  line printed.
+  while you type, the screen takes the room of the header and tabs above it, and on a phone on its
+  side it has that room whether you type or not, a dozen rows on a Pixel 7, a tap on the screen
+  showing them again, with the keys and the line on one row, which the keyboard leaves room for. A
+  row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a
+  finger's size each, scrolling sideways on a narrow phone, and a key there sends what you typed
+  first, so tab completes it. A line typed while the connection comes back stays until it can go. A
+  full-screen program such as vim or htop gets every key as you type it, a password prompt hides
+  what you type, a swipe scrolls back and ↓ comes back to the newest output, a pinch sets the size,
+  and the menu's Select text opens the screen as text, to select from, quote or copy; Quote there
+  opens the quote in place, with Add a note, Send now and Add, and the view says above the keys what
+  waits for your next message. The keys, the tabs and the line are a finger's 44 px. A screen reader
+  hears what a line printed.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
@@ -57,18 +59,19 @@ settings; and updates from Settings.
   a long one, its first 1,500 characters, as Desktop cuts any quote. Claude sees a terminal only
   that way. `!` commands go into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
-  output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one
-  is open), which opens the side chat with the passage attached, and Quote. On a computer they sit
-  above the selection and ↵ quotes; Quote opens Desktop's note box at the selection: ↵ adds the
-  quote with your note, ⌘↵ sends it at once (a steer while Claude works), Esc lets it go, and a
-  note half written survives a look at another session. ⇧⌘L quotes without a note. On a phone the
-  pair docks just above the message box, clear of the system's menu; Quote puts the passage in the
-  box with "Add a note", and the keyboard comes up only when you tap it. A left swipe on a
-  paragraph, a prompt or a command quotes it.
+  output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one is
+  open), which opens the side chat with the passage attached, and Quote. On a computer they sit
+  above the selection and ↵ quotes; Quote opens Desktop's note box above the selection: ↵ adds the
+  quote with your note, ⌘↵ sends it at once (a steer while Claude works), Esc lets it go, and a note
+  half written survives a look at another session. ⇧⌘L quotes without a note. On a phone the pair
+  docks just above the message box, clear of the system's menu; Quote puts the passage in the box
+  with "Add a note", and the keyboard comes up only when you tap it. A left swipe on a paragraph, a
+  prompt or a command quotes it.
 - **What goes with your next message, in one place.** Quotes, quotes with notes and line comments
-  wait above the message box as chips, each kind told apart at a glance. Click or tap one to read
-  it whole, change its note, show it where it came from, or remove it. They are kept with your
-  draft, and come back as they were when a message does not go.
+  wait above the message box as chips, each kind told apart at a glance, as wide as the box has room
+  for, so a note reads in its chip. Click or tap one to read it whole, change its note, show it
+  where it came from, or remove it. They are kept with your draft, and come back as they were when a
+  message does not go.
 - **Desktop's formats, both ways.** A quote with a note goes as Desktop's `<!-- reply -->` block,
   one without as an `<!-- attach -->` block (lines of a file with their path and lines, the
   terminal's with its tab), a line comment as "In `path` at line N:" with its code fenced, and
@@ -105,9 +108,10 @@ settings; and updates from Settings.
   it; while one is open, Send to side chat goes to it, and so does `/btw` with a question. On a
   computer it shares the column beside the conversation with Changes, Files and the Terminal: from
   1280px it sits under the one open, a handle between them sharing the height, which this browser
-  remembers; below that, where there is room for one, the one asked for last shows and the other
-  waits behind it until it closes. On a phone it is a sheet that Back closes. Picked in the session
-  list or found with ⌘K, a side chat opens as its session's side chat, not as a copy of the session.
+  remembers, the pane taking the larger part until the handle moves and each keeping room for
+  itself; below that, where there is room for one, the one asked for last shows and the other waits
+  behind it until it closes. On a phone it is a sheet that Back closes. Picked in the session list
+  or found with ⌘K, a side chat opens as its session's side chat, not as a copy of the session.
 - **Context, by Send.** The context ring sits in the message box's row, as in Desktop, and opens
   Context: how full the window is, with Compact, what the whole session used, your plan's limits,
   and Usage and activity. On a phone it shows once a turn has run, faint and without its number
@@ -171,18 +175,19 @@ settings; and updates from Settings.
   request has Claude set one up first. The pull request Claude names in Desktop's `<pr-created>` tag
   is a card, with View PR, and where gh on the computer is installed and signed in, what GitHub says
   of it now: its title, open, a draft, merged or closed, its branches and its checks, read again
-  while they run. A file's row has its path's menu.
+  while they run; the list's preview reads the tag as the conversation does, its address among
+  words. A file's row has its path's menu.
 - **Lines of a file, and of a diff.** A tap or a click picks a line, Shift-click picks up to
   another, and on a phone a long press on a line, then a drag, picks the lines it goes over: a bar
-  under them has Copy · Quote · Add comment, as a right-click on them does, and ⇧⌘L quotes them. A
-  line number turns into Desktop's + under a pointer, a comment on that line at once. Comments use
-  Desktop's box at the line, Cancel · Send to Claude · Add comment (↵ adds, ⌘↵ sends to Claude, with
-  everything that waits), on one line or a few in a row, "at lines 10-12" as Desktop writes them; on
-  a diff, removed lines alone are its "before changes". A diff's selection and right-click offer
-  Copy and Add comment. A file's ⋯ has its path's menu, Attach as context included. On a phone,
-  Quote in Changes, Files or the Terminal opens in place as a sheet, with Add a note, Send now and
-  Add, and the view's foot then says what waits; beside the conversation the quote waits above the
-  box at once, as Desktop's Attach as context does.
+  under them has Copy · Quote · Add comment, a finger's 44 px on a phone, as a right-click on them
+  does, and ⇧⌘L quotes them. A line number turns into Desktop's + under a pointer, a comment on that
+  line at once. Comments use Desktop's box at the line, Cancel · Send to Claude · Add comment (↵
+  adds, ⌘↵ sends to Claude, with everything that waits), on one line or a few in a row, "at lines
+  10-12" as Desktop writes them; on a diff, removed lines alone are its "before changes". A diff's
+  selection and right-click offer Copy and Add comment. A file's ⋯ has its path's menu, Attach as
+  context included. On a phone, Quote in Changes, Files or the Terminal opens in place as a sheet,
+  with Add a note, Send now and Add, and the view's foot then says what waits; beside the
+  conversation the quote waits above the box at once, as Desktop's Attach as context does.
 - **Steps and paths.** A command step has Copy command · Run in terminal · Copy output · Start a
   side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
   context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
@@ -195,28 +200,33 @@ settings; and updates from Settings.
   the title. ⌃B, as in Claude Desktop (Ctrl+Alt+B off a Mac, where Ctrl+B shows and hides the
   session list), or `/tasks`, as Claude Code names it, opens their list above the message box with
   the keys in it, and says so when nothing runs. A command has Output and Stop; an agent's row, and
-  a workflow's, leads to its card, where a workflow's one Stop is.
+  a workflow's, leads to its card, where a workflow's one Stop is. While Claude waits for an answer,
+  this list and Claude's task list fold into one line under its card, "1/4 Adding the dark palette ·
+  1 in background", so the card's buttons sit near the thumb; a tap, or ⌃B, unfolds them.
 - **Claude's to-do list, one line.** In the conversation each of Claude's task lists is a step,
   "Tasks · 1 of 4 done", which opens to the list as it was then; the bar above the message box is
-  its live view, the task under way first.
+  its live view, the task under way first, and a list Claude Code refused never becomes it.
 - **Claude's questions by number.** On a computer 1 to 9 pick an answer, as in Claude Desktop, the
   number faint beside each option: the card takes the keys as it comes, unless you are typing
   something, a number picks for the question the keys are in, or the first not answered yet, and a
-  letter starts that question's own answer under Other.
+  letter starts that question's own answer under Other; after a pick the next question comes into
+  view.
 - **The session list hides, and floats.** On a computer its button (or ⌘B, as in Desktop) hides it,
   remembered in this browser, and the conversation takes the whole width; pointing at the window's
   left edge or the button brings it over the conversation until the pointer leaves, a session is
   picked or Esc. Between 1024 and 1279px a pane beside the conversation hides it the same way, and
-  ⌘B brings it back.
+  ⌘B or its button floats it over the conversation, which keeps its room, until ⌘B again, Esc, a
+  click outside it or a pick.
 - **Back on a phone closes what is open.** Android's Back, and the browser's, closes the sheet or
   menu that is open, and goes no further.
 - **Update from Settings.** Pelican asks npm's registry for a newer version once a day, and when
-  Settings opens, and says so there, quietly, with what changed, from the new version's
-  CHANGELOG.md; offline it says nothing. Where npm installed Pelican into its global folder, Update
-  installs that very version: first into a folder of its own, where Pelican checks that it starts,
-  then over your install, with the same prefix and npm's integrity checks, and Pelican starts again,
-  through launchd or systemd when it runs as a service, in its own place when it runs in a terminal;
-  pages reconnect by themselves on the new version. While anything runs that the restart would end
+  Settings opens, and says so, quietly, first thing there and with a dot on its gear, with what
+  changed, from the new version's CHANGELOG.md; offline it says nothing. Where npm installed Pelican
+  into its global folder, Update installs that very version: first into a folder of its own, where
+  Pelican checks that it starts, then over your install, with the same prefix and npm's integrity
+  checks, and Pelican starts again, through launchd or systemd when it runs as a service, in its own
+  place when it runs in a terminal; pages reconnect by themselves on the new version and say so,
+  "Pelican updated to 0.5.1", with What's new. While anything runs that the restart would end
   (Claude working or waiting for you, background agents, workflows and commands, a terminal's
   program, a `!` command), Settings lists it first, with Update now and Update when idle, which
   waits until nothing has run for a minute, and can be cancelled. Transcripts, files, pins, settings
@@ -332,6 +342,28 @@ settings; and updates from Settings.
 
 ### Fixes
 
+- Claude's question, an approval, a plan and an MCP form keep their buttons in view however little
+  room there is above the message box: at 1100 and 1280 px with a pane open, the message box
+  covered the middle of Answer, which took no click, and on a phone the second question's options
+  and the buttons were cut. The card keeps its title at its head and its buttons at its foot, with
+  what it asks about scrolling between them; on a short screen a card that waits gets the room it
+  needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a card that
+  comes and its foot stays just above the message box.
+- On a phone with its keyboard up, the message box, Send, Stop and the model and mode stay above the
+  keyboard, also with a quote waiting and a card above: the card gives way first.
+- On Android a sheet settles at the bottom edge, the page under it dimmed: Chrome scrolled the
+  sheet's frame to what it focused while the sheet slid in, which left the title's menu, Context
+  and the model's sheet up to 100 px above the edge, the message box showing beneath.
+- A session started from Pelican in a folder under `/tmp`, picked with Browse folders, shows in the
+  list as a project's do, and its folder is offered again under New session; before, it was filed
+  under Temporary and left out of All, and the folder never came back. Sessions other tools make in
+  temporary folders stay under Temporary. Such a folder reads `/tmp` everywhere, as it was picked,
+  not `/private/tmp` in the session.
+- The header's folder gives way from its start, "…/repos/acme-web", and leaves the branch its room,
+  where a pane beside the conversation left a bare branch icon; the list counts "1 session", not
+  "1 sessions".
+- The model chip waits quietly until Claude Code has said which models there are, rather than
+  reading "Model High" for the first seconds.
 - An agent Claude left working in the background shows as Claude Code and Claude Desktop show one:
   under its step, Running in background with its steps, its time and what it is doing, then
   Finished, Failed or Stopped in background. Opened, its steps are read again every few seconds
