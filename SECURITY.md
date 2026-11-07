@@ -90,10 +90,15 @@ can read your sessions and have Claude run commands as you, so treat access to i
   helper commands and environment variables in its Claude Code settings, servers in its `.mcp.json`,
   slash commands, skills and agents that run a shell or tools without asking, and in its git config
   what git runs on its own or for a command run there: filters, a file-system monitor, a hooks
-  folder, an external diff, a diff driver's command and text converter, a pager, the program SSH
-  runs as, a password prompt, credential helpers, a signing program and aliases (which `!` makes a
-  shell command, and `-c` can give any setting), and hooks its own hooks folder came with (a
-  tarball's `.git` keeps them). Claude Code asks before it runs them in a terminal, but never in a
+  folder and hooks the config names (`hook.<name>.command`), an external diff, a diff driver's
+  command and text converter, a pager, an editor and a rebase's, a merge driver, the program SSH
+  runs as, a password prompt, credential helpers, a proxy for git://, an ext:: remote's command and
+  the setting that lets one run, a remote's upload-pack and receive-pack, a command for an
+  alternate's refs, a recent objects hook (garbage collection), `add -p`'s diff filter, a
+  trailer's command, a submodule's update command, a signing program, aliases (which `!` makes a
+  shell command, and `-c` can give any setting), and the programs of git mergetool, difftool,
+  help, send-email, imap-send, instaweb, git gui and git svn; and hooks its own hooks folder came
+  with (a tarball's `.git` keeps them). Claude Code asks before it runs them in a terminal, but never in a
   session started through its SDK, so Pelican asks. Its Claude Code settings can also pick what a
   session starts with and what it costs, a model, an effort, fast mode, Ultracode or a mode (Plan
   too), which count only once the folder is trusted, as in Claude Code: until then a new session's
@@ -135,12 +140,24 @@ can read your sessions and have Claude run commands as you, so treat access to i
   and git runs none of the repository's programs: Claude Code, and every git it starts, gets git
   settings (`GIT_CONFIG_*`) that give each setting of the repository's that names one your own
   value, from your system and global git config, or else one that runs nothing of the folder's: no
-  filter, file-system monitor or hooks, its own hooks folder's included; an external diff and a
-  diff driver's command of nothing, which git cannot be told to leave out, so `git diff` there stops
-  rather than run them (`git diff --no-ext-diff` shows the diff); `cat` as a text converter, which
-  shows a file as it is; the pager in `PAGER`, or less; `ssh`; no password prompt; the format's own
-  signing program; aliases of nothing; and its credential helpers emptied, then yours again. A
-  folder whose git config git cannot read in full does not start that way. A folder is trusted when
+  filter, file-system monitor or hooks, its own hooks folder's and those its config names included
+  (`hook.<name>.enabled` false); an external diff and a diff driver's command of nothing, which git
+  cannot be told to leave out, so `git diff` there stops rather than run them
+  (`git diff --no-ext-diff` shows the diff); `cat` as a text converter, which shows a file as it
+  is, and as `add -p`'s diff filter; the pager in `PAGER`, or less, for each command it gives a
+  pager of its own too (git keeps a `pager.<cmd>` it read before when told only `true`, so the
+  command gets the pager itself, or `false` where yours says not to page it); the editor in `VISUAL`
+  or `EDITOR`, else vi, for a commit's message and a rebase's list; git's own merge
+  (`git merge-file`) for a merge driver; `ssh`; no password prompt; no proxy for git://
+  (`GIT_PROXY_COMMAND` empty, as git takes the first `core.gitProxy` it reads, the folder's, so
+  yours is left out there too); no ext:: remote (`protocol.ext.allow` never); `echo` as a
+  trailer's command, which keeps the value given; `checkout` to update a submodule; `true` for an
+  alternate's refs; the format's own signing program; aliases, and the programs of mergetool,
+  difftool, the browser, send-email, imap-send, instaweb, git gui and git svn, of nothing, and `man`
+  to show help; and its credential helpers emptied, then yours again. A folder whose git config git
+  cannot read in full does not start that way, nor one whose config names what git cannot be told
+  to leave out: a remote's upload-pack or receive-pack (git takes the first it reads, the folder's)
+  or a recent objects hook (git runs every one it reads); Trust and start runs them. A folder is trusted when
   Claude Code's own record says so (its trust dialog, read and never written), when you trusted it
   in Pelican, when Pelican made it (a scratch folder), or when Claude Code has worked there before,
   unless you chose your settings only for it. Listing a folder's slash commands or MCP servers
@@ -157,7 +174,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   within a second once that browser is signed out, and takes nothing more from it; and it runs in a
   folder as Claude Code does, so a folder nobody trusted that brings programs is asked about first,
   and in one kept to your settings only, git runs none of the repository's programs (the settings
-  Claude Code and `!` commands get there, as above). The shell's
+  Claude Code and `!` commands get there, as above), and where git cannot be told to leave one out,
+  no terminal starts there. The shell's
   environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`, `INIT_CWD`, `NODE`),
   Claude Code's own (`CLAUDECODE` and every `CLAUDE_CODE_*`: how it was started and, for a Pelican
   started from a Claude Code session, that session's id, its messaging socket and the token for it)

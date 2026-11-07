@@ -440,7 +440,8 @@ settings; and updates from Settings.
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
-  none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
+  none of the repository's programs, or, where git cannot be told to leave one out, no terminal
+  starts. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
   (`npm_*`, `INIT_CWD`, `NODE`), Claude Code's own (`CLAUDECODE` and `CLAUDE_CODE_*`, such as how it
   was started, or the id, messaging socket and token of a Claude Code session Pelican was started
   from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
@@ -482,17 +483,26 @@ settings; and updates from Settings.
   programs: a folder's settings count only once it is trusted, as in Claude Code. Before, they
   applied with no question where the folder brought nothing else, so a cloned repository could turn
   on Ultracode and fast mode.
-- More of what a folder's git config makes git run is asked about, and turned off with your
-  settings only: an external diff, a diff driver's command and text converter, a pager, the program
-  SSH runs as, a password prompt, credential helpers, a signing program and aliases (a `!` one is
-  a shell command, and any can give git a setting with `-c`), and hooks that came in the folder's
-  own hooks folder, as a tarball's `.git` brings them. With your settings only, each gets your own setting, from your
-  system and global git config, or one that runs nothing of the folder's: `git diff` there stops
-  rather than run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the
-  file as it is, and credential helpers are yours alone. Changes' own git runs none of them either,
+- More of what a folder's git config makes git run is asked about, and turned off with your settings
+  only: an external diff, a diff driver's command and text converter, a pager, an editor and a
+  rebase's, a merge driver, the program SSH runs as, a password prompt, credential helpers, a proxy
+  for git://, an ext:: remote's command and the setting that lets one run, a command for an
+  alternate's refs, `add -p`'s diff filter, a trailer's command, a submodule's update command, a
+  signing program, aliases (a `!` one is a shell command, and any can give git a setting with `-c`),
+  the programs of git mergetool, difftool, help, send-email, imap-send, instaweb, git gui and git
+  svn, hooks its config names, and hooks that came in the folder's own hooks folder, as a tarball's
+  `.git` brings them. With your settings only, each gets your own setting, from your system and
+  global git config, or one that runs nothing of the folder's: `git diff` there stops rather than
+  run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the file as it
+  is, `git log` in a terminal pages with your pager (git kept the folder's `pager.log` when told
+  only to page), a commit's message opens in your editor, a merge merges as git's own does, an ext::
+  remote and a git:// proxy run nothing, and credential helpers are yours alone. A folder whose
+  config names what git cannot be told to leave out, a remote's upload-pack or receive-pack (git
+  takes the first it reads, the folder's) or a recent objects hook (git runs them all), is asked
+  about too, and does not start with your settings only. Changes' own git runs none of them either,
   and fetches nothing, not even a partial clone's missing files, whose fetch ran a program the
-  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath`
-  were listed and turned off.
+  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath` were
+  listed and turned off.
 - A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
   reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
   Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed
