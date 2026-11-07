@@ -107,6 +107,12 @@ const alive = (pid: number) => {
 
 const literally = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// bash 5.1 and later (Ubuntu's since 22.04, Homebrew's) turn bracketed paste on as they show the
+// prompt (ESC [?2004h) and off as Enter runs a line (ESC [?2004l, then a carriage return), where a
+// Mac's bash 3.2 does neither: what a command prints starts its line after a line break or after
+// that carriage return (`[\r\n]` before it), and the prompt may come after the first
+// (`(?:\u001b\[\?2004h)?`).
+
 describe('a terminal', () => {
   it('runs a shell in the folder, takes keys and sizes, names the program in front, and says how it ended', async () => {
     const terminal = await open();
@@ -172,7 +178,7 @@ describe('a terminal', () => {
       expect(terminal.cwd).toBe(work());
       const shown = await atPrompt(terminal.id);
       shown.type('pwd -P\r');
-      await shown.sees(new RegExp(`\\r\\n${literally(work())}\\r\\n`));
+      await shown.sees(new RegExp(`[\\r\\n]${literally(work())}\\r\\n`));
       for (const name of [link, work()]) {
         const listed = await api('GET', `/api/terminals?cwd=${encodeURIComponent(name)}&folder=${encodeURIComponent(name)}`);
         expect(listed.body).toMatchObject({ terminals: [{ id: terminal.id, cwd: work() }], folder: work() });
@@ -593,7 +599,7 @@ describe('the size a terminal is drawn at', () => {
     computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
     let from = computer.output.length;
     computer.type('stty size\r');
-    await computer.sees(/\r\n20 40\r\n/, 10_000, from);
+    await computer.sees(/[\r\n]20 40\r\n/, 10_000, from);
     expect(phone.messages.slice(phoneHeard).filter((m) => m.type === 'size')).toEqual([]);
     expect(computer.messages.slice(computerHeard).filter((m) => m.type === 'size')).toEqual([]);
     // Alone, as the phone has gone, it takes its own size, and is told it so it draws at it.
@@ -602,7 +608,7 @@ describe('the size a terminal is drawn at', () => {
     await until(() => computer.messages.some((m) => m.type === 'size' && m.cols === 120 && m.rows === 40), 5000, 'its size said back');
     from = computer.output.length;
     computer.type('stty size\r');
-    await computer.sees(/\r\n40 120\r\n/, 10_000, from);
+    await computer.sees(/[\r\n]40 120\r\n/, 10_000, from);
   }, 30_000);
 });
 
@@ -615,7 +621,7 @@ describe('Clear terminal', () => {
     const asker = await atPrompt(terminal.id);
     const other = await atPrompt(terminal.id);
     asker.type('seq 1 60\r');
-    await asker.sees(/60\r\nPROMPT\$ $/);
+    await asker.sees(/60\r\n(?:\u001b\[\?2004h)?PROMPT\$ $/);
     await until(() => written(other).includes('60'), 5000, 'the other page');
     asker.send({ type: 'clear' });
     // Every page is told, after the output before it, and clears as the copy does: the line the
@@ -665,7 +671,7 @@ describe('Clear terminal', () => {
     const terminal = await open();
     const asker = await atPrompt(terminal.id);
     asker.type('seq 1 30\r');
-    await asker.sees(/30\r\nPROMPT\$ $/);
+    await asker.sees(/30\r\n(?:\u001b\[\?2004h)?PROMPT\$ $/);
     // A page comes in with the clear asked at the same moment: whatever its screen holds, it ends cleared.
     const late = page(terminal.id);
     asker.send({ type: 'clear' });
