@@ -57,6 +57,42 @@ describe('loading the newest page', () => {
   });
 });
 
+describe('a rewind another page made', () => {
+  const at = (i: number): ChatMessage => text(`m${i}`, `message ${i}`, { role: i % 2 === 0 ? 'user' : 'assistant', timestamp: 1000 + i });
+  const all = Array.from({ length: 300 }, (_, i) => at(i));
+  const newest = (messages: ChatMessage[], rewound?: { prompt: string; at: number }): MessagesPage => {
+    const offset = Math.max(0, messages.length - 120);
+    return { messages: messages.slice(offset), total: messages.length, offset, ...(rewound ? { rewound } : {}) };
+  };
+
+  it('shows nothing from its prompt on, also where this page had loaded only messages after that prompt', async () => {
+    const id = 'session-window';
+    const spy = vi.spyOn(api, 'messages').mockResolvedValue(newest(all));
+    await loadLatest(id);
+    expect(uuids(id)[0]).toBe('m180');
+    // Back to before m100, which this page never loaded: the newest page now ends at m99.
+    const rewound = { prompt: 'm100', at: Date.now() };
+    spy.mockResolvedValue(newest(all.slice(0, 100), rewound));
+    handleEvent({ type: 'rewound', sessionId: id, rewound });
+    expect(getView(id).messages.filter((m) => Number(m.uuid.slice(1)) >= 100)).toEqual([]);
+    await vi.waitFor(() => expect(uuids(id).at(-1)).toBe('m99'));
+    expect(uuids(id)).toEqual(all.slice(0, 100).map((m) => m.uuid));
+    expect(getView(id).rewound).toEqual(rewound);
+  });
+
+  it('keeps what this page sent that the server has not confirmed yet', async () => {
+    const id = 'session-window-pending';
+    const spy = vi.spyOn(api, 'messages').mockResolvedValue(newest(all));
+    await loadLatest(id);
+    addLocalMessage(id, text('p1', 'mine', { pending: true, timestamp: 5000 }));
+    const rewound = { prompt: 'm100', at: Date.now() };
+    spy.mockResolvedValue(newest(all.slice(0, 100), rewound));
+    handleEvent({ type: 'rewound', sessionId: id, rewound });
+    await vi.waitFor(() => expect(uuids(id).at(-2)).toBe('m99'));
+    expect(uuids(id).at(-1)).toBe('p1');
+  });
+});
+
 describe('a session’s run', () => {
   it('follows the socket: whole states, then appended text; a copy that does not match asks again', async () => {
     const id = 'session-run';

@@ -93,11 +93,16 @@ export function merge(existing: ChatMessage[], incoming: ChatMessage[]): ChatMes
   return next;
 }
 
-/** The messages before the prompt a rewind went back to before: those from it on are out of the conversation. */
+/**
+ * The messages before the prompt a rewind went back to before: those from it on are out of the
+ * conversation. A prompt the page has not loaded is older than all it holds (it loaded the newest
+ * page), which then all goes, but what it sent that the server has not confirmed: the page is read
+ * again.
+ */
 function beforeCut(messages: ChatMessage[], rewound: Rewound | undefined): ChatMessage[] {
   if (!rewound) return messages;
   const at = messages.findIndex((m) => m.uuid === rewound.prompt || m.sourceUuid === rewound.prompt);
-  return at < 0 ? messages : messages.slice(0, at);
+  return at < 0 ? messages.filter((m) => m.pending) : messages.slice(0, at);
 }
 
 /** Loads (or reloads) the newest page; local messages the server has not confirmed yet stay. */
