@@ -399,7 +399,8 @@ settings; and updates from Settings.
 - A session started from Pelican in a folder under `/tmp`, picked with Browse folders, shows in the
   list as a project's do, and its folder is offered again under New session; before, it was filed
   under Temporary and left out of All, and the folder never came back. Sessions other tools make in
-  temporary folders stay under Temporary. Such a folder reads `/tmp` everywhere, as it was picked,
+  temporary folders stay under Temporary; where they are all there is, the list says how many there
+  are, with their Temporary chip and Show them, rather than "No sessions yet" and "0 sessions". Such a folder reads `/tmp` everywhere, as it was picked,
   not `/private/tmp` in the session.
 - The header's folder gives way from its start, "…/repos/acme-web", and leaves the branch its room,
   where a pane beside the conversation left a bare branch icon; the list counts "1 session", not
