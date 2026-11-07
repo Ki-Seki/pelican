@@ -507,6 +507,9 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
         </ul>
       )}
 
+      {/* The screen, and under it the keys and the line; side by side with a phone on its side and its */}
+      {/* keyboard up, where under it there is room for the line alone (styles.css). */}
+      <div data-terminal-body className="flex min-h-0 flex-1 flex-col">
       {/* Always there, also before the first terminal starts: a terminal starts at the size it has. */}
       <div className={`relative flex min-h-0 flex-1 flex-col pr-2 pl-4 ${touch ? 'pb-1' : 'pb-2'}`}>
         <TerminalScreen
@@ -548,6 +551,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, abov
           <PhoneKeys screen={screen} mode={mode} program={shown.program} safe={safe} />
         </>
       ) : above}
+      </div>
 
       <ScreenText
         {...(asText ? { text: asText } : {})}
@@ -742,14 +746,14 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
 
   const placeholder = mode.direct ? `Keys go to ${program}` : mode.secret ? 'Password' : 'Type a command';
   return (
-    <div className={`shrink-0 border-t border-line pt-1.5 ${safe}`}>
+    <div data-phone-keys className={`shrink-0 border-t border-line pt-1.5 ${safe}`}>
       {refused && (
         <p role="status" className="px-4 pb-1.5 text-[12.5px] leading-snug text-danger">
           The browser did not let Pelican read the clipboard. Allow it in the browser’s site settings, or touch and hold the line, then Paste.
         </p>
       )}
       {/* On a phone on its side the keys and the line share one row, which its keyboard leaves room for. */}
-      <div className="[@media(orientation:landscape)_and_(pointer:coarse)]:flex [@media(orientation:landscape)_and_(pointer:coarse)]:items-center">
+      <div data-keys-and-line className="[@media(orientation:landscape)_and_(pointer:coarse)]:flex [@media(orientation:landscape)_and_(pointer:coarse)]:items-center">
       {/* Keys a finger can hit, in their order; on a narrow phone the row scrolls sideways. Where an */}
       {/* upright phone's keyboard leaves room for the line alone, they make way for it (styles.css). */}
       <div data-makes-room="tiny" className="no-scrollbar flex gap-1 overflow-x-auto px-2 [@media(orientation:landscape)_and_(pointer:coarse)]:min-w-0 [@media(orientation:landscape)_and_(pointer:coarse)]:flex-1 [@media(orientation:landscape)_and_(pointer:coarse)]:pr-0" role="toolbar" aria-label="Keys">
@@ -770,6 +774,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
         ))}
       </div>
       <form
+        data-line-form
         className="flex items-center gap-1.5 px-2 pt-1.5 [@media(orientation:landscape)_and_(pointer:coarse)]:w-[min(26rem,44%)] [@media(orientation:landscape)_and_(pointer:coarse)]:shrink-0 [@media(orientation:landscape)_and_(pointer:coarse)]:pt-0"
         onSubmit={(e) => {
           e.preventDefault();

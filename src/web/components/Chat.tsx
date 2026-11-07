@@ -8,6 +8,7 @@ import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect,
 import { OWN_EFFORT, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO } from '../../shared/modes';
+import { REWIND_BUSY } from '../../shared/rewind';
 import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindCheck, RewindRestore, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
@@ -57,7 +58,7 @@ import { modelOf, SavedForNewSessions } from './ModelSheet';
 import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PaneColumn } from './PaneColumn';
-import { PermissionCard } from './PermissionCard';
+import { keepAskedInView, PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
 import { RewindDialog, RewindPicker, type RewindPoint, type RewindProblem } from './Rewind';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
@@ -98,6 +99,8 @@ function localMessage(uuid: string, text: string, attachments: Attachment[]): Ch
  * Desktop: one answered sooner, with nothing to put back, rewinds the conversation at once.
  */
 const REWIND_PAUSE_MS = 400;
+/** How long Rewind's "unavailable while Claude is working" stays where Claude was not seen at work here. */
+const REWIND_REFUSAL_MS = 5000;
 
 /** Rewind to here being asked about: the message, and what its check says can go back. */
 type RewindAsk = RewindPoint & { token: number; preview: RewindCheck | 'pending'; shown: boolean };
@@ -477,6 +480,23 @@ export function Chat({
   // do, or the computer out of reach (the line under the header says so too).
   const [sendError, setSendError] = useState<{ text: string; note: boolean }>();
   const failed = (error: unknown) => setSendError({ text: (error as Error).message, note: isDemoNote(error) || isUnreachable(error) });
+  // "Rewind is unavailable while Claude is working" holds while it works: it goes once Claude stops,
+  // or, where it was not seen at work here (a message from another page took the session for a
+  // moment), a few seconds after it was said.
+  const rewindRefused = sendError?.text === REWIND_BUSY;
+  const workedSinceRefused = useRef(false);
+  useEffect(() => {
+    if (!rewindRefused) {
+      workedSinceRefused.current = false;
+      return undefined;
+    }
+    if (busy) {
+      workedSinceRefused.current = true;
+      return undefined;
+    }
+    const timer = setTimeout(() => setSendError((now) => (now?.text === REWIND_BUSY ? undefined : now)), workedSinceRefused.current ? 0 : REWIND_REFUSAL_MS);
+    return () => clearTimeout(timer);
+  }, [rewindRefused, busy]);
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   // The title's menu, opened under the title (from the keyboard: its first action has focus).
   const [menu, setMenu] = useState<{ keys: boolean }>();
@@ -833,7 +853,7 @@ export function Chat({
     if (!sessionId) return;
     setSendError(undefined);
     if (busy) {
-      setSendError({ text: 'Rewind is unavailable while Claude is working.', note: true });
+      setSendError({ text: REWIND_BUSY, note: true });
       return;
     }
     rewindToken.current += 1;
@@ -1064,12 +1084,28 @@ export function Chat({
   const asking = request?.id;
   useEffect(() => {
     const el = root.current;
-    if (!asking || !el || !window.matchMedia('(max-height: 380px)').matches) return;
-    // Its start at the top, its foot above the message box: as much of it as there is room for.
-    requestAnimationFrame(() => {
-      const card = el.querySelector('[data-dock] section');
-      if (card) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    });
+    if (!asking || !el) return undefined;
+    const short = window.matchMedia('(max-height: 380px)');
+    let frame = 0;
+    // Where the whole chat scrolls, its start at the top, its foot above the message box: as much of
+    // it as there is room for. Anywhere, the start of what it asks about above its buttons.
+    const show = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const card = el.querySelector('[data-dock] section');
+        if (!card) return;
+        if (short.matches) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        const scroller = short.matches ? el : el.querySelector<HTMLElement>('[data-dock]');
+        if (scroller) keepAskedInView(scroller, card);
+      });
+    };
+    show();
+    // Turned on its side, or upright again, while the card waits: shown so again.
+    short.addEventListener?.('change', show);
+    return () => {
+      cancelAnimationFrame(frame);
+      short.removeEventListener?.('change', show);
+    };
   }, [asking]);
   useEffect(() => {
     if (!busy || !sessionId) return undefined;
@@ -1432,7 +1468,9 @@ export function Chat({
           scrolls, Claude's card keeping its head and its buttons in view (PermissionCard). On a phone
           on its side the whole chat scrolls instead, the message box at its foot. */}
       {/* A field of the card that takes the keys (a question's Other…) scrolls into view clear of its head and foot. */}
-      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-20 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
+      {/* Folded under the card, Claude's tasks and what runs in the background keep to the fold of what */}
+      {/* can be seen, the card's buttons just above them (--folded-h, PermissionCard). */}
+      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-[calc(5rem+var(--folded-h,0px))] overflow-y-auto overscroll-contain px-3 ${folded ? '[--folded-h:2.5rem]' : ''} ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
           <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
             {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
@@ -1440,7 +1478,10 @@ export function Chat({
           </section>
         )}
         {folded ? (
-          <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+          // On the dock's background, so what scrolls under it does not show around it; above the message box where the whole chat scrolls.
+          <div className="sticky bottom-0 z-[2] -mx-3 bg-bg px-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]">
+            <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+          </div>
         ) : (
           <>
         {showTasks && <TasksBar tasks={tasks} />}

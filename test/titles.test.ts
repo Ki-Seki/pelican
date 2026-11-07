@@ -1,11 +1,13 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { listSummaries, sessionTitle } from '../src/server/sessions';
+import { keepNameThroughRequests, listSummaries, sessionSummary, sessionTitle } from '../src/server/sessions';
+import { refreshTranscriptIndex } from '../src/server/transcripts';
+import { COMMIT_REQUEST, createPrRequest } from '../src/shared/requests';
 import { columns, shortTitle } from '../src/shared/titles';
 
 describe('a prompt as a title', () => {
@@ -87,6 +89,38 @@ describe('the titles of listed sessions', () => {
   it('keeps a title the session was given, and a summary Claude Code wrote, as they are', async () => {
     expect((await listed(2))?.title).toBe('Speed up the nightly export, by batching the owner lookups in export_rows');
     expect((await listed(3))?.title).toBe('Batching the owner lookups in the nightly export pipeline for speed');
+  });
+
+  it('keeps the name a session had through Claude Desktop’s requests Pelican sends, Commit changes and Create PR, as Desktop does', async () => {
+    const PR = createPrRequest({ repo: 'acme/app', branch: 'feat/x', baseBranch: 'main', cwd: '/w/app', draft: false });
+    const lastPrompt = (n: number, text: string) => ({ type: 'last-prompt', lastPrompt: text, leafUuid: `${id(n)}-a`, sessionId: id(n) });
+    // Claude Code names it by its last prompt: Commit changes, after a prompt of the user's.
+    await write(6, [prompt(id(6), 'Where is the theme defined?'), reply(id(6), 'In src/theme.js.'), lastPrompt(6, 'Where is the theme defined?'), prompt(id(6), COMMIT_REQUEST), reply(id(6), 'Committed.'), lastPrompt(6, COMMIT_REQUEST)]);
+    expect((await listed(6))?.title).toBe('Where is the theme defined?');
+    // In the header, which asks for the one session.
+    expect((await sessionSummary(id(6), () => undefined))?.title).toBe('Where is the theme defined?');
+    // A Create PR request kept as the last prompt, whole or cut, and no row of the user's before it: the first prompt names it.
+    await write(7, [prompt(id(7), 'Add a dark theme'), reply(id(7), 'Added.'), prompt(id(7), PR), reply(id(7), 'Opened.'), lastPrompt(7, PR.slice(0, 120))]);
+    expect((await listed(7))?.title).toBe('Add a dark theme');
+    // A title of its own stays, whatever the last prompt; a prompt after the request names it again.
+    await write(8, [{ type: 'custom-title', customTitle: 'Theme work', sessionId: id(8) }, prompt(id(8), 'Go'), reply(id(8), 'Done.'), lastPrompt(8, COMMIT_REQUEST)]);
+    expect((await listed(8))?.title).toBe('Theme work');
+    await appendFile(path.join(project, `${id(6)}.jsonl`), `${JSON.stringify(lastPrompt(6, 'Now the footer'))}\n`);
+    expect((await listed(6))?.title).toBe('Now the footer');
+  });
+
+  it('records the name back once Claude Code has recorded a request as the last prompt, for the apps that name sessions by it', async () => {
+    const file = path.join(project, `${id(9)}.jsonl`);
+    const lastPrompt = (text: string) => ({ type: 'last-prompt', lastPrompt: text, sessionId: id(9) });
+    await write(9, [prompt(id(9), 'Where is the theme defined?'), reply(id(9), 'In src/theme.js.'), lastPrompt('Where is the theme defined?'), prompt(id(9), COMMIT_REQUEST), reply(id(9), 'Committed.'), lastPrompt(COMMIT_REQUEST)]);
+    // Written just now, after the list last looked.
+    await refreshTranscriptIndex();
+    await keepNameThroughRequests(id(9));
+    const rows = (await readFile(file, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows.at(-1)).toEqual({ type: 'last-prompt', lastPrompt: 'Where is the theme defined?', sessionId: id(9) });
+    // Once is enough: the name is the session's again.
+    await keepNameThroughRequests(id(9));
+    expect((await readFile(file, 'utf8')).trim().split('\n')).toHaveLength(rows.length);
   });
 
   it('shows why a turn stopped, not Claude Code’s error as the reply', async () => {

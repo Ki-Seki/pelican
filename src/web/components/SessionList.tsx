@@ -666,8 +666,10 @@ export function SessionList({
   }, [shown]);
 
   const compact = prefs.listDensity === 'compact';
-  // What "All" shows, counted the way it is filtered.
+  // What "All" shows, counted the way it is filtered; and the temporary sessions it leaves out.
   const visibleCount = (sessions ?? []).filter((s) => !s.archived && (s.pinned || (!(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)))).length;
+  const hiddenTemp = prefs.showTemporary ? 0 : (sessions ?? []).filter((s) => s.temp && !s.archived && !s.pinned && !(s.sideChatOf && !prefs.showSideChats)).length;
+  const temporarySessions = `${hiddenTemp} temporary ${hiddenTemp === 1 ? 'session' : 'sessions'}`;
   const startNew = () => onNew(project === SCRATCH ? { scratch: true } : defaultStart(sessions ?? [], project && !SPECIAL[project] ? project : undefined));
 
   return (
@@ -679,7 +681,8 @@ export function SessionList({
               <h1 className="truncate text-[20px] font-semibold tracking-tight">{machine || 'Pelican'}</h1>
               <span title={connected ? 'Connected' : 'Reconnecting'} className={`size-1.5 shrink-0 rounded-full ${connected ? 'bg-live' : 'bg-wait'}`} />
             </div>
-            <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount} ${visibleCount === 1 ? 'session' : 'sessions'}` : ''}</div>
+            {/* Where All leaves out every session there is, those it leaves out are counted instead. */}
+            <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount === 0 && hiddenTemp > 0 ? temporarySessions : `${visibleCount} ${visibleCount === 1 ? 'session' : 'sessions'}`}` : ''}</div>
           </div>
           {top}
           <button type="button" aria-label={update ? `Settings: Pelican ${update} is out` : 'Settings'} title={update ? `Pelican ${update} is out` : undefined} onClick={onSettings} className="relative grid size-11 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg pointer-fine:size-10">
@@ -727,7 +730,8 @@ export function SessionList({
           <ListFilter className="size-[18px]" />
         </button>
         </div>
-        {(projects.length > 1 || archivedCount > 0) && (
+        {/* Temporary sessions alone, which All leaves out, have their chip too: the way to them. */}
+        {(projects.length > 1 || archivedCount > 0 || hiddenTemp > 0) && (
           <ChipRow items={projects.join('\u0000')}>
             {[undefined, ...projects].map((p) => (
               <button
@@ -813,6 +817,17 @@ export function SessionList({
         {shown.more && <MoreRows key={rowLimit} root={scroller} onNear={showMore} />}
         {sessions && groups.length === 0 && (query || project ? (
           <div className="px-4 py-12 text-center text-[13px] text-faint">No matching sessions</div>
+        ) : hiddenTemp > 0 ? (
+          // Sessions there are, all in the system's temporary folder, which All leaves out: said, with the way to them.
+          <div className="mx-auto max-w-xs px-4 py-14 text-center">
+            <div className="text-[15px] font-medium">{hiddenTemp === 1 ? 'A temporary session' : temporarySessions[0]!.toUpperCase() + temporarySessions.slice(1)}</div>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+              {hiddenTemp === 1 ? 'It is' : 'They are'} in the system’s temporary folder, where other sessions mostly start them, which All leaves out. The <span className="font-medium text-fg">Temporary</span> chip shows {hiddenTemp === 1 ? 'it' : 'them'}, and so does Temporary sessions in the list’s options.
+            </p>
+            <button type="button" onClick={() => setProject(TEMP)} className="mt-3 h-10 rounded-full bg-chip px-4 text-[13.5px] hover:bg-hover pointer-coarse:h-11">
+              Show {hiddenTemp === 1 ? 'it' : 'them'}
+            </button>
+          </div>
         ) : archivedCount > 0 ? (
           <div className="px-4 py-12 text-center text-[13px] text-faint">Every session is archived</div>
         ) : (

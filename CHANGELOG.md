@@ -32,16 +32,22 @@ settings; and updates from Settings.
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
   while you type, the screen takes the room of the header and tabs above it, and on a phone on its
   side it has that room whether you type or not, a dozen rows on a Pixel 7, a tap on the screen
-  showing them again, with the keys and the line on one row, which the keyboard leaves room for. A
-  row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a
-  finger's size each, scrolling sideways on a narrow phone, and a key there sends what you typed
-  first, so tab completes it. A line typed while the connection comes back stays until it can go. A
+  showing them again, and doing only that: what comes back takes no tap for half a second, so
+  neither that tap nor one made at once lands on End or Files under the finger; the keys and the
+  line share one row there, and with the keyboard up the line saying Claude waits, and what waits
+  for your next message, give way to them until it goes down. Where the keyboard leaves room under
+  the screen for the line alone (66 px in Chrome on a Pixel 7), the keys and the line sit beside the
+  screen instead, the keys over the line, each as tall as that room allows (30 px there, about as
+  tall as the keyboard's own keys), and the screen keeps three rows. A row of keys has what a
+  phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a finger's size each,
+  scrolling sideways on a narrow phone, and a key there sends what you typed first, so tab
+  completes it. A line typed while the connection comes back stays until it can go. A
   full-screen program such as vim or htop gets every key as you type it, a password prompt hides
   what you type, a swipe scrolls back and ↓ comes back to the newest output, a pinch sets the size,
   and the menu's Select text opens the screen as text, to select from, quote or copy; Quote there
   opens the quote in place, with Add a note, Send now and Add, and the view says above the keys what
-  waits for your next message. The keys, the tabs and the line are a finger's 44 px. A screen reader
-  hears what a line printed.
+  waits for your next message. The keys, the tabs and the line are a finger's 44 px, beside the
+  screen as tall as the room allows. A screen reader hears what a line printed.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
@@ -57,7 +63,9 @@ settings; and updates from Settings.
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
   session's folder, which reads it from a file of its own (`.` or `source`), so its lines go in
   together and run as they read: a `!` in it is not taken from your shell's history, as bash and zsh
-  take one in what is typed at their prompt. The question shows the whole command, wrapped, its
+  take one in what is typed at their prompt. Under the line that reads the file, the new tab shows
+  the command itself, dimmed, as a terminal shows what was typed, then what it prints (in sh's
+  family, bash and zsh among them, and fish). The question shows the whole command, wrapped, its
   lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
   the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
   command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
@@ -159,12 +167,12 @@ settings; and updates from Settings.
   marker sits at the cut, with Undo rewind, which brings the messages back (the files stay as they
   are) until you send your next message; it takes the words back out of the box while they are as
   the rewind put them. Code and conversation is all or nothing: code that cannot go back leaves the
-  conversation as it was, an earlier rewind's cut and all. Not while Claude works, and, while
-  another app has the session open, the code alone, as Desktop does; the conversation's first
-  message (also after a SessionStart hook's context), and one before a compaction, can go back in
-  code only. A rewind, Undo rewind and a message go one at a time: one sent from another page
-  while a rewind starts Claude again goes after the cut, and a second rewind meanwhile says Claude
-  is working. A rewind leaves the session's name as it was.
+  conversation as it was, an earlier rewind's cut and all. Not while Claude works, which it says
+  until Claude stops, and, while another app has the session open, the code alone, as Desktop
+  does; the conversation's first message (also after a SessionStart hook's context), and one
+  before a compaction, can go back in code only. A rewind, Undo rewind and a message go one at a
+  time: one sent from another page while a rewind starts Claude again goes after the cut, and a
+  second rewind meanwhile says Claude is working. A rewind leaves the session's name as it was.
 - **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
   message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
   A turn in Changes ends with its prompt's Rewind to here.
@@ -180,8 +188,11 @@ settings; and updates from Settings.
   whichever app sent it, once however quickly it is tapped again; while Claude works it waits for
   the end of the turn as a queued message, never steered into the work at hand, whatever Settings
   says for what you type, each as a message of its own, and its button says it is queued, with Take
-  back, which takes it out of the queue. ⌘-click (Ctrl-click), or a long
-  press on a phone, puts it in the message box first, to read and change. Create PR shows in the
+  back, which takes it out of the queue. Neither renames the session: one Claude Code names by its
+  last prompt keeps the name it had, in the list, the header and notifications, as Desktop keeps a
+  session's title, and once its Claude has ended Pelican records that name back where Claude Code
+  keeps it, for the terminal's `/resume` and the other apps. ⌘-click (Ctrl-click), or a long press
+  on a phone, puts it in the message box first, to read and change. Create PR shows in the
   conversation as `/create-pr`, as in Desktop, also among prompts Claude Code took in together, and
   so in Export as Markdown; Create PR is offered on a branch other than the
   default one, where origin is on GitHub, or where there is no remote at all, for which Desktop's
@@ -218,7 +229,9 @@ settings; and updates from Settings.
   the keys in it, and says so when nothing runs. A command has Output and Stop; an agent's row, and
   a workflow's, leads to its card, where a workflow's one Stop is. While Claude waits for an answer,
   this list and Claude's task list fold into one line under its card, "1/4 Adding the dark palette ·
-  1 in background", so the card's buttons sit near the thumb; a tap, or ⌃B, unfolds them.
+  1 in background", so the card's buttons sit near the thumb; a tap, or ⌃B, unfolds them. Where
+  the card has little room, the line keeps to the foot of what can be seen, the card's buttons just
+  above it, rather than out of sight under it (50 px under at 844×390).
 - **Claude's to-do list, one line.** In the conversation each of Claude's task lists is a step,
   "Tasks · 1 of 4 done", which opens to the list as it was then; the bar above the message box is
   its live view, the task under way first, and a list Claude Code refused never becomes it.
@@ -372,9 +385,14 @@ settings; and updates from Settings.
   room there is above the message box: at 1100 and 1280 px with a pane open, the message box
   covered the middle of Answer, which took no click, and on a phone the second question's options
   and the buttons were cut. The card keeps its title at its head and its buttons at its foot, with
-  what it asks about scrolling between them; on a short screen a card that waits gets the room it
-  needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a card that
-  comes and its foot stays just above the message box.
+  what it asks about scrolling between them, cut a little way off each at a quiet line, as in
+  Claude Desktop, rather than right under the title; on a short screen a card that waits gets the
+  room it needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a
+  card that comes and its foot stays just above the message box. An approval shows what it asks
+  about above Allow and Deny, a command whole or its first lines, whatever the height, the words
+  above it going under the title where there is not room for both: on a Pixel 7 on its side
+  `npm test` sat under the buttons, and showed only with a swipe; on a short screen what Always
+  allow saves sits beside Allow and Deny where it fits, rather than on a line of its own.
 - On a phone with its keyboard up, the message box, Send, Stop and the model and mode stay above the
   keyboard, also with a quote waiting and a card above: the card gives way first.
 - On Android a sheet settles at the bottom edge, the page under it dimmed: Chrome scrolled the
@@ -383,10 +401,12 @@ settings; and updates from Settings.
 - A session started from Pelican in a folder under `/tmp`, picked with Browse folders, shows in the
   list as a project's do, and its folder is offered again under New session; before, it was filed
   under Temporary and left out of All, and the folder never came back. Sessions other tools make in
-  temporary folders stay under Temporary. Such a folder reads `/tmp` everywhere, as it was picked,
+  temporary folders stay under Temporary; where they are all there is, the list says how many there
+  are, with their Temporary chip and Show them, rather than "No sessions yet" and "0 sessions". Such a folder reads `/tmp` everywhere, as it was picked,
   not `/private/tmp` in the session.
 - The header's folder gives way from its start, "…/repos/acme-web", and leaves the branch its room,
-  where a pane beside the conversation left a bare branch icon; the list counts "1 session", not
+  where a pane beside the conversation left a bare branch icon, and so does New session's folder
+  under "What should Claude do?", which cut the folder's name; the list counts "1 session", not
   "1 sessions".
 - The model chip waits quietly until Claude Code has said which models there are, rather than
   reading "Model High" for the first seconds.

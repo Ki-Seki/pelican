@@ -89,8 +89,9 @@ export function WaitingChips({ items, touch, open, onOpen, onRemove, list }: {
         }
         return (
           // Keyboard focus on its main part rings the whole chip; its × shows its own.
-          // As wide as it needs, up to what a box beside a conversation has room for: a quote's note reads in it.
-          <li key={item.id} title={name} className={`flex h-8 max-w-[min(24rem,100%)] shrink-0 items-center rounded-full border bg-bg text-[12.5px] has-[>button:first-child:focus-visible]:ring-2 has-[>button:first-child:focus-visible]:ring-faint ${active ? 'border-fg' : 'border-line'}`}>
+          // As wide as it needs, up to the room the box has, so a quote's note reads in it; beside
+          // others, a little less, so the next shows at the edge, to scroll to.
+          <li key={item.id} title={name} className={`flex h-8 max-w-[calc(100%-4rem)] shrink-0 items-center rounded-full border bg-bg text-[12.5px] only:max-w-full has-[>button:first-child:focus-visible]:ring-2 has-[>button:first-child:focus-visible]:ring-faint ${active ? 'border-fg' : 'border-line'}`}>
             <button
               type="button"
               aria-label={name}

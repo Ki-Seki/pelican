@@ -315,6 +315,45 @@ describe('pinned sessions in the list', () => {
   });
 });
 
+describe('a list whose only sessions are temporary ones', () => {
+  it('says they are there, and how to show them, the Temporary chip or the list’s options, rather than that there are none', async () => {
+    setPrefs({ showTemporary: false });
+    // As the CLI leaves them: runs in folders under /tmp, which All leaves out.
+    server = [
+      session('x1', 'A run in the temp folder', { cwd: '/tmp/run-1', project: 'run-1', temp: true }),
+      session('x2', 'Another run there', { cwd: '/tmp/run-2', project: 'run-2', temp: true, lastActivity: now - 2 * MIN }),
+    ];
+    list();
+    expect(await screen.findByText('2 temporary sessions')).toBeTruthy();
+    expect(screen.getByText('Claude Code · 2 temporary sessions')).toBeTruthy();
+    expect(screen.queryByText('No sessions yet')).toBeNull();
+    expect(screen.queryByText('A run in the temp folder')).toBeNull();
+    // Their chip is there, and Show them picks it.
+    expect(screen.getByRole('button', { name: 'Temporary2' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show them' }));
+    expect(screen.getByRole('button', { name: 'Temporary2' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('A run in the temp folder')).toBeTruthy();
+    expect(screen.getByText('Another run there')).toBeTruthy();
+  });
+
+  it('with one, says it of the one; shown by the list’s options, lists them as ever', async () => {
+    server = [session('x1', 'A run in the temp folder', { cwd: '/tmp/run-1', project: 'run-1', temp: true })];
+    setPrefs({ showTemporary: false });
+    list();
+    expect(await screen.findByText('A temporary session')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show it' })).toBeTruthy();
+    cleanup();
+    setPrefs({ showTemporary: true });
+    try {
+      list();
+      expect(await screen.findByText('A run in the temp folder')).toBeTruthy();
+      expect(screen.getByText('Claude Code · 1 session')).toBeTruthy();
+    } finally {
+      setPrefs({ showTemporary: false });
+    }
+  });
+});
+
 describe('a finger on a row', () => {
   /** A finger on a row's title at `from` (180px from the screen's left), across by `dx` and down by `dy`, then let go. */
   const slide = async (title: string, dx: number, { from = 180, dy = 0 } = {}) => {

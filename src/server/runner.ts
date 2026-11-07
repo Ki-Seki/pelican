@@ -57,7 +57,7 @@ import { liveProcesses } from './live.js';
 import { deliveryOf, toChatMessage } from './normalize.js';
 import { answerable, notify, oneLine } from './push.js';
 import { liveCut, spendCut } from './rewound.js';
-import { sessionInfo, sessionTitle } from './sessions.js';
+import { keepNameThroughRequests, sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
 import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_ENV, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
@@ -1521,6 +1521,8 @@ export class SessionRun {
       }
     } finally {
       this.endedNow();
+      // What it recorded as it exited names the session in other apps: not one of Desktop's requests.
+      if (!this.sideChat) void keepNameThroughRequests(this.sessionId).catch((error: Error) => console.warn('[pelican] could not keep the session\'s name:', error.message));
       // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
       const closedHere = this.closed;
       this.closed = true;

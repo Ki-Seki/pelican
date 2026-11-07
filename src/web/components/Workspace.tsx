@@ -14,6 +14,7 @@ import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { fileItem, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 import { useComments, useCommentsChat } from '../lib/review';
+import { type Settling, settleRows } from '../lib/settle';
 import { wantTerminalFocus } from '../lib/terminals';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
@@ -376,8 +377,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // on its own. Beside the conversation its chips are in view above the message box, so the foot
   // is only Send now; on a phone, where the view covers the box, it says what waits.
   const count = waitingCount(waiting);
+  // Typing in the terminal's line with a phone on its side and its keyboard up, it gives way to the screen and the line (styles.css).
   const footer = waiting.length > 0 && (
-    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits || footInTerminal ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
+    <div data-gives-way className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits || footInTerminal ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
       {!docked && (
         <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
           {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
@@ -427,6 +429,19 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   const view = useRef<HTMLDivElement>(null);
   useCovering(open && !docked, view);
+  // What folds away comes back under a finger: it takes no tap for a moment (lib/settle), neither
+  // the tap that brought it back nor one made at once.
+  const settle = useRef<Settling>(undefined);
+  useEffect(() => {
+    const el = view.current;
+    if (!open || docked || !el) return undefined;
+    const rows = settleRows(el, '[data-makes-room]');
+    settle.current = rows;
+    return () => {
+      rows.stop();
+      settle.current = undefined;
+    };
+  }, [open, docked]);
   // A phone on its side folds the view's header and tabs, and the terminal's, away from its screen
   // (styles.css): a tap on the screen shows them, or folds them again; typing in its line folds them.
   const [unfolded, setUnfolded] = useState(false);
@@ -442,7 +457,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       if (!down || e.pointerId !== down.id) return;
       tap.current = undefined;
       // A tap: not a swipe through the output, a long press for its menu, or two fingers sizing it.
-      if (down.fingers === 1 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && e.timeStamp - down.at < 400) setUnfolded((was) => !was);
+      if (down.fingers !== 1 || Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 10 || e.timeStamp - down.at >= 400) return;
+      // The rows come back under the finger before its click: that click, and a tap at once, are not theirs.
+      if (!unfolded) settle.current?.reveal();
+      setUnfolded(!unfolded);
     },
     onPointerCancel: () => {
       tap.current = undefined;
@@ -514,8 +532,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       {terminal}
       <div ref={setFoot} className="shrink-0" />
       {!footInTerminal && footer}
-      {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
-      <div aria-live="polite" className="shrink-0">
+      {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. Typing */}
+      {/* in the terminal's line with a phone on its side and its keyboard up, it gives way (styles.css). */}
+      <div aria-live="polite" data-gives-way className="shrink-0">
         {needsYou && (
           <button type="button" onClick={onClose} className="pb-safe flex min-h-12 w-full items-center gap-2.5 border-t border-line bg-panel px-4 pt-2 text-left text-[14px]">
             <span className="size-2 shrink-0 rounded-full bg-wait" />

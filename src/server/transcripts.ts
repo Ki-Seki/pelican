@@ -252,6 +252,55 @@ export async function readLastTurn(file: string): Promise<LastTurn | undefined> 
   return done(found);
 }
 
+/**
+ * The latest prompt Claude Code recorded as a session's last (its `last-prompt` rows, which name a
+ * session without a title of its own) that `skip` does not pass over: read from the file's end, as
+ * far back as MAX_SCAN. None where there is no such row.
+ */
+export async function lastPromptExcept(file: string, skip: (text: string) => boolean = () => false): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof openRegular>> | undefined;
+  try {
+    handle = await openRegular(file);
+    const { size } = await handle.stat();
+    let end = size;
+    let carry = Buffer.alloc(0);
+    let step = FIRST_CHUNK;
+    while (end > 0 && size - end < MAX_SCAN) {
+      const start = Math.max(0, end - step);
+      step = Math.min(step * 2, MAX_CHUNK);
+      const chunk = Buffer.alloc(end - start);
+      await handle.read(chunk, 0, chunk.length, start);
+      let data = Buffer.concat([chunk, carry]);
+      end = start;
+      if (start > 0) {
+        const firstBreak = data.indexOf(0x0a);
+        if (firstBreak < 0) {
+          carry = data;
+          continue;
+        }
+        carry = data.subarray(0, firstBreak);
+        data = data.subarray(firstBreak + 1);
+      }
+      const lines = data.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i]!;
+        if (!line.includes('"type":"last-prompt"')) continue;
+        try {
+          const row = JSON.parse(line) as { type?: unknown; lastPrompt?: unknown };
+          if (row.type === 'last-prompt' && typeof row.lastPrompt === 'string' && row.lastPrompt.trim() && !skip(row.lastPrompt)) return row.lastPrompt;
+        } catch {
+          // Half written.
+        }
+      }
+    }
+  } catch {
+    // Missing or unreadable.
+  } finally {
+    await handle?.close();
+  }
+  return undefined;
+}
+
 const lastTurnCache = new Map<string, { size: number; mtimeMs: number; value: LastTurn | undefined }>();
 /** A first list after a start reads every transcript's end: a few at a time, not thousands at once. */
 const reading = limiter(16);

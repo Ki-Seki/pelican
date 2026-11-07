@@ -208,10 +208,11 @@ describe('a terminal', () => {
     try {
       const terminal = await open(work(), { command: 'echo one\necho two' });
       await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
-      // Typed: `.` and the file, which holds the command as it was shown.
+      // Typed: `.` and the file, which prints the command first, dimmed, from a word in single quotes,
+      // then holds it as it was shown.
       const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
       expect(file).toBeDefined();
-      expect(readFileSync(file!, 'utf8')).toBe('echo one\necho two\n');
+      expect(readFileSync(file!, 'utf8')).toBe("command printf '\\033[2m%s\\033[0m\\n' 'echo one\necho two'\necho one\necho two\n");
       expect((await stat(file!)).mode & 0o777).toBe(0o600);
       expect((await stat(path.dirname(file!))).mode & 0o777).toBe(0o700);
       // Gone with the terminal.
@@ -266,6 +267,34 @@ describe('a terminal', () => {
           if (value === undefined) delete process.env[variable];
           else process.env[variable] = value;
         }
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 30_000);
+  }
+
+  // Its prompt shows the line that reads the command's file (`. /tmp/pelican-run-…/1`): the command
+  // itself shows under it, dimmed, as a terminal shows what was typed, quotes and all, nothing of it
+  // read on the way, then what it prints.
+  for (const [name, file, args] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i']], ['zsh', '/bin/zsh', ['-d', '-f', '-i']]] as const) {
+    it.skipIf(!existsSync(file))(`shows the command it runs in ${name}, dimmed, before what it prints`, async () => {
+      Object.assign(testShell, { file, args: [...args] });
+      try {
+        const command = "echo \"it's $((6 * 7)) !! `echo tick` 100%\"\nprintf '%s\\n' 'a''b' \"c'd\"";
+        const shown = page((await open(work(), { command })).id);
+        await shown.readied();
+        await shown.sees(/c'd\r?\n/, 10_000);
+        await new Promise<void>((resolve) => shown.screen.write('', resolve));
+        const lines = shown.lines();
+        const at = lines.indexOf("echo \"it's $((6 * 7)) !! `echo tick` 100%\"");
+        expect(at, lines.join('\n')).toBeGreaterThan(0);
+        expect(lines[at - 1]).toMatch(/\. \/\S+\/pelican-run-\w+\/\d+$/);
+        expect(lines[at + 1]).toBe("printf '%s\\n' 'a''b' \"c'd\"");
+        expect(lines.slice(at + 2, at + 5)).toEqual(["it's 42 !! tick 100%", 'ab', "c'd"]);
+        const cell = (y: number) => shown.screen.buffer.active.getLine(y)!.getCell(0)!;
+        expect(cell(at).isDim()).toBeTruthy();
+        expect(cell(at + 1).isDim()).toBeTruthy();
+        expect(cell(at + 2).isDim()).toBeFalsy();
+      } finally {
         Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
       }
     }, 30_000);

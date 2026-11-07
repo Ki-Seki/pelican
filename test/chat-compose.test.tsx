@@ -472,6 +472,16 @@ describe('a new session moved to another folder before it starts', () => {
     await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Plan'));
   });
 
+  it('names the folder in the middle of the empty chat with its name kept, a long path giving way from its start, as the header does', () => {
+    const deep = '/tmp/pelican-check/v50-gate/fb-scratch/live/repos/cloned-app';
+    wrap(<Chat newCwd={deep} home="/home/me" machine="studio" wide={false} onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    const folder = screen.getByLabelText(`Folder: ${deep}`);
+    const path = folder.querySelector('span[dir="rtl"]')!;
+    expect(path.className).toContain('truncate');
+    expect(path.querySelector('bdi[dir="ltr"]')?.textContent).toBe(deep);
+    expect(folder.getAttribute('title')).toBe(deep);
+  });
+
   it('never takes Bypass along: in the other folder it starts as a new session there does', async () => {
     wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
     fireEvent.click(screen.getByLabelText('Permission mode'));
@@ -663,6 +673,13 @@ describe('what runs in the background', () => {
     const line = await screen.findByRole('button', { name: /1\/2.*Testing.*2 in background/ });
     expect(line.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('region', { name: '2 in background' })).toBeNull();
+    // It keeps to the fold of what can be seen, the card's buttons just above it, where the dock
+    // scrolls (at 844×390 it lay 50 px under the fold): stuck at the dock's foot, the room it takes said.
+    const dock = line.closest('[data-dock]')!;
+    expect(line.parentElement!.className).toMatch(/(^| )sticky( |$)/);
+    expect(line.parentElement!.parentElement).toBe(dock);
+    expect(dock.className).toContain('[--folded-h:2.5rem]');
+    expect(dock.querySelector('[data-card-foot]')!.className).toContain('bottom-[var(--folded-h,0px)]');
     fireEvent.click(line);
     expect(await screen.findByRole('region', { name: '2 in background' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^1\/2\s*Testing/ })).toBeTruthy();
@@ -834,6 +851,10 @@ describe('a file open in Changes and files', () => {
     fireEvent.click(await within(pane).findByRole('button', { name: 'Quote' }));
     const chips = await screen.findByRole('list', { name: 'With your next message' });
     expect(within(chips).getByText('a.ts:1-2')).toBeTruthy();
+    // As wide as the box has room for, so a note reads in it (it stopped at 24rem), a little less beside others.
+    const chip = within(chips).getByText('a.ts:1-2').closest('li')!;
+    expect(chip.className).toContain('only:max-w-full');
+    expect(chip.className).toContain('max-w-[calc(100%-4rem)]');
     expect(box().value).toBe('First this.');
     getSelection()!.removeAllRanges();
     // It goes as Desktop attaches lines of a file: where they are, then the lines.

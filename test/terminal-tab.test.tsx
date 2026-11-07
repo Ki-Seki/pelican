@@ -576,6 +576,15 @@ describe('the Terminal tab on a phone', () => {
     expect(field().hasAttribute('data-terminal-line')).toBe(true);
     expect(screen.getByRole('tablist', { name: 'Terminals' }).closest('[data-makes-room]')?.getAttribute('data-makes-room')).toBe('short');
     expect(screen.getByRole('toolbar', { name: 'Keys' }).getAttribute('data-makes-room')).toBe('tiny');
+    // On a phone on its side with its keyboard up, where under the screen there is room for the line
+    // alone, the screen and the keys over the line sit side by side (styles.css): one body holds both.
+    const body = document.querySelector('[data-terminal]')!.closest('[data-terminal-body]');
+    expect(body).toBeTruthy();
+    const keys = field().closest('[data-phone-keys]')!;
+    expect(keys.parentElement).toBe(body);
+    const both = screen.getByRole('toolbar', { name: 'Keys' }).closest('[data-keys-and-line]')!;
+    expect(both.parentElement).toBe(keys);
+    expect(field().closest('[data-line-form]')?.parentElement).toBe(both);
   });
 
   it('gives a full-screen program every key as it is typed, and hides what is typed at a password prompt', async () => {
