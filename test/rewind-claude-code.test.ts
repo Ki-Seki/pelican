@@ -6,21 +6,24 @@
 // prompt's turn (resumeDropsTurn) falls back to the whole session; the demo refuses; and Fork from
 // here copies up to just before a prompt (none before the first, also after a SessionStart hook's
 // context), or the end of a reply. Rewinds, Undo and messages go one at a time; a failed rewind
-// leaves the conversation as it read; and a rewind renames nothing.
+// leaves the conversation as it read; Fork, side chats, Changes and a Claude started again read the
+// conversation up to the cut; and a rewind renames nothing.
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, MessagesPage, RewindCheck, RewindDone, SessionSummary } from '../src/shared/protocol';
+import type { ChatMessage, MessagesPage, RewindCheck, RewindDone, SessionChanges, SessionSummary } from '../src/shared/protocol';
 import { REWIND_BUSY } from '../src/shared/rewind';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
 import { saveUpload } from '../src/server/files';
+import { forgetCuts } from '../src/server/rewound';
 import { closeAll, getRun, sendMessage } from '../src/server/runner';
 import { loadMessages } from '../src/server/sessions';
 import { transcriptPath } from '../src/server/transcripts';
-import { rememberChoice } from '../src/server/trust';
+import { pelicanChoice, rememberChoice } from '../src/server/trust';
 import { type MessagesRequest, type StandIn, standInApi, textOf, until } from './stand-in-api';
 
 // Looking a folder's trust up takes as long as a test asks (`slow.launch`, in ms): the moment a
@@ -104,6 +107,8 @@ beforeAll(async () => {
     const { results, text } = said(request);
     if (results) return 'Done.';
     if (text.endsWith('Write the notes')) return { tool: 'Write', input: { file_path: notes, content: 'Changed by Claude.\n' } };
+    // Work left running between turns, which starting Claude again would end.
+    if (text.endsWith('Start the watcher')) return { tool: 'Bash', input: { command: 'sleep 60', description: 'Watch', run_in_background: true } };
     // A question for the user, which Claude Code always waits on: its turn runs until it is answered.
     if (text.endsWith('Ask me')) return { tool: 'AskUserQuestion', input: { questions: [{ question: 'Which theme?', header: 'Theme', multiSelect: false, options: [{ label: 'Light', description: 'Light' }, { label: 'Dark', description: 'Dark' }] }] } };
     return `Reply to: ${text.split('\n').at(-1)}`;
@@ -490,3 +495,106 @@ describe('Rewind to here and the session’s name', () => {
   }, 240_000);
 });
 
+describe('the conversation as it reads after a rewind, up to the cut', () => {
+  it('is what a Claude started again later has: after Claude closed, and after Pelican started again', async () => {
+    const id = await session(['Later: First question', 'Later: Second question', 'Later: Third question']);
+    const third = await uuidOf(id, 'Later: Third question');
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: third, restore: 'conversation' })).status).toBe(200);
+    closeAll();
+    forgetCuts();
+    await until(() => getRun(id) === undefined, 10_000, 'Claude to close');
+    expect((await page(id)).rewound).toMatchObject({ prompt: third });
+    await reply(id, 'Later: Instead');
+    const request = JSON.stringify(turnOf('Later: Instead')!.messages);
+    expect(request).toContain('Later: Second question');
+    expect(request).not.toContain('Later: Third question');
+  }, 240_000);
+
+  it('is what Fork copies, a side chat is asked about and Changes lists', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Reads: Read the notes', 'Reads: Second question', 'Reads: Write the notes'], { permissionMode: 'acceptEdits' });
+    const write = await uuidOf(id, 'Reads: Write the notes');
+    const turns = async () => (await json<SessionChanges>(await ask(`/api/sessions/${id}/changes`))).body.turns;
+    expect((await turns()).map((t) => t.uuid)).toContain(write);
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: write, restore: 'conversation' })).status).toBe(200);
+    // Changes: the turns before the cut.
+    expect((await turns()).map((t) => t.uuid)).not.toContain(write);
+    // Fork: a copy of the conversation up to the cut.
+    const copy = (await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, {}))).body.sessionId;
+    const copied = words(await loadMessages(copy));
+    expect(copied).toContain('Reads: Second question');
+    expect(copied).not.toContain('Reads: Write the notes');
+    // A side chat: Claude is asked about the conversation up to the cut.
+    const side = (await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/side`, { question: 'Reads: What did I ask last?' }))).body.sessionId;
+    await until(() => getRun(side)?.busy === false && Boolean(turnOf('Reads: What did I ask last?')), 90_000, 'the side chat’s answer');
+    const asked = JSON.stringify(turnOf('Reads: What did I ask last?')!.messages);
+    expect(asked).toContain('Reads: Second question');
+    expect(asked).not.toContain('Reads: Write the notes');
+  }, 240_000);
+});
+
+describe('what only the code can go back to before', () => {
+  it('a prompt before a compaction', async () => {
+    const id = await session(['Compact: First question', 'Compact: Second question']);
+    await sendMessage({ sessionId: id }, { text: '/compact', attachments: [], settings: {} });
+    await until(() => getRun(id)?.busy === false, 90_000, 'the compaction');
+    await reply(id, 'Compact: Third question');
+    const check = await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: await uuidOf(id, 'Compact: Second question'), dryRun: true }));
+    expect(check.body.conversationStays).toBe('The conversation was compacted after this message, so it can no longer go back to before it.');
+    const refused = await json(await ask(`/api/sessions/${id}/rewind`, { uuid: await uuidOf(id, 'Compact: Second question'), restore: 'conversation' }));
+    expect(refused).toEqual({ status: 409, body: { error: check.body.conversationStays } });
+    // After it, the conversation can go back.
+    const later = await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: await uuidOf(id, 'Compact: Third question'), dryRun: true }));
+    expect(later.body.conversationStays).toBeUndefined();
+  }, 240_000);
+
+  it('a session another app has open, as Desktop has it; Pelican’s own Claude is no other app', async () => {
+    const id = await session(['Other: First question', 'Other: Second question']);
+    const second = await uuidOf(id, 'Other: Second question');
+    expect((await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: second, dryRun: true }))).body.conversationStays).toBeUndefined();
+    // Claude Code in a terminal, by its registry entry: a process of its own, not one of Pelican's
+    // (started through a shell that leaves it, so it is no child of this one).
+    const pid = Number(execFileSync('/bin/sh', ['-c', `"${process.execPath}" -e "setTimeout(() => {}, 120000)" > /dev/null 2>&1 & echo $!`], { encoding: 'utf8' }).trim());
+    const entry = path.join(config.claudeHome, 'sessions', `${pid}.json`);
+    try {
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, JSON.stringify({ pid, sessionId: id, cwd: folder, startedAt: Date.now(), entrypoint: 'cli', status: 'idle', updatedAt: Date.now() }));
+      await pause(1700);
+      const held = await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: second, dryRun: true }));
+      expect(held.body.conversationStays).toBe('The session is open in the terminal too, so only its code can go back here.');
+      expect(await json(await ask(`/api/sessions/${id}/rewind`, { uuid: second, restore: 'conversation' }))).toEqual({ status: 409, body: { error: held.body.conversationStays } });
+    } finally {
+      rmSync(entry, { force: true });
+      process.kill(pid);
+    }
+  }, 240_000);
+
+  it('a session with work Claude left running, which starting Claude again would end', async () => {
+    const id = await session(['Watch: First question', 'Watch: Start the watcher'], { permissionMode: 'bypassPermissions' });
+    await until(() => getRun(id)?.hasBackgroundTasks === true, 30_000, 'the watcher');
+    const first = await uuidOf(id, 'Watch: Start the watcher');
+    const check = await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: first, dryRun: true }));
+    expect(check.body.conversationStays).toBe('Claude has work running in the background here, which starting it again would stop. Stop it first.');
+    expect(await json(await ask(`/api/sessions/${id}/rewind`, { uuid: first, restore: 'conversation' }))).toEqual({ status: 409, body: { error: check.body.conversationStays } });
+    for (const task of getRun(id)!.state().tasks ?? []) await getRun(id)!.stopTask(task.id);
+  }, 240_000);
+
+});
+
+describe('Rewind to here, with an answer about the folder’s trust', () => {
+  it('keeps the answer it brings, as a message does', async () => {
+    const asked = path.join(path.dirname(folder), 'asked');
+    mkdirSync(asked, { recursive: true });
+    let id: string | undefined;
+    for (const text of ['Asked: First question', 'Asked: Second question']) {
+      id = await sendMessage(id ? { sessionId: id } : { cwd: asked }, { text, attachments: [], settings: {} });
+      const sent = id;
+      await until(() => getRun(sent)?.busy === false, 90_000, `the turn of “${text}”`);
+    }
+    // Kept to the user's settings only until now; the answer the sheet gave comes with the rewind.
+    await rememberChoice(asked, 'user-only');
+    const second = await uuidOf(id!, 'Asked: Second question');
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: second, dryRun: true, trust: 'trusted' })).status).toBe(200);
+    expect(await pelicanChoice(realpathSync(asked))).toBe('trusted');
+  }, 240_000);
+});
