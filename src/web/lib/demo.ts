@@ -4,13 +4,13 @@ import { isSavedEffort, modelKey, type StartDefaults } from '../../shared/defaul
 import { isPermissionMode } from '../../shared/modes';
 import type {
   Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, Rewound, RewindCheck, RewindDone, RunSettings, RunState, SendMode, ServerInfo,
-  SessionStatus, SessionSummary, Workflow,
+  SessionChanges, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
 import { shortTitle } from '../../shared/titles';
-import { answerLocally, ApiError } from './api';
+import { answerLocally, api, ApiError } from './api';
 import { fromDefaults } from './defaults';
 import { newId } from './ids';
 import { DEMO_NOTE, DemoRefusal, INSTALL_URL, STATIC_DEMO } from './static-demo';
@@ -34,6 +34,8 @@ type Story = {
   timers: ReturnType<typeof setTimeout>[];
   /** A session the demo started itself. */
   summary?: SessionSummary;
+  /** Of a copy the demo made (Fork): the session it copied. */
+  copyOf?: string;
   /**
    * Where the demo rewound the conversation (Rewind to here): its prompt, when, how many of `added`
    * came before it, and whether a message has gone since (then Undo rewind is over).
@@ -433,7 +435,19 @@ function fork(sessionId: string, body: Record<string, unknown>): { sessionId: st
     status: 'idle',
   };
   story.added = copy.map((m) => ({ ...m }));
+  story.copyOf = sessionId;
   return { sessionId: id, ...(prompt ? { prompt } : {}) };
+}
+
+/**
+ * What each turn of a session the demo made changed: none of a new one's own; of a copy, the turns
+ * of its session it holds, with no copies of their files to rewind to, as forkSession copies none.
+ */
+async function changesOf(story: Story): Promise<SessionChanges> {
+  if (!story.copyOf) return { turns: [], lines: {} };
+  const source = await api.changes(story.copyOf).catch((): SessionChanges => ({ turns: [], lines: {} }));
+  const held = new Set(story.added.map((m) => m.uuid));
+  return { turns: source.turns.filter((turn) => held.has(turn.uuid)).map((turn) => ({ ...turn, checkpoint: false })), lines: source.lines };
 }
 
 const statusOf = (run: RunState): SessionStatus => (run.permissions.length > 0 ? 'waiting' : run.busy ? 'running' : 'idle');
@@ -504,6 +518,7 @@ function read(path: string): Promise<unknown> | undefined {
     return Promise.resolve({ messages, total: messages.length, offset: 0, ...(rewound ? { rewound } : {}) } satisfies MessagesPage);
   }
   if (rest === '/mcp') return Promise.resolve({ servers: [], live: false });
+  if (rest === '/changes') return changesOf(story);
   return undefined;
 }
 

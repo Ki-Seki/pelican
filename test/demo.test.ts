@@ -139,6 +139,9 @@ describe('the demo', () => {
     expect((await api.messages(whole!)).messages.map((m) => m.uuid)).toContain('second');
     // Before the first prompt nothing is copied: its words go to a new session's box.
     expect(await api.forkBefore(sessionId, 'first')).toEqual({ sessionId: null, prompt: { text: 'Add a footer', attachments: [] } });
+    // What its turns changed is answered in the page too, as the site saved none for a session made there.
+    expect(await api.changes(copy!)).toEqual({ turns: [], lines: {} });
+    expect(await api.changes(sessionId)).toEqual({ turns: [], lines: {} });
   });
 
   it('starts a new session in the page, which the list and the chat then show', async () => {
