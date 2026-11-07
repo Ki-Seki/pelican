@@ -16,14 +16,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import pkg from '../package.json' with { type: 'json' };
 import { changesBetween, compareVersions, type InstallInfo, isNewerVersion, type UpdateInfo, type UpdateState } from '../src/shared/update';
+import { app } from '../src/server/app';
 import { accessToken } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { LABEL } from '../src/server/service';
 import { startServer } from '../src/server/server';
 import { closeAllTerminals, testShell } from '../src/server/terminals';
 import {
-  fileInTar, integrityHolds, nodeSatisfies, npmBeside, npmSaid, type Ran, type RunningSources, servedBy, shellWord, type UpdateContext, updateInfo, updateTiming,
-  useRunningSources, useUpdateContext,
+  fileInTarball, integrityHolds, nodeSatisfies, npmBeside, npmSaid, type Ran, READ_LIMITS, type RunningSources, servedBy, shellWord, TarReader, type UpdateContext,
+  updateInfo, updateTiming, useRunningSources, useUpdateContext,
 } from '../src/server/update';
 
 const CURRENT = pkg.version;
@@ -38,26 +39,30 @@ const timing = { ...updateTiming };
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** A ustar header for an entry of `size` bytes, of `type` ('0' a file, 'x' a pax header). */
+function tarHeader(name: string, size: number, type = '0'): Buffer {
+  const header = Buffer.alloc(512);
+  header.write(name.slice(0, 100), 0);
+  header.write('0000755\0', 100);
+  header.write('0000000\0', 108);
+  header.write('0000000\0', 116);
+  header.write(`${size.toString(8).padStart(11, '0')}\0`, 124);
+  header.write('00000000000\0', 136);
+  header.write('        ', 148);
+  header.write(type, 156);
+  header.write('ustar\0', 257);
+  header.write('00', 263);
+  header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148);
+  return header;
+}
+
+/** A tar entry: its header, its body, and the padding to a whole block. */
+const tarEntry = (name: string, body: Buffer, type = '0') => Buffer.concat([tarHeader(name, body.length, type), body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
+
 /** A .tgz as npm pack writes one: ustar entries under package/. */
 function tgz(files: Record<string, string>): Buffer {
-  const blocks: Buffer[] = [];
-  for (const [name, text] of Object.entries(files)) {
-    const body = Buffer.from(text);
-    const header = Buffer.alloc(512);
-    header.write(`package/${name}`, 0);
-    header.write('0000755\0', 100);
-    header.write('0000000\0', 108);
-    header.write('0000000\0', 116);
-    header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124);
-    header.write('00000000000\0', 136);
-    header.write('        ', 148);
-    header.write('0', 156);
-    header.write('ustar\0', 257);
-    header.write('00', 263);
-    header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148);
-    blocks.push(header, body, Buffer.alloc((512 - (body.length % 512)) % 512));
-  }
-  return gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+  const entries = Object.entries(files).map(([name, text]) => tarEntry(`package/${name}`, Buffer.from(text)));
+  return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]));
 }
 
 const integrity = (data: Buffer) => `sha512-${createHash('sha512').update(data).digest('base64')}`;
@@ -69,10 +74,10 @@ const standInScript = (version: string, broken = false) => broken
 
 const CHANGELOG = (versions: string[]) => `# Changelog\n\n${versions.map((v) => `## ${v}\n\nWhat ${v} brings, in a paragraph.\n\n### Highlights\n\n- **One thing.** Of ${v}.\n`).join('\n')}`;
 
-/** A release of the package, as npm pack makes it. */
-const release = (version: string, { broken = false, changelog = true } = {}) => tgz({
+/** A release of the package, as npm pack makes it; `changelog`: none, or this one instead of the usual. */
+const release = (version: string, { broken = false, changelog = true as boolean | string } = {}) => tgz({
   'package.json': JSON.stringify({ name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' }, engines: { node: '>=22.12' } }),
-  ...(changelog ? { 'CHANGELOG.md': CHANGELOG([version, CURRENT, '0.4.1']) } : {}),
+  ...(changelog ? { 'CHANGELOG.md': typeof changelog === 'string' ? changelog : CHANGELOG([version, CURRENT, '0.4.1']) } : {}),
   'dist/server/index.js': standInScript(version, broken),
 });
 
@@ -85,6 +90,8 @@ const registry = {
   /** How the package's document is answered: as npm's registry does, or not. */
   answer: 'ok' as 'ok' | 'error' | 'garbage' | 'wrong-integrity',
   engines: undefined as string | undefined,
+  /** Where its document says the tarballs are: its own address, unless another is given. */
+  tarballsAt: undefined as string | undefined,
   requests: [] as string[],
 };
 
@@ -93,9 +100,10 @@ function packument() {
     name: 'pelican-cc',
     'dist-tags': { latest: registry.latest },
     versions: Object.fromEntries([...registry.tarballs].map(([version, data]) => [version, {
-      name: 'pelican-cc', version,
+      // As npm's registry has it from the package.json: what npm links in the prefix's bin.
+      name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' },
       ...(registry.engines ? { engines: { node: registry.engines } } : {}),
-      dist: { tarball: `${registry.url}pelican-cc/-/pelican-cc-${version}.tgz`, integrity: registry.answer === 'wrong-integrity' ? integrity(Buffer.from('other')) : integrity(data) },
+      dist: { tarball: `${registry.tarballsAt ?? registry.url}pelican-cc/-/pelican-cc-${version}.tgz`, integrity: registry.answer === 'wrong-integrity' ? integrity(Buffer.from('other')) : integrity(data) },
     }])),
   };
 }
@@ -134,7 +142,7 @@ appendFileSync(process.env.STANDIN_NPM_LOG, JSON.stringify(args) + '\\n');
 const flag = (name) => args[args.indexOf(name) + 1];
 if (args[0] === 'prefix' && args[1] === '--global') {
   console.log(process.env.STANDIN_NPM_GLOBAL);
-} else if (args.join(' ') === 'config get registry') {
+} else if (args.join(' ') === 'config get registry --global') {
   console.log(process.env.STANDIN_NPM_REGISTRY);
 } else if (args[0] === 'install' && args.includes('--global')) {
   const prefix = flag('--prefix');
@@ -217,7 +225,7 @@ const services = {
 };
 
 /** Runs programs for real (node: npm and Pelican, standing in); launchctl, systemctl and ps stand in. */
-const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal } = {}) => {
+const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal, cwd } = {}) => {
   if (file === 'launchctl' || file === 'systemctl' || file === 'ps') {
     services.calls.push([file, ...args]);
     const said = (stdout: string, code = 0): Ran => ({ code, stdout, stderr: code ? `${file}: failed` : '' });
@@ -227,7 +235,7 @@ const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal }
     return Promise.resolve(said('', services.restartCode));
   }
   return new Promise((resolve) => {
-    execFile(file, args, { timeout, env: env ?? process.env, ...(signal ? { signal } : {}) }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout, env: env ?? process.env, ...(signal ? { signal } : {}), ...(cwd ? { cwd } : {}) }, (error, stdout, stderr) => {
       const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -1) : 0;
       resolve({ code, stdout: String(stdout), stderr: String(stderr) });
     });
@@ -317,6 +325,7 @@ beforeEach(async () => {
   registry.latest = NEXT;
   registry.answer = 'ok';
   registry.engines = undefined;
+  registry.tarballsAt = undefined;
   registry.requests = [];
   Object.assign(services, { calls: [], ours: true, restartCode: 0, ps: '' });
   started = [];
@@ -372,15 +381,49 @@ describe('versions and what changed', () => {
     expect(changesBetween('# Changelog\r\n\r\n## v1.0.0\r\n\r\nWindows lines.\r\n', '0.9.0', '1.0.0')).toBe('## v1.0.0\n\nWindows lines.');
   });
 
-  it('reads a file out of a tarball, and checks a tarball against its integrity', () => {
+  it('reads a file out of a tarball as it unpacks, and checks a tarball against its integrity', async () => {
     const data = release(NEXT);
     expect(integrityHolds(data, integrity(data))).toBe(true);
     expect(integrityHolds(data, `${integrity(Buffer.from('x'))} sha1-abc`)).toBe(false);
     expect(integrityHolds(data, 'sha1-abc')).toBe(false);
-    const tar = gunzipSync(data);
-    expect(fileInTar(tar, 'package/CHANGELOG.md')?.toString()).toContain(`## ${NEXT}`);
-    expect(fileInTar(tar, 'package/missing.md')).toBeUndefined();
+    const limits = { unpacked: READ_LIMITS.unpacked, file: READ_LIMITS.changelog };
+    expect((await fileInTarball(data, 'package/CHANGELOG.md', limits))?.toString()).toContain(`## ${NEXT}`);
+    expect(await fileInTarball(data, 'package/missing.md', limits)).toBeUndefined();
+    // A long name, as pax writes one, read in blocks of any size; of a file past what is kept, its start.
+    const long = `package/${'folder/'.repeat(20)}CHANGELOG.md`;
+    const record = ` path=${long}\n`;
+    const pax = gzipSync(Buffer.concat([
+      tarEntry('package/PaxHeader', Buffer.from(`${record.length + String(record.length + 2).length}${record}`), 'x'),
+      tarEntry(long.slice(0, 100), Buffer.from('x'.repeat(3000))),
+      Buffer.alloc(1024),
+    ]));
+    expect((await fileInTarball(pax, long, { unpacked: 1 << 20, file: 1000 }))?.toString()).toBe('x'.repeat(1000));
+    expect((await fileInTarball(pax, long, { unpacked: 1 << 20, file: 1 << 20 }))?.toString()).toBe('x'.repeat(3000));
+    const tar = gunzipSync(pax);
+    for (const size of [1, 7, 511, 513, 4096]) {
+      const reader = new TarReader(long, 1 << 20);
+      for (let at = 0; at < tar.length && !reader.push(tar.subarray(at, at + size)); at += size);
+      expect(reader.file?.toString(), `in pieces of ${size}`).toBe('x'.repeat(3000));
+    }
+    // Not gzip: no file.
+    await expect(fileInTarball(Buffer.from('not a tarball'), 'package/CHANGELOG.md', limits)).rejects.toThrow();
   });
+
+  it('unpacks a tarball only as far as it allows: a gzip bomb before the changelog is given up on early', async () => {
+    // 200 MB of an entry's zeros before CHANGELOG.md, in a few hundred KB: gzip members, one after the other.
+    const zeros = gzipSync(Buffer.alloc(1024 * 1024));
+    const bomb = Buffer.concat([
+      gzipSync(tarHeader('package/padding.bin', 200 * 1024 * 1024)),
+      ...Array.from({ length: 200 }, () => zeros),
+      gzipSync(Buffer.concat([tarEntry('package/CHANGELOG.md', Buffer.from(CHANGELOG([NEXT]))), Buffer.alloc(1024)])),
+    ]);
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    const start = Date.now();
+    expect(await fileInTarball(bomb, 'package/CHANGELOG.md', { unpacked: 8 * 1024 * 1024, file: READ_LIMITS.changelog })).toBeUndefined();
+    expect(Date.now() - start).toBeLessThan(5000);
+    // Allowed that much, it is read: the members are one archive.
+    expect((await fileInTarball(bomb, 'package/CHANGELOG.md', { unpacked: 256 * 1024 * 1024, file: READ_LIMITS.changelog }))?.toString()).toContain(`## ${NEXT}`);
+  }, 30_000);
 
   it('says in a line what npm said went wrong', () => {
     const refused = [
@@ -409,8 +452,13 @@ describe('versions and what changed', () => {
     expect(nodeSatisfies(undefined, '1.0.0')).toBe(true);
     expect(shellWord('pelican-cc@0.5.1')).toBe('pelican-cc@0.5.1');
     expect(shellWord('~/.local')).toBe('~/.local');
+    expect(shellWord('~')).toBe('~');
     expect(shellWord('/Users/a b/.local')).toBe("'/Users/a b/.local'");
     expect(shellWord("it's")).toBe("'it'\\''s'");
+    // The ~ stays outside the quotes, where the shell expands it.
+    expect(shellWord('~/my projects/pelican')).toBe("~/'my projects/pelican'");
+    expect(shellWord("~/it's")).toBe("~/'it'\\''s'");
+    expect(shellWord('~user/x')).toBe("'~user/x'");
   });
 
   it('runs the npm of the Node running Pelican, not the first on PATH', async () => {
@@ -441,7 +489,7 @@ describe('how Pelican was installed, and what Settings offers', () => {
     const prefix = path.join(dir, 'global');
     const install = await offered(await globalInstall(prefix), { global: prefix });
     expect(install).toEqual({ kind: 'npm', folder: path.join(prefix, 'lib', 'node_modules', 'pelican-cc'), prefix, self: true, restart: 'in-place' });
-    expect(await npmRuns()).toEqual([['config', 'get', 'registry'], ['prefix', '--global']]);
+    expect(await npmRuns()).toEqual([['config', 'get', 'registry', '--global'], ['prefix', '--global']]);
   }, 30_000);
 
   it('shows the command, and why, where npm’s global folder is not this one: another tool’s, such as a script of your own', async () => {
@@ -489,11 +537,61 @@ describe('how Pelican was installed, and what Settings offers', () => {
     }
   }, 30_000);
 
+  it('shows commands that work as shown for folders whose names have spaces, under the home folder too', async () => {
+    const home = path.join(dir, 'home');
+    /** What a shell makes of `words` (a command's start), run as the page shows it, with this home folder. */
+    const shells = ['/bin/sh', '/bin/bash', '/bin/zsh'].filter((shell) => existsSync(shell));
+    const said = (shell: string, words: string) => new Promise<string>((resolve) => {
+      execFile(shell, ['-c', `${words} && pwd -P`], { env: { HOME: home, PATH: '/usr/bin:/bin' }, cwd: dir }, (error, stdout, stderr) => resolve(error ? `failed: ${stderr}` : stdout.trim()));
+    });
+    // A checkout in ~/my projects/pelican: its cd goes there.
+    const checkout = path.join(home, 'my projects', 'pelican');
+    const script = await pelicanAt(checkout);
+    await mkdir(path.join(checkout, '.git'), { recursive: true });
+    const source = await offered(script);
+    expect(source.command).toBe("cd ~/'my projects/pelican' && git pull && npm ci && npm run build");
+    for (const shell of shells) expect(await said(shell, source.command!.split(' && ')[0]!), shell).toBe(checkout);
+    // A project's package, in ~/my app: the same.
+    await forget();
+    const project = await offered(await pelicanAt(path.join(home, 'my app', 'node_modules', 'pelican-cc')));
+    expect(project.command).toBe(`cd ~/'my app' && npm install pelican-cc@${NEXT}`);
+    for (const shell of shells) expect(await said(shell, project.command!.split(' && ')[0]!), shell).toBe(path.join(home, 'my app'));
+    // Another prefix in ~/Library/Application Support: the shell names the folder whole.
+    await forget();
+    const prefix = path.join(home, 'Library', 'Application Support', 'tool');
+    const other = await offered(await globalInstall(prefix), { global: path.join(dir, 'global') });
+    expect(other.command).toBe(`npm install --global --prefix ~/'Library/Application Support/tool' pelican-cc@${NEXT}`);
+    const word = /--prefix (.+) pelican-cc@/.exec(other.command!)![1]!;
+    for (const shell of shells) expect(await said(shell, `cd ${word}`), shell).toBe(prefix);
+  }, 30_000);
+
+  it('says to start pnpm dlx and bunx with the new version, as npx, since each runs the copy in its cache', async () => {
+    // As pnpm 11.9.0 starts what pnpm dlx runs: from its store, saying it is pnpm.
+    const byPnpm = { env: { ...context('').env, npm_config_user_agent: 'pnpm/11.9.0 npm/? node/v24.22.1 darwin arm64' } };
+    const cases: Array<[string, string, RegExp, object?]> = [
+      // pnpm 9 and 10, then before: the cache's dlx folder, in pnpm's own layout; pnpm 11: its store.
+      ['Library/Caches/pnpm/dlx/abc123/19a0c1e0d4b-1f2e/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
+      ['tmp/dlx-4242/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
+      ['Library/pnpm/store/v11/links/@/pelican-cc/0.5.0/367149aba2e7/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/, byPnpm],
+      ['tmp/bunx-501-pelican-cc@latest/node_modules/pelican-cc', `bunx pelican-cc@${NEXT} --port 7860`, /bunx’s cache/],
+    ];
+    for (const [where, command, why, more] of cases) {
+      await forget();
+      const install = await offered(await pelicanAt(path.join(dir, 'home', where)), more);
+      expect(install, where).toMatchObject({ kind: 'npx', self: false, command });
+      expect(install.why, where).toMatch(why);
+    }
+  }, 30_000);
+
   it('leaves a project’s package, Volta’s, pnpm’s, Yarn’s and Bun’s to them', async () => {
     const cases: Array<[string, RegExp, string]> = [
       ['project/node_modules/pelican-cc', /package of ~\/project/, `cd ~/project && npm install pelican-cc@${NEXT}`],
       ['.volta/tools/image/packages/pelican-cc/lib/node_modules/pelican-cc', /Volta/, `volta install pelican-cc@${NEXT}`],
       ['Library/pnpm/global/5/node_modules/pelican-cc', /pnpm/, `pnpm add --global pelican-cc@${NEXT}`],
+      // pnpm 11 keeps a global install in its store too, but its command is started from your shell, not by pnpm.
+      ['Library/pnpm/store/v11/links/@/pelican-cc/0.5.0/3613aebac74c/node_modules/pelican-cc', /pnpm/, `pnpm add --global pelican-cc@${NEXT}`],
+      // A project whose folder starts as bunx's do.
+      ['projects/bunx-demo/node_modules/pelican-cc', /package of ~\/projects\/bunx-demo/, `cd ~/projects/bunx-demo && npm install pelican-cc@${NEXT}`],
       ['.config/yarn/global/node_modules/pelican-cc', /Yarn/, `yarn global add pelican-cc@${NEXT}`],
       ['.bun/install/global/node_modules/pelican-cc', /Bun/, `bun add --global pelican-cc@${NEXT}`],
     ];
@@ -548,6 +646,64 @@ describe('how Pelican was installed, and what Settings offers', () => {
     expect(install).toMatchObject({ kind: 'npm', self: false, command: `npm install --global --prefix ${prefix} pelican-cc@${NEXT}` });
     expect(install.why).toMatch(/needs Node 99 or newer/);
   }, 30_000);
+});
+
+describe('the registry, as a global install has it', () => {
+  // npm itself: the npm of the Node running the tests, with a home folder, a global folder and a cache of the tests' own.
+  const realNpm = npmBeside(process.execPath);
+
+  it.skipIf(!realNpm)('is the user’s, never one a project’s .npmrc names in the folder Pelican was started in, for the check and the update alike', async () => {
+    // A registry a cloned project's .npmrc names: it hears nothing.
+    const heard: string[] = [];
+    const other = http.createServer((request, response) => {
+      heard.push(request.url ?? '');
+      response.writeHead(404).end('{}');
+    });
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
+    try {
+      const project = path.join(dir, 'cloned-project');
+      await mkdir(project, { recursive: true });
+      await writeFile(path.join(project, 'package.json'), JSON.stringify({ name: 'cloned', version: '1.0.0', private: true }));
+      await writeFile(path.join(project, '.npmrc'), `registry=http://127.0.0.1:${(other.address() as AddressInfo).port}/\n`);
+      // The user's own settings name the stand-in registry.
+      const home = path.join(dir, 'npm-user');
+      await mkdir(home, { recursive: true });
+      await writeFile(path.join(home, '.npmrc'), `registry=${registry.url}\n`);
+      const prefix = path.join(dir, 'npm-prefix');
+      await rm(prefix, { recursive: true, force: true });
+      const script = await globalInstall(prefix);
+      const npmRanIn: Array<string | undefined> = [];
+      useUpdateContext(context(script, {
+        home,
+        npm: realNpm,
+        env: {
+          PATH: process.env.PATH, HOME: home, npm_config_prefix: prefix, npm_config_cache: path.join(home, '.npm'), npm_config_update_notifier: 'false',
+          // Nothing but 127.0.0.1 is reached, whatever npm would ask.
+          npm_config_proxy: 'http://127.0.0.1:9', npm_config_https_proxy: 'http://127.0.0.1:9', npm_config_noproxy: '127.0.0.1',
+        },
+        // Pelican was started in the project: what it runs runs there, unless it says where.
+        run: (file, args, options = {}) => {
+          if (file === realNpm!.file && args[0] === realNpm!.args[0]) npmRanIn.push(options.cwd);
+          return run(file, args, { ...options, cwd: options.cwd ?? project });
+        },
+      }));
+      const info = (await api('GET', '/api/update?check=1')).body as UpdateInfo;
+      expect(info).toMatchObject({ latest: NEXT, changes: expect.stringContaining(`What ${NEXT} brings`), install: { kind: 'npm', prefix, self: true } });
+      expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+      // npm installed it into the prefix, from the user's registry; the stand-in for process.execve said so.
+      const failed = await until('failed', 100_000);
+      expect(failed.state).toMatchObject({ error: expect.stringMatching(/could not start it in its place \(stand-in/) });
+      expect(await installedVersion(prefix)).toBe(NEXT);
+      expect(await realpath(path.join(prefix, 'bin', 'pelican'))).toBe(path.join(prefix, 'lib', 'node_modules', 'pelican-cc', 'dist', 'server', 'index.js'));
+      expect(started).toHaveLength(1);
+      expect(heard).toEqual([]);
+      // Each npm ran from the home folder: config get registry --global, prefix --global, and both installs.
+      expect(npmRanIn.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(npmRanIn)).toEqual(new Set([home]));
+    } finally {
+      await new Promise((resolve) => other.close(resolve));
+    }
+  }, 120_000);
 });
 
 describe('the check', () => {
@@ -621,6 +777,99 @@ describe('the check', () => {
     expect(asked()).toBe(3);
   }, 30_000);
 
+  it('asks again when what it remembered is dated ahead of now, is not what the registry would say, or came from another registry', async () => {
+    const asked = () => registry.requests.filter((request) => request === '/pelican-cc').length;
+    const remember = async (kept: object) => {
+      await mkdir(path.join(dir, 'state'), { recursive: true });
+      await writeFile(path.join(dir, 'state', 'update.json'), JSON.stringify(kept));
+    };
+    const latest = { version: NEXT, tarball: `${registry.url}pelican-cc/-/pelican-cc-${NEXT}.tgz`, integrity: integrity(registry.tarballs.get(NEXT)!) };
+    // Remembered from a minute ago, it is the answer, and the registry is not asked.
+    await remember({ at: Date.now() - 60_000, registry: registry.url, latest });
+    useUpdateContext(context(await globalInstall(prefix())));
+    expect((await updateInfo()).latest).toBe(NEXT);
+    expect(asked()).toBe(0);
+    // Dated a day ahead (a clock put back), it would stop the asking for a day.
+    for (const kept of [
+      { at: Date.now() + 24 * 3600_000, registry: registry.url, latest },
+      // A tarball npm would not take, or no version.
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, tarball: 'file:///etc/hosts' } },
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, integrity: 'sha1-abc' } },
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, version: `${NEXT} --registry=http://evil.example/` } },
+      // Another registry's answer: npm's names this one now.
+      { at: Date.now() - 60_000, registry: 'http://127.0.0.1:9/', latest },
+    ]) {
+      registry.requests = [];
+      await remember(kept);
+      useUpdateContext(context(await globalInstall(prefix())));
+      expect((await updateInfo()).latest, JSON.stringify(kept)).toBe(NEXT);
+      expect(asked(), JSON.stringify(kept)).toBe(1);
+      expect(JSON.parse(await readFile(path.join(dir, 'state', 'update.json'), 'utf8'))).toMatchObject({ registry: registry.url, latest });
+    }
+  }, 30_000);
+
+  it('downloads a tarball only from the registry’s own origin: one elsewhere is never asked for, and the release notes are linked instead', async () => {
+    const heard: string[] = [];
+    const elsewhere = http.createServer((request, response) => {
+      heard.push(request.url ?? '');
+      response.writeHead(200).end(registry.tarballs.get(NEXT));
+    });
+    await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve));
+    try {
+      registry.tarballsAt = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}/`;
+      useUpdateContext(context(await globalInstall(prefix()), { global: prefix() }));
+      const info = await updateInfo(true);
+      expect(info).toMatchObject({ latest: NEXT, notes: `https://github.com/Ki-Seki/pelican/releases/tag/v${NEXT}`, install: { self: true } });
+      expect(info.changes).toBeUndefined();
+      expect(heard).toEqual([]);
+    } finally {
+      await new Promise((resolve) => elsewhere.close(resolve));
+    }
+  }, 30_000);
+
+  it('sends Settings at most so much of what changed, with where the rest is', async () => {
+    const line = '- A change, in a line long enough to fill a section of a changelog quickly.\n';
+    registry.tarballs.set(NEXT, release(NEXT, { changelog: `# Changelog\n\n## ${NEXT}\n\nWhat ${NEXT} brings.\n\n${line.repeat(20_000)}\n## ${CURRENT}\n\nThe running one.\n` }));
+    useUpdateContext(context(await globalInstall(prefix())));
+    const answer = await fetch(`${origin()}/api/update?check=1`, { headers: { 'x-pelican': '1', ...signedIn() } });
+    const text = await answer.text();
+    const info = JSON.parse(text) as UpdateInfo;
+    expect(info.changes!.length).toBeLessThanOrEqual(READ_LIMITS.changes + 200);
+    expect(info.changes).toMatch(new RegExp(`^## ${NEXT.replace(/\./g, '\\.')}\n\nWhat .* brings\.\n\n- A change`));
+    expect(info.changes!.endsWith(`- A change, in a line long enough to fill a section of a changelog quickly.\n\nThe rest is in [CHANGELOG.md](https://github.com/Ki-Seki/pelican/blob/v${NEXT}/CHANGELOG.md).`)).toBe(true);
+    expect(text.length).toBeLessThan(READ_LIMITS.changes + 4096);
+  }, 30_000);
+
+  it('gives up on a tarball that unpacks to too much, and downloads one it could not read only once until the registry answers again', async () => {
+    // 200 MB of zeros before CHANGELOG.md, in a few hundred KB.
+    const zeros = gzipSync(Buffer.alloc(1024 * 1024));
+    registry.tarballs.set(NEXT, Buffer.concat([
+      gzipSync(tarHeader('package/padding.bin', 200 * 1024 * 1024)),
+      ...Array.from({ length: 200 }, () => zeros),
+      gzipSync(Buffer.concat([tarEntry('package/CHANGELOG.md', Buffer.from(CHANGELOG([NEXT, CURRENT]))), Buffer.alloc(1024)])),
+    ]));
+    let now = Date.now();
+    useUpdateContext(context(await globalInstall(prefix()), { now: () => now }));
+    const downloads = () => registry.requests.filter((request) => request.endsWith('.tgz')).length;
+    expect(await updateInfo(true)).toMatchObject({ latest: NEXT, notes: `https://github.com/Ki-Seki/pelican/releases/tag/v${NEXT}` });
+    expect(downloads()).toBe(1);
+    // Each look after: what it found, and no download.
+    for (let i = 0; i < 3; i += 1) expect((await updateInfo(true)).changes).toBeUndefined();
+    expect(downloads()).toBe(1);
+    // The registry asked again, a few minutes on: once more.
+    now += updateTiming.settingsMs + 1000;
+    await updateInfo(true);
+    await updateInfo(true);
+    expect(downloads()).toBe(2);
+    // One read is read once.
+    registry.tarballs.set(NEXT, release(NEXT));
+    now += updateTiming.settingsMs + 1000;
+    expect((await updateInfo(true)).changes).toContain(`What ${NEXT} brings`);
+    now += updateTiming.settingsMs + 1000;
+    expect((await updateInfo(true)).changes).toContain(`What ${NEXT} brings`);
+    expect(downloads()).toBe(3);
+  }, 30_000);
+
   it('asks nothing in the demo', async () => {
     useUpdateContext(context(await globalInstall(prefix())));
     config.demo = true;
@@ -631,11 +880,11 @@ describe('the check', () => {
 });
 
 describe('what an update would end', () => {
-  it('lists Claude working or waiting, its background tasks, terminals with a program and ! commands', async () => {
+  it('lists Claude working or waiting, the messages queued for the end of its turn, its background tasks, terminals with a program and ! commands', async () => {
     useUpdateContext(context(await globalInstall(path.join(dir, 'global'))));
     useRunningSources({
       runs: () => [
-        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, tasks: [], checks: 0, unseen: false },
+        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, queued: 2, tasks: [], checks: 0, unseen: false },
         { sessionId: 's2', cwd: '/w/api', busy: true, waiting: true, tasks: [], checks: 0, unseen: false },
         {
           sessionId: 's3', cwd: '/w/web', busy: false, waiting: false, checks: 1, unseen: false,
@@ -654,6 +903,7 @@ describe('what an update would end', () => {
     const { busy } = await updateInfo(true);
     expect(busy).toEqual([
       { kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' },
+      { kind: 'queued', title: 'Fix the build', detail: '2 messages for when this turn ends', sessionId: 's1' },
       { kind: 'session', title: 'Ship the API', detail: 'Claude waits for you', sessionId: 's2' },
       { kind: 'work', title: 'Redo the site', detail: '2 agents, a workflow, a command and a check it scheduled in the background', sessionId: 's3' },
       { kind: 'work', title: 'ops', detail: 'work it keeps running in the background', sessionId: 's4' },
@@ -721,6 +971,20 @@ describe('updating', () => {
     expect(started).toEqual([{ file: process.execPath, args: [process.execPath, path.join(prefix(), 'bin', 'pelican'), '--port', '7860'] }]);
     expect(serving.agains).toBe(1);
     expect(failed.state).toMatchObject({ error: expect.stringMatching(/could not start it in its place \(stand-in/), running: CURRENT });
+  }, 30_000);
+
+  it('takes one of two requests at once (a double tap, two pages): the other is told an update is under way', async () => {
+    // What runs takes a moment to read (ps, for a terminal): the second request comes meanwhile.
+    useRunningSources({ ...nothingRuns, terminals: async () => pause(40).then(() => []) });
+    await ready();
+    const answers = await Promise.all([1, 2].map(() => api('POST', '/api/update', { version: NEXT, when: 'now' })));
+    expect(answers.map((answer) => answer.status).sort()).toEqual([202, 409]);
+    expect(answers.find((answer) => answer.status === 409)!.body.error).toBe('Pelican is already updating.');
+    await until('failed');
+    await pause(300);
+    // One install apart, one over this install, one start.
+    expect((await npmRuns()).map((args) => args[3] === prefix() ? 'over' : 'apart')).toEqual(['apart', 'over']);
+    expect(started).toHaveLength(1);
   }, 30_000);
 
   it('starts in place once what it started has ended, not waiting on the ps it asks, which is one of its own while it runs', async () => {
@@ -867,6 +1131,68 @@ describe('updating', () => {
   }, 30_000);
 });
 
+describe('what waits while the install is replaced', () => {
+  const prefix = () => path.join(dir, 'global');
+
+  it('starts nothing: the reads that would start Claude Code, git, gh, a terminal, a search or Tailscale wait, and reading goes on', async () => {
+    // Claude Code, standing in: it writes down each start.
+    const launched = path.join(dir, 'claude-launched');
+    const fake = path.join(dir, 'claude-fake');
+    await rm(launched, { force: true });
+    await writeFile(fake, `#!/bin/sh\necho "$@" >> '${launched}'\nexit 1\n`, { mode: 0o755 });
+    const before = config.claudeExecutable;
+    config.claudeExecutable = fake;
+    const work = path.join(dir, 'work-folder');
+    await mkdir(work, { recursive: true });
+    await writeFile(path.join(work, 'a.txt'), 'a\n');
+    // Starting again waits, as for what runs to end, until the reads are tried.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    servedBy({
+      stop: async () => {
+        serving.stops += 1;
+        await held;
+      },
+      again: async () => void (serving.agains += 1),
+    });
+    try {
+      useUpdateContext(context(await globalInstall(prefix()), { global: prefix() }));
+      expect((await api('GET', '/api/update?check=1')).body.install.self).toBe(true);
+      expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+      await until('restarting');
+      const q = `cwd=${encodeURIComponent(work)}`;
+      for (const read of [
+        '/api/models', `/api/commands?${q}`, '/api/usage/plan', '/api/sessions/s1/mcp', `/api/git?${q}`, `/api/git/diff?${q}&path=a.txt`, '/api/pr?url=x',
+        '/api/terminals', `/api/terminals?${q}`, '/api/terminals/t1', `/api/search?${q}&q=a`, `/api/files?${q}&q=a`, `/api/defaults?${q}`, '/api/access/phone',
+      ]) {
+        const answer = await api('GET', read);
+        expect(answer.status, read).toBe(503);
+        expect(answer.body.error, read).toBe(`Pelican is updating to ${NEXT} and starts again in a moment.`);
+      }
+      // Changes wait as before; reading what is there goes on, the update's own looks too, which ask neither npm nor the registry.
+      expect((await api('POST', '/api/sessions', {})).status).toBe(503);
+      for (const read of ['/api/sessions', '/api/defaults', `/api/tree?${q}`, `/api/file?${q}&path=a.txt`]) expect((await api('GET', read)).status, read).toBe(200);
+      await npmRuns();
+      const asked = registry.requests.length;
+      Object.assign(updateTiming, { settingsMs: 0 });
+      expect((await api('GET', '/api/update?check=1')).body).toMatchObject({ latest: NEXT, state: { phase: 'restarting' } });
+      expect(registry.requests.length).toBe(asked);
+      expect(await npmRuns()).toEqual([]);
+      release();
+      await until('failed');
+      expect(existsSync(launched)).toBe(false);
+      // Once over, the reads are answered again.
+      expect((await api('GET', `/api/tree?${q}`)).status).toBe(200);
+      expect((await api('GET', '/api/pr?url=x')).status).toBe(200);
+    } finally {
+      release();
+      config.claudeExecutable = before;
+    }
+  }, 30_000);
+});
+
 describe('who may update, and to what', () => {
   const prefix = () => path.join(dir, 'global');
 
@@ -898,6 +1224,20 @@ describe('who may update, and to what', () => {
     expect((await api('POST', '/api/update/cancel')).status).toBe(403);
     config.demo = false;
     expect(await npmRuns()).toEqual([]);
+  }, 30_000);
+
+  it('takes no request past 1 MB, as no other route does', async () => {
+    // Asked of the app itself: over a socket, a 413 sent before the body is can reset the connection first.
+    const big = JSON.stringify({ version: NEXT, when: 'now', padding: 'x'.repeat(2 * 1024 * 1024) });
+    for (const where of ['/api/update', '/api/update/cancel']) {
+      const response = await app.request(`${origin()}${where}`, {
+        method: 'POST', body: big,
+        headers: { host: new URL(origin()).host, 'x-pelican': '1', 'content-type': 'application/json', 'content-length': String(big.length), ...signedIn() },
+      });
+      expect(response.status, where).toBe(413);
+    }
+    expect(await npmRuns()).toEqual([]);
+    expect((await api('GET', '/api/update')).body.state).toBeUndefined();
   }, 30_000);
 
   it('takes nothing where Pelican cannot update itself, nor twice at once', async () => {

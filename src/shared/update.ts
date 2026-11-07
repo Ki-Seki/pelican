@@ -18,7 +18,7 @@ export type InstallKind =
   | 'npm'
   /** `npm install -g`, into a global folder another account owns (root's, with sudo). */
   | 'npm-elsewhere-owned'
-  /** npx's cache: npx fetches a new version when asked for it. */
+  /** A cache of npx, pnpm dlx or bunx: each fetches a new version when asked for it. */
   | 'npx'
   /** A source checkout (git), built and started from there, or linked with `npm link`. */
   | 'source'
@@ -57,11 +57,11 @@ export type InstallInfo = {
 /** Something an update would end, as it restarts Pelican. */
 export type Interruption = {
   /**
-   * session: Claude working or waiting for you in a session; work: its background tasks
-   * (agents, workflows, commands) or checks it stays running for; terminal: a program in a
-   * terminal; command: a `!` command.
+   * session: Claude working or waiting for you in a session; queued: messages queued for the end
+   * of its turn, which go unsent; work: its background tasks (agents, workflows, commands) or
+   * checks it stays running for; terminal: a program in a terminal; command: a `!` command.
    */
-  kind: 'session' | 'work' | 'terminal' | 'command';
+  kind: 'session' | 'queued' | 'work' | 'terminal' | 'command';
   /** The session's title, the terminal's program, the command. */
   title: string;
   /** What it is doing, or where. */

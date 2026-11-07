@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -24,7 +24,7 @@ function howItGoes(info: UpdateInfo): string {
   return `${where}: Pelican installs it, checks that it starts, and ${again}. Pages reconnect by themselves.`;
 }
 
-const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', work: 'Background', terminal: 'Terminal', command: 'Command' };
+const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', queued: 'Queued', work: 'Background', terminal: 'Terminal', command: 'Command' };
 
 /** What an update would end, one line each. */
 function EndsList({ busy }: { busy: Interruption[] }) {
@@ -97,6 +97,8 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
   const [asking, setAsking] = useState<Interruption[]>();
   const [problem, setProblem] = useState<string>();
   const [sending, setSending] = useState(false);
+  // A request under way, at once: a second tap before the buttons are drawn off (a double click) asks nothing.
+  const pending = useRef(false);
   useEffect(() => {
     if (!open) {
       setAsking(undefined);
@@ -107,41 +109,44 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
   const state = info?.state;
   if (demo || !info || (!info.latest && !state)) return null;
   const version = state?.version ?? info.latest!;
-  const take = (next: Promise<UpdateInfo>) => {
+  /** One request at a time, from the tap until its answer, with the buttons off meanwhile. */
+  const act = (work: () => Promise<void>) => {
+    if (pending.current) return;
+    pending.current = true;
     setSending(true);
     setProblem(undefined);
-    next
-      .then((fresh) => {
-        queryClient.setQueryData(['update'], fresh);
-        setAsking(undefined);
-      })
-      .catch((error: Error & { status?: number }) => setProblem(error.message))
-      .finally(() => setSending(false));
+    work()
+      .catch((error: Error) => setProblem(error.message))
+      .finally(() => {
+        pending.current = false;
+        setSending(false);
+      });
   };
-  const update = async () => {
+  const take = (next: () => Promise<UpdateInfo>) => act(async () => {
+    queryClient.setQueryData(['update'], await next());
+    setAsking(undefined);
+  });
+  const update = () => act(async () => {
     // What would end, as it is now: the list shown is the list confirmed.
-    setProblem(undefined);
-    let fresh: UpdateInfo;
-    try {
-      fresh = await api.update();
-    } catch (error) {
-      setProblem((error as Error).message);
+    const fresh = await api.update();
+    queryClient.setQueryData(['update'], fresh);
+    if (fresh.busy?.length) {
+      setAsking(fresh.busy);
       return;
     }
-    queryClient.setQueryData(['update'], fresh);
-    if (fresh.busy?.length) setAsking(fresh.busy);
-    else take(api.startUpdate(version, 'now'));
-  };
+    queryClient.setQueryData(['update'], await api.startUpdate(version, 'now'));
+    setAsking(undefined);
+  });
 
   return (
     <section aria-label="Update" className="mx-3 mb-2 border-t border-line pt-2.5 text-[13px] leading-relaxed text-muted">
       {state?.phase === 'preparing' ? (
-        <Line busy text={`Getting ${version} and checking that it starts. Nothing changes until it does.`} action={<button type="button" onClick={() => take(api.cancelUpdate())} disabled={sending} className={`${button} bg-chip`}>Cancel</button>} />
+        <Line busy text={`Getting ${version} and checking that it starts. Nothing changes until it does.`} action={<button type="button" onClick={() => take(() => api.cancelUpdate())} disabled={sending} className={`${button} bg-chip`}>Cancel</button>} />
       ) : state?.phase === 'waiting' ? (
         <>
           <Line
             text={state.idleSince !== undefined ? `${version} is ready, and nothing runs: Pelican updates in a moment.` : `${version} is ready. Pelican updates once nothing has run for a minute.`}
-            action={<button type="button" onClick={() => take(api.cancelUpdate())} disabled={sending} className={`${button} bg-chip`}>Cancel</button>}
+            action={<button type="button" onClick={() => take(() => api.cancelUpdate())} disabled={sending} className={`${button} bg-chip`}>Cancel</button>}
           />
           {info.busy && info.busy.length > 0 && <><div className="mt-1 text-faint">Waiting for:</div><EndsList busy={info.busy} /></>}
         </>
@@ -170,16 +175,20 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
                   <div className="mt-2 rounded-xl border border-line px-3 py-2">
                     <div className="text-fg">Updating restarts Pelican, which ends:</div>
                     <EndsList busy={asking} />
-                    <div className="text-[12.5px] text-faint">Transcripts, files, pins, settings and drafts stay.</div>
+                    <div className="text-[12.5px] text-faint">
+                      {asking.some((item) => item.kind === 'queued')
+                        ? 'Transcripts, files, pins, settings and drafts stay; queued messages are not sent.'
+                        : 'Transcripts, files, pins, settings and drafts stay.'}
+                    </div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <button type="button" disabled={sending} onClick={() => take(api.startUpdate(version, 'now', true))} className={`${button} bg-danger text-bg`}>Update now</button>
-                      <button type="button" disabled={sending} onClick={() => take(api.startUpdate(version, 'idle'))} className={`${button} bg-fg text-bg`}>Update when idle</button>
+                      <button type="button" disabled={sending} onClick={() => take(() => api.startUpdate(version, 'now', true))} className={`${button} bg-danger text-bg`}>Update now</button>
+                      <button type="button" disabled={sending} onClick={() => take(() => api.startUpdate(version, 'idle'))} className={`${button} bg-fg text-bg`}>Update when idle</button>
                       <button type="button" disabled={sending} onClick={() => setAsking(undefined)} className={`${button} bg-chip font-normal`}>Cancel</button>
                     </div>
                   </div>
                 ) : (
                   <>
-                    <button type="button" disabled={sending} onClick={() => void update()} className={`${button} mt-2 bg-fg text-bg`}>
+                    <button type="button" disabled={sending} onClick={update} className={`${button} mt-2 bg-fg text-bg`}>
                       {state?.phase === 'failed' ? 'Try again' : `Update to ${info.latest}`}
                     </button>
                     <p className="mt-1.5 text-[12.5px] leading-snug text-faint">{howItGoes(info)}</p>
@@ -187,7 +196,11 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
                 )
               ) : info.install?.command ? (
                 <div className="mt-2">
-                  <div>To update, run this in a terminal{info.install.restart === 'launchd' || info.install.restart === 'systemd' ? ', then pelican service restart' : ', then restart Pelican'}:</div>
+                  <div>
+                    {info.install.kind === 'npx'
+                      ? 'To update, stop Pelican, then start it with:'
+                      : `To update, run this in a terminal${info.install.restart === 'launchd' || info.install.restart === 'systemd' ? ', then pelican service restart' : ', then restart Pelican'}:`}
+                  </div>
                   <div className="mt-1 flex items-start gap-1 rounded-lg bg-chip py-1 pr-1 pl-2.5">
                     <code className="min-w-0 flex-1 py-0.5 font-mono text-[12px] break-all text-fg">{info.install.command}</code>
                     <CopyButton text={info.install.command} />

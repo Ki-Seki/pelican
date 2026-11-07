@@ -4,7 +4,7 @@ import { constants, existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { createGunzip } from 'node:zlib';
 
 import { type Context, Hono, type Next } from 'hono';
 
@@ -21,8 +21,9 @@ import { runningShellList } from './shell-runs.js';
 import { listTerminals, terminalRunning } from './terminals.js';
 
 /**
- * Updating Pelican from its Settings. Pelican asks npm's registry which version of pelican-cc is
- * newest (`dist-tags.latest`), at most once a day and when Settings opens, and reads what changed
+ * Updating Pelican from its Settings. Pelican asks npm's registry (the one a global install uses,
+ * as the user's and the global npm settings name it, never a project's) which version of pelican-cc
+ * is newest (`dist-tags.latest`), at most once a day and when Settings opens, and reads what changed
  * from that version's CHANGELOG.md. Where Pelican can update itself (an `npm install -g` into npm's
  * global folder, which this account can write to), the owner can start the update there: npm
  * installs that exact version, first into a folder of its own, where Pelican checks it starts
@@ -52,16 +53,16 @@ export type UpdateContext = {
   ipc: boolean;
   /** npm, as the Node running Pelican has it: the program, and the arguments before npm's own. */
   npm?: { file: string; args: string[] };
-  /** Runs a program, never through a shell. */
-  run: (file: string, args: string[], options?: { timeout?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal }) => Promise<Ran>;
+  /** Runs a program, never through a shell: in `cwd`, else in the folder Pelican was started in. */
+  run: (file: string, args: string[], options?: { timeout?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; cwd?: string }) => Promise<Ran>;
   fetch: typeof fetch;
   /** process.execve, where this Node has it. */
   execve?: (file: string, args: string[], env: NodeJS.ProcessEnv) => never;
   now: () => number;
 };
 
-const runProgram: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal } = {}) => new Promise((resolve) => {
-  execFile(file, args, { timeout, env: env ?? process.env, maxBuffer: 32 * 1024 * 1024, ...(signal ? { signal } : {}), windowsHide: true }, (error, stdout, stderr) => {
+const runProgram: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal, cwd } = {}) => new Promise((resolve) => {
+  execFile(file, args, { timeout, env: env ?? process.env, maxBuffer: 32 * 1024 * 1024, ...(signal ? { signal } : {}), ...(cwd ? { cwd } : {}), windowsHide: true }, (error, stdout, stderr) => {
     const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -1) : 0;
     resolve({ code, stdout: String(stdout), stderr: String(stderr || (error && code === -1 ? error.message : '')) });
   });
@@ -117,8 +118,11 @@ export function useUpdateContext(next?: UpdateContext): void {
   checked = undefined;
   tried = undefined;
   checking = undefined;
+  loading = undefined;
   changelogs.clear();
+  unread.clear();
   cancelWaiting();
+  claimed = false;
   state = undefined;
 }
 
@@ -142,11 +146,17 @@ export const updateTiming = {
 // What the computer says, for messages: paths under the home folder as ~/…
 const tilde = (file: string) => (file === ctx().home ? '~' : file.startsWith(`${ctx().home}${path.sep}`) ? `~${file.slice(ctx().home.length)}` : file);
 
-/** A word of a shell command, quoted when it needs to be (a ~/ path stays bare where it can, so the shell expands it). */
+const quoted = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * A word of a shell command, quoted when it needs to be. A path under the home folder keeps its ~
+ * outside the quotes (`~/'my projects/pelican'`), as the shell expands only a bare one.
+ */
 export function shellWord(word: string): string {
   if (/^[\w./:@%+=,-]+$/.test(word)) return word;
-  if (/^~\/[\w./:@%+=,-]*$/.test(word)) return word;
-  return `'${word.replace(/'/g, `'\\''`)}'`;
+  if (word === '~' || /^~\/[\w./:@%+=,-]*$/.test(word)) return word;
+  if (word.startsWith('~/')) return `~/${quoted(word.slice(2))}`;
+  return quoted(word);
 }
 const command = (...words: string[]) => words.map(shellWord).join(' ');
 
@@ -179,17 +189,52 @@ function npmEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return kept;
 }
 
+/**
+ * Runs npm as `npm install -g` typed in a terminal at home would: from the home folder, never from
+ * the folder Pelican was started in, where a cloned project's .npmrc would name the registry (and
+ * the rest of npm's settings) for Pelican's own code.
+ */
+function runNpm(args: string[], options: { timeout: number; signal?: AbortSignal }): Promise<Ran> {
+  const { npm, env, home, run } = ctx();
+  if (!npm) return Promise.resolve({ code: -1, stdout: '', stderr: 'npm is not beside this Node' });
+  return run(npm.file, [...npm.args, ...args], { ...options, env: npmEnvironment(env), cwd: home });
+}
+
 const npmSays = async (args: string[]): Promise<string | undefined> => {
-  const { npm, env } = ctx();
-  if (!npm) return undefined;
-  const ran = await ctx().run(npm.file, [...npm.args, ...args], { timeout: 30_000, env: npmEnvironment(env) });
+  if (!ctx().npm) return undefined;
+  const ran = await runNpm(args, { timeout: 30_000 });
   return ran.code === 0 ? ran.stdout.trim().split('\n').at(-1)?.trim() || undefined : undefined;
 };
+
+/**
+ * pnpm's store, where pnpm 11 keeps what it installs globally and what pnpm dlx runs, each started
+ * from there (v11/links/@/pelican-cc/<version>/<hash>/node_modules/pelican-cc).
+ */
+const PNPM_STORE = /[\\/]v\d+[\\/]links[\\/]@[^\\/]*[\\/]pelican-cc[\\/]/;
+
+/**
+ * Programs that run a package from a cache of their own, which they fill again: asked for a
+ * version by number, each starts that one, which is how such a Pelican updates.
+ */
+const RUNNERS: Array<{ test: (folder: string) => boolean; name: string; run: string[] }> = [
+  { test: (folder) => folder.split(path.sep).includes('_npx'), name: 'npx', run: ['npx'] },
+  // pnpm dlx (and pnpx): in its cache's dlx folder (a dlx-<pid> one before pnpm 9), in pnpm's own
+  // layout; from pnpm 11, in pnpm's store, as a global install is, but started by pnpm, which says so.
+  {
+    test: (folder) => /[\\/]dlx(-\d+)?[\\/](.*[\\/])?node_modules[\\/]\.pnpm[\\/]/.test(folder)
+      || (PNPM_STORE.test(folder) && /^pnpm\//.test(ctx().env.npm_config_user_agent ?? '')),
+    name: 'pnpm dlx',
+    run: ['pnpm', 'dlx'],
+  },
+  // bunx: in the temporary folder, as bunx-<uid>-pelican-cc@<version>.
+  { test: (folder) => /[\\/]bunx-(\d+-)?pelican-cc@[^\\/]*[\\/]node_modules[\\/]/.test(folder), name: 'bunx', run: ['bunx'] },
+];
 
 /** Other tools that install packages globally, each keeping the versions it installed. */
 const TOOLS: Array<{ test: RegExp; name: string; command: (version: string) => string }> = [
   { test: /[\\/]\.volta[\\/]/, name: 'Volta', command: (v) => command('volta', 'install', `${PACKAGE_NAME}@${v}`) },
-  { test: /[\\/](\.pnpm|pnpm[\\/]global)[\\/]/, name: 'pnpm', command: (v) => command('pnpm', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
+  // Before pnpm 11, its global folder's own layout; from pnpm 11, its store (PNPM_STORE).
+  { test: /[\\/](\.pnpm|pnpm[\\/]global)[\\/]|[\\/]v\d+[\\/]links[\\/]@[^\\/]*[\\/]pelican-cc[\\/]/, name: 'pnpm', command: (v) => command('pnpm', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
   { test: /[\\/]\.?yarn[\\/](global|berry)[\\/]/, name: 'Yarn', command: (v) => command('yarn', 'global', 'add', `${PACKAGE_NAME}@${v}`) },
   { test: /[\\/]\.bun[\\/]install[\\/]global[\\/]/, name: 'Bun', command: (v) => command('bun', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
   { test: /^\/nix\/store\//, name: 'Nix', command: () => 'nix profile upgrade --all' },
@@ -241,11 +286,12 @@ async function findInstall(): Promise<Install> {
       commandFor: () => `cd ${shellWord(where)} && git pull && npm ci && npm run build`,
     };
   }
-  if (folder.split(path.sep).includes('_npx')) {
+  const runner = RUNNERS.find((each) => each.test(folder));
+  if (runner) {
     return {
       kind: 'npx', folder, self: false, restart, scriptIn,
-      why: 'This Pelican runs from npx’s cache, which npx fills again: it starts the new version when asked for it by number.',
-      commandFor: (v) => command('npx', `${PACKAGE_NAME}@${v}`, ...ctx().args),
+      why: `This Pelican runs from ${runner.name}’s cache, which ${runner.name} fills again: it starts the new version when asked for it by number.`,
+      commandFor: (v) => command(...runner.run, `${PACKAGE_NAME}@${v}`, ...ctx().args),
     };
   }
   if (platform === 'win32') return managed('Pelican cannot replace itself while it runs on Windows.', (v) => command('npm', 'install', '--global', `${PACKAGE_NAME}@${v}`));
@@ -283,42 +329,86 @@ async function findInstall(): Promise<Install> {
 
 const install = (): Promise<Install> => (found ??= findInstall());
 
-/** The registry npm installs from, as it says (or its setting in the environment, without npm); npm's own when neither says. */
-async function registry(): Promise<string> {
-  const { env } = ctx();
-  const said = (await npmSays(['config', 'get', 'registry']).catch(() => undefined)) ?? env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY;
+/** A registry's address as npm would use it: http(s), with no user name or password, ending in a slash. */
+function registryAddress(said: string | undefined): string | undefined {
   try {
-    const url = new URL(said ?? 'https://registry.npmjs.org/');
+    const url = new URL(said ?? '');
     if ((url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password) return url.href.endsWith('/') ? url.href : `${url.href}/`;
   } catch {
     // Not an address.
   }
-  return 'https://registry.npmjs.org/';
+  return undefined;
+}
+
+/**
+ * The registry a global install comes from, as npm says (`npm config get registry --global`, from
+ * the home folder: the user's and the global settings, never a project's), or its setting in the
+ * environment, without npm; npm's own when neither says.
+ */
+async function registry(): Promise<string> {
+  const { env } = ctx();
+  const said = (await npmSays(['config', 'get', 'registry', '--global']).catch(() => undefined)) ?? env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY;
+  return registryAddress(said) ?? 'https://registry.npmjs.org/';
 }
 
 /** A version on the registry: where its tarball is, the integrity npm checks it against, and the Node it needs. */
 type Release = { version: string; tarball: string; integrity: string; node?: string };
 type Checked = { at: number; registry: string; latest?: Release };
 
+/**
+ * A release as Pelican takes one, from the registry or from what it remembered of it: a version,
+ * an http(s) tarball and a sha512 integrity, which npm checks the tarball against.
+ */
+function releaseOf(raw: { version?: unknown; tarball?: unknown; integrity?: unknown; node?: unknown } | undefined): Release | undefined {
+  if (!raw || typeof raw.version !== 'string' || !VERSION.test(raw.version)) return undefined;
+  if (typeof raw.tarball !== 'string' || typeof raw.integrity !== 'string' || !/^sha512-/.test(raw.integrity)) return undefined;
+  let tarball: URL;
+  try {
+    tarball = new URL(raw.tarball);
+  } catch {
+    return undefined;
+  }
+  if (tarball.protocol !== 'https:' && tarball.protocol !== 'http:') return undefined;
+  return { version: raw.version, tarball: tarball.href, integrity: raw.integrity, ...(typeof raw.node === 'string' ? { node: raw.node } : {}) };
+}
+
+/** Whether a tarball is the registry's own, at its origin: the only place Pelican downloads one from. */
+function onRegistry(tarball: string, base: string): boolean {
+  try {
+    return new URL(tarball).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
 let checked: Checked | undefined;
 /** When the registry was last asked, whether it answered or not. */
 let tried: number | undefined;
 let checking: Promise<Checked | undefined> | undefined;
+let loading: Promise<void> | undefined;
 
 const stored = () => path.join(config.stateDir, 'update.json');
 
-/** The last answer, kept across restarts, so a Pelican started often still asks once a day. */
-async function remembered(): Promise<void> {
-  if (checked) return;
-  try {
-    const kept = JSON.parse(await readFile(stored(), 'utf8')) as Checked;
-    if (typeof kept.at === 'number' && typeof kept.registry === 'string') {
-      checked = kept;
+/**
+ * The last answer, kept across restarts, so a Pelican started often still asks once a day. It is
+ * taken as the registry's own would be (releaseOf), only from the registry npm names now, and
+ * never from the future: dated ahead (a clock put back, a file copied in), it would stop the
+ * asking for as long.
+ */
+function remembered(): Promise<void> {
+  loading ??= (async () => {
+    try {
+      const kept = JSON.parse(await readFile(stored(), 'utf8')) as { at?: unknown; registry?: unknown; latest?: Parameters<typeof releaseOf>[0] };
+      const latest = kept.latest === undefined ? undefined : releaseOf(kept.latest);
+      if (typeof kept.at !== 'number' || !Number.isFinite(kept.at) || kept.at > ctx().now() || (kept.latest !== undefined && !latest)) return;
+      if (typeof kept.registry !== 'string' || kept.registry !== (await registry()) || checked) return;
+      checked = { at: kept.at, registry: kept.registry, ...(latest ? { latest } : {}) };
       tried = kept.at;
+    } catch {
+      // None yet, or not one Pelican wrote.
     }
-  } catch {
-    // None yet.
-  }
+  })();
+  return loading;
 }
 
 /** Reads at most `limit` bytes of a response; more is refused. */
@@ -335,6 +425,19 @@ async function bodyOf(response: Response, limit: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/**
+ * How much Pelican reads of what the registry sends, and keeps of it: pelican-cc's document, a
+ * tarball (2.9 MB for 0.5.0), as downloaded and as unpacked (8.4 MB) as far as its CHANGELOG.md,
+ * that file, and what Settings is sent of it, the sections since the running version.
+ */
+export const READ_LIMITS = {
+  document: 16 * 1024 * 1024,
+  tarball: 32 * 1024 * 1024,
+  unpacked: 64 * 1024 * 1024,
+  changelog: 2 * 1024 * 1024,
+  changes: 64 * 1024,
+};
+
 /** What the registry says is newest, as a Release; throws when it says nothing usable. */
 async function askRegistry(base: string): Promise<Release | undefined> {
   const response = await ctx().fetch(new URL(PACKAGE_NAME, base), {
@@ -342,38 +445,41 @@ async function askRegistry(base: string): Promise<Release | undefined> {
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`the registry answered ${response.status}`);
-  const document = JSON.parse((await bodyOf(response, 16 * 1024 * 1024)).toString('utf8')) as {
+  const document = JSON.parse((await bodyOf(response, READ_LIMITS.document)).toString('utf8')) as {
     'dist-tags'?: { latest?: unknown };
     versions?: Record<string, { dist?: { tarball?: unknown; integrity?: unknown }; engines?: { node?: unknown } }>;
   };
   const latest = document['dist-tags']?.latest;
   if (typeof latest !== 'string' || !VERSION.test(latest)) throw new Error('the registry named no latest version');
   if (!isNewerVersion(latest, pkg.version)) return undefined;
-  const dist = document.versions?.[latest]?.dist;
-  const tarball = typeof dist?.tarball === 'string' ? new URL(dist.tarball) : undefined;
-  if (!tarball || (tarball.protocol !== 'https:' && tarball.protocol !== 'http:') || typeof dist?.integrity !== 'string' || !/^sha512-/.test(dist.integrity)) {
-    throw new Error(`the registry gave no tarball for ${latest}`);
-  }
-  const node = document.versions?.[latest]?.engines?.node;
-  return { version: latest, tarball: tarball.href, integrity: dist.integrity, ...(typeof node === 'string' ? { node } : {}) };
+  const entry = document.versions?.[latest];
+  const release = releaseOf({ version: latest, tarball: entry?.dist?.tarball, integrity: entry?.dist?.integrity, node: entry?.engines?.node });
+  if (!release) throw new Error(`the registry gave no tarball for ${latest}`);
+  return release;
 }
 
 /**
  * Asks npm's registry for the newest pelican-cc: by itself at most once a day (`everyMs`), and when
- * Settings opens (`settings`) unless it was asked a few minutes ago. A failed ask says nothing, and
- * keeps what the last one found.
+ * Settings opens (`settings`) unless it was asked a few minutes ago; an ask dated ahead of now (the
+ * clock went back) is as old as can be. A failed ask says nothing, and keeps what the last one
+ * found, from that same registry.
  */
 export async function checkForUpdate({ settings = false } = {}): Promise<Checked | undefined> {
   if (config.demo) return undefined;
   await remembered();
   const since = tried === undefined ? Infinity : ctx().now() - tried;
-  if (since < (settings ? updateTiming.settingsMs : updateTiming.everyMs)) return checked;
+  if (since >= 0 && since < (settings ? updateTiming.settingsMs : updateTiming.everyMs)) return checked;
   checking ??= (async () => {
     tried = ctx().now();
     try {
       const base = await registry();
+      // npm names another registry now: what the last one said is no answer of this one.
+      if (checked && checked.registry !== base) checked = undefined;
       const latest = await askRegistry(base);
       checked = { at: tried, registry: base, ...(latest ? { latest } : {}) };
+      // A changelog that could not be read is tried again, once, with the registry's new answer.
+      for (const key of unread) changelogs.delete(key);
+      unread.clear();
       await mkdir(config.stateDir, { recursive: true });
       await writeFile(stored(), JSON.stringify(checked));
     } catch {
@@ -412,50 +518,163 @@ export function integrityHolds(data: Buffer, integrity: string): boolean {
   return wanted.length > 0 && wanted.includes(digest);
 }
 
-/** A file of a tar archive (npm's tarballs: ustar, perhaps with pax or GNU long names), by its name. */
-export function fileInTar(tar: Buffer, name: string): Buffer | undefined {
-  let at = 0;
-  let long: string | undefined;
-  while (at + 512 <= tar.length) {
-    const header = tar.subarray(at, at + 512);
-    if (header.every((byte) => byte === 0)) return undefined;
+/**
+ * One file of a tar stream (npm's tarballs: ustar, perhaps with pax or GNU long names), read as its
+ * blocks come, keeping nothing else: at most `max` bytes of it, from its start.
+ */
+export class TarReader {
+  /** The file, once read: whole, or its first `max` bytes. */
+  file: Buffer | undefined;
+  /** Nothing more is to be read: the file was, the archive ended, or it is no tar archive. */
+  over = false;
+  private header: Buffer[] = [];
+  private headerSize = 0;
+  /** The entry under way: its type, what of it is kept, its bytes still to come and the padding after them. */
+  private type = '';
+  private keep: 'file' | 'name' | undefined;
+  private left = 0;
+  private padding = 0;
+  private kept: Buffer[] = [];
+  private keptSize = 0;
+  /** The name a pax or GNU header gave the entry after it. */
+  private long: string | undefined;
+
+  constructor(private readonly name: string, private readonly max: number) {}
+
+  /** Reads the next bytes; true once nothing more is to be read. */
+  push(chunk: Buffer): boolean {
+    for (let at = 0; at < chunk.length && !this.over;) {
+      if (this.left > 0) {
+        const part = chunk.subarray(at, at + this.left);
+        at += part.length;
+        this.left -= part.length;
+        if (this.keep) this.hold(part);
+        if (this.left === 0 || (this.keep === 'file' && this.keptSize >= this.max)) this.ended();
+      } else if (this.padding > 0) {
+        const part = Math.min(this.padding, chunk.length - at);
+        at += part;
+        this.padding -= part;
+      } else {
+        const part = chunk.subarray(at, at + 512 - this.headerSize);
+        at += part.length;
+        this.header.push(part);
+        this.headerSize += part.length;
+        if (this.headerSize === 512) this.begin(Buffer.concat(this.header));
+      }
+    }
+    return this.over;
+  }
+
+  private begin(header: Buffer): void {
+    this.header = [];
+    this.headerSize = 0;
     const field = (start: number, length: number) => header.subarray(start, start + length).toString('utf8').replace(/\0[\s\S]*$/, '');
     const size = Number.parseInt(field(124, 12).trim() || '0', 8);
-    if (!Number.isFinite(size) || size < 0) return undefined;
-    const type = header[156] === 0 ? '0' : String.fromCharCode(header[156]!);
+    if (header.every((byte) => byte === 0) || !Number.isFinite(size) || size < 0) {
+      this.over = true;
+      return;
+    }
+    this.type = header[156] === 0 ? '0' : String.fromCharCode(header[156]!);
     const prefix = field(345, 155);
-    const entry = long ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
-    long = undefined;
-    const body = tar.subarray(at + 512, at + 512 + size);
-    if (type === 'x') long = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'))?.[1];
-    else if (type === 'L') long = body.toString('utf8').replace(/\0[\s\S]*$/, '');
-    else if (type === '0' && entry === name) return Buffer.from(body);
-    at += 512 + Math.ceil(size / 512) * 512;
+    const entry = this.long ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
+    this.long = undefined;
+    this.keep = this.type === 'x' || this.type === 'L' ? 'name' : this.type === '0' && entry === this.name ? 'file' : undefined;
+    this.left = size;
+    this.padding = (512 - (size % 512)) % 512;
+    if (size === 0) this.ended();
   }
-  return undefined;
+
+  /** Keeps what is wanted of an entry, as far as it may hold: the file up to `max`, a name up to 64 KB. */
+  private hold(part: Buffer): void {
+    const room = (this.keep === 'file' ? this.max : 64 * 1024) - this.keptSize;
+    if (room <= 0) return;
+    const kept = Buffer.from(part.subarray(0, room));
+    this.kept.push(kept);
+    this.keptSize += kept.length;
+  }
+
+  private ended(): void {
+    const body = Buffer.concat(this.kept);
+    this.kept = [];
+    this.keptSize = 0;
+    if (this.keep === 'file') {
+      this.file = body;
+      this.over = true;
+    } else if (this.keep === 'name') {
+      this.long = this.type === 'x' ? /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'))?.[1] : body.toString('utf8').replace(/\0[\s\S]*$/, '');
+    }
+    this.keep = undefined;
+  }
+}
+
+/**
+ * A file of a gzipped tar archive (npm's tarballs), unpacked as it is read and kept alone: at most
+ * `limits.file` bytes of it; none when it is not there, or when the archive unpacks to more than
+ * `limits.unpacked` bytes on the way to it.
+ */
+export async function fileInTarball(tgz: Buffer, name: string, limits: { unpacked: number; file: number }): Promise<Buffer | undefined> {
+  const tar = new TarReader(name, limits.file);
+  const gunzip = createGunzip();
+  gunzip.end(tgz);
+  let unpacked = 0;
+  try {
+    for await (const chunk of gunzip as AsyncIterable<Buffer>) {
+      unpacked += chunk.length;
+      if (unpacked > limits.unpacked) return undefined;
+      if (tar.push(chunk)) break;
+    }
+  } finally {
+    gunzip.destroy();
+  }
+  return tar.file;
+}
+
+/**
+ * What changed, as Settings is sent it at every look: at most READ_LIMITS.changes characters, cut
+ * after the last section or line that fits, and where the rest is.
+ */
+function shortened(changes: string, version: string): string {
+  if (changes.length <= READ_LIMITS.changes) return changes;
+  const head = changes.slice(0, READ_LIMITS.changes);
+  const section = head.lastIndexOf('\n## ');
+  const line = head.lastIndexOf('\n');
+  const kept = head.slice(0, section > 0 ? section : line > 0 ? line : head.length).trimEnd();
+  return `${kept}\n\nThe rest is in [CHANGELOG.md](https://github.com/Ki-Seki/pelican/blob/v${version}/CHANGELOG.md).`;
 }
 
 const changelogs = new Map<string, Promise<string | undefined>>();
+/** Releases whose changelog could not be read: not asked for again until the registry answers again. */
+const unread = new Set<string>();
 
 /**
  * What changed from the running version to `release`, from the CHANGELOG.md in its tarball on the
- * registry (the very file npm would install, its integrity checked), read once per version.
+ * registry (the very file npm would install, its integrity checked), downloaded only from the
+ * registry's own origin, once per release; one that could not be read is not downloaded again
+ * until the registry answers again, and Settings links to the release notes meanwhile.
  */
-function changesTo(release: Release): Promise<string | undefined> {
-  let changes = changelogs.get(release.version);
+function changesTo(release: Release, base: string): Promise<string | undefined> {
+  const key = `${release.version} ${release.integrity}`;
+  let changes = changelogs.get(key);
   if (!changes) {
     changes = (async () => {
+      if (!onRegistry(release.tarball, base)) return undefined;
       const response = await ctx().fetch(release.tarball, { signal: AbortSignal.timeout(60_000) });
-      if (!response.ok) return undefined;
-      const data = await bodyOf(response, 64 * 1024 * 1024);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      const data = await bodyOf(response, READ_LIMITS.tarball);
       if (!integrityHolds(data, release.integrity)) return undefined;
-      const changelog = fileInTar(gunzipSync(data, { maxOutputLength: 256 * 1024 * 1024 }), 'package/CHANGELOG.md');
-      return changelog ? changesBetween(changelog.toString('utf8'), pkg.version, release.version) : undefined;
+      const file = await fileInTarball(data, 'package/CHANGELOG.md', { unpacked: READ_LIMITS.unpacked, file: READ_LIMITS.changelog });
+      if (!file) return undefined;
+      // Cut at the limit, it ends at its last whole line.
+      const text = file.toString('utf8');
+      const changes = changesBetween(file.length < READ_LIMITS.changelog ? text : text.slice(0, text.lastIndexOf('\n') + 1), pkg.version, release.version);
+      return changes === undefined ? undefined : shortened(changes, release.version);
     })().catch(() => undefined);
-    changelogs.set(release.version, changes);
-    // One that could not be read is tried again next time.
+    changelogs.set(key, changes);
     void changes.then((text) => {
-      if (text === undefined && changelogs.get(release.version) === changes) changelogs.delete(release.version);
+      if (text === undefined && changelogs.get(key) === changes) unread.add(key);
     });
   }
   return changes;
@@ -476,7 +695,8 @@ export function nodeSatisfies(range: string | undefined, node = process.versions
 
 /** Where what an update would end is found; tests give stand-ins. */
 export type RunningSources = {
-  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; tasks: BackgroundTask[]; checks: number; unseen: boolean }>;
+  /** `queued`: messages sent to wait for the turn's end (Queue for later), which no restart keeps. */
+  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; queued?: number; tasks: BackgroundTask[]; checks: number; unseen: boolean }>;
   terminals: () => Promise<Array<{ program: string; cwd: string }>>;
   shells: () => Array<{ sessionId: string; command: string }>;
   title: (sessionId: string) => Promise<string | undefined>;
@@ -490,6 +710,7 @@ export const runningHere: RunningSources = {
       cwd: run.cwd,
       busy: run.busy,
       waiting: run.status() === 'waiting',
+      queued: shown.queued?.length ?? 0,
       tasks: shown.tasks ?? [],
       checks: shown.scheduled?.length ?? 0,
       // Work Claude Code keeps running and shows no one (watchers).
@@ -521,7 +742,10 @@ const clipped = (text: string, max = 80) => {
   return line.length > max || text.includes('\n') ? `${line.slice(0, max).trimEnd()}…` : line;
 };
 
-/** What an update would end now: Claude at work or waiting, its background work, terminals with a program, `!` commands. */
+/**
+ * What an update would end now: Claude at work or waiting, the messages queued for the end of its
+ * turn, its background work, terminals with a program, `!` commands.
+ */
 export async function whatWouldEnd(): Promise<Interruption[]> {
   const ended: Interruption[] = [];
   const titles = new Map<string, string>();
@@ -532,6 +756,7 @@ export async function whatWouldEnd(): Promise<Interruption[]> {
   for (const run of sources.runs()) {
     if (run.waiting) ended.push({ kind: 'session', title: await title(run.sessionId, run.cwd), detail: 'Claude waits for you', sessionId: run.sessionId });
     else if (run.busy) ended.push({ kind: 'session', title: await title(run.sessionId, run.cwd), detail: 'Claude is working', sessionId: run.sessionId });
+    if (run.queued) ended.push({ kind: 'queued', title: await title(run.sessionId, run.cwd), detail: `${count(run.queued, 'message')} for when this turn ends`, sessionId: run.sessionId });
     const workflows = run.tasks.filter((task) => task.type === 'local_workflow').length;
     const commands = run.tasks.filter((task) => task.type === 'local_bash' || task.type.startsWith('monitor')).length;
     const agents = run.tasks.length - workflows - commands;
@@ -552,6 +777,8 @@ export async function whatWouldEnd(): Promise<Interruption[]> {
 // Updating -------------------------------------------------------------------------------------
 
 let state: UpdateState | undefined;
+/** An update asked for, from its request until it is under way or refused: one at a time. */
+let claimed = false;
 /** The update under way: stopped by Cancel while it prepares or waits. */
 let job: { version: string; stop: AbortController } | undefined;
 let waiting: NodeJS.Timeout | undefined;
@@ -602,19 +829,17 @@ export function npmSaid(ran: Ran): string {
  * after the same version was installed apart), so new work waits no longer than it must.
  */
 function npmInstall(prefix: string, version: string, base: string, { signal, cached = false }: { signal?: AbortSignal; cached?: boolean } = {}): Promise<Ran> {
-  const { npm, env, run } = ctx();
-  if (!npm) return Promise.resolve({ code: -1, stdout: '', stderr: 'npm is not beside this Node' });
-  return run(npm.file, [
-    ...npm.args, 'install', '--global', '--prefix', prefix, '--registry', base,
+  return runNpm([
+    'install', '--global', '--prefix', prefix, '--registry', base,
     '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--loglevel=error', ...(cached ? ['--prefer-offline'] : []),
     `${PACKAGE_NAME}@${version}`,
-  ], { timeout: 15 * 60_000, env: npmEnvironment(env), ...(signal ? { signal } : {}) });
+  ], { timeout: 15 * 60_000, ...(signal ? { signal } : {}) });
 }
 
 /** Why the Pelican at `script` does not start as `version` (`pelican --version`); undefined when it does. */
 async function startsAs(script: string, version: string, signal?: AbortSignal): Promise<string | undefined> {
-  const { execPath, env, run } = ctx();
-  const ran = await run(execPath, [script, '--version'], { timeout: 60_000, env, ...(signal ? { signal } : {}) });
+  const { execPath, env, home, run } = ctx();
+  const ran = await run(execPath, [script, '--version'], { timeout: 60_000, env, cwd: home, ...(signal ? { signal } : {}) });
   if (ran.code !== 0) return `pelican --version failed: ${tail(ran)}`;
   const line = ran.stdout.trim().split('\n').at(-1) ?? '';
   if (!line.startsWith(`${version} (Pelican)`)) return `pelican --version said ${clipped(line, 200) || 'nothing'}`;
@@ -793,12 +1018,13 @@ export async function updateInfo(fresh = false): Promise<UpdateInfo> {
   const info: UpdateInfo = { current: pkg.version };
   if (config.demo) return info;
   if (state) info.state = state;
-  const found = await checkForUpdate({ settings: fresh });
+  // While the install is replaced, the registry is not asked: what it said is what is being installed.
+  const found = updating() ? checked : await checkForUpdate({ settings: fresh });
   const latest = found?.latest && isNewerVersion(found.latest.version, pkg.version) ? found.latest : undefined;
   if (!latest) return info;
   info.latest = latest.version;
   const [changes, how, busy] = await Promise.all([
-    Promise.race([changesTo(latest), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000).unref())]),
+    Promise.race([changesTo(latest, found!.registry), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000).unref())]),
     install(),
     whatWouldEnd(),
   ]);
@@ -827,18 +1053,26 @@ export async function startUpdate(version: unknown, when: unknown, confirmed: un
   if (config.demo) throw new UpdateRefused('This is the demo: nothing is installed. Install Pelican to update it.', 403);
   if (typeof version !== 'string' || !VERSION.test(version)) throw new UpdateRefused('Not a version', 400);
   if (when !== 'now' && when !== 'idle') throw new UpdateRefused('when must be now or idle', 400);
-  if (job || updating() || state?.phase === 'waiting' || state?.phase === 'preparing') throw new UpdateRefused('Pelican is already updating.', 409);
+  if (claimed || job || updating() || state?.phase === 'waiting' || state?.phase === 'preparing') throw new UpdateRefused('Pelican is already updating.', 409);
   const found = checked?.latest;
   if (!found || found.version !== version || !isNewerVersion(version, pkg.version)) {
     throw new UpdateRefused(`${version} is not the newest version npm’s registry named${found ? ` (${found.version})` : ''}. Open Settings again.`, 409);
   }
-  const how = await install();
-  if (!how.self || !how.prefix) throw new UpdateRefused(how.why ?? 'Pelican cannot update itself here.', 409);
-  if (!nodeSatisfies(found.node)) throw new UpdateRefused(`Pelican ${version} needs Node ${found.node}.`, 409);
-  if (when === 'now' && confirmed !== true && (await whatWouldEnd()).length > 0) throw new UpdateRefused('Something runs that the update would end: confirm first.', 409);
-  state = { phase: 'preparing', version, when };
-  void carryOut(version, when, checked!.registry, how);
-  return state;
+  const base = checked!.registry;
+  // Claimed before anything is awaited: of two requests at once (a double tap, two pages), the
+  // second is told an update is under way, as it will be once this one has looked.
+  claimed = true;
+  try {
+    const how = await install();
+    if (!how.self || !how.prefix) throw new UpdateRefused(how.why ?? 'Pelican cannot update itself here.', 409);
+    if (!nodeSatisfies(found.node)) throw new UpdateRefused(`Pelican ${version} needs Node ${found.node}.`, 409);
+    if (when === 'now' && confirmed !== true && (await whatWouldEnd()).length > 0) throw new UpdateRefused('Something runs that the update would end: confirm first.', 409);
+    state = { phase: 'preparing', version, when };
+    void carryOut(version, when, base, how);
+    return state;
+  } finally {
+    claimed = false;
+  }
 }
 
 /** Cancel: a wait for idle, or getting the version ready, stops; nothing of this install changed. */
@@ -849,9 +1083,23 @@ export function cancelUpdate(): boolean {
   return true;
 }
 
-/** While the install is replaced and Pelican starts again, nothing new starts: a request to start something waits for the new version. */
+/**
+ * The reads that start a program, as app.ts serves them: Claude Code (models, commands, the plan's
+ * usage, MCP servers), git (Changes, the files of a folder, a folder's own settings), gh (a pull
+ * request's card), the terminal's PTY and ps, ripgrep (search: Claude Code's own, in the very
+ * install being replaced) and Tailscale's command line (the phone's address).
+ */
+const STARTS_SOMETHING = /^\/api\/(models|commands|usage\/plan|sessions\/[^/]+\/mcp|git(\/diff)?|pr|terminals(\/[^/]+)?|search|files|access\/phone)$/;
+
+/**
+ * While the install is replaced and Pelican starts again, nothing new starts: a change, or a read
+ * that starts a program, waits for the new version (503). Reading what is there goes on, the
+ * update's own requests and signing in too.
+ */
 export async function whileUpdating(c: Context, next: Next): Promise<Response | void> {
-  if (updating() && c.req.method !== 'GET' && c.req.method !== 'HEAD' && !c.req.path.startsWith('/api/update') && !c.req.path.startsWith('/api/auth')) {
+  if (!updating() || c.req.path.startsWith('/api/update') || c.req.path.startsWith('/api/auth')) return next();
+  const reads = c.req.method === 'GET' || c.req.method === 'HEAD';
+  if (!reads || STARTS_SOMETHING.test(c.req.path) || (c.req.path === '/api/defaults' && c.req.query('cwd'))) {
     return c.json({ error: `Pelican is updating to ${state!.version} and starts again in a moment.` }, 503);
   }
   return next();

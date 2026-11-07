@@ -217,13 +217,16 @@ settings; and updates from Settings.
   then over your install, with the same prefix and npm's integrity checks, and Pelican starts again,
   through launchd or systemd when it runs as a service, in its own place when it runs in a terminal;
   pages reconnect by themselves on the new version. While anything runs that the restart would end
-  (Claude working or waiting for you, background agents, workflows and commands, a terminal's
-  program, a `!` command), Settings lists it first, with Update now and Update when idle, which
-  waits until nothing has run for a minute, and can be cancelled. Transcripts, files, pins, settings
-  and drafts stay. Run by npx, from a clone, from another prefix than npm's (as a script of your own
-  may keep it), by pnpm, Yarn, Bun or Volta, or from a folder root owns, Settings shows the command
-  to run instead, and why. If anything fails, the running version goes on, and Settings says what
-  failed.
+  (Claude working or waiting for you, messages queued for the end of its turn, background agents,
+  workflows and commands, a terminal's program, a `!` command), Settings lists it first, with Update
+  now and Update when idle, which waits until nothing has run for a minute, and can be cancelled.
+  Transcripts, files, pins, settings and drafts stay; queued messages are not sent, as Settings says
+  when there are some. Meanwhile nothing new starts: a change, or anything that would start Claude
+  Code, git, gh, a terminal or a search, waits for the new version. Run by npx, pnpm dlx or bunx,
+  Settings says to start Pelican again with the new version; from a clone, from another prefix than
+  npm's (as a script of your own may keep it), by pnpm, Yarn, Bun or Volta, or from a folder root
+  owns, it shows the command to run instead, and why, as a shell takes it, folders with spaces in
+  their names too. If anything fails, the running version goes on, and Settings says what failed.
 
 ### Changes in behavior
 
@@ -363,10 +366,15 @@ settings; and updates from Settings.
   PR are requests to Claude, which runs git and gh under your permission rules. The demo asks
   nothing of GitHub.
 - Updating from Settings takes a request from Pelican's own page, signed in, as every change does,
-  and never in either demo; it installs nothing but pelican-cc, at the newest version npm's registry
-  names, which the request must name exactly, with npm's integrity checks and no package scripts,
-  and only where npm itself installed Pelican in its global folder, which this account can write to.
-  Pelican never runs sudo. SECURITY.md says what it runs, and when.
+  one at a time, and never in either demo; it installs nothing but pelican-cc, at the newest version
+  npm's registry names, which the request must name exactly, with npm's integrity checks and no
+  package scripts, and only where npm itself installed Pelican in its global folder, which this
+  account can write to. The registry is the one a global install uses: every npm command runs from
+  your home folder and reads npm's global settings, so a project's `.npmrc` in the folder Pelican
+  was started from chooses nothing. Pelican downloads a tarball only from that registry's own
+  address, reads no more of it than it needs for the changelog, within set limits, and takes what it
+  remembered of the registry's last answer only as it would take the registry's own. Pelican never
+  runs sudo. SECURITY.md says what it runs, and when.
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs

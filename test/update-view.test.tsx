@@ -17,6 +17,8 @@ const server = vi.hoisted(() => ({
   started: [] as unknown[][],
   cancelled: 0,
   version: '0.5.0',
+  /** How long the server takes to answer a look (what runs is read with ps). */
+  slow: 0,
 }));
 
 vi.mock('../src/web/lib/api', async (original) => {
@@ -27,10 +29,12 @@ vi.mock('../src/web/lib/api', async (original) => {
       ...actual.api,
       update: async (check = false) => {
         server.asked.push(check);
+        if (server.slow) await new Promise((resolve) => setTimeout(resolve, server.slow));
         return server.info;
       },
       startUpdate: async (...args: unknown[]) => {
         server.started.push(args);
+        if (server.slow) await new Promise((resolve) => setTimeout(resolve, server.slow));
         return server.info;
       },
       cancelUpdate: async () => {
@@ -69,7 +73,7 @@ const NEWER: UpdateInfo = {
 
 afterEach(() => {
   cleanup();
-  Object.assign(server, { info: { current: '0.5.0' }, asked: [], started: [], cancelled: 0, version: '0.5.0' });
+  Object.assign(server, { info: { current: '0.5.0' }, asked: [], started: [], cancelled: 0, version: '0.5.0', slow: 0 });
   connections.listeners = [];
   sessionStorage.clear();
 });
@@ -121,6 +125,69 @@ describe('Settings › About, of updates', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update to 0.5.1' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Update now' }));
     await waitFor(() => expect(server.started).toEqual([['0.5.1', 'idle'], ['0.5.1', 'now', true]]));
+  });
+
+  it('asks the server once for a double click on Update, its buttons off until it answers', async () => {
+    server.info = NEWER;
+    render(<UpdateSection open />, { wrapper });
+    const update = await screen.findByRole('button', { name: 'Update to 0.5.1' });
+    server.slow = 60;
+    fireEvent.click(update);
+    fireEvent.click(update);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(update);
+    await waitFor(() => expect(server.started).toEqual([['0.5.1', 'now']]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(server.started).toEqual([['0.5.1', 'now']]);
+    // The look before it, once too.
+    expect(server.asked.filter((check) => !check)).toHaveLength(1);
+    // The confirmation's Update now, tapped twice: once.
+    server.slow = 0;
+    server.info = { ...NEWER, busy: [{ kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' }] };
+    server.started = [];
+    cleanup();
+    render(<UpdateSection open />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 0.5.1' }));
+    server.slow = 60;
+    const now = await screen.findByRole('button', { name: 'Update now' });
+    fireEvent.click(now);
+    fireEvent.click(now);
+    await waitFor(() => expect(server.started).toEqual([['0.5.1', 'now', true]]));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(server.started).toEqual([['0.5.1', 'now', true]]);
+  });
+
+  it('says that messages queued for the end of a turn are not sent, where an update now would end them', async () => {
+    server.info = {
+      ...NEWER,
+      busy: [
+        { kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' },
+        { kind: 'queued', title: 'Fix the build', detail: '2 messages for when this turn ends', sessionId: 's1' },
+      ],
+    };
+    render(<UpdateSection open />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 0.5.1' }));
+    expect(await screen.findByText('Updating restarts Pelican, which ends:')).toBeTruthy();
+    expect(screen.getByText('Queued')).toBeTruthy();
+    expect(screen.getByText(/2 messages for when this turn ends/)).toBeTruthy();
+    expect(screen.getByText('Transcripts, files, pins, settings and drafts stay; queued messages are not sent.')).toBeTruthy();
+    expect(screen.queryByText('Transcripts, files, pins, settings and drafts stay.')).toBeNull();
+  });
+
+  it('says to stop Pelican and start it with the new version where npx, pnpm dlx or bunx runs it', async () => {
+    server.info = {
+      ...NEWER,
+      install: {
+        kind: 'npx', folder: '/Users/me/.npm/_npx/6c0de8e1/node_modules/pelican-cc', self: false, restart: 'in-place',
+        command: 'npx pelican-cc@0.5.1 --port 7860',
+        why: 'This Pelican runs from npx’s cache, which npx fills again: it starts the new version when asked for it by number.',
+      },
+    };
+    render(<UpdateSection open />, { wrapper });
+    expect(await screen.findByText('npx pelican-cc@0.5.1 --port 7860')).toBeTruthy();
+    expect(screen.getByText('To update, stop Pelican, then start it with:')).toBeTruthy();
+    expect(screen.queryByText(/run this in a terminal/)).toBeNull();
   });
 
   it('shows the command to run, and why, where Pelican cannot update itself', async () => {

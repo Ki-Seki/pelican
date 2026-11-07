@@ -146,7 +146,6 @@ app.use('/api/*', async (c, next) => {
 
 // While an update replaces Pelican's install and starts it again, nothing new starts (update.ts).
 app.use('/api/*', whileUpdating);
-app.route('/api/update', updateRoutes);
 
 // Bodies are small, except an upload; nothing is buffered past these sizes. Only signed-in
 // requests get this far, apart from signing in itself, whose limit is 4 KB.
@@ -161,6 +160,9 @@ app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/auth') ? limits.auth
 // Answers are JSON that compresses well (a long session list or a page of messages, ten times
 // over), and the proxies a phone comes through pass them on as they are. Images are left alone.
 app.use('/api/*', compress({ threshold: 1024 }));
+
+// Updating from Settings, behind the same limits as every other request.
+app.route('/api/update', updateRoutes);
 
 app.onError((error, c) => {
   // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
