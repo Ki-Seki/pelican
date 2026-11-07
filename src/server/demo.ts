@@ -371,6 +371,9 @@ const SESSIONS: DemoSession[] = [
         { role: 'assistant', at: t + 99000, content: [tool('p3', 'Bash', { command: 'npx playwright test tests/login.spec.ts --repeat-each=50', description: 'Run the login test 50 times' })] },
         { role: 'user', at: t + 160000, content: [result('p3', 'Running 50 tests using 4 workers\n\n  50 passed (58.2s)')] },
         { role: 'assistant', at: t + 165000, content: [text('All 50 runs pass now. The test waits for the CSRF token instead of sleeping, so it is also about 400 ms faster.')] },
+        // A `!` command, as Claude Code's bash mode records one: the command, then its output.
+        { role: 'user', at: t + 200000, content: '<bash-input>git status --short</bash-input>' },
+        { role: 'user', at: t + 201000, content: '<bash-stdout> M tests/login.spec.ts</bash-stdout><bash-stderr></bash-stderr>' },
         // Commit changes and Create PR, sent from Changes as Claude Desktop sends them (0.5.0).
         { role: 'user', at: t + 240000, content: COMMIT_REQUEST },
         { role: 'assistant', at: t + 244000, content: [tool('p4', 'Bash', { command: 'git add -A && git commit -m "Wait for the CSRF token in the login test"', description: 'Commit the change' })] },

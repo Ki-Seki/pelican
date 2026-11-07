@@ -1,8 +1,9 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
 // sheets and the files Claude sent there, on a phone and wide, light and dark; and the ways in to
-// every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone), and
-// Rewind to here, Undo rewind and Fork from here as the demo acts them out. Runs in CI after the
+// every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone),
+// Rewind to here, Undo rewind and Fork from here as the demo acts them out, and Changes' Commit
+// changes and Create PR, a pull request's card, picked lines and comments. Runs in CI after the
 // build, and before the site is published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
@@ -257,13 +258,44 @@ async function walkWorkspace(page, base, session, where, step, requested) {
   const file = await openSourceFile(page, view);
   if (!file) return missing('Files opens no file as its lines');
   const word = (await page.locator('[data-line="1"]').textContent())?.match(/[A-Za-z_]{3,}/)?.[0] ?? 'the';
-  await selectLines(page, 1, 2);
-  const quote = page.getByRole('button', { name: 'Quote', exact: true });
-  if (!(await quote.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing(`selecting lines of ${file} offers no Quote`);
-  await quote.click();
-  // It waits above the message box: a chip, or on a phone the card of the quote just taken.
-  const waits = page.locator('ul[aria-label="With your next message"] li').or(page.getByRole('button', { name: 'Add a note' })).first();
-  if (!(await waits.waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`Quote on ${file} puts no quote above the message box`);
+  const phone = (page.viewportSize()?.width ?? 0) < 600;
+  // Lines picked by their numbers: on a phone a tap; with a pointer, selected.
+  if (phone) await page.locator('[data-line="1"]').tap();
+  else await selectLines(page, 1, 2);
+  const bar = page.getByRole('toolbar', { name: 'Picked lines' });
+  if (!(await bar.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing(`picking lines of ${file} shows no bar`);
+  const offered = (await bar.getByRole('button').allTextContents()).map((t) => t.trim());
+  if (offered.join('|') !== 'Copy|Quote|Add comment') missing(`the bar under picked lines offers ${offered.join(', ')}, not Copy, Quote, Add comment`);
+  await bar.getByRole('button', { name: 'Quote', exact: true }).click();
+  if (phone) {
+    // On a phone it opens in place, for a note; added, it waits, and the view's foot says so.
+    const sheet = page.getByRole('dialog', { name: /^Quote · / });
+    if (!(await sheet.waitFor({ timeout: 3000 }).then(() => true, () => false))) return missing(`Quote on ${file} opens no quote in place`);
+    await sheet.getByRole('button', { name: 'Add', exact: true }).tap();
+    if (!(await view.getByText(/1 quote/).first().waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`a quote added in place is not said to wait at the view's foot`);
+    await page.locator('[data-line="2"]').tap();
+  } else {
+    // It waits above the message box at once, as Desktop's Attach as context.
+    if (!(await page.locator('ul[aria-label="With your next message"] li').first().waitFor({ timeout: 3000 }).then(() => true, () => false))) missing(`Quote on ${file} puts no quote above the message box`);
+    await page.locator('[data-line="2"] > span:last-child').click();
+  }
+  // Add comment: Desktop's box at the line, Cancel · Send to Claude · Add comment.
+  if (await bar.waitFor({ timeout: 3000 }).then(() => true, () => false)) {
+    await bar.getByRole('button', { name: 'Add comment' }).click();
+    const box = page.locator('form[data-comment-box]');
+    if (!(await box.waitFor({ timeout: 3000 }).then(() => true, () => false))) missing('Add comment opens no comment box');
+    else {
+      const buttons = (await box.getByRole('button').allTextContents()).map((t) => t.replace(/[⌘↵⌃]|Ctrl|Enter|\+/g, '').trim());
+      if (buttons.join('|') !== 'Cancel|Send to Claude|Add comment') missing(`the comment box offers ${buttons.join(', ')}, not Cancel, Send to Claude, Add comment`);
+      if (phone) {
+        for (const button of await box.getByRole('button').all()) {
+          const height = (await button.boundingBox())?.height ?? 0;
+          if (height < 44) missing(`the comment box's "${(await button.textContent()).trim()}" is ${Math.round(height)}px tall`);
+        }
+      }
+      await box.getByRole('button', { name: 'Cancel' }).click();
+    }
+  } else missing(`a click on a line of ${file} picks nothing`);
 
   step('a text search');
   view = await openWorkspace(page, `${url}&w=files`);
@@ -279,9 +311,14 @@ async function walkWorkspace(page, base, session, where, step, requested) {
   if (!view) return missing('Changes does not open');
   const show = view.getByRole('button', { name: /^Show:/ });
   if (!(await show.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Changes has no Show');
+  if (!/^Show:All changes/.test((await show.textContent()) ?? '')) missing(`Changes shows "${await show.textContent()}" first, not All changes`);
   await show.click();
-  const turn = page.getByRole('dialog', { name: 'Show' }).getByRole('button', { name: /^T\d+ · / }).first();
+  const choices = page.getByRole('dialog', { name: 'Show' });
+  const names = (await choices.locator('[role="menuitemradio"]').allTextContents()).map((t) => t.trim());
+  if (!names[0]?.startsWith('All changes')) missing(`Show starts with "${names[0]}", not All changes`);
+  const turn = choices.locator('[role="menuitemradio"]').filter({ hasNotText: /^(All changes|Uncommitted changes)/ }).first();
   if (!(await turn.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('Show offers no turn');
+  if (!(await choices.getByText('Turns', { exact: true }).count())) missing('Show lists the turns under no heading of their own');
   await turn.click();
   const changed = view.locator('button:has(> span[title])').first();
   if (!(await changed.waitFor({ timeout: 5000 }).then(() => true, () => false))) return missing('the turn lists no file');
@@ -609,6 +646,8 @@ async function driveApp(browser, base, sessions, walked) {
         await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
         await page.waitForTimeout(300);
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
+        // Desktop's Create PR shows as /create-pr, and its <pr-created> as a card: never their markup.
+        if (await page.locator('main').getByText(/<create-pr-command>|<pr-created>/).count()) problems.push(`app, ${size}, ${scheme}: session ${session.id} shows a request's or a pull request's markup`);
         await pressSession(page, size === 'wide', `app, ${size}, session ${session.id}`);
       }
       at = 'Changes and files';
@@ -696,7 +735,7 @@ async function checkDocked(browser, base, sessions) {
         await page.getByRole('button', { name: 'Quote', exact: true }).waitFor({ timeout: 3000 }).catch(() => {});
         const out = await page.evaluate(() => {
           const pane = document.querySelector('aside[aria-label="Changes and files"]');
-          const bar = [...pane.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Quote')?.parentElement;
+          const bar = [...pane.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Quote')?.closest('[data-lines-bar]');
           if (!bar) return 'selecting lines of a file offers no Quote';
           const scroller = pane.querySelector('.overflow-y-auto');
           const { bottom, top } = bar.getBoundingClientRect();
@@ -772,7 +811,8 @@ async function checkRewind(browser, base, sessions, where) {
   for (const candidate of sessions.filter((s) => !s.sideChatOf && s.status === 'idle')) {
     await look.goto(`${base}?s=${encodeURIComponent(candidate.id)}`, { waitUntil: 'networkidle' });
     await look.waitForTimeout(300);
-    if ((await look.locator('[data-quote-what="prompt"]').count()) >= 2) {
+    // Prompts of words: a request shown as its command (/create-pr) puts the request back, not its words.
+    if ((await look.locator('[data-quote-what="prompt"]:not(.font-mono)').count()) >= 2) {
       session = candidate;
       break;
     }
@@ -792,7 +832,7 @@ async function checkRewind(browser, base, sessions, where) {
     await page.goto(url, { waitUntil: 'networkidle' });
     await page.waitForTimeout(400);
     // The last prompt, the actions beside it or under it its own.
-    const bubble = page.locator('.group\\/user').filter({ has: page.locator('[data-quote-what="prompt"]') }).last();
+    const bubble = page.locator('.group\\/user').filter({ has: page.locator('[data-quote-what="prompt"]:not(.font-mono)') }).last();
     const prompt = bubble.locator('[data-quote-what="prompt"]');
     const words = (await prompt.innerText()).trim();
     await prompt.scrollIntoViewIfNeeded();
@@ -1367,6 +1407,101 @@ async function waysInOnPhone(browser, base, session, where) {
 }
 
 /** The ways in to every action, on a computer and on a phone (see waysInOnComputer and waysInOnPhone). */
+/**
+ * Commit changes and Create PR, at the foot of Changes, on a computer and a phone: Desktop's names
+ * for what Changes shows, both requests offered and no Push, Create PR's ▾, a finger's 44 px; a tap
+ * sends one at once (the demo acts it out: /create-pr, then the pull request's card); and a `!`
+ * command's list. In a session whose conversation already holds a Create PR (`answer` asks the
+ * demo, or reads what the site saved), idle, so a request is not a steer.
+ */
+async function checkRequests(browser, base, sessions, answer, where) {
+  let session;
+  for (const candidate of sessions.filter((s) => s.cwd && !s.sideChatOf && s.status !== 'running' && s.status !== 'waiting')) {
+    const page = await answer(`sessions/${encodeURIComponent(candidate.id)}/messages?limit=120`).catch(() => undefined);
+    const said = (page?.messages ?? []).flatMap((m) => m.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])));
+    if (said.some((text) => text.trim().startsWith('<create-pr-command>'))) {
+      session = candidate;
+      break;
+    }
+  }
+  if (!session) {
+    problems.push(`${where}: no idle session holds a Create PR to check the requests in`);
+    return;
+  }
+  for (const size of ['wide', 'phone']) {
+    const context = await browser.newContext({ ...SIZES[size] });
+    const page = await context.newPage();
+    let at = 'the conversation';
+    watch(page, () => `${where}, requests, ${size}, ${at}`);
+    const missing = (what) => problems.push(`${where}, requests, ${size}, ${at}: ${what}`);
+    const url = `${base}?s=${encodeURIComponent(session.id)}`;
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    if (!(await page.getByText('/create-pr', { exact: true }).count())) missing('a Create PR sent shows as no /create-pr');
+    const card = page.locator('[data-pr-card]').first();
+    if (!(await shows(card))) missing('the pull request Claude made shows no card');
+    else if (!(await card.getByRole('link', { name: /View PR/ }).count())) missing('the pull request\'s card has no View PR');
+
+    at = 'a ! command';
+    const shell = page.locator('[data-quote-what="step"]').filter({ has: page.locator('svg.lucide-square-terminal') }).filter({ hasText: 'git status' }).first();
+    if (await shell.count()) {
+      if (size === 'wide') {
+        await shell.hover();
+        await shell.getByRole('button', { name: /^More for / }).click();
+      } else {
+        const head = await shell.locator('> div').first().boundingBox();
+        await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: x, clientY: y, bubbles: true })), [head.x + 40, head.y + head.height / 2]);
+        await page.waitForTimeout(650);
+        await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: x, clientY: y, bubbles: true })), [head.x + 40, head.y + head.height / 2]);
+      }
+      const menu = await openMenu(page);
+      if (!menu) missing(`${size === 'wide' ? 'its ⋯' : 'a long press'} opens no menu`);
+      else {
+        const lacking = lacks(menu, ['Copy command', 'Copy output', 'Quote output']);
+        if (lacking.length) missing(`its menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+        await page.keyboard.press('Escape');
+        await allClosed(page);
+      }
+    } else notes.push(`${where}: no ! command to check the menu of`);
+
+    at = 'Changes';
+    const view = await openWorkspace(page, `${url}&w=changes`);
+    if (!view) {
+      missing('Changes does not open');
+      await context.close();
+      continue;
+    }
+    const show = view.getByRole('button', { name: /^Show:/ });
+    if (await shows(show) && !/^Show:All changes/.test((await show.textContent()) ?? '')) missing(`it shows "${await show.textContent()}" first, not All changes`);
+    const commit = view.getByRole('button', { name: 'Commit changes' });
+    const pr = view.getByRole('button', { name: 'Create PR', exact: true });
+    if (!(await shows(commit, 5000))) missing('its foot offers no Commit changes');
+    if (!(await shows(pr))) missing('its foot offers no Create PR');
+    if (await view.getByRole('button', { name: /^Push\b/ }).count()) missing('it offers a Push, which Desktop has not');
+    if (size === 'phone') {
+      for (const button of [commit, pr, view.getByRole('button', { name: 'Create PR or Create draft PR' }), show, ...await view.getByRole('button', { name: /^(Changes|Files|Terminal)/ }).all()]) {
+        const box = await button.boundingBox().catch(() => null);
+        if (box && box.height < 44) missing(`"${(await button.textContent()).trim() || await button.getAttribute('aria-label')}" is ${Math.round(box.height)}px tall`);
+      }
+    }
+    await view.getByRole('button', { name: 'Create PR or Create draft PR' }).click();
+    const kinds = page.getByRole('dialog', { name: 'Create PR' });
+    const offered = (await kinds.locator('[role="menuitemradio"]').allTextContents().catch(() => [])).map((t) => t.trim());
+    if (offered.join('|') !== 'Create PR|Create draft PR') missing(`Create PR's ▾ offers ${offered.join(', ') || 'nothing'}`);
+    await page.keyboard.press('Escape');
+    await allClosed(page);
+
+    at = 'Create PR, sent';
+    const before = await page.locator('[data-pr-card]').count();
+    await pr.click();
+    // Sent at once: on a phone the conversation comes back to show it; the demo acts it out.
+    const cards = page.locator('[data-pr-card]');
+    if (!(await page.waitForFunction((n) => document.querySelectorAll('[data-pr-card]').length > n, before, { timeout: 8000 }).then(() => true, () => false))) missing('a tap on Create PR shows no pull request made');
+    else if (!(await cards.last().getByText(/^Open/).first().isVisible().catch(() => false))) missing('the pull request made says nothing of its status');
+    await context.close();
+  }
+}
+
 async function checkWaysIn(browser, base, sessions, where) {
   const found = await waysInOnComputer(browser, base, sessions, where);
   if (found.conversation) await waysInOnPhone(browser, base, found.conversation, where);
@@ -1571,6 +1706,7 @@ try {
     await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
     await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
+    await checkRequests(browser, `${server.base}demo/`, sessions, saved, 'site, demo');
     await checkRewind(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
@@ -1584,6 +1720,7 @@ try {
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
     await checkWaysIn(browser, demo.base, sessions ?? [], 'app');
+    await checkRequests(browser, demo.base, sessions ?? [], asked, 'app');
     await checkRewind(browser, demo.base, sessions ?? [], 'app');
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkExport(browser, demo.base, sessions ?? [], 'app');
