@@ -6,6 +6,7 @@ import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { workflowOf } from '../../shared/workflows';
 import { api } from '../lib/api';
+import { composing, hasKeyboard } from '../lib/keyboard';
 import { describeTool, relPath } from '../lib/tools';
 import { fenced } from '../lib/workflows';
 import { Diff } from './Diff';
@@ -286,11 +287,30 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
 
 type Question = { question: string; header?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string; preview?: string }> };
 
+/** A field of its own, whose keys are its own: typed digits are words there, not picks. */
+const typingIn = (target: EventTarget | null) => target instanceof HTMLElement && target.matches('input, textarea, select, [contenteditable="true"]');
+
+/**
+ * Claude's questions, as Claude Desktop asks them: options to pick (1 to 9 pick one by its number,
+ * as in Desktop, shown faintly beside each on a computer), or words of your own under Other. On a
+ * computer the card takes the keys when it comes, unless something is being typed elsewhere: a
+ * number picks for the question the keys are in, else the first not answered yet, and a letter
+ * starts that question's Other.
+ */
 function Questions({ sessionId, request }: { sessionId: string; request: PermissionRequest }) {
   const { busy, error, decide } = useDecide(sessionId, request);
   const questions = (Array.isArray(request.input.questions) ? request.input.questions : []) as Question[];
   const [picked, setPicked] = useState<Record<string, string[]>>({});
   const [other, setOther] = useState<Record<string, string>>({});
+  const card = useRef<HTMLDivElement>(null);
+  const keys = hasKeyboard();
+  useEffect(() => {
+    if (!hasKeyboard()) return;
+    const now = document.activeElement;
+    // Nothing being typed: the page, or an empty message box, gives the card the keys.
+    const idle = !now || now === document.body || (now instanceof HTMLTextAreaElement && now.getAttribute('aria-label') === 'Message Claude' && !now.value.trim());
+    if (idle) card.current?.focus({ preventScroll: true });
+  }, []);
 
   const toggle = (q: Question, label: string) => {
     setPicked((prev) => {
@@ -306,30 +326,63 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
     return [q.question, chosen.join(', ')];
   }));
   const complete = questions.every((q) => answers[q.question]);
+  /** The question the keys pick for: the one they are in, else the first not answered yet, else the last. */
+  const current = (target: EventTarget | null): Question | undefined => {
+    const at = target instanceof Element ? target.closest('[data-question]')?.getAttribute('data-question') : null;
+    if (at) return questions[Number(at)];
+    return questions.find((q) => !answers[q.question]) ?? questions.at(-1);
+  };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (busy || e.repeat || e.metaKey || e.ctrlKey || e.altKey || composing(e.nativeEvent) || typingIn(e.target)) return;
+    const q = current(e.target);
+    if (!q) return;
+    const option = /^[1-9]$/.test(e.key) ? q.options?.[Number(e.key) - 1] : undefined;
+    if (option) {
+      e.preventDefault();
+      toggle(q, option.label);
+      // A pick is the answer, as in Desktop: words under Other go, but where several may be picked.
+      if (!q.multiSelect) setOther((prev) => ({ ...prev, [q.question]: '' }));
+      return;
+    }
+    // A letter starts the question's own answer, under Other, as in Desktop.
+    if (e.key.length === 1 && e.key !== ' ' && !/^[0-9]$/.test(e.key)) {
+      const field = card.current?.querySelector<HTMLInputElement>(`[data-question="${questions.indexOf(q)}"] input`);
+      if (!field) return;
+      e.preventDefault();
+      setOther((prev) => ({ ...prev, [q.question]: `${prev[q.question] ?? ''}${e.key}` }));
+      field.focus();
+    }
+  };
 
   return (
-    <div>
+    <div ref={card} role="group" aria-label={questions.length === 1 ? 'Claude’s question' : 'Claude’s questions'} tabIndex={-1} onKeyDown={onKeyDown} className="outline-none">
       <div className="flex items-center gap-2 text-[13px] text-muted"><CircleHelp className="size-4" />Claude has {questions.length === 1 ? 'a question' : 'questions'}</div>
       <div className="mt-2 max-h-[46dvh] space-y-4 overflow-y-auto">
-        {questions.map((q) => {
+        {questions.map((q, at) => {
           // What Claude drew for the option picked last (a mockup, some code), as Claude Code shows it beside the list.
           const preview = (q.options ?? []).find((o) => o.label === (picked[q.question] ?? []).at(-1))?.preview;
           return (
-            <div key={q.question}>
+            <div key={q.question} data-question={at}>
               {q.header && <div className="mb-0.5 text-[11px] font-medium tracking-wide text-faint uppercase">{q.header}</div>}
               <div className="text-[15px] leading-snug font-medium">{q.question}</div>
               <div className="mt-2 space-y-1.5">
-                {(q.options ?? []).map((option) => {
+                {(q.options ?? []).map((option, i) => {
                   const on = (picked[q.question] ?? []).includes(option.label);
                   return (
                     <button
                       key={option.label}
                       type="button"
                       onClick={() => toggle(q, option.label)}
-                      className={`block w-full rounded-xl border px-3 py-2 text-left ${on ? 'border-fg bg-hover' : 'border-line hover:bg-hover'}`}
+                      aria-pressed={on}
+                      {...(i < 9 ? { 'aria-keyshortcuts': String(i + 1) } : {})}
+                      className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left ${on ? 'border-fg bg-hover' : 'border-line hover:bg-hover'}`}
                     >
-                      <div className="text-[14.5px]">{option.label}</div>
-                      {option.description && <div className="mt-0.5 text-[12.5px] leading-snug text-muted">{option.description}</div>}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[14.5px]">{option.label}</span>
+                        {option.description && <span className="mt-0.5 block text-[12.5px] leading-snug text-muted">{option.description}</span>}
+                      </span>
+                      {/* Its number, which picks it, faintly, where there is a keyboard. */}
+                      {keys && i < 9 && <span aria-hidden className="mt-0.5 shrink-0 font-mono text-[12px] text-faint">{i + 1}</span>}
                     </button>
                   );
                 })}

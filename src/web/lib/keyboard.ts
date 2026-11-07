@@ -103,8 +103,8 @@ export type KeyDef = {
   /** Taken too, never shown: a key a browser may keep (⌘, for Settings), or the one Pelican had before. */
   also?: readonly Chord[];
   /**
-   * Desktop's key for a part of 0.5.0 that is not here yet: nothing takes it, and the list of keys
-   * and the menus leave it out until something does.
+   * Desktop's key for a part of Pelican not built yet: nothing takes it, and the list of keys and
+   * the menus leave it out until something does. None is, as of 0.5.0.
    */
   soon?: true;
   /** The browser's own key (Copy, Paste), shown in a menu beside what it does; Pelican never takes it. */
@@ -170,7 +170,7 @@ export const KEYS = {
   commentAdd: { label: 'Comment box: add comment', group: 'Quotes and comments', scope: 'comment', keys: ({ enterSends }) => (enterSends ? ['enter'] : []) },
   commentSend: { label: 'Comment box: send to Claude', group: 'Quotes and comments', scope: 'comment', keys: ['mod+enter'] },
 
-  pickAnswer: { label: 'Pick an answer', group: 'Questions', scope: 'question', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], soon: true },
+  pickAnswer: { label: 'Pick an answer', group: 'Questions', scope: 'question', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'] },
 
   copy: { label: 'Copy', scope: 'page', keys: ['mod+c'], browser: true },
   paste: { label: 'Paste', scope: 'page', keys: ['mod+v'], browser: true },

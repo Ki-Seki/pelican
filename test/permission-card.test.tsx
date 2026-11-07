@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { revealHidden } from '../src/shared/hidden';
 import type { PermissionRequest } from '../src/shared/protocol';
 
 const { PermissionCard } = await import('../src/web/components/PermissionCard');
+const { api } = await import('../src/web/lib/api');
 
 afterEach(cleanup);
 
@@ -76,5 +77,78 @@ describe('an approval to send a file', () => {
     render(<PermissionCard sessionId="s1" cwd="/Users/ada/work" request={request({ files: ['/Users/ada/work/a.png'], caption: 'Your invoice \u2714\ufe0f\u202efdp.exe' })} />);
     expect(screen.getByText('Your invoice \u2714\ufe0f⟨U+202E⟩fdp.exe')).toBeTruthy();
     expect(screen.getByText(/invisible or direction-changing characters/)).toBeTruthy();
+  });
+});
+
+describe('Claude’s questions', () => {
+  const asked = (questions: Array<Record<string, unknown>>): PermissionRequest => ({
+    id: 'q1', sessionId: 's1', toolName: 'AskUserQuestion', createdAt: Date.now(), input: { questions },
+  });
+  const QUESTIONS = [
+    { question: 'Which database?', header: 'Database', options: [{ label: 'Postgres', description: 'What the rest uses' }, { label: 'SQLite' }] },
+    { question: 'Which environments?', multiSelect: true, options: [{ label: 'dev' }, { label: 'staging' }, { label: 'production' }] },
+  ];
+  /** A computer's screen, with a pointer that hovers: a keyboard, very likely. */
+  const computer = (on: boolean) => {
+    window.matchMedia = ((query: string) => ({ matches: on && query === '(hover: hover) and (pointer: fine)', media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  };
+  afterEach(() => {
+    computer(false);
+    vi.restoreAllMocks();
+  });
+
+  it('on a computer, take the keys as they come, and 1 to 9 pick by number, for the first question not answered yet', async () => {
+    computer(true);
+    const decide = vi.spyOn(api, 'decide').mockResolvedValue({ ok: true } as never);
+    render(<PermissionCard sessionId="s1" request={asked(QUESTIONS)} />);
+    const card = screen.getByRole('group', { name: 'Claude’s questions' });
+    expect(document.activeElement).toBe(card);
+    // Each option's number, faintly beside it.
+    expect(screen.getByRole('button', { name: /^SQLite/ }).getAttribute('aria-keyshortcuts')).toBe('2');
+    expect(screen.getByRole('button', { name: /^SQLite/ }).textContent).toBe('SQLite2');
+    fireEvent.keyDown(card, { key: '2' });
+    expect(screen.getByRole('button', { name: /^SQLite/ }).getAttribute('aria-pressed')).toBe('true');
+    // The next number goes to the next question, where several may be picked.
+    fireEvent.keyDown(card, { key: '1' });
+    fireEvent.keyDown(card, { key: '2' });
+    fireEvent.keyDown(card, { key: '9' });
+    // Clicks on an approval count once it has been there a moment.
+    const later = performance.now() + 1000;
+    vi.spyOn(performance, 'now').mockReturnValue(later);
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }));
+    expect(decide).toHaveBeenCalledWith('s1', 'q1', { behavior: 'allow', updatedInput: { questions: QUESTIONS, answers: { 'Which database?': 'SQLite', 'Which environments?': 'dev, staging' } } });
+  });
+
+  it('pick for the question the keys are in; a letter starts its Other, where a number is a number', () => {
+    computer(true);
+    render(<PermissionCard sessionId="s1" request={asked(QUESTIONS)} />);
+    const second = screen.getByRole('button', { name: /^production/ });
+    second.focus();
+    fireEvent.keyDown(second, { key: '1' });
+    expect(screen.getByRole('button', { name: /^dev/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /^Postgres/ }).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.keyDown(screen.getByRole('button', { name: /^Postgres/ }), { key: 'M' });
+    const others = screen.getAllByPlaceholderText('Other…') as HTMLInputElement[];
+    expect(others[0]!.value).toBe('M');
+    expect(document.activeElement).toBe(others[0]);
+    fireEvent.keyDown(others[0]!, { key: '2' });
+    expect(screen.getByRole('button', { name: /^SQLite/ }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('leave the keys where something is being typed, and show no numbers on a phone', () => {
+    computer(true);
+    const box = document.createElement('textarea');
+    box.setAttribute('aria-label', 'Message Claude');
+    box.value = 'Half a thought';
+    document.body.append(box);
+    box.focus();
+    render(<PermissionCard sessionId="s1" request={asked(QUESTIONS)} />);
+    expect(document.activeElement).toBe(box);
+    box.remove();
+    cleanup();
+    computer(false);
+    render(<PermissionCard sessionId="s1" request={asked(QUESTIONS)} />);
+    expect(screen.getByRole('button', { name: /^SQLite/ }).textContent).toBe('SQLite');
+    expect(document.activeElement).not.toBe(screen.getByRole('group', { name: 'Claude’s questions' }));
   });
 });

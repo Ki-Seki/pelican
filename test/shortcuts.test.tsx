@@ -79,17 +79,20 @@ describe('the keyboard shortcuts sheet', () => {
         'Comment box: add comment: Enter',
         'Comment box: send to Claude: Ctrl Enter',
       ],
+      Questions: ['Pick an answer: 1 9'],
     });
   });
 
-  it('names only keys that work: those of parts still to come wait for them', () => {
+  it('names only keys that work, every one of them: Queue for later, Background tasks and picking an answer too', () => {
     const listed = Object.values(parts()).flat().map((row) => row.slice(0, row.lastIndexOf(':')));
     for (const id of KEY_IDS) {
       const { label } = KEYS[id];
       if (!keyWorks(id)) expect(listed, label).not.toContain(label);
     }
-    // Still to come: picking an answer by its number.
-    expect(listed).not.toContain('Pick an answer');
+    expect(KEY_IDS.filter((id) => !keyWorks(id))).toEqual([]);
+    expect(listed).toContain('Queue for later, while Claude works');
+    expect(listed).toContain('Background tasks');
+    expect(listed).toContain('Pick an answer');
     // The browser's own (Copy, Paste) are shown in menus, not here.
     expect(listed).not.toContain('Copy');
   });
