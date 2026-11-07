@@ -62,6 +62,15 @@ export function sideChatOptions(): Partial<Options> {
   };
 }
 
+/**
+ * What a side chat's Claude is told besides: that the session it is a copy of goes on, in Claude
+ * Code's own word for a copy whose source still runs. Work that session left running when it was
+ * copied (a background agent, a command) is the session's own, not the copy's: Claude Code would
+ * otherwise tell the copy's Claude it "didn't finish before the previous session ended", and so
+ * failed. A side chat starts no work of its own: it only reads.
+ */
+export const SIDE_CHAT_ENV: Record<string, string> = { CLAUDE_CODE_RESUME_SOURCE_ALIVE: '1' };
+
 /** The settings a side chat takes from its session: the model, effort and speed, in its own mode. */
 export function sideChatSettings(settings: RunSettings): RunSettings {
   const { model, effort, fast } = settings;

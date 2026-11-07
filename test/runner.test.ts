@@ -289,6 +289,8 @@ describe('starting Claude', () => {
     expect(claude.options.env?.CLAUDE_CODE_ENTRYPOINT).toBe(process.env.CLAUDE_CODE_ENTRYPOINT);
     // Pelican's own environment, which its `!` commands get, stays without it.
     expect(process.env.CLAUDE_CODE_ATTACHMENTS_BY_PATH).toBeUndefined();
+    // A session of its own is no copy whose source goes on, as a side chat is.
+    expect(claude.options.env).not.toHaveProperty('CLAUDE_CODE_RESUME_SOURCE_ALIVE');
     run.close();
     await settle();
     await sendMessage({ sessionId, cwd: folder }, { text: 'Send me the report', attachments: [], settings: {} });
@@ -1146,6 +1148,8 @@ describe('side chats', () => {
       effort: 'high',
     });
     expect(claude.options.settings).toBeUndefined();
+    // Told that the session it copies goes on: work that session left running is not the copy's.
+    expect(claude.options.env?.CLAUDE_CODE_RESUME_SOURCE_ALIVE).toBe('1');
     // The session's own system prompt; the note that it is a side chat goes with each question.
     expect(claude.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
     await settle();

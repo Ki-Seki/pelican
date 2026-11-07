@@ -59,7 +59,7 @@ import { answerable, notify, oneLine } from './push.js';
 import { liveCut, spendCut } from './rewound.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
-import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
+import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_ENV, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
@@ -582,7 +582,7 @@ export class SessionRun {
       perTaskStopAffordance: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       settingSources: this.launch.settingSources,
-      env: claudeEnv(this.launch),
+      env: { ...claudeEnv(this.launch), ...(this.sideChat ? SIDE_CHAT_ENV : {}) },
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
