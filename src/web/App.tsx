@@ -35,6 +35,7 @@ import { socket } from './lib/socket';
 import { defaultStart, newSessionQuery } from './lib/start';
 import { STATIC_DEMO } from './lib/static-demo';
 import { setWaitingCount } from './lib/title';
+import { useNewVersion } from './lib/update';
 import { fitToVisibleViewport } from './lib/viewport';
 
 // The conversation (Markdown, code highlighting, diffs) and Settings load when first needed: the
@@ -202,6 +203,8 @@ function Main() {
   const wide = useMedia('(min-width: 1024px)');
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
+  // Back after Pelican started again as another version (an update): the page loads that version's app.
+  useNewVersion();
   const [connected, setConnected] = useState(socket.connected);
   const [notifications, setNotifications] = useState<NotificationState>('off');
   const [settingsOpen, setSettingsOpen] = useState(false);

@@ -33,6 +33,7 @@ import { useSyncExternalStore } from 'react';
 import type { DefaultChange, StartDefaults } from '../../shared/defaults';
 import type { Todo } from '../../shared/tasks';
 import type { NewTerminal, TerminalInfo, TerminalList, TerminalRunning } from '../../shared/terminal';
+import type { UpdateInfo } from '../../shared/update';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
 import { DemoRefusal, requestKey, STATIC_DEMO, staticRequest } from './static-demo';
 
@@ -233,6 +234,11 @@ export const api = {
   }),
   /** Asks the server for nothing much, to learn whether it can be reached. */
   probe: () => request<ServerInfo>('info').then(() => true, () => false),
+  /** What Settings says of updates; `check`: ask npm's registry again, unless it was asked a few minutes ago. */
+  update: (check = false) => request<UpdateInfo>(`update${check ? '?check=1' : ''}`),
+  /** Updates to `version` now (`confirmed`: what it ends was shown), or once nothing has run for a minute. */
+  startUpdate: (version: string, when: 'now' | 'idle', confirmed = false) => send<UpdateInfo>('POST', 'update', { version, when, confirmed }),
+  cancelUpdate: () => send<UpdateInfo>('POST', 'update/cancel'),
   sessions: () => request<{ sessions: SessionSummary[] }>('sessions').then((r) => r.sessions),
   session: (id: string) =>
     request<{ session: SessionSummary | null; run: RunState | null; tasks: Todo[]; settings: RecordedSettings }>(`sessions/${encodeURIComponent(id)}`),

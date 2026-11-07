@@ -17,6 +17,7 @@ import { ModelSheet, ModelSummary, ModeSheet, modelOf, SheetNote } from './Model
 import { usePlanLimits } from './PlanLimits';
 import { Segmented, Sheet, SheetHeading, SheetOption, SheetToggle } from './Sheet';
 import { showShortcuts } from './Shortcuts';
+import { UpdateSection } from './UpdateSection';
 
 // The usage page loads once Settings is open, not with it: Settings shows sooner on a slow link.
 const loadUsage = () => import('./Usage');
@@ -223,6 +224,8 @@ export function SettingsSheet({
         <br />
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>
       </div>
+      {/* A newer Pelican on npm, said here only; neither demo has one. */}
+      {info && <UpdateSection open={open} demo={info.demo} />}
       {info?.auth && <SheetOption icon={<LogOut className="size-4" />} label="Sign out" danger onSelect={onSignOut} />}
       {/* Only what Claude Code keeps as a default: no Max effort and no Ultracode, which are a session's; never Bypass. */}
       <ModelSheet
