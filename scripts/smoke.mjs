@@ -2,8 +2,9 @@
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
 // sheets and the files Claude sent there, on a phone and wide, light and dark; and the ways in to
 // every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone),
-// Rewind to here, Undo rewind and Fork from here as the demo acts them out, and Changes' Commit
-// changes and Create PR, a pull request's card, picked lines and comments. Runs in CI after the
+// Rewind to here, Undo rewind and Fork from here as the demo acts them out, Changes' Commit
+// changes and Create PR, a pull request's card, picked lines and comments, and while Claude works,
+// Send's other way, Claude's question and what runs in the background. Runs in CI after the
 // build, and before the site is published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
@@ -883,6 +884,80 @@ async function checkSideChats(browser, base, sessions, where) {
  * bringing the prompt back and taking the words out of the box; ⌘K's Rewind to an earlier message
  * listing the prompts; and Fork from here opening a copy with the words in its box.
  */
+/**
+ * While Claude works and asks: in the session waiting for an approval, typing gives Send its other
+ * way beside it, Queue for later, a finger's 44 px on a phone, and Stop stays beside Send; Allow plays
+ * out to Claude's question, picked on a computer with its number and on a phone with a tap, and
+ * answered. Then what runs in the background: "1 in background", ⌃B (Ctrl+Alt+B off a Mac) opening
+ * its list with the keys in it, and a workflow's row with no Stop of its own, which is on its card.
+ */
+async function checkWhileWorking(browser, base, sessions, where) {
+  const waiting = sessions.find((s) => s.status === 'waiting' && !s.runningIn && !s.sideChatOf);
+  const flow = sessions.find((s) => /checkout flow/i.test(s.title ?? ''));
+  if (!waiting) notes.push(`${where}, while Claude works: no session waiting for an approval`);
+  for (const size of ['wide', 'phone']) {
+    if (!waiting) break;
+    const context = await browser.newContext({ ...SIZES[size] });
+    const page = await context.newPage();
+    const say = (problem) => problems.push(`${where}, while Claude works, ${size}: ${problem}`);
+    watch(page, () => `${where}, while Claude works, ${size}`);
+    await page.goto(`${base}?s=${encodeURIComponent(waiting.id)}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    await page.getByLabel('Message Claude').fill('Also keep the old names');
+    const other = page.getByRole('button', { name: /^Queue for later/ });
+    if (!(await shows(other))) say('typing gives Send no Queue for later beside it');
+    else if (size === 'phone' && ((await other.boundingBox())?.height ?? 0) < 43.5) say(`Queue for later is ${Math.round((await other.boundingBox())?.height ?? 0)} px tall`);
+    if (!(await page.getByRole('button', { name: 'Stop', exact: true }).count()) || !(await page.getByRole('button', { name: 'Send', exact: true }).count())) say('Stop and Send do not both show while something is typed');
+    await page.getByLabel('Message Claude').fill('');
+    const allow = page.getByRole('button', { name: 'Allow', exact: true });
+    if (!(await shows(allow))) {
+      say('no Allow to play out');
+      await context.close();
+      continue;
+    }
+    await allow.click({ delay: 600 });
+    const card = page.getByRole('group', { name: /Claude’s question/ });
+    if (!(await shows(card, 8000))) {
+      say('allowing the edit brings no question');
+      await context.close();
+      continue;
+    }
+    if (size === 'wide') {
+      // The card has the keys, and 2 picks the second option.
+      await page.waitForTimeout(600);
+      await page.keyboard.press('2');
+    } else {
+      await card.getByRole('button', { name: /^The account/ }).click();
+    }
+    const picked = card.getByRole('button', { name: /^The account/ });
+    if ((await picked.getAttribute('aria-pressed')) !== 'true') say('the question’s option is not picked');
+    await page.waitForTimeout(600);
+    await card.getByRole('button', { name: 'Answer' }).click();
+    if (!(await shows(page.getByText(/The choice is kept with the account’s settings/).first(), 8000))) say('the answer gets no reply');
+    await context.close();
+  }
+  if (!flow) {
+    notes.push(`${where}, background: no session with a workflow at work`);
+    return;
+  }
+  const context = await browser.newContext({ ...SIZES.wide });
+  const page = await context.newPage();
+  const say = (problem) => problems.push(`${where}, background: ${problem}`);
+  watch(page, () => `${where}, background`);
+  await page.goto(`${base}?s=${encodeURIComponent(flow.id)}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  if (!(await shows(page.locator(CHAT_HEADER).getByText('1 in background')))) say('the session does not say "1 in background"');
+  const bar = page.getByRole('region', { name: /in background/ });
+  if (!(await shows(bar))) say('no list of what runs in the background');
+  else {
+    if (await bar.getByRole('button', { name: 'Stop', exact: true }).count()) say('a workflow’s row has a Stop of its own');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Control+b' : 'Control+Alt+b');
+    const inside = await page.waitForFunction(() => Boolean(document.activeElement?.closest('[role="region"][aria-label*="in background"]')), undefined, { timeout: 2000 }).then(() => true, () => false);
+    if (!inside) say('⌃B does not put the keys in the list of what runs in the background');
+  }
+  await context.close();
+}
+
 async function checkRewind(browser, base, sessions, where) {
   const finder = await browser.newContext({ ...SIZES.wide });
   const look = await finder.newPage();
@@ -1787,6 +1862,7 @@ try {
     await checkSideChat(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkRequests(browser, `${server.base}demo/`, sessions, saved, 'site, demo');
+    await checkWhileWorking(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkRewind(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
@@ -1801,6 +1877,7 @@ try {
     await checkSideChat(browser, demo.base, sessions ?? []);
     await checkWaysIn(browser, demo.base, sessions ?? [], 'app');
     await checkRequests(browser, demo.base, sessions ?? [], asked, 'app');
+    await checkWhileWorking(browser, demo.base, sessions ?? [], 'app');
     await checkRewind(browser, demo.base, sessions ?? [], 'app');
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkExport(browser, demo.base, sessions ?? [], 'app');
