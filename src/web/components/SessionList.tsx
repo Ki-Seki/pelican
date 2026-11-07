@@ -676,7 +676,7 @@ export function SessionList({
               <h1 className="truncate text-[20px] font-semibold tracking-tight">{machine || 'Pelican'}</h1>
               <span title={connected ? 'Connected' : 'Reconnecting'} className={`size-1.5 shrink-0 rounded-full ${connected ? 'bg-live' : 'bg-wait'}`} />
             </div>
-            <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount} sessions` : ''}</div>
+            <div className="text-[12.5px] text-faint">Claude Code{sessions ? ` · ${visibleCount} ${visibleCount === 1 ? 'session' : 'sessions'}` : ''}</div>
           </div>
           {top}
           <button type="button" aria-label="Settings" onClick={onSettings} className="grid size-11 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg pointer-fine:size-10">

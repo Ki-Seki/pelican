@@ -159,17 +159,22 @@ function PaneButton({ icon: Icon, label, keyId, pressed, onClick, children, ref 
   );
 }
 
-/** On a phone, the panes as tiles at the top of the title's menu, the first menu a newcomer opens. */
+/**
+ * On a phone, the panes as tiles at the top of the title's menu, the first menu a newcomer opens:
+ * Changes with its lines takes the room they need, so it shows them whole, "Changes +13 −1", as
+ * the view's own tab does; the others share the rest.
+ */
 function PaneTiles({ lines, onPick }: { lines?: { added: number; removed: number }; onPick: (tab: WorkspaceTab) => void }) {
+  const counted = Boolean(lines && (lines.added > 0 || lines.removed > 0));
   const tile = (tab: WorkspaceTab, Icon: LucideIcon, label: string, extra?: ReactNode) => (
-    <button type="button" onClick={() => onPick(tab)} className="flex min-h-16 min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl bg-chip px-2 py-2 text-[14px] active:bg-hover">
+    <button type="button" onClick={() => onPick(tab)} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-chip px-2 py-2 text-[14px] active:bg-hover">
       <Icon className="size-[18px] text-muted" />
       <span className="flex max-w-full items-baseline gap-1.5 truncate">{label}{extra}</span>
     </button>
   );
   return (
-    <div className="flex gap-2 px-1 pt-1 pb-2">
-      {tile('changes', FileDiff, 'Changes', lines && (lines.added > 0 || lines.removed > 0) ? <Lines {...lines} /> : undefined)}
+    <div className={`grid gap-2 px-1 pt-1 pb-2 ${counted ? 'grid-cols-[minmax(max-content,1.4fr)_1fr_1fr]' : 'grid-cols-3'}`}>
+      {tile('changes', FileDiff, 'Changes', counted && lines ? <Lines {...lines} /> : undefined)}
       {tile('files', Folder, 'Files')}
       {tile('terminal', SquareTerminal, 'Terminal')}
     </div>
