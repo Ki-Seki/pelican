@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { appendFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
@@ -6,6 +6,7 @@ import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, Rewound, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { promptGist } from '../shared/quoted.js';
+import { COMMIT_REQUEST, CREATE_PR_OPEN } from '../shared/requests.js';
 import { shortTitle } from '../shared/titles.js';
 import { config } from './config.js';
 import { folderKind, pickedFolders } from './folders.js';
@@ -14,7 +15,7 @@ import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { beforeCut, liveCut, shownCut } from './rewound.js';
 import { SIDE_CHAT_TITLE, type SideQuestion, sideChatQuestion, sideChatSource } from './side-chat.js';
-import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
+import { forgetTranscripts, lastPromptExcept, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
 /** How much background work runs in a session this app runs (runner's runTasks). */
@@ -36,6 +37,52 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
   if (summarized && info.summary && oneLine(info.summary)) return oneLine(info.summary);
   // A prompt that quotes (Claude Desktop's replies, Pelican's too) is called by its words, not its markers.
   return shortTitle(promptGist(info.summary || info.firstPrompt || '')) || undefined;
+}
+
+/** One of Claude Desktop's requests that Pelican sends, Commit changes or Create PR: whole, or as much of it as Claude Code kept. */
+export const namesRequest = (text: string): boolean => {
+  const whole = text.trim();
+  return whole === COMMIT_REQUEST || whole.startsWith(CREATE_PR_OPEN);
+};
+
+const namedBefore = new Map<string, { size: number; mtimeMs: number; name: string | undefined }>();
+
+/** The prompt Claude Code last recorded as the session's name before Desktop's requests, cached by the file's size and time. */
+async function nameBeforeRequests(file: string): Promise<string | undefined> {
+  const now = await stat(file).catch(() => undefined);
+  if (!now) return undefined;
+  const cached = namedBefore.get(file);
+  if (cached && cached.size === now.size && cached.mtimeMs === now.mtimeMs) return cached.name;
+  const name = await lastPromptExcept(file, namesRequest);
+  namedBefore.set(file, { size: now.size, mtimeMs: now.mtimeMs, name });
+  return name;
+}
+
+/**
+ * A session Claude Code names by its last prompt (no title of its own) keeps the name it had when
+ * that prompt is one of Claude Desktop's requests, Commit changes or Create PR, as Desktop keeps a
+ * session's title through them: the prompt Claude Code recorded before them, else the first. The
+ * SDK's `summary`, which names it in the list, the header and the notifications, says so.
+ */
+async function named(info: SDKSessionInfo, file: string | undefined): Promise<SDKSessionInfo> {
+  if (info.customTitle || !info.summary || !namesRequest(info.summary) || !file) return info;
+  const name = await nameBeforeRequests(file) ?? (info.firstPrompt && !namesRequest(info.firstPrompt) ? info.firstPrompt : undefined);
+  return name ? { ...info, summary: name } : info;
+}
+
+/**
+ * Claude Code records a session's last prompt as it exits, its name for every app that names
+ * sessions so (the terminal's /resume, Claude Desktop, an editor's): once a Claude process whose
+ * last prompt was one of Desktop's requests has ended, the name the session had is recorded back
+ * the same way, as a rewind keeps a session's name.
+ */
+export async function keepNameThroughRequests(sessionId: string): Promise<void> {
+  const file = await transcriptPath(sessionId);
+  const latest = file ? await lastPromptExcept(file) : undefined;
+  if (!file || !latest || !namesRequest(latest)) return;
+  const info = await sessionInfo(sessionId);
+  if (!info || info.customTitle || namesRequest(info.summary)) return;
+  await appendFile(file, `${JSON.stringify({ type: 'last-prompt', lastPrompt: info.summary, sessionId })}\n`);
 }
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
@@ -132,13 +179,15 @@ async function refresh(): Promise<SDKSessionInfo[]> {
     if (!before || before.size !== entry.size || before.mtimeMs !== entry.mtimeMs) changed.push(entry);
   }
   for (const file of seen.keys()) if (!present.has(file)) seen.delete(file);
+  for (const file of namedBefore.keys()) if (!present.has(file)) namedBefore.delete(file);
   forgetTranscripts(present);
   await Promise.all(changed.map((entry) => asking(async () => {
     const turn = (await lastTurnTime(entry.file, entry))?.lastTurn;
     // The folder it ran in leads straight to the file; without one, every project is searched.
     const dir = seen.get(entry.file)?.info?.cwd ?? turn?.cwd;
-    const info = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
+    const found = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
       ?? await getSessionInfo(entry.id).catch(() => undefined);
+    const info = found && await named(found, entry.file);
     const sideChatOf = info ? await sideChatSource(entry.file) : undefined;
     const sideQuestion = sideChatOf ? await sideChatQuestion(entry.file) : undefined;
     seen.set(entry.file, {
@@ -179,9 +228,10 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
   // list has both. One it has not seen yet is searched for, never a whole listing.
   const cached = infoCache.get(sessionId);
   // The folder it last ran in may not be the one its transcript is filed under: then search.
-  const info = (cached?.cwd ? await getSessionInfo(sessionId, { dir: cached.cwd }).catch(() => undefined) : undefined)
+  const found = (cached?.cwd ? await getSessionInfo(sessionId, { dir: cached.cwd }).catch(() => undefined) : undefined)
     ?? await getSessionInfo(sessionId).catch(() => undefined);
-  if (!info) return cached;
+  if (!found) return cached;
+  const info = await named(found, await transcriptPath(sessionId));
   let cwd = info.cwd || cached?.cwd;
   if (!cwd) {
     const file = await transcriptPath(sessionId);

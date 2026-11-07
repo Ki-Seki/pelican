@@ -188,8 +188,11 @@ settings; and updates from Settings.
   whichever app sent it, once however quickly it is tapped again; while Claude works it waits for
   the end of the turn as a queued message, never steered into the work at hand, whatever Settings
   says for what you type, each as a message of its own, and its button says it is queued, with Take
-  back, which takes it out of the queue. ⌘-click (Ctrl-click), or a long
-  press on a phone, puts it in the message box first, to read and change. Create PR shows in the
+  back, which takes it out of the queue. Neither renames the session: one Claude Code names by its
+  last prompt keeps the name it had, in the list, the header and notifications, as Desktop keeps a
+  session's title, and once its Claude has ended Pelican records that name back where Claude Code
+  keeps it, for the terminal's `/resume` and the other apps. ⌘-click (Ctrl-click), or a long press
+  on a phone, puts it in the message box first, to read and change. Create PR shows in the
   conversation as `/create-pr`, as in Desktop, also among prompts Claude Code took in together, and
   so in Export as Markdown; Create PR is offered on a branch other than the
   default one, where origin is on GitHub, or where there is no remote at all, for which Desktop's
