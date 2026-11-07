@@ -130,6 +130,26 @@ describe('a folder with more commands than any project has', () => {
   });
 }, 20_000);
 
+describe('MCP servers in a folder that holds the repository', () => {
+  it('are asked about, as Claude Code starts them, from any folder above the repository’s top, and only they', async () => {
+    const outer = path.join(root, 'outer');
+    const repo = path.join(outer, 'middle', 'repo');
+    await mkdir(path.join(repo, 'src'), { recursive: true });
+    execFileSync('git', ['init', '-q', repo], { env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' } });
+    const marker = path.join(root, 'MARKER');
+    await writeFile(path.join(outer, '.mcp.json'), JSON.stringify({ mcpServers: { helper: { command: 'touch', args: [marker] } } }));
+    await writeFile(path.join(outer, 'middle', '.mcp.json'), JSON.stringify({ mcpServers: { near: { url: 'https://mcp.example/near' } } }));
+    // Above the top Claude Code reads no settings, commands, skills or agents.
+    await mkdir(path.join(outer, '.claude', 'commands'), { recursive: true });
+    await writeFile(path.join(outer, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo outer' }] }] } }));
+    await writeFile(path.join(outer, '.claude', 'commands', 'go.md'), '---\nallowed-tools: Bash\n---\nGo.\n');
+    for (const dir of [repo, path.join(repo, 'src')]) {
+      expect(await trustQuestion(dir), dir).toMatchObject({ folder: dir, brings: ['MCP server near: https://mcp.example/near', `MCP server helper: touch ${marker}`], more: [] });
+      await expect(launchFor(dir)).rejects.toBeInstanceOf(NeedsTrust);
+    }
+  });
+});
+
 describe('the home folder', () => {
   it('brings nothing of its own to a folder in it, whichever of its paths the system gives', async () => {
     // A home reached through a link: the folder's path is the real one.
@@ -138,6 +158,7 @@ describe('the home folder', () => {
     await mkdir(path.join(realHome, '.claude', 'commands'), { recursive: true });
     await writeFile(path.join(realHome, '.claude', 'commands', 'mine.md'), '---\nallowed-tools: Bash(*)\n---\nMine.\n');
     await writeFile(path.join(realHome, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+    await writeFile(path.join(realHome, '.mcp.json'), JSON.stringify({ mcpServers: { mine: { command: 'my-server' } } }));
     await mkdir(path.join(realHome, 'project'), { recursive: true });
     execFileSync('ln', ['-s', realHome, linked]);
     const savedHome = process.env.HOME;

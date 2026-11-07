@@ -801,8 +801,10 @@ async function gitBrings(top: string, from: string, found: Gathered): Promise<vo
 /**
  * What the folder brings: read from its files, nothing run. Settings, MCP servers, commands,
  * skills and agents of the folder and its parents up to the repository's top (Claude Code reads
- * the project's from there), never those of the home folder, which are the user's own (by either
- * of its paths: the folder's is a real one); and what the repository's git config runs.
+ * the project's from there), and the MCP servers of every folder above it, as Claude Code reads a
+ * `.mcp.json` from each folder up to the file system's top and starts its servers; never those of
+ * the home folder or above it, which are the user's own and the computer's (by either of its
+ * paths: the folder's is a real one); and what the repository's git config runs.
  */
 export async function whatFolderBrings(folder: string): Promise<Brings> {
   const dir = await real(folder);
@@ -830,14 +832,18 @@ export async function whatFolderBrings(folder: string): Promise<Brings> {
     return value;
   };
   for (let d = dir; !homes.has(d); d = path.dirname(d)) {
-    for (const name of ['settings.json', 'settings.local.json']) {
-      const file = path.join(d, '.claude', name);
-      gather(fromSettings(await json(file)), path.relative(dir, file), found);
+    // Above the repository's top, only a .mcp.json: a folder that holds the repository brings one too.
+    const inRepository = top === undefined || holds(top, d);
+    if (inRepository) {
+      for (const name of ['settings.json', 'settings.local.json']) {
+        const file = path.join(d, '.claude', name);
+        gather(fromSettings(await json(file)), path.relative(dir, file), found);
+      }
     }
     const mcp = path.join(d, '.mcp.json');
     gather(fromMcp(await json(mcp)), path.relative(dir, mcp), found);
-    await fromClaudeFolder(d, dir, budget, found);
-    if (d === top || path.dirname(d) === d) break;
+    if (inRepository) await fromClaudeFolder(d, dir, budget, found);
+    if (path.dirname(d) === d) break;
   }
   const items = [...found.list, ...git.list];
   return { brings: items.map((item) => item.text), commands: items.map((item) => item.commands), more: [...more] };
