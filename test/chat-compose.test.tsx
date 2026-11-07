@@ -663,6 +663,13 @@ describe('what runs in the background', () => {
     const line = await screen.findByRole('button', { name: /1\/2.*Testing.*2 in background/ });
     expect(line.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('region', { name: '2 in background' })).toBeNull();
+    // It keeps to the fold of what can be seen, the card's buttons just above it, where the dock
+    // scrolls (at 844×390 it lay 50 px under the fold): stuck at the dock's foot, the room it takes said.
+    const dock = line.closest('[data-dock]')!;
+    expect(line.parentElement!.className).toMatch(/(^| )sticky( |$)/);
+    expect(line.parentElement!.parentElement).toBe(dock);
+    expect(dock.className).toContain('[--folded-h:2.5rem]');
+    expect(dock.querySelector('[data-card-foot]')!.className).toContain('bottom-[var(--folded-h,0px)]');
     fireEvent.click(line);
     expect(await screen.findByRole('region', { name: '2 in background' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^1\/2\s*Testing/ })).toBeTruthy();

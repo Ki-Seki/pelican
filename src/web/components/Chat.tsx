@@ -1468,7 +1468,9 @@ export function Chat({
           scrolls, Claude's card keeping its head and its buttons in view (PermissionCard). On a phone
           on its side the whole chat scrolls instead, the message box at its foot. */}
       {/* A field of the card that takes the keys (a question's Other…) scrolls into view clear of its head and foot. */}
-      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-20 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
+      {/* Folded under the card, Claude's tasks and what runs in the background keep to the fold of what */}
+      {/* can be seen, the card's buttons just above them (--folded-h, PermissionCard). */}
+      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-[calc(5rem+var(--folded-h,0px))] overflow-y-auto overscroll-contain px-3 ${folded ? '[--folded-h:2.5rem]' : ''} ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
           <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
             {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
@@ -1476,7 +1478,10 @@ export function Chat({
           </section>
         )}
         {folded ? (
-          <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+          // On the dock's background, so what scrolls under it does not show around it; above the message box where the whole chat scrolls.
+          <div className="sticky bottom-0 z-[2] -mx-3 bg-bg px-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]">
+            <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+          </div>
         ) : (
           <>
         {showTasks && <TasksBar tasks={tasks} />}

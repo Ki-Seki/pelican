@@ -20,10 +20,11 @@ const str = (value: unknown) => (typeof value === 'string' ? value : '');
  * its head and foot stay at the top and bottom of what can be seen of it, and what it asks about
  * scrolls between them: Allow, Answer, Approve are never under the box. On a phone on its side the
  * whole chat scrolls instead, and the foot stays just above the message box at its foot
- * (--composer-h, Chat).
+ * (--composer-h, Chat); with Claude's tasks and what runs in the background folded into a line
+ * under the card, just above that line (--folded-h).
  */
 const HEAD = 'sticky top-0 z-[1] bg-panel pt-3';
-const FOOT = 'sticky bottom-0 z-[1] bg-panel pb-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]';
+const FOOT = 'sticky bottom-[var(--folded-h,0px)] z-[1] bg-panel pb-3 [@media(max-height:380px)]:bottom-[calc(var(--composer-h,0px)+var(--folded-h,0px))]';
 
 /** How much of the start of what a card asks about must show above its buttons: three lines of a command, or all of a shorter one. */
 const ASKED_START_PX = 64;
@@ -346,12 +347,13 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
           </div>
         </div>
       ) : (
-        // What "always" saves goes on a line of its own; on a phone on its side, where the foot must
-        // leave room above it for what the card asks about, beside Allow and Deny where it fits.
+        // What "always" saves goes on a line of its own; on a short screen (a phone on its side, or
+        // its keyboard up), where the foot must leave room above it for what the card asks about,
+        // beside Allow and Deny where it fits.
         <div className="flex flex-wrap gap-2 pt-3">
           {request.defaultToNo ? <>{deny}{allow}</> : <>{allow}{deny}</>}
           {always && (
-            <div className="flex max-w-full basis-full [@media(max-height:380px)]:basis-auto">
+            <div className="flex max-w-full basis-full [@media(max-height:600px)]:basis-auto">
               <Button wrap disabled={busy} onClick={() => decide({ behavior: 'allow', remember: true })}>{always.text}</Button>
             </div>
           )}

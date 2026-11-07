@@ -84,13 +84,13 @@ describe('what an approval asks about, where the card has little room', () => {
     expect(scroller.scrollTop).toBe(6);
   });
 
-  it('keeps what "always" saves beside Allow and Deny where the foot must leave room (a phone on its side), on a line of its own elsewhere', () => {
+  it('keeps what "always" saves beside Allow and Deny where the foot must leave room (a short screen), on a line of its own elsewhere', () => {
     card();
     const allow = screen.getByRole('button', { name: 'Allow' });
     const always = screen.getByRole('button', { name: 'Always allow npm test * in this project' });
     expect(always.parentElement!.parentElement).toBe(allow.parentElement);
     expect(always.parentElement!.className).toContain('basis-full');
-    expect(always.parentElement!.className).toContain('[@media(max-height:380px)]:basis-auto');
+    expect(always.parentElement!.className).toContain('[@media(max-height:600px)]:basis-auto');
   });
 });
 
