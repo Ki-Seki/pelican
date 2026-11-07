@@ -496,7 +496,7 @@ describe('a session’s menu', () => {
     await waitFor(() => expect(onGone).toHaveBeenCalledWith('t1'));
   });
 
-  it('from the open session’s title: its view, all three, and its start and ID at its foot', async () => {
+  it('from the open session’s title: its view, all three, and its start and ID at its foot, over another app it is open in', async () => {
     const choose = vi.fn();
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -504,7 +504,7 @@ describe('a session’s menu', () => {
           open
           onClose={() => {}}
           sessionId="7f3c2a10-0000-4000-8000-000000000001"
-          session={{ ...server.find((s) => s.id === 't1')!, createdAt: now - 2 * HOUR }}
+          session={{ ...server.find((s) => s.id === 't1')!, createdAt: now - 2 * HOUR, openIn: 'Claude Desktop' }}
           from="title"
           view={{ value: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'thinking', label: 'Thinking' }, { value: 'verbose', label: 'Verbose' }], choose }}
           onForked={() => {}}
@@ -518,7 +518,7 @@ describe('a session’s menu', () => {
     expect(within(sheet).getByRole('group', { name: 'Transcript view' }).textContent).toBe('NormalThinkingVerbose');
     fireEvent.click(within(sheet).getByRole('menuitemradio', { name: 'Verbose' }));
     expect(choose).toHaveBeenCalledWith('verbose');
-    expect(sheet.textContent).toMatch(/Started today, .* · ID 7f3c2a10/);
+    expect(sheet.textContent).toMatch(/Also open in Claude DesktopStarted today, .* · ID 7f3c2a10/);
     expect(within(sheet).getByRole('button', { name: 'Copy the session’s ID' })).toBeTruthy();
   });
 });

@@ -25,8 +25,8 @@ export function exportSession(sessionId: string, title?: string): void {
   link.remove();
 }
 
-/** "Started today, 10:41 AM · ID 7f3c2a10", and a way to copy the whole ID. */
-function Started({ sessionId, at }: { sessionId: string; at?: number }) {
+/** "Started today, 10:41 AM · ID 7f3c2a10", and a way to copy the whole ID; over it, another app it is open in. */
+function Started({ sessionId, at, openIn }: { sessionId: string; at?: number; openIn?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return undefined;
@@ -35,6 +35,8 @@ function Started({ sessionId, at }: { sessionId: string; at?: number }) {
   }, [copied]);
   const day = at ? dayLabel(at) : '';
   return (
+    <>
+    {openIn && <div className="truncate pb-0.5">Also open in {openIn}</div>}
     <div className="flex min-w-0 items-center gap-1.5">
       <span className="min-w-0 truncate">
         {at ? `Started ${day === 'Today' || day === 'Yesterday' ? day.toLowerCase() : day}, ${clockTime(at)} · ` : ''}ID <span className="font-mono">{isSessionId(sessionId) ? sessionId.slice(0, 8) : sessionId}</span>
@@ -49,6 +51,7 @@ function Started({ sessionId, at }: { sessionId: string; at?: number }) {
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       </button>
     </div>
+    </>
   );
 }
 
@@ -218,7 +221,7 @@ export function SessionMenu({
         keys={from === 'title'}
         focusFirst={Boolean(focusFirst)}
         {...(header ? { header } : {})}
-        {...(from === 'title' ? { footer: <Started sessionId={sessionId} {...(session?.createdAt ? { at: session.createdAt } : {})} /> } : {})}
+        {...(from === 'title' ? { footer: <Started sessionId={sessionId} {...(session?.createdAt ? { at: session.createdAt } : {})} {...(session?.openIn ? { openIn: session.openIn } : {})} /> } : {})}
         {...(lift ? { lift } : {})}
       />
       <RenameSheet open={renaming} onClose={() => setRenaming(false)} sessionId={sessionId} title={title} onRenamed={onRenamed} />
