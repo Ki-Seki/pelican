@@ -52,7 +52,8 @@ function Changes({ text, version }: { text: string; version: string }) {
   return (
     <div className="mt-1.5">
       <div className={all ? 'max-h-72 overflow-y-auto overscroll-contain rounded-lg border border-line px-3 py-2' : ''}>
-        <div className="prose-chat text-[13px] leading-relaxed">
+        {/* Settings' size, not a reply's: headings and lists are sized from it. */}
+        <div className="prose-chat" style={{ fontSize: 13 }}>
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a> }}>
             {all ? text : first}
           </ReactMarkdown>

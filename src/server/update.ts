@@ -270,12 +270,13 @@ async function findInstall(): Promise<Install> {
   }
   if (!(await writable(modules)) || !(await writable(path.join(prefix, 'bin'))) || !(await writable(folder))) {
     return {
-      kind: 'npm-elsewhere-owned', folder, prefix, self: false, restart, scriptIn,
+      kind: 'npm-elsewhere-owned', folder, prefix: global, self: false, restart, scriptIn,
       why: `npm’s global folder (${tilde(modules)}) belongs to another account, so updating it takes sudo, which Pelican never runs.`,
       commandFor: (v) => command('sudo', 'npm', 'install', '--global', `${PACKAGE_NAME}@${v}`),
     };
   }
-  return { kind: 'npm', folder, prefix, self: true, restart, scriptIn };
+  // The prefix as npm names it (the same folder), for the page and for npm.
+  return { kind: 'npm', folder, prefix: global, self: true, restart, scriptIn };
 }
 
 const install = (): Promise<Install> => (found ??= findInstall());
