@@ -1160,6 +1160,20 @@ async function saysRunning(id: string, expected: boolean): Promise<void> {
   }
 }
 
+/** Runs `work` while ps cannot say what runs (it fails, as where it is missing or refused). */
+async function withoutPs<T>(work: () => Promise<T>): Promise<T> {
+  const failing = path.join(dir, 'failing-ps');
+  await mkdir(failing, { recursive: true });
+  await writeFile(path.join(failing, 'ps'), '#!/bin/sh\necho "ps: not allowed" >&2\nexit 1\n', { mode: 0o755 });
+  const before = process.env.PATH;
+  process.env.PATH = `${failing}:${before ?? ''}`;
+  try {
+    return await work();
+  } finally {
+    process.env.PATH = before;
+  }
+}
+
 /** Ends what a test left running, by its process group, as only the test started it. */
 function endGroup(pgid: number | undefined): void {
   if (!pgid) return;
@@ -1259,6 +1273,15 @@ describe('what runs in a terminal', () => {
     expect(parseProcessTable('')).toBeUndefined();
     expect(parseProcessTable('ps: illegal option')).toBeUndefined();
   });
+
+  it('is said to run when the computer cannot say, so End asks first rather than end what may run', async () => {
+    const terminal = await open();
+    await atPrompt(terminal.id);
+    expect(await runningIn(terminal.id)).toBe(false);
+    // The shell is in front, so only ps can tell of a job of its own: it fails.
+    const said = await withoutPs(async () => (await api('GET', `/api/terminals/${terminal.id}`)).body as { terminal: TerminalInfo; running: boolean });
+    expect(said).toEqual({ terminal: expect.objectContaining({ id: terminal.id, program: 'bash' }), running: true });
+  }, 20_000);
 
   it('is said for End to ask first: a program in front, or a job in the background, but not the shell at its prompt', async () => {
     const terminal = await open();
@@ -1546,6 +1569,39 @@ describe('who gets a terminal', () => {
     const ninth = page(terminals[1]!.id);
     await until(() => ninth.closed !== undefined);
     expect(ninth.closed?.code).toBe(TERMINAL_CLOSE.tooManyViewers);
+  }, 60_000);
+
+  it('at most 10 at once: one nobody typed into makes no room while a program runs in it, or while the computer cannot say', async () => {
+    const terminals: TerminalInfo[] = [];
+    for (let n = 0; n < 9; n += 1) terminals.push(await open());
+    for (const terminal of terminals) {
+      const used = await atPrompt(terminal.id);
+      used.type('true\r');
+      await used.sees(/true\r\n/);
+      await used.close();
+    }
+    // A shell that started a program by itself, as a login shell's profile can: nobody typed into
+    // it, and no page shows it, but what runs in it would end with it.
+    Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-c', 'sleep 300; exit'] });
+    let busy: TerminalInfo;
+    try {
+      busy = await open();
+    } finally {
+      Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+    }
+    await saysRunning(busy.id, true);
+    await until(() => terminals.every((t) => terminalState(t.id)!.viewers.length === 0), 5000, 'the pages to go');
+    const another = () => api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 });
+    expect((await another()).status).toBe(429);
+    expect((await api('GET', '/api/terminals')).body.terminals.map((t: TerminalInfo) => t.id)).toContain(busy.id);
+    // A shell at its prompt nobody typed into, where the computer cannot say whether a job of its runs.
+    await api('DELETE', `/api/terminals/${busy.id}`);
+    const quiet = await open();
+    await saysRunning(quiet.id, false);
+    expect((await withoutPs(another)).status).toBe(429);
+    // Once it can say: nothing runs there, and it makes room.
+    expect((await another()).status).toBe(201);
+    expect((await api('GET', '/api/terminals')).body.terminals.map((t: TerminalInfo) => t.id)).not.toContain(quiet.id);
   }, 60_000);
 
   it('a socket for no terminal, at a size no terminal takes, or sending a frame too large, is closed', async () => {
