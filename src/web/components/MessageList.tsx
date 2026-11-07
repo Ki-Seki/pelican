@@ -5,7 +5,7 @@ import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, Tu
 import { requestShown } from '../../shared/quoted';
 import { api, apiUrl } from '../lib/api';
 import { modelName } from '../../shared/usage';
-import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget } from '../lib/actions';
+import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget, STEP_ACTIONS } from '../lib/actions';
 import { addWaiting } from '../lib/drafts';
 import { announce } from '../lib/announce';
 import { clockTime, dayLabel, duration } from '../lib/format';
@@ -29,7 +29,7 @@ import { PrCard } from './PrCard';
 import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
 import { type RewindPoint, RewoundMarker } from './Rewind';
 import { StreamingMarkdown } from './StreamingMarkdown';
-import { sentFilesOf, ToolCallView, ToolTarget } from './ToolCall';
+import { sentFilesOf, ToolCallView, ToolTarget, useCommandTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -620,6 +620,11 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
   const [all, setAll] = useState(false);
   const saved = useSavedOutput(all ? sessionId : undefined, item.saved);
   const recorded = useMemo(() => [item.stdout, item.stderr].map(cleanOutput).filter((part) => part.trim()).join('\n').replace(/^\s*\n/, '').trimEnd(), [item.stdout, item.stderr]);
+  // A command's own list, as a command step has (lib/actions): a long press, a right-click, ⋯.
+  const [menu, setMenu] = useState<MenuAt>();
+  const touch = useMedia('(hover: none)');
+  const target = useCommandTarget(item.command, recorded, item.key);
+  const press = useLongPress<HTMLDivElement>((p) => setMenu(menuAt(p, p.element)), { nativeMenu: browsersOwn });
   const whole = useMemo(() => (saved.text === undefined ? undefined : cleanOutput(saved.text).replace(/^\s*\n/, '').trimEnd()), [saved.text]);
   const output = all && whole !== undefined ? whole : recorded;
   const lines = recorded.split('\n');
@@ -627,13 +632,41 @@ function ShellItem({ item, sessionId }: { item: Extract<Item, { kind: 'shell' }>
   const clipped = long && !all;
   const foot = 'border-t border-line py-1.5 text-[12px] text-faint hover:text-fg';
   return (
-    <div data-quotable data-quote-from={item.key} data-quote-what="step" {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})} className="overflow-hidden rounded-xl border border-line bg-panel">
-      <div className="flex items-center gap-2 px-3 py-2 font-mono text-[12.5px]">
+    <div data-quotable data-quote-from={item.key} data-quote-what="step" {...(item.timestamp ? { 'data-quote-at': item.timestamp } : {})} className="group/shell overflow-hidden rounded-xl border border-line bg-panel">
+      <div
+        {...press}
+        // Its own list, not the turn's it may sit in.
+        onContextMenu={(e) => {
+          press.onContextMenu(e);
+          e.stopPropagation();
+        }}
+        className={`flex items-center gap-2 px-3 py-2 font-mono text-[12.5px] ${press.className}`}
+      >
         <SquareTerminal className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 break-words">{item.command}</span>
         {item.ended && <span className="shrink-0 font-sans text-[11px] text-faint">{item.ended === 'stopped' ? 'Stopped' : 'Failed'}</span>}
         {item.timestamp && <span className="shrink-0 font-sans text-[11px] text-faint">{clockTime(item.timestamp)}</span>}
+        <button
+          type="button"
+          aria-label={`More for ${commandName(item.command)}`}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(menu)}
+          onClick={(e) => setMenu({ at: e.currentTarget, ...(e.detail === 0 ? { keys: true } : {}) })}
+          className={`-my-1 hidden size-7 shrink-0 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover/shell:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
+        >
+          <MoreHorizontal className="size-3.5" />
+        </button>
       </div>
+      <ActionMenu
+        open={Boolean(menu)}
+        onClose={() => setMenu(undefined)}
+        label={`Run ${commandName(item.command)}`}
+        title={<>Run · <span className="font-mono">{commandName(item.command)}</span></>}
+        entries={menu ? entries(STEP_ACTIONS, target, 'menu', touch ? 'touch' : 'pointer') : []}
+        at={menu?.at ?? null}
+        focusFirst={Boolean(menu?.keys)}
+        {...(menu?.lift ? { lift: menu.lift } : {})}
+      />
       {output && (
         // Clipped, its last lines sit at the bottom of the box, the start fading out above them.
         <pre className={`border-t border-line px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-muted ${clipped ? 'flex max-h-60 flex-col justify-end overflow-hidden [mask-image:linear-gradient(to_top,black_75%,transparent)]' : ''}`}>

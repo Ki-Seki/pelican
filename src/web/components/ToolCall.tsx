@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
+import { commandRunnable, TERMINAL_LIMITS } from '../../shared/terminal';
 import type { ChatMessage, DeliveredFile } from '../../shared/protocol';
 import { entries, PATH_ACTIONS, STEP_ACTIONS, type StepTarget } from '../lib/actions';
 import { announce } from '../lib/announce';
@@ -721,6 +722,40 @@ function useStepFile(call: ToolCall) {
 
 const FILE_TOOLS = new Set(['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
+/** A command Run in terminal may run: one that shows all it holds, as an approval reads it, and no longer than a terminal takes. */
+const runnable = (command: string) => command.trim() !== '' && command.length <= TERMINAL_LIMITS.command && commandRunnable(command);
+
+/**
+ * A command's list (lib/actions STEP_ACTIONS), for a step Claude ran and a `!` command alike: Copy
+ * command, Run in terminal (a new terminal in the session's folder, for a command that shows all it
+ * holds), Copy output, Start a side chat and Quote output.
+ */
+export function useCommandTarget(command: string, output: string, key: string): StepTarget {
+  const quoteTo = useContext(QuoteTargetContext);
+  const runIn = useContext(RunInTerminal);
+  const from = { what: 'step' as const, key };
+  return {
+    kind: 'command',
+    command,
+    ...(output ? { output } : {}),
+    ...(runIn && runnable(command) ? { runInTerminal: () => runIn(command) } : {}),
+    ...(quoteTo?.sideChat ? {
+      sideChatOpen: quoteTo.sideChat.open,
+      sideChat: (passage?: string) => {
+        const quoted = quoteItem(passage || command, from);
+        if (quoted) quoteTo.sideChat?.start(quoted);
+      },
+    } : {}),
+    ...(quoteTo ? {
+      quote: (passage: string) => {
+        const quoted = quoteItem(passage, from);
+        if (!quoted) return;
+        announce(addWaiting(quoteTo.chat, quoted) ? 'Quoted in your message' : TOO_MANY_REPLIES);
+      },
+    } : {}),
+  };
+}
+
 /** A step's menu, open: where, and the row a finger raised. */
 type StepMenuAt = { at: MenuAnchor; lift?: Element; keys?: boolean };
 
@@ -731,38 +766,17 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   const outcome = outcomeOf(call);
   const fileLink = useStepFile(call);
   // A step's own list: a command's, an agent's, or a file step's path menu (lib/actions).
-  const quoteTo = useContext(QuoteTargetContext);
-  const runIn = useContext(RunInTerminal);
   const path = usePathTarget(fileLink?.path);
   const [menu, setMenu] = useState<StepMenuAt>();
   const isCommand = call.name === 'Bash' || call.name === 'PowerShell';
   const isAgent = call.name === 'Agent' || call.name === 'Task';
   const commandText = isCommand ? str(call.input.command) : '';
+  const commandOutput = isCommand && (outcome.kind === 'done' || outcome.kind === 'failed') ? cleanOutput(resultText(call.result)).trim() : '';
+  const commandTarget = useCommandTarget(commandText, commandOutput, call.id);
   const stepTarget = (): StepTarget | undefined => {
     if (isAgent) return { kind: 'agent', viewOutput: () => setOpen(true) };
     if (!isCommand || !commandText) return undefined;
-    const output = outcome.kind === 'done' || outcome.kind === 'failed' ? cleanOutput(resultText(call.result)).trim() : '';
-    const from = { what: 'step' as const, key: call.id };
-    return {
-      kind: 'command',
-      command: commandText,
-      ...(output ? { output } : {}),
-      ...(runIn ? { runInTerminal: () => runIn(commandText) } : {}),
-      ...(quoteTo?.sideChat ? {
-        sideChatOpen: quoteTo.sideChat.open,
-        sideChat: (passage?: string) => {
-          const quoted = quoteItem(passage || commandText, from);
-          if (quoted) quoteTo.sideChat?.start(quoted);
-        },
-      } : {}),
-      ...(quoteTo ? {
-        quote: (passage: string) => {
-          const quoted = quoteItem(passage, from);
-          if (!quoted) return;
-          announce(addWaiting(quoteTo.chat, quoted) ? 'Quoted in your message' : TOO_MANY_REPLIES);
-        },
-      } : {}),
-    };
+    return commandTarget;
   };
   const device = hasKeyboard() ? 'pointer' : 'touch';
   const listFor = () => {

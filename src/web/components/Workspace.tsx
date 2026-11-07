@@ -287,6 +287,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     </button>
   ) : null;
 
+  const changedFiles = useMemo(() => new Set(git?.files.map((f) => f.path) ?? []), [git]);
   // The shown file's path menu, as everywhere a path is: under ⋯ beside its name.
   const [pathMenu, setPathMenu] = useState<{ at: Element; keys: boolean }>();
   const shownFile = shown && git?.files.find((f) => f.path === shown.path);
@@ -352,7 +353,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           {...(requests && onRequest ? { onRequest } : {})}
         />
       )}
-      {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}
+      {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} changed={changedFiles} />}
     </>
   );
 

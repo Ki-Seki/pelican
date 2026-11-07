@@ -274,3 +274,30 @@ describe('a page that was run', () => {
     expect(document.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
   });
 });
+
+describe('a row in Files', () => {
+  it('has its path’s menu on a right-click: a folder’s opens a terminal there, a changed file’s shows its changes', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true, '(pointer: fine)': true };
+    const tree = vi.spyOn((await import('../src/web/lib/api')).api, 'tree').mockResolvedValue([
+      { name: 'styles', path: 'src/styles', dir: true },
+      { name: 'theme.css', path: 'src/theme.css', dir: false, size: 120 },
+    ]);
+    const info = vi.spyOn((await import('../src/web/lib/api')).api, 'info').mockResolvedValue({ terminal: { available: true } } as never);
+    const go = vi.fn();
+    wrap(<WorkspaceFiles cwd={CWD} step={{ tab: 'files', path: 'src/' }} open go={go} up={() => {}} onAddToMessage={() => {}} changed={new Set(['src/theme.css'])} />);
+    // The terminals are known to run here before the folder's menu offers one.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in terminal' })).toBeTruthy());
+    fireEvent.contextMenu(await screen.findByText('styles'), { clientX: 10, clientY: 10 });
+    let menu = screen.getByRole('menu', { name: 'src/styles' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Attach as context', 'Copy', 'Open in terminal']);
+    fireEvent.click(within(menu).getByText('Open in terminal'));
+    expect(go).toHaveBeenLastCalledWith({ tab: 'terminal' });
+    fireEvent.contextMenu(screen.getByText('theme.css'), { clientX: 10, clientY: 30 });
+    menu = screen.getByRole('menu', { name: 'src/theme.css' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Attach as context', 'Copy', 'Open in Changes', 'Download file']);
+    fireEvent.click(within(menu).getByText('Open in Changes'));
+    expect(go).toHaveBeenLastCalledWith({ tab: 'changes', path: 'src/theme.css' });
+    tree.mockRestore();
+    info.mockRestore();
+  });
+});

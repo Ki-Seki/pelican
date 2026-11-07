@@ -245,3 +245,48 @@ describe('your prompt', () => {
     expect(screen.getByRole('menu', { name: 'Your message' })).toBeTruthy();
   });
 });
+
+describe('a `!` command in the conversation', () => {
+  const shell: ChatMessage[] = [
+    { uuid: 'b1', role: 'user', blocks: [{ type: 'text', text: '<bash-input>npm test -- theme</bash-input>' }], timestamp: at },
+    { uuid: 'b2', role: 'user', blocks: [{ type: 'text', text: '<bash-stdout>Tests 14 passed</bash-stdout><bash-stderr></bash-stderr>' }], timestamp: at + 1000 },
+  ];
+  const record = (messages: ChatMessage[]) => {
+    const runInTerminal = vi.fn();
+    render(
+      <RunInTerminal.Provider value={runInTerminal}>
+        <QuoteTargetContext.Provider value={{ chat: 'chat' }}>
+          <MessageList sessionId="s" view={{ messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false }} cwd="/p" mode="normal" />
+        </QuoteTargetContext.Provider>
+      </RunInTerminal.Provider>,
+    );
+    return runInTerminal;
+  };
+
+  it('has a command step’s list, Run in terminal included, on a long press under a finger', () => {
+    phone();
+    const runInTerminal = record(shell);
+    const head = screen.getByText('npm test -- theme').parentElement!;
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(head, { pointerType: 'touch', isPrimary: true, pointerId: 9, clientX: 60, clientY: 60 });
+      act(() => vi.advanceTimersByTime(510));
+    } finally {
+      vi.useRealTimers();
+    }
+    const sheet = screen.getByRole('dialog', { name: 'Run · npm test -- theme' });
+    expect(within(sheet).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy command', 'Run in terminal', 'Copy output', 'Quote output']);
+    fireEvent.click(within(sheet).getByText('Run in terminal'));
+    expect(runInTerminal).toHaveBeenCalledWith('npm test -- theme');
+  });
+
+  it('with a pointer, under ⋯ or a right-click; a command that hides what it holds has no Run in terminal', () => {
+    computer();
+    record([
+      { uuid: 'b1', role: 'user', blocks: [{ type: 'text', text: '<bash-input>echo safe\u0001\u000btouch pwned</bash-input>' }], timestamp: at },
+      { uuid: 'b2', role: 'user', blocks: [{ type: 'text', text: '<bash-stdout>safe</bash-stdout><bash-stderr></bash-stderr>' }], timestamp: at + 1000 },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: /^More for echo safe/ }));
+    expect(menuItems('Run echo safe\u0001\u000btouch pwned')).toEqual(['Copy command', 'Copy output', 'Quote output']);
+  });
+});
