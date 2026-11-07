@@ -34,6 +34,11 @@ const SEND_KEYS = keyText('commentsSend') ?? '';
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
 
+/** Forgets the tab last looked at: the view opens on Changes, as in a page just loaded (the tests, each a page of its own). */
+export function forgetLastTab(): void {
+  lastTab = 'changes';
+}
+
 /** Without a trust sheet to ask with, a folder that needs trusting starts no terminal. */
 const noTrust = async (): Promise<TrustChoice | undefined> => undefined;
 

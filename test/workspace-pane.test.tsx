@@ -65,6 +65,8 @@ beforeAll(() => {
 
 const { Chat } = await import('../src/web/components/Chat');
 const { setPrefs } = await import('../src/web/lib/prefs');
+const { takeTerminalAsks } = await import('../src/web/lib/terminals');
+const { forgetLastTab } = await import('../src/web/components/Workspace');
 
 afterEach(() => {
   cleanup();
@@ -73,6 +75,10 @@ afterEach(() => {
   media = {};
   setPrefs({ workspacePane: false });
   history.replaceState(null, '', '/');
+  // Each test starts as a page just loaded, with the one terminal and none asked for: in any order.
+  opened.length = 0;
+  takeTerminalAsks('/');
+  forgetLastTab();
 });
 
 /** A computer wide enough for the pane beside the conversation, with a mouse and a keyboard. */
@@ -150,7 +156,6 @@ describe('Changes and files beside the conversation', () => {
 
   it('opens a new terminal in the session’s folder with Ctrl+Shift+`, as Claude Desktop’s New terminal does, from the terminal too', async () => {
     computer();
-    opened.length = 0;
     await session();
     key(window, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(pane()).not.toBeNull());
