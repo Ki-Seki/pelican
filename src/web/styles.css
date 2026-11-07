@@ -196,6 +196,27 @@ body {
   pointer-events: none;
 }
 
+/* A card's head and foot stay at the top and bottom of what can be seen of it (PermissionCard):
+   what it asks about, scrolled under them, is cut a little way off, at a quiet line, as in Claude
+   Desktop, rather than right under the title or the buttons (data-cut-top, data-cut-bottom). The
+   room lies over what is cut, so nothing moves as it comes and goes. */
+[data-card][data-cut-top] [data-card-head]::after,
+[data-card][data-cut-bottom] [data-card-foot]::before {
+  content: '';
+  position: absolute;
+  inset-inline: -1rem;
+  height: 0.5rem;
+  background: var(--panel);
+}
+[data-card][data-cut-top] [data-card-head]::after {
+  top: 100%;
+  border-bottom: 1px solid var(--line);
+}
+[data-card][data-cut-bottom] [data-card-foot]::before {
+  bottom: 100%;
+  border-top: 1px solid var(--line);
+}
+
 /* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px
    the session list is hidden while it is open, so the conversation keeps its room, as when it is
    hidden by hand: the pane marks the page (data-pane), and App hides the list until asked back. */

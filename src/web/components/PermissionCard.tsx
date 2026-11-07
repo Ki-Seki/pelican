@@ -25,6 +25,45 @@ const str = (value: unknown) => (typeof value === 'string' ? value : '');
 const HEAD = 'sticky top-0 z-[1] bg-panel pt-3';
 const FOOT = 'sticky bottom-0 z-[1] bg-panel pb-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]';
 
+/** The room a card's head and foot keep, with a quiet line, where what it asks about is cut under them (styles.css). */
+const CUT_ROOM_PX = 8;
+
+/**
+ * Marks the card while what it asks about is scrolled under its head or its foot, where they stick
+ * (`data-cut-top`, `data-cut-bottom`): there they keep a little room and a quiet line, as Claude
+ * Desktop's do, rather than sit on half a line of it (styles.css).
+ */
+function useCutEdges(card: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = card.current;
+    if (!el) return undefined;
+    let frame = 0;
+    const look = () => {
+      frame = 0;
+      const head = el.querySelector('[data-card-head]');
+      const foot = el.querySelector('[data-card-foot]');
+      const under = head?.nextElementSibling;
+      const over = foot?.previousElementSibling;
+      el.toggleAttribute('data-cut-top', Boolean(head && under && under.getBoundingClientRect().top < head.getBoundingClientRect().bottom - 0.5));
+      el.toggleAttribute('data-cut-bottom', Boolean(foot && over && over.getBoundingClientRect().bottom > foot.getBoundingClientRect().top + 0.5));
+    };
+    const soon = () => {
+      frame ||= requestAnimationFrame(look);
+    };
+    look();
+    // Scrolled (the dock, or the whole chat), or laid out again: the card, or the page as it resizes.
+    document.addEventListener('scroll', soon, { capture: true, passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(soon);
+    observer?.observe(el);
+    observer?.observe(document.documentElement);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('scroll', soon, { capture: true });
+      observer?.disconnect();
+    };
+  }, [card]);
+}
+
 /** The files a SendUserFile call names: a list, or one as a bare string, as Claude Code takes it. */
 const filesIn = (input: Record<string, unknown>): string[] =>
   typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
@@ -230,7 +269,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const deny = <Button kind={request.defaultToNo ? 'primary' : 'quiet'} disabled={busy} onClick={() => setDenying(true)}>Deny</Button>;
   return (
     <div>
-      <div className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
+      <div data-card-head className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
         <ShieldQuestion className="mt-px size-4 shrink-0" />
         <span>{head!.text}</span>
       </div>
@@ -260,7 +299,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
         ) : null}
       </div>
       </div>
-      <div className={FOOT}>
+      <div data-card-foot className={FOOT}>
       {/* Said with what it warns of in view: by the buttons, which stay in view. */}
       {hidden && (
         <div className="flex items-start gap-1.5 pt-2 text-[12.5px] leading-snug text-danger">
@@ -351,8 +390,9 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
       if (!scroller) return;
       const shown = scroller.getBoundingClientRect();
       const at = next.getBoundingClientRect();
-      const by = at.top - (shown.top + head);
-      if (by >= 0 && at.bottom <= shown.bottom - foot) return;
+      // Clear of the room and the line the head and the foot keep over what is cut under them.
+      const by = at.top - (shown.top + head + CUT_ROOM_PX);
+      if (by >= 0 && at.bottom <= shown.bottom - foot - CUT_ROOM_PX) return;
       scroller.scrollTo({ top: scroller.scrollTop + by, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     });
   };
@@ -407,7 +447,7 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
 
   return (
     <div ref={card} role="group" aria-label={questions.length === 1 ? 'Claude’s question' : 'Claude’s questions'} tabIndex={-1} onKeyDown={onKeyDown} className="outline-none">
-      <div className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><CircleHelp className="size-4" />Claude has {questions.length === 1 ? 'a question' : 'questions'}</div>
+      <div data-card-head className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><CircleHelp className="size-4" />Claude has {questions.length === 1 ? 'a question' : 'questions'}</div>
       <div className="mt-2 space-y-4">
         {questions.map((q, at) => {
           // What Claude drew for the option picked last (a mockup, some code), as Claude Code shows it beside the list.
@@ -455,7 +495,7 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
           );
         })}
       </div>
-      <div className={FOOT}>
+      <div data-card-foot className={FOOT}>
         <div className="flex gap-2 pt-3">
           <Button kind="primary" disabled={busy || !complete} onClick={() => decide({ behavior: 'allow', updatedInput: { ...request.input, answers } })}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : 'Answer'}
@@ -479,11 +519,11 @@ function PlanReview({ sessionId, request }: { sessionId: string; request: Permis
   const first: PermissionMode = request.plan?.before === 'bypassPermissions' ? 'bypassPermissions' : request.plan?.auto ? 'auto' : 'acceptEdits';
   return (
     <div>
-      <div className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><ClipboardList className="size-4" />Claude's plan</div>
+      <div data-card-head className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><ClipboardList className="size-4" />Claude's plan</div>
       <div className="mt-2 max-h-[42dvh] overflow-y-auto overscroll-contain rounded-xl border border-line bg-bg px-3 py-2">
         <Markdown text={str(request.input.plan)} className="text-[14px]" />
       </div>
-      <div className={FOOT}>
+      <div data-card-foot className={FOOT}>
       {revising ? (
         <div className="space-y-2 pt-3">
           <textarea
@@ -585,7 +625,7 @@ function Elicitation({ sessionId, request }: { sessionId: string; request: Permi
 
   return (
     <div>
-      <div className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
+      <div data-card-head className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
         <Plug className="mt-px size-4 shrink-0" />
         <span>{request.title || `${asked.server} asks`}</span>
       </div>
@@ -646,7 +686,7 @@ function Elicitation({ sessionId, request }: { sessionId: string; request: Permi
           </div>
         )}
       </div>
-      <div className={FOOT}>
+      <div data-card-foot className={FOOT}>
         <div className="flex flex-wrap gap-2 pt-3">
           {asked.mode === 'url' ? (
             <>
@@ -667,9 +707,11 @@ function Elicitation({ sessionId, request }: { sessionId: string; request: Permi
 }
 
 export function PermissionCard({ sessionId, request, cwd }: { sessionId: string; request: PermissionRequest; cwd?: string }) {
+  const card = useRef<HTMLDivElement>(null);
+  useCutEdges(card);
   return (
     // Its head and foot pad its top and bottom, so each stays whole where it sticks.
-    <div className="animate-fade mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel px-4 shadow-[0_2px_16px_rgba(0,0,0,0.06)]">
+    <div ref={card} data-card className="animate-fade mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel px-4 shadow-[0_2px_16px_rgba(0,0,0,0.06)]">
       {request.elicitation ? (
         <Elicitation sessionId={sessionId} request={request} />
       ) : request.toolName === 'AskUserQuestion' ? (

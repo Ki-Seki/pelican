@@ -378,9 +378,10 @@ settings; and updates from Settings.
   room there is above the message box: at 1100 and 1280 px with a pane open, the message box
   covered the middle of Answer, which took no click, and on a phone the second question's options
   and the buttons were cut. The card keeps its title at its head and its buttons at its foot, with
-  what it asks about scrolling between them; on a short screen a card that waits gets the room it
-  needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a card that
-  comes and its foot stays just above the message box.
+  what it asks about scrolling between them, cut a little way off each at a quiet line, as in
+  Claude Desktop, rather than right under the title; on a short screen a card that waits gets the
+  room it needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a
+  card that comes and its foot stays just above the message box.
 - On a phone with its keyboard up, the message box, Send, Stop and the model and mode stay above the
   keyboard, also with a quote waiting and a card above: the card gives way first.
 - On Android a sheet settles at the bottom edge, the page under it dimmed: Chrome scrolled the
