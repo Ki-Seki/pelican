@@ -28,7 +28,13 @@ can read your sessions and have Claude run commands as you, so treat access to i
   stored as a scrypt hash in `~/.config/pelican/auth.json`. While one is set, it replaces the token.
 - **Sign-in cookies** are `HttpOnly` and `SameSite=Strict`, and signed with a secret that belongs
   to the token or the password: changing either signs every browser out. A cookie in use is
-  renewed, so a browser stays signed in until it goes 30 days unused. Failed sign-ins are limited
+  renewed, so a browser stays signed in until it goes 30 days unused. Signing out signs that
+  browser out on the computer too: its cookie, and every renewal of it, is refused from then on,
+  until the last could have expired, and what that browser has open, its live updates and its
+  terminals, closes at once, in every tab. Pelican keeps such sign-ins in its state folder (a hash
+  of each one's id, never its cookie), so a restart or an update keeps them refused, at most 256 of
+  them: past that, the oldest make room, and every cookie no newer than theirs is refused with
+  them. Failed sign-ins are limited
   to 10 per address and 30 in all every 10 minutes, counted before the check, so requests sent
   together cannot slip past. `X-Forwarded-For` is believed only with `PELICAN_TRUSTED_PROXY=1`,
   for a proxy on the same computer.
@@ -294,7 +300,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them, and saves a `!` command's output too long for the conversation where Claude Code saves
 one, in the session's `tool-results` folder, readable only by you. It stores uploads, push
-notification keys and subscriptions, the folders you trusted or kept to your settings, which
+notification keys and subscriptions, the sign-ins signed out until their cookies would have
+expired, the folders you trusted or kept to your settings, which
 sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
 long they waited for you, a note of the running server, and what the last look for an update found,

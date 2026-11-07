@@ -1020,6 +1020,39 @@ describe('a page whose sign-in has gone', () => {
   }, 20_000);
 });
 
+describe('a browser signed out', () => {
+  it('has its terminal let go of within a second, from another tab too, and its cookie opens none again', async () => {
+    const terminal = await open();
+    // The browser signs in with the token, as its sign-in page does, and shows the terminal in two tabs.
+    const login = await fetch(`${origin()}/api/auth/login`, { method: 'POST', headers: { 'x-pelican': '1', 'content-type': 'application/json', origin: origin() }, body: JSON.stringify({ token: accessToken() }) });
+    const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+    const browser = { origin: origin(), cookie };
+    const tab = await atPrompt(terminal.id, { headers: browser });
+    const otherTab = await atPrompt(terminal.id, { headers: browser });
+    const owner = await atPrompt(terminal.id);
+
+    // Signed out from the first tab: both close, and nothing the second sends after reaches the shell.
+    const out = await api('POST', '/api/auth/logout', undefined, { authorization: '', cookie });
+    expect(out.status).toBe(200);
+    const at = Date.now();
+    const marker = path.join(dir, 'typed-after-sign-out');
+    if (otherTab.ws.readyState === WebSocket.OPEN) otherTab.type(`touch ${marker}\r`);
+    await until(() => tab.closed !== undefined && otherTab.closed !== undefined, 1000, 'the signed-out tabs to close');
+    expect(Date.now() - at).toBeLessThan(1000);
+    expect(tab.closed?.code).toBe(TERMINAL_CLOSE.signedOut);
+    expect(otherTab.closed?.code).toBe(TERMINAL_CLOSE.signedOut);
+
+    // The same cookie opens no terminal again; the owner's page, signed in otherwise, stays.
+    const again = new Page(port, terminal.id, { headers: browser });
+    await again.opening();
+    expect(again.opened).toBe(false);
+    owner.type(`echo "still here $((6 * 7))"\r`);
+    await owner.sees(/still here 42\r\n/);
+    expect(existsSync(marker)).toBe(false);
+    expect(terminalState(terminal.id)!.viewers).toHaveLength(1);
+  }, 20_000);
+});
+
 describe('who gets a terminal', () => {
   it('only Pelican’s own page, signed in, under a name that points here, gets a socket', async () => {
     const terminal = await open();

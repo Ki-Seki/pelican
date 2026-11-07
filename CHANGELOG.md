@@ -398,6 +398,10 @@ settings; and updates from Settings.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
+- Signing out signs that browser out on the computer too: its cookie, and every renewal of it, is
+  refused until it would have expired, also after Pelican restarts, and its terminals and live
+  updates close at once, in every tab. Before, only the browser forgot the cookie: a terminal open
+  in another tab kept taking keys, and the cookie, copied, still signed in.
 - Run in terminal reads a command as an approval does: it is offered, and the server runs it, only
   for one with no control character a shell takes as a key and nothing an approval would write out,
   such as a character that hides or turns text around, or a space other than a plain one where a

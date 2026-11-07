@@ -19,7 +19,7 @@ import { commandRunnable, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '.
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, remove } from './actions.js';
 import { forget, keep } from './kept.js';
-import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
+import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn, signOut } from './auth.js';
 import { config } from './config.js';
 import { demoRunState, demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
@@ -192,7 +192,10 @@ app.post('/api/auth/login', async (c) => {
   return c.json({ ok: true });
 });
 
-app.post('/api/auth/logout', (c) => {
+app.post('/api/auth/logout', async (c) => {
+  // The cookie is refused from now on, with every renewal of it, until it would have expired, and
+  // what this browser has open (its live updates, its terminals) closes at once (auth.ts).
+  await signOut(c.req.header('cookie'));
   c.header('Set-Cookie', cookieHeader(c, cookieName(), '', 0));
   // What the browser kept of Pelican (a conversation's pictures) goes too; where the browser does
   // not take this (an http address that is not this computer), the pictures are checked anyway.

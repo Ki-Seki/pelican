@@ -52,7 +52,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | Path | What it holds |
 | --- | --- |
 | `src/server/cli.ts` | The `pelican` command: options, `pelican token`, `pelican password`, start-up checks |
-| `src/server/auth.ts` | The access token, the password and the sign-in cookie |
+| `src/server/auth.ts` | The access token, the password, the sign-in cookie and the sign-ins signed out |
 | `src/server/app.ts` | The HTTP API, and the host, origin, request and sign-in checks in front of it |
 | `src/server/runner.ts` | Runs Claude Code through the Agent SDK, one process per active session |
 | `src/server/claude-code.ts` | Which Claude Code runs, its version, and whether it is signed in |
