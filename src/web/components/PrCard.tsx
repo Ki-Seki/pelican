@@ -42,7 +42,8 @@ export function PrCard({ pr }: { pr: PrCreated }) {
     <div data-pr-card className="my-2 flex items-center gap-3 rounded-xl border border-line bg-panel py-2.5 pr-2 pl-3.5">
       <Icon aria-hidden className={`size-4 shrink-0 ${state?.tone ?? 'text-muted'}`} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[14px]">
+        {/* On a narrow phone the title takes two lines rather than lose its number. */}
+        <div className="line-clamp-2 text-[14px] leading-snug break-words">
           {live ? live.title : 'Pull request'} <span className="text-faint">#{pr.number}</span>
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-faint">
