@@ -247,6 +247,25 @@ describe('starting Claude', () => {
     expect(messages()).toHaveLength(0);
   });
 
+  it('starts a new session as Claude Code’s settings say, passing only the mode, fast mode and what was picked', async () => {
+    const userFile = path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json');
+    await mkdir(path.dirname(userFile), { recursive: true });
+    await writeFile(userFile, JSON.stringify({ model: 'opus', fastMode: true, ultracode: true, permissions: { defaultMode: 'plan' } }));
+    try {
+      const { claude, state } = await start('From the settings');
+      // The model, effort and Ultracode are Claude Code's to read; it would leave fast mode off through the SDK.
+      expect(claude.options).toMatchObject({ permissionMode: 'plan', settings: { fastMode: true } });
+      expect(claude.options.model).toBeUndefined();
+      expect(claude.options.effort).toBeUndefined();
+      expect(state().settings).toMatchObject({ model: 'opus', fast: true, ultracode: true, permissionMode: 'plan' });
+      // Ultracode turned off for it, where a file turns it on, is said; a mode picked for it wins.
+      const picked = await start('Picked', { ultracode: false, permissionMode: 'acceptEdits', model: 'sonnet' });
+      expect(picked.claude.options).toMatchObject({ permissionMode: 'acceptEdits', model: 'sonnet', settings: { fastMode: true, ultracode: false } });
+    } finally {
+      await rm(userFile, { force: true });
+    }
+  });
+
   it('tells Claude Code it shows the files Claude sends, in Claude Code’s environment only, new or resumed', async () => {
     const { claude, sessionId, run } = await start();
     expect(claude.options.env).toMatchObject({ CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1', PATH: process.env.PATH });

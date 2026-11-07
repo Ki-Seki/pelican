@@ -367,7 +367,10 @@ export async function newSessionSettings(
   const effort = picked.effort ?? effortFor(defaults.effort, modelKey(model, models), option).level;
   const fast = picked.fast ?? (defaults.fast.value && option?.supportsFast !== false);
   const mode = picked.permissionMode ?? (defaults.permissionMode.value === 'auto' && option?.supportsAuto === false ? 'default' : defaults.permissionMode.value);
-  const given: RunSettings = { ...picked, permissionMode: mode, ...(fast ? { fast: true } : {}) };
+  // Ultracode turned off for it where a file turns it on is said, or Claude Code would turn it on.
+  const { ultracode: _ultracode, ...rest } = picked;
+  const ultracode = picked.ultracode === true || (picked.ultracode === false && defaults.ultracode.value) ? { ultracode: picked.ultracode } : {};
+  const given: RunSettings = { ...rest, ...ultracode, permissionMode: mode, ...(fast ? { fast: true } : {}) };
   const shown: RunSettings = {
     model,
     ...(effort ? { effort } : {}),

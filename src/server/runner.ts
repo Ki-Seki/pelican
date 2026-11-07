@@ -483,6 +483,7 @@ export class SessionRun {
 
   start(): void {
     const settings = this.given ?? this.settings;
+    const ultracodeOff = this.given?.ultracode === false;
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
@@ -493,11 +494,12 @@ export class SessionRun {
       ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
       allowDangerouslySkipPermissions: true,
-      ...(settings.fast || settings.ultracode ? {
+      ...(settings.fast || settings.ultracode || ultracodeOff ? {
         settings: {
           ...(settings.fast ? { fastMode: true } : {}),
-          // Ultracode needs workflows; both are session settings, like the CLI's --settings.
-          ...(settings.ultracode ? { ultracode: true, enableWorkflows: true } : {}),
+          // Ultracode needs workflows; both are session settings, like the CLI's --settings. Off is
+          // said only for a new session it was turned off for: a settings file may turn it on.
+          ...(settings.ultracode ? { ultracode: true, enableWorkflows: true } : ultracodeOff ? { ultracode: false } : {}),
         },
       } : {}),
       includePartialMessages: true,
