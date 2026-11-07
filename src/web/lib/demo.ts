@@ -6,7 +6,7 @@ import type {
   Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, PrStatus, Rewound, RewindCheck, RewindDone, RunSettings, RunState, SendMode, ServerInfo,
   SessionChanges, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
-import { COMMIT_REQUEST, requestShown } from '../../shared/requests';
+import { COMMIT_REQUEST, isRequest, requestShown } from '../../shared/requests';
 import { AGENTS_SESSION, agentNotice, type DemoAgent, handbackText, LICENSES, OUTDATED, OUTDATED_FINISHES_MS } from '../../shared/demo-agents';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
@@ -191,14 +191,18 @@ function finish(sessionId: string, durationMs: number): void {
 
 /**
  * Claude is done with the turn, stopped or not: idle, unless messages were queued meanwhile. Those
- * go next, at once and in one message, as your own Pelican sends them (also after Stop).
+ * go next, as your own Pelican sends them (also after Stop): at once and in one message, but a
+ * request of Desktop's (Commit changes, Create PR) on its own, what waits after it once its turn ends.
  */
 function end(sessionId: string, run: RunState): void {
   const { queued = [], ...rest } = run;
-  runAs(sessionId, { ...rest, busy: false, permissions: [], partial: [] });
-  if (queued.length === 0) return;
-  const text = queued.map((p) => p.text).filter(Boolean).join('\n\n');
-  reply(sessionId, user(text ? [{ type: 'text', text }] : [], { uuid: queued[0]!.uuid }));
+  const alone = queued.findIndex((p) => isRequest(p.text));
+  const next = queued.slice(0, alone === 0 ? 1 : alone > 0 ? alone : queued.length);
+  const after = queued.slice(next.length);
+  runAs(sessionId, { ...rest, busy: false, permissions: [], partial: [], ...(after.length > 0 ? { queued: after } : {}) });
+  if (next.length === 0) return;
+  const text = next.map((p) => p.text).filter(Boolean).join('\n\n');
+  reply(sessionId, user(text ? [{ type: 'text', text }] : [], { uuid: next[0]!.uuid }));
 }
 
 /** A message taken by Claude, answered with what Claude would do (a side chat's: what it would do there). */
