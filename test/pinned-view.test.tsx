@@ -432,6 +432,8 @@ describe('a session’s menu', () => {
     list();
     await screen.findByText('Pinned');
     const row = screen.getByRole('link', { name: /^Tidy the docs, / });
+    // The page's clock stays the file's (noon today), which the sessions' times count from.
+    const clock = Date.now();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       fireEvent.pointerDown(row, { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: 120, clientY: 100 });
@@ -439,6 +441,7 @@ describe('a session’s menu', () => {
     } finally {
       vi.useRealTimers();
       vi.useFakeTimers({ toFake: ['Date'], shouldAdvanceTime: true });
+      vi.setSystemTime(clock);
     }
     fireEvent.pointerUp(row, { pointerType: 'touch', isPrimary: true, pointerId: 1, clientX: 120, clientY: 100 });
     const menu = await screen.findByRole('menu', { name: 'Tidy the docs' });
