@@ -2,8 +2,9 @@
 
 ## 0.5.0
 
-A terminal beside the conversation, and quotes with notes, as in Claude Desktop, with its keys; and
-new sessions that start as Claude Code starts them, from its own settings.
+A terminal beside the conversation, quotes with notes, and every action where it is used, as in
+Claude Desktop, with its keys; and new sessions that start as Claude Code starts them, from its own
+settings.
 
 ### Highlights
 
@@ -68,6 +69,56 @@ new sessions that start as Claude Code starts them, from its own settings.
   a message. Desktop and the CLI see Pelican's quotes as replies, and Pelican shows Desktop's,
   comments without code too, and its own older ones, as quiet quotes.
 
+- **One list of actions for each thing, wherever you reach it.** A session, your prompt, Claude's
+  reply, a step and a file's path each have one short list, in Claude Desktop's words and order,
+  and every way in shows the same: on a computer a right-click, or ⋯ where the thing has one, with
+  Desktop's keys faintly beside each action; on a phone a long press (half a second) on a session's
+  row, your prompt, a step or a path, which raises the thing over a sheet of its actions. A long
+  press on Claude's words stays your phone's own text selection.
+- **The session's menu is its title.** The title with ▾ opens the one session menu: Rename · Pin ·
+  Side chat · Fork · Copy resume command · Export · Transcript view (Normal, Thinking, Verbose) ·
+  Archive · Delete, with the session's start and ID at its foot. A row of the list opens the same
+  list, from its ⋯ (in place of its time, on hover), a right-click or a long press. Rename and
+  Delete ask in a sheet of their own. On a phone the menu opens with Changes, Files and Terminal as
+  tiles at its top.
+- **Changes, Files and Terminal in the header.** On a computer three quiet buttons, Changes with the
+  lines changed ("+31 −2"), Files and Terminal, each with its name and key in its tooltip, each
+  showing its tab or hiding the pane while it shows it (Changes, asked for, shows Changes in a folder
+  git does not track too, and says why it is empty); on a phone one button, the lines changed or a
+  folder.
+- **Context, by Send.** The context ring sits in the message box's row, as in Desktop, and opens
+  Context: how full the window is, with Compact, what the whole session used, your plan's limits,
+  and Usage and activity. On a phone it shows once a turn has run, faint and without its number
+  below 60%.
+- **The message box's +.** Add files or photos (⌘U), Commands, Files and agents, Shell command, and
+  the session's MCP servers ("1 of 2 on"), which have a sheet of their own, also with `/mcp`; a line
+  above the box says when one fails while Claude runs.
+- **One list of commands, behind / and ⌘K.** This session's actions by Claude Code's names (`/btw`,
+  `/branch`, `/rename`, `/export`, `/diff`, `/context`, `/mcp`, `/model`…), then Pelican's (Pin,
+  Archive, Files, Terminal, New session, Settings…), then Claude Code's commands and skills. A
+  command of your own takes its name from one of Pelican's. On a computer ⌘K opens the list as a
+  command menu, where typing a session's name finds it too; ⇧⌘K searches sessions.
+- **Your prompt and Claude's reply carry their own.** Your prompt: a tap on a phone shows Copy ·
+  Rewind to here · Fork from here under it; with a pointer they sit beside it, on hover, adding no
+  height. Claude's reply: Copy · ⋯ · the time under it, always on a phone, and on a computer Copy ·
+  Fork from here · ⋯ · the model and the time, in room kept for them; its ⋯ has Copy message as
+  Markdown, Start a side chat, Quote message, Rewind to here and Fork from here, the turn's figures
+  at its foot. A right-click puts what was clicked first: a selection's Copy and Quote selection, a
+  code block's Copy code, a path's own menu; links and pictures keep the browser's.
+- **Fork from here.** On your prompt, a new session up to just before it, with its words (and what
+  it quoted) waiting in the new session's box; on Claude's reply, a new session up to the end of it.
+- **Steps and paths.** A command step has Copy command · Run in terminal · Copy output · Start a
+  side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
+  context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
+  Download file, a folder Open in terminal.
+- **The session list hides, and floats.** On a computer its button (or ⌘B, as in Desktop) hides it,
+  remembered in this browser, and the conversation takes the whole width; pointing at the window's
+  left edge or the button brings it over the conversation until the pointer leaves, a session is
+  picked or Esc. Between 1024 and 1279px a pane beside the conversation hides it the same way, and
+  ⌘B brings it back.
+- **Back on a phone closes what is open.** Android's Back, and the browser's, closes the sheet or
+  menu that is open, and goes no further.
+
 ### Changes in behavior
 
 - **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
@@ -99,10 +150,13 @@ new sessions that start as Claude Code starts them, from its own settings.
   session. A settings file that is not valid JSON is left as it is, and Settings says so. A running
   session keeps the model, effort and mode it started with, as in Claude Code.
 - A session's effort shows as Claude Code applies it, its own default for the model included.
-- Keys are Claude Desktop's, as it takes them in a browser: ⇧⌘K (Ctrl+Shift+K) searches sessions,
-  ⇧⌘O (Ctrl+Shift+O) starts one, ⇧⌘, (Ctrl+Shift+,) opens Settings, and ⌃⇧D shows or hides
-  Changes and files on a Mac too. ⌘K still searches; ⌘, and ⌘⇧D work as well where a browser
-  passes them on, and keys a browser keeps for itself are left to it.
+- Keys are Claude Desktop's, as it takes them in a browser: ⌘K (Ctrl+K) opens the command menu and
+  ⇧⌘K (Ctrl+Shift+K) searches sessions, which ⌘K did before; ⇧⌘O starts a session, ⇧⌘, opens
+  Settings, ⌘B shows or hides the session list; ⌥⌘R renames the open session, ⌥⌘O forks it and
+  ⌥⌘A archives it; ⌃⇧D shows Changes, ⇧⌘F Files and ⌃\` the terminal, on a Mac too; ⌘U adds files,
+  ⇧⌘I opens the model, ⇧⌘E its effort, ⌥⌘F turns fast mode on or off and ⌥⌘M opens the mode. ⌘,
+  and ⌘⇧D work as well where a browser passes them on, and keys a browser keeps for itself are left
+  to it. Off a Mac, Ctrl takes ⌘'s place.
 - The list of keys (⌘/ or Ctrl+/) is Desktop's: in its parts (General, This session, Panes, Message
   box, Quotes and comments), wide on a computer, naming only the keys that work.
 - Line comments go to Claude as Claude Desktop sends them, and wait as chips above the message box
@@ -114,9 +168,30 @@ new sessions that start as Claude Code starts them, from its own settings.
   queued message.
 - On a phone, a session's row takes the swipe a paragraph takes to be quoted, with its own Pin and
   Archive as before: a short one shows them, a full one archives with Undo, none goes right or
-  starts at the screen's edge, and none is taken while text is selected.
+  starts at the screen's edge, and none is taken while text is selected. On a computer the row's
+  hover Pin and Archive buttons are gone: they are in its ⋯, which shows in place of its time.
+- The header's ⋯ is gone, and so is the meter beside it: the title's ▾ opens the session's menu, and
+  the context ring is by Send. The session menu's words are Desktop's: Fork (was Branch), Copy
+  resume command (was Continue in a terminal), Export (was Export as Markdown). Its MCP servers moved
+  to the message box's +, and its details to where each is used: the folder and branch under the
+  title, the session's totals in Context, the last turn's figures in its reply's ⋯, its start and
+  ID at the menu's foot. Archiving the open session from its menu offers Undo, as from the list.
+- Claude's reply no longer shows how long a turn took, its tokens and its cost under it: they are in
+  its ⋯. A prompt's Rewind is called Rewind to here, and puts the files back as before, until the
+  next part of 0.5.0 makes it Desktop's; Edit and send again stays in a prompt's menu until then.
+- The message box's paperclip is its +, where Add files or photos is.
+- ⌃⇧D shows Changes, and hides the pane while it shows them; the pane's other tabs have their own
+  buttons and keys. Below 1280px, where a pane beside the conversation hides the session list, the
+  way back to the list is its button in the header, not ‹, and ⇧⌘K brings it over the conversation
+  to search.
 - Export as Markdown shows a prompt's quotes and their notes, comments on lines and attached files
   as the conversation does, Claude Desktop's and Pelican's alike, never their markers.
+
+### Fixes
+
+- On a phone, a tap near the end of the conversation lands on what was tapped: the conversation no
+  longer moves under the lifting finger to reach its end, unless something arrived while the finger
+  was down, as the last reply's actions, now always under it, are tapped there.
 
 ### Security
 
@@ -157,6 +232,14 @@ new sessions that start as Claude Code starts them, from its own settings.
 
 ### Site, docs and project
 
+- The docs describe where every action is: each thing's list and its ways in, the session menu,
+  the header's buttons, Context, the message box's +, the command menu, the keys, the session list
+  hiding and floating, and Back on a phone.
+- The browser smoke test walks the ways in, in the app and the site's live demo: on a computer a
+  row's ⋯ and right-click, the title's menu, the message box's + and /, ⌘K, a prompt's, a reply's,
+  a step's and a path's menus, a link's right-click left to the browser, ⌘/ and the session list
+  hiding and floating; on a phone a row's long press, the title's sheet and its tiles, a prompt's
+  tap and long press, a reply's row, a step's long press and +, Back closing each.
 - The docs describe the terminal: the tab and its keys, on a computer and a phone, where it runs,
   what it keeps and when it ends, `--no-terminal`, and its security. The coverage table has "A
   terminal beside the conversation" as done.

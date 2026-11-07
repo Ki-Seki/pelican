@@ -67,7 +67,7 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   app; once it is idle, continue it here.
 - **All of Claude Code.** Approvals with the diff, plans and questions, steer or queue while Claude
   works, quotes with notes and side chats as in Claude Desktop, `!` commands with their output live,
-  `/` commands and skills, `@` files, every model and permission mode, rewind and branch, subagents
+  `/` commands and skills, `@` files, every model and permission mode, rewind and fork, subagents
   and background tasks, MCP servers.
 - **What Claude makes, in place.** Charts and diagrams Claude draws, pages it writes and files it
   sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
@@ -80,8 +80,9 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
 - **Your usage, from every app.** Tokens, sessions and streaks by project, model and app, with your
   plan's limits, or the cost Claude Code estimates on an API key.
 - **Made for a phone, good on a computer.** One hand, dictation, a notification when Claude needs
-  you or finishes, and a Home Screen icon. On a wide screen, the list, the conversation and the
-  changes sit side by side.
+  you or finishes, and a Home Screen icon. Every action sits on what it acts on: a long press on a
+  phone, a right-click or ⌘K on a computer, with Claude Desktop's keys. On a wide screen, the list,
+  the conversation and the changes sit side by side, and the list hides when you want the room.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: the list with a pinned session; a chart Claude drew, in place, and a page it wrote, run; an edit waiting for approval, and what changed; a screenshot Claude sent; a session Claude Desktop is running">
