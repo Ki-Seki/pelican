@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // One terminal's screen on a page (src/web/components/TerminalScreen.tsx), with xterm.js and the
-// connection stood in for: the size it tells the shell as its tab shows again or its box changes.
-import { act, cleanup, render } from '@testing-library/react';
+// connection stood in for: the size it tells the shell as its tab shows again or its box changes,
+// and where a link in the output goes, said before it opens.
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** The size the box fits, as xterm's fit addon proposes it. */
@@ -58,7 +59,15 @@ vi.mock('@xterm/xterm', () => {
 });
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { proposeDimensions = () => ({ ...fits }); } }));
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class {} }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }));
+/** What the web links addon was made with: its handler, and its hover and leave. */
+let webLinks: unknown[] = [];
+vi.mock('@xterm/addon-web-links', () => ({
+  WebLinksAddon: class {
+    constructor(...args: unknown[]) {
+      webLinks = args;
+    }
+  },
+}));
 vi.mock('../src/shared/terminal-guards', () => ({ guardOutput: () => undefined }));
 vi.mock('../src/shared/terminal-widths', () => ({ loadWidths: () => undefined }));
 vi.mock('../src/web/lib/terminal-cursor', () => ({ showCursor: () => undefined }));
@@ -117,7 +126,10 @@ beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => box.width });
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => box.height });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const frame = () => act(() => new Promise((resolve) => setTimeout(resolve, 5)));
 const props = { id: 't1', touch: false, label: 'Terminal', onProgram() {}, onExit() {}, onConnection() {}, onMode() {}, onMenu() {}, onQuote() {} };
@@ -155,5 +167,54 @@ describe('the size a page tells the shell', () => {
     await frame();
     expect(told).toEqual([[100, 30]]);
     expect(shown).toMatchObject({ cols: 100, rows: 30 });
+  });
+});
+
+type LinkHandler = { activate: (event: MouseEvent, uri: string) => void; hover: (event: MouseEvent, uri: string) => void; leave: (event: MouseEvent, uri: string) => void };
+const linkHandler = () => (shown as unknown as { options: { linkHandler: LinkHandler } }).options.linkHandler;
+const click = (keys: Partial<MouseEventInit> = {}) => new MouseEvent('click', keys);
+
+describe('a link in the output', () => {
+  it('says where it goes as it is pointed at, before a click with ⌘ or Ctrl opens it, whatever its text reads', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<TerminalScreen {...props} hidden={false} />);
+    // A program's link (OSC 8) whose text reads as another address, and a host spelled to look like one.
+    act(() => linkHandler().hover(click(), 'https://github.com.evil.example/login?next=%2F#top'));
+    const status = screen.getByRole('status');
+    expect(status.textContent).toContain('https://github.com.evil.example/login?next=%2F#top');
+    act(() => linkHandler().leave(click(), 'https://github.com.evil.example/login'));
+    expect(screen.queryByRole('status')).toBeNull();
+    act(() => linkHandler().hover(click(), 'https://\u0430pple.example/'));
+    expect(screen.getByRole('status').textContent).toContain('https://xn--pple-43d.example/');
+    // A plain address the text holds is said the same way, by the addon's hover.
+    const [, options] = webLinks as [unknown, { hover: LinkHandler['hover']; leave: LinkHandler['leave'] }];
+    act(() => options.leave(click(), ''));
+    act(() => options.hover(click(), 'https://example.com/docs'));
+    expect(screen.getByRole('status').textContent).toContain('https://example.com/docs');
+    // A click alone selects; with the key held, it opens where it was said to go, with no way back.
+    act(() => linkHandler().activate(click(), 'https://example.com/docs'));
+    expect(open).not.toHaveBeenCalled();
+    act(() => linkHandler().activate(click({ metaKey: true, ctrlKey: true }), 'https://example.com/docs'));
+    expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer');
+    // Nothing but http and https.
+    act(() => linkHandler().hover(click(), 'javascript:alert(1)'));
+    act(() => linkHandler().activate(click({ metaKey: true, ctrlKey: true }), 'javascript:alert(1)'));
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks on a touch screen first, saying where it goes, and opens once Open is tapped', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<TerminalScreen {...props} touch hidden={false} />);
+    act(() => linkHandler().activate(click(), 'https://github.com.evil.example/login'));
+    expect(open).not.toHaveBeenCalled();
+    const asking = screen.getByRole('dialog', { name: 'Open this link?' });
+    expect(asking.textContent).toContain('https://github.com.evil.example/login');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    act(() => linkHandler().activate(click(), 'https://example.com/docs'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer');
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

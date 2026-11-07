@@ -168,13 +168,16 @@ can read your sessions and have Claude run commands as you, so treat access to i
   takes as a key, or anything an approval would write out (a character that hides or turns text
   around, or a space other than a plain one where a shell reads it as part of a word, read as
   above), which the server refuses too. Claude sees nothing of a terminal unless you put it in a
-  message (Quote, at most its first 1,500 characters). A link in a terminal opens only with Cmd or
-  Ctrl held, or a tap on a phone, and only an `http` or `https` one, in a new tab with no way back
-  to Pelican. The demo has no terminal, and `--no-terminal` turns them off. The native part,
-  `@lydell/node-pty`, is pinned to one version, and CI checks that its files, for every platform,
-  are those of Microsoft's node-pty of that version, against the integrity the npm registry
-  publishes for it; that the few lines of its own, which pick the platform's files, are those read
-  for that version; and that none of its packages runs anything as npm installs it.
+  message (Quote, at most its first 1,500 characters). A link in a terminal says where it goes
+  before it opens, as the browser would ask for it (an international name in its `xn--` form):
+  pointed at, at the foot of the screen, and tapped on a phone, in a question with Open, since a
+  program's link (OSC 8) can read as any words; it opens only with Cmd or Ctrl held, or once Open is
+  tapped, and only an `http` or `https` one, in a new tab with no way back to Pelican. The demo has
+  no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is pinned to
+  one version, and CI checks that its files, for every platform, are those of Microsoft's node-pty
+  of that version, against the integrity the npm registry publishes for it; that the few lines of
+  its own, which pick the platform's files, are those read for that version; and that none of its
+  packages runs anything as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'

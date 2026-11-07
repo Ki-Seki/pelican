@@ -12,7 +12,7 @@ import { guardOutput } from '../../shared/terminal-guards';
 import { loadWidths } from '../../shared/terminal-widths';
 import { announce } from '../lib/announce';
 import { api, checkSignedIn } from '../lib/api';
-import { ariaKeys, isApple, isKey, keyText } from '../lib/keyboard';
+import { ariaKeys, isApple, isKey, keyText, MOD } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { showCursor } from '../lib/terminal-cursor';
 import {
@@ -135,6 +135,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const [reconnecting, setReconnecting] = useState(false);
   /** Scrolled back on a touch screen, with no wheel to come back with: ↓ jumps to the newest output, stopping a swipe's glide. */
   const [scrolledBack, setScrolledBack] = useState(false);
+  /**
+   * A link in the output, and where it goes, which its text need not say (a program's OSC 8 link
+   * reads as any words): pointed at, said at the foot of the screen before a click opens it; tapped
+   * on a touch screen, asked about first, opening once Open is tapped.
+   */
+  const [link, setLink] = useState<{ address: WebAddress; asking: boolean }>();
   const stopGlide = useRef<() => void>(() => undefined);
   /** After a line sent from the phone's field: where its output starts, read out once the shell is quiet. */
   const reading = useRef<{ from: IMarker; quiet?: ReturnType<typeof setTimeout>; latest: ReturnType<typeof setTimeout> } | undefined>(undefined);
@@ -198,6 +204,19 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
   useLayoutEffect(() => {
     const el = box.current!;
+    const links = {
+      activate: (event: MouseEvent, uri: string) => {
+        const address = webAddress(uri);
+        if (!address) return;
+        if (touch) setLink({ address, asking: true });
+        else if (isApple ? event.metaKey : event.ctrlKey) openAddress(address);
+      },
+      hover: (_event: MouseEvent, uri: string) => {
+        const address = webAddress(uri);
+        if (!touch && address) setLink((now) => (now?.asking ? now : { address, asking: false }));
+      },
+      leave: () => setLink((now) => (now?.asking ? now : undefined)),
+    };
     const t = new Terminal({
       fontFamily: monoFont(),
       fontSize: fontSize(),
@@ -217,12 +236,13 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       // xterm would log an error for every character it does not take where it comes (a DEL), and
       // a browser with its console open keeps each one: output of millions would fill the page.
       logLevel: 'off',
-      // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key.
-      linkHandler: { activate: (event, uri) => openLink(event, uri, touch), allowNonHttpProtocols: false },
+      // A link opens with Cmd or Ctrl held, so a click can still select; a finger has no such key,
+      // and is asked first. Where it goes is said before either.
+      linkHandler: { ...links, allowNonHttpProtocols: false },
     });
     const fitAddon = new FitAddon();
     t.loadAddon(fitAddon);
-    t.loadAddon(new WebLinksAddon((event, uri) => openLink(event, uri, touch)));
+    t.loadAddon(new WebLinksAddon(links.activate, { hover: links.hover, leave: links.leave }));
     // The widths the server's copy counts cells with: an emoji takes two, and a cell at most 11
     // combining marks, so output reaching the page as it is printed grows no cell without bound.
     loadWidths(t, Unicode11Addon);
@@ -478,6 +498,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       window.removeEventListener('online', comeBack);
       c.stop();
       if (connection.current === c) connection.current = undefined;
+      // A link of this terminal's no longer shows, nor is asked about.
+      setLink(undefined);
       // Taken away with the screen, the terminal is gone already.
       if (term.current === t) t.clearSelection();
     };
@@ -562,6 +584,43 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
           <Loader2 className="size-3 animate-spin" /> Reconnecting
         </div>
       )}
+      {link && !link.asking && (
+        // Where the link pointed at goes, as a browser says it at the foot of its window.
+        <div role="status" className="pointer-events-none absolute bottom-2 left-3 z-10 max-w-[calc(100%-1.5rem)] truncate rounded-md border border-line bg-panel px-2 py-1 font-mono text-[12px] text-muted shadow-sm">
+          <span className="text-fg">{link.address.origin}</span>{link.address.rest}
+          <span className="font-sans text-faint"> · {MOD}-click to open</span>
+        </div>
+      )}
+      {link?.asking && (
+        <div
+          role="dialog"
+          aria-label="Open this link?"
+          className="absolute inset-x-2 bottom-2 z-20 rounded-xl border border-line bg-panel p-3 text-[13px] shadow-lg"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            setLink(undefined);
+          }}
+        >
+          <p className="text-muted">Open this link in a new tab?</p>
+          <p className="mt-1 max-h-24 overflow-y-auto font-mono text-[12.5px] break-all">
+            <span className="font-semibold text-fg">{link.address.origin}</span>{link.address.rest}
+          </p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" onClick={() => setLink(undefined)} className="h-11 shrink-0 rounded-full bg-chip px-4 pointer-fine:h-9">Cancel</button>
+            <button
+              type="button"
+              onClick={() => {
+                openAddress(link.address);
+                setLink(undefined);
+              }}
+              className="h-11 shrink-0 rounded-full bg-fg px-4 font-medium text-bg pointer-fine:h-9"
+            >
+              Open
+            </button>
+          </div>
+        </div>
+      )}
       {scrolledBack && (
         <button
           type="button"
@@ -644,11 +703,28 @@ function rowsAsText(el: HTMLElement, t: Terminal): () => void {
   };
 }
 
-/** A link in the output: opened in a new tab, with Cmd or Ctrl held on a computer, on a tap on a phone. */
-function openLink(event: MouseEvent, uri: string, touch: boolean): void {
-  if (!touch && !(isApple ? event.metaKey : event.ctrlKey)) return;
-  if (!/^https?:\/\//i.test(uri)) return;
-  window.open(uri, '_blank', 'noopener,noreferrer');
+/**
+ * Where a link in the output goes, as the browser reads it (its host as the browser asks for it,
+ * an international name in its xn-- form, so one made to look like another does not), split for
+ * showing: its origin, and the rest. Only http and https; anything else is no link here.
+ */
+export type WebAddress = { href: string; origin: string; rest: string };
+
+export function webAddress(uri: string): WebAddress | undefined {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+  const login = url.username || url.password ? `${url.username}${url.password ? ':\u2026' : ''}@` : '';
+  return { href: url.href, origin: `${url.protocol}//${login}${url.host}`, rest: `${url.pathname}${url.search}${url.hash}` };
+}
+
+/** A link in the output, opened in a new tab: where it was said to go, with no way back to Pelican. */
+function openAddress(address: WebAddress): void {
+  window.open(address.href, '_blank', 'noopener,noreferrer');
 }
 
 /** A new size, within bounds, and the screen fitted to it (or not yet, while a pinch goes on); whether it changed. */

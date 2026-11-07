@@ -17,14 +17,16 @@ settings; and updates from Settings.
   up, as closing a window does, asking first while a program runs in it, also a job left in the
   background, but not for what your prompt keeps running for itself (powerlevel10k's gitstatusd,
   pure's worker). On a computer you type straight into it, with input methods, the emoji picker and
-  dictation too, select to Quote (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A
-  right-click on it, or a long press on a phone, opens Claude Desktop's terminal menu: Quote and
-  Copy what is selected, Paste, Select all and Clear terminal, with Select text on a phone. Clear
-  terminal clears the screen and what scrolled off it, as `clear` does, on every page showing the
-  terminal and in the computer's copy, so a reload, or another page, shows it cleared, and a program
-  in front of the shell, such as vim or htop, draws its screen again, as after Ctrl+L. Its colors
-  and font are Pelican's, light or dark, and a program that asks for its colors, as delta or vim
-  does to pick a theme, gets them. A screen reader reads it.
+  dictation too, select to Quote (⇧⌘L) or Copy, and Ctrl and the wheel sets the text size. A link
+  in it says where it goes before it opens: pointed at, at the foot of the screen, before ⌘-click
+  (Ctrl-click) opens it, and tapped on a phone, in a question with Open, as a program's link can
+  read as any words. A right-click on it, or a long press on a phone, opens Claude Desktop's
+  terminal menu: Quote and Copy what is selected, Paste, Select all and Clear terminal, with Select
+  text on a phone. Clear terminal clears the screen and what scrolled off it, as `clear` does, on
+  every page showing the terminal and in the computer's copy, so a reload, or another page, shows it
+  cleared, and a program in front of the shell, such as vim or htop, draws its screen again, as
+  after Ctrl+L. Its colors and font are Pelican's, light or dark, and a program that asks for its
+  colors, as delta or vim does to pick a theme, gets them. A screen reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
