@@ -1,14 +1,17 @@
+import { appendFile } from 'node:fs/promises';
+
 import type { RewindFilesResult } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Attachment, RewindCheck, RewindDone, RewindRestore } from '../shared/protocol.js';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../shared/rewind.js';
 import { splitFiles } from '../web/lib/turns.js';
+import { sessionsChanged } from './feed.js';
 import { findUpload, removeUpload, saveUpload } from './files.js';
 import { type PromptPlace, promptPlace } from './history.js';
 import { liveProcesses } from './live.js';
 import { cutOf, endCut, keepCut, liveCut } from './rewound.js';
 import { changing, ensureRun, getRun, oneAtATime, restartAt, type SessionRun } from './runner.js';
-import { shownMessages } from './sessions.js';
+import { sessionInfo, shownMessages } from './sessions.js';
 import { isSideChat } from './side-chat.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 
@@ -126,6 +129,26 @@ export async function promptBack(file: string, uuid: string): Promise<Back> {
 /** The pictures saved again for a prompt that does not go back to the box after all. */
 const discard = (back: Back) => Promise.all(back.saved.map((a) => removeUpload(a.id).catch(() => undefined)));
 
+/** How long the Claude a rewind replaced is waited for to end, writing what it writes as it does. */
+const ENDING_MS = 5_000;
+
+/**
+ * Keeps the name a session had (`name`, the Agent SDK's: a title it was given, else the last prompt
+ * Claude Code recorded, else the first) when a rewind starts its Claude again. The Claude it
+ * replaced records, as it ends, the last prompt it had (Claude Code's `last-prompt` row), which
+ * names the session where no title does, and may be one the rewind took out: once it has ended,
+ * the name is recorded back the same way, so a rewind renames nothing, and Undo rewind has no name
+ * to give back.
+ */
+async function keepName(sessionId: string, name: string | undefined, replaced: SessionRun | undefined): Promise<void> {
+  if (!name || !replaced?.closed) return;
+  await Promise.race([replaced.ended, new Promise((resolve) => setTimeout(resolve, ENDING_MS).unref())]);
+  const [now, file] = await Promise.all([sessionInfo(sessionId), transcriptPath(sessionId)]);
+  if (!file || !now || now.summary === name) return;
+  await appendFile(file, `${JSON.stringify({ type: 'last-prompt', lastPrompt: name, sessionId })}\n`);
+  sessionsChanged();
+}
+
 /**
  * Rewind to here, as Claude Code's /rewind and Claude Desktop's do it: back to before one of your
  * prompts, with its three choices (Desktop's words; the CLI says Restore code and conversation,
@@ -164,34 +187,40 @@ async function rewind(sessionId: string, prompt: string, choice: RewindRestore):
   // earlier rewind's cut, or whole.
   const earlier = await liveCut(sessionId);
   const now = earlier ? { entry: earlier.entry } : undefined;
-  // Read before anything changes: what goes back in the box.
+  // Read before anything changes: what goes back in the box, and what the session is called.
   const back = await promptBack(file, prompt);
+  const name = (await sessionInfo(sessionId))?.summary;
+  const replaced = getRun(sessionId);
   // Only the prompt's own turn goes: Claude Code checks that, so nothing it did not show goes too.
   const at = { entry: place.before!, ...(place.later === 0 ? { dropsTurn: prompt } : {}) };
-  let run;
   try {
-    run = await restartAt(sessionId, at, now);
-  } catch (error) {
-    await discard(back);
-    throw error;
-  }
-  if (!run) {
-    await discard(back);
-    throw new RewindRefusal(CHANGED, 409);
-  }
-  let code: RewindDone = {};
-  if (choice === 'both') {
+    let run;
     try {
-      code = await restoreCode(run, prompt);
+      run = await restartAt(sessionId, at, now);
     } catch (error) {
-      // Nothing is rewound: the session's Claude has the conversation as it read before again.
-      await restartAt(sessionId, now).catch(() => undefined);
       await discard(back);
-      throw error instanceof RewindRefusal ? error : new RewindRefusal(notRestored((error as Error).message), 409);
+      throw error;
     }
+    if (!run) {
+      await discard(back);
+      throw new RewindRefusal(CHANGED, 409);
+    }
+    let code: RewindDone = {};
+    if (choice === 'both') {
+      try {
+        code = await restoreCode(run, prompt);
+      } catch (error) {
+        // Nothing is rewound: the session's Claude has the conversation as it read before again.
+        await restartAt(sessionId, now).catch(() => undefined);
+        await discard(back);
+        throw error instanceof RewindRefusal ? error : new RewindRefusal(notRestored((error as Error).message), 409);
+      }
+    }
+    await keepCut(sessionId, { prompt, entry: at.entry, end: place.end, at: Date.now() });
+    return { ...code, prompt: { text: back.text, attachments: back.attachments } };
+  } finally {
+    await keepName(sessionId, name, replaced);
   }
-  await keepCut(sessionId, { prompt, entry: at.entry, end: place.end, at: Date.now() });
-  return { ...code, prompt: { text: back.text, attachments: back.attachments } };
 }
 
 /**

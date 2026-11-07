@@ -409,6 +409,14 @@ export class SessionRun {
   });
   // Most callers never wait for it: a failure here must not count as unhandled.
   private readonly readyHandled = this.ready.catch(() => undefined);
+  private endedNow!: () => void;
+  /**
+   * Settles once its process has ended and what it writes as it exits is written: Claude Code
+   * records the prompt it last had (its `last-prompt` row), which names the session.
+   */
+  readonly ended = new Promise<void>((resolve) => {
+    this.endedNow = resolve;
+  });
   /** Claude Code said something: it started, and the session is there to resume. */
   private began = false;
   private suggestion?: string;
@@ -1487,6 +1495,7 @@ export class SessionRun {
         console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
       }
     } finally {
+      this.endedNow();
       // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
       const closedHere = this.closed;
       this.closed = true;

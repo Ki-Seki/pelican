@@ -5,14 +5,14 @@
 // the next message; Claude at work gets 409; Claude Code's check refusing to drop more than the
 // prompt's turn (resumeDropsTurn) falls back to the whole session; the demo refuses; and Fork from
 // here copies up to just before a prompt (none before the first, also after a SessionStart hook's
-// context), or the end of a reply. Rewinds, Undo and messages go one at a time, and a failed rewind
-// leaves the conversation as it read.
+// context), or the end of a reply. Rewinds, Undo and messages go one at a time; a failed rewind
+// leaves the conversation as it read; and a rewind renames nothing.
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, MessagesPage, RewindCheck, RewindDone } from '../src/shared/protocol';
+import type { ChatMessage, MessagesPage, RewindCheck, RewindDone, SessionSummary } from '../src/shared/protocol';
 import { REWIND_BUSY } from '../src/shared/rewind';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
@@ -124,6 +124,9 @@ afterAll(async () => {
 });
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** What the session is called, as the list and the header say. */
+const titleOf = async (id: string) => (await json<{ session: SessionSummary }>(await ask(`/api/sessions/${id}`))).body.session.title;
 
 describe('Rewind to here, in the Claude Code the Agent SDK bundles', () => {
   it('Code only: Claude Code’s dry run says what goes back, then rewindFiles puts the file back and the conversation stays', async () => {
@@ -469,5 +472,21 @@ describe('Rewind to here, one at a time with what else changes the session’s C
     expect((await page(id)).rewound).toBeUndefined();
   }, 240_000);
 
+});
+
+describe('Rewind to here and the session’s name', () => {
+  it('stays: the session keeps its name through a rewind and Undo rewind', async () => {
+    const id = await session(['Name: First question', 'Name: Second question', 'Name: Third question']);
+    const before = await titleOf(id);
+    expect(before).toBe('Name: First question');
+    const second = await uuidOf(id, 'Name: Second question');
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: second, restore: 'conversation' })).status).toBe(200);
+    // The Claude the rewind replaced has ended, writing the last prompt it had: the rewound third.
+    expect(await titleOf(id)).toBe(before);
+    expect((await ask(`/api/sessions/${id}/rewind/undo`, {})).status).toBe(200);
+    await until(() => getRun(id) !== undefined, 10_000, 'Claude resumed whole');
+    await pause(1500);
+    expect(await titleOf(id)).toBe(before);
+  }, 240_000);
 });
 
