@@ -30,6 +30,7 @@ import { readDefaults, saveDefault, SettingsRefused } from './defaults.js';
 import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { exactBytes } from './open.js';
+import { pullRequestStatus } from './pull-requests.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
@@ -593,7 +594,7 @@ async function insideRepository(cwd: string): Promise<boolean> {
 /** Git runs only in a trusted folder (trust.ts): a folder you are only shown runs nothing of its own. */
 const gitAllowed = (cwd: string) => folderTrusted(cwd);
 
-/** What Changes compares with: the last commit, or (`scope=base`) where the branch split from the default one. */
+/** What Changes compares with: the last commit, or (`scope=base`) all of the changes, by Claude Code's /diff. */
 const scopeOf = (c: Context) => (c.req.query('scope') === 'base' ? 'base' : 'uncommitted');
 
 app.get('/api/git', async (c) => {
@@ -611,6 +612,12 @@ app.get('/api/git/diff', async (c) => {
   if (!(await gitAllowed(cwd))) return c.json({ diff: '' });
   return c.json({ diff: await gitDiff(cwd, file, scopeOf(c), c.req.query('from') || undefined) });
 });
+
+/**
+ * A pull request Claude named in Desktop's `<pr-created>` tag, as GitHub says it is now: read with
+ * gh where it is signed in, for its card; a github.com pull request's address and nothing else.
+ */
+app.get('/api/pr', async (c) => c.json(await pullRequestStatus(c.req.query('url') ?? '')));
 
 app.get('/api/tree', async (c) => {
   const cwd = await folderOf(c);

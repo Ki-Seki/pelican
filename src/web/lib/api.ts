@@ -7,6 +7,7 @@ import type {
   CommandAt,
   FileContent,
   GitStatus,
+  PrStatus,
   LiveShell,
   McpServer,
   MessagesPage,
@@ -352,6 +353,8 @@ export const api = {
     return new Map((['there', 'gone', 'large'] as const).flatMap((state) => (answer[state] ?? []).map((path) => [path, state] as const)));
   },
   /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
+  /** A pull request's live status, as gh reads it on the computer. */
+  pr: (url: string) => request<PrStatus>(`pr?url=${encodeURIComponent(url)}`),
   git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
   /** One file's diff; `from`, a renamed file's old path, so it shows what changed rather than a new file. */
   gitDiff: (cwd: string, path: string, scope?: 'base', from?: string) =>

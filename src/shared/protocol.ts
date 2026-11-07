@@ -477,6 +477,13 @@ export type SessionChanges = { turns: TurnChanges[]; lines: Record<string, numbe
 export type GitStatus = { repo: false; untrusted?: boolean } | {
   repo: true; branch?: string; upstream?: string; base?: string; split?: boolean; remote?: boolean; github?: string; ahead?: number; behind?: number; uncommitted?: number; files: GitFile[];
 };
+/**
+ * A pull request Claude named in Desktop's `<pr-created>` tag, as GitHub says it is now, read with
+ * gh: its card's live status. `live: false` where gh cannot read it (not installed, not signed in).
+ */
+export type PrStatus = { live: false } | {
+  live: true; number: number; title: string; state: 'open' | 'closed' | 'merged'; draft: boolean; head?: string; base?: string; checks?: 'passing' | 'failing' | 'running';
+};
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };

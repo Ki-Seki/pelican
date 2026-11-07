@@ -2,6 +2,7 @@ import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizont
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
+import { requestShown } from '../../shared/quoted';
 import { api, apiUrl } from '../lib/api';
 import { modelName } from '../../shared/usage';
 import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget } from '../lib/actions';
@@ -11,6 +12,7 @@ import { clockTime, dayLabel, duration } from '../lib/format';
 import { useMedia } from '../lib/media';
 import { type Press, useLongPress, useRightClick } from '../lib/press';
 import { promptGist, quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
+import { readPrCreated } from '../lib/requests';
 import { promptBefore } from '../lib/next-steps';
 import { usePathLinks } from '../lib/path-links';
 import type { ViewMode } from '../lib/prefs';
@@ -23,6 +25,7 @@ import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type 
 import { openImage } from './Lightbox';
 import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { loadsInPlace, Markdown, RemoteImage } from './Markdown';
+import { PrCard } from './PrCard';
 import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
 import { type RewindPoint, RewoundMarker } from './Rewind';
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -256,7 +259,7 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.kind === 'text' ? (
           // A paragraph swiped to the left is quoted (a phone's swipe to reply); a shell command in
           // Claude's own words can be run in the terminal.
-          <SwipeQuote key={seg.key}><InReply.Provider value><div data-reply-text><Markdown text={seg.text} className="my-2" /></div></InReply.Provider></SwipeQuote>
+          <ReplyText key={seg.key} text={seg.text} />
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
@@ -299,6 +302,26 @@ const AssistantTurn = memo(function AssistantTurn({
     </div>
   );
 });
+
+/**
+ * Claude's own words in a reply: a paragraph swiped to the left is quoted (a phone's swipe to
+ * reply), a shell command can be run in the terminal, and a pull request named in Desktop's
+ * `<pr-created>` tag is a card under them.
+ */
+function ReplyText({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const read = useMemo(() => readPrCreated(text, streaming), [text, streaming]);
+  const words = read.text.trim() !== '' && (
+    <InReply.Provider value>
+      {streaming ? <StreamingMarkdown text={read.text} className="my-2" /> : <div data-reply-text><Markdown text={read.text} className="my-2" /></div>}
+    </InReply.Provider>
+  );
+  return (
+    <>
+      {words && (streaming ? words : <SwipeQuote>{words}</SwipeQuote>)}
+      {read.prs.map((pr) => <PrCard key={pr.url} pr={pr} />)}
+    </>
+  );
+}
 
 /** A file that went with a prompt; once the prompt is written down, a tap opens it. */
 function FileChip({ file }: { file: SentFile }) {
@@ -401,6 +424,8 @@ const UserBubble = memo(function UserBubble({
   const target = useContext(QuoteTargetContext);
   const touch = useMedia('(hover: none)');
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
+  // Desktop's Create PR request reads as the command it shows: /create-pr, /create-pr --draft.
+  const request = item.command ? undefined : requestShown(item.text);
   const ready = !item.pending;
   const press = useLongPress<HTMLDivElement>((p) => ready && setMenu(menuAt(p)), { enabled: ready && !selectable, nativeMenu: browsersOwn, selectable });
   // Gone (a tap elsewhere took the selection), its words are a prompt's again, a long press its list.
@@ -472,7 +497,7 @@ const UserBubble = memo(function UserBubble({
               <IconRow list={row} />
             </div>
           )}
-          <PromptText text={text} command={Boolean(item.command)} onTap={() => ready && setActions((v) => !v)} source={from} press={press} bubble={bubble} />
+          <PromptText text={request ?? text} command={Boolean(item.command || request)} onTap={() => ready && setActions((v) => !v)} source={from} press={press} bubble={bubble} />
         </SwipeQuote>
       )}
       {item.pending ? (
@@ -772,7 +797,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
   return (
     <div>
       {run.partial.map((block, i) => {
-        if (block.type === 'text') return block.text ? <InReply.Provider key={i} value><StreamingMarkdown text={block.text} className="my-2" /></InReply.Provider> : null;
+        if (block.type === 'text') return block.text ? <ReplyText key={i} text={block.text} streaming /> : null;
         // Normal says that Claude thinks; the other views show what, as it comes.
         if (block.type === 'thinking') return <Thinking key={i} text={view === 'normal' ? '' : block.thinking} live defaultOpen />;
         const summary = describeTool(block.name, partialTarget(block), cwd);
