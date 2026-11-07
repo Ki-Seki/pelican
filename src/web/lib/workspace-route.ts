@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
+import { whenSettled } from './sheet-history';
+
 /**
  * Where Changes and files is, kept in the page's address next to the session (`?s=…`):
  * - `w`: the tab, `changes`, `files` or `terminal`; on a phone its being there is what opens the view;
@@ -98,14 +100,17 @@ const urlWith = (step: WorkspaceStep | undefined) => `${location.pathname}${with
  * goUp). Otherwise this entry becomes the step.
  */
 export function goTo(step: WorkspaceStep | undefined, push: boolean): void {
-  leaving = false;
-  const url = urlWith(step);
-  if (url !== here()) {
-    const depth = depthOf(history.state);
-    if (push && step) history.pushState({ pelicanWorkspace: depth + 1, pelicanFrom: location.search }, '', url);
-    else history.replaceState(history.state, '', url);
-  }
-  changed();
+  // After a sheet that just closed has taken its entry out of the history (lib/sheet-history).
+  whenSettled(() => {
+    leaving = false;
+    const url = urlWith(step);
+    if (url !== here()) {
+      const depth = depthOf(history.state);
+      if (push && step) history.pushState({ pelicanWorkspace: depth + 1, pelicanFrom: location.search }, '', url);
+      else history.replaceState(history.state, '', url);
+    }
+    changed();
+  });
 }
 
 /**
@@ -114,21 +119,28 @@ export function goTo(step: WorkspaceStep | undefined, push: boolean): void {
  * chat goes up to its folder and the back gesture still leads to the chat.
  */
 export function goUp(step: WorkspaceStep): void {
-  const state = history.state as State;
-  if (depthOf(state) > 1 && state?.pelicanFrom === withStep(location.search, step)) history.back();
-  else goTo(step, false);
+  whenSettled(() => {
+    const state = history.state as State;
+    if (depthOf(state) > 1 && state?.pelicanFrom === withStep(location.search, step)) history.back();
+    else goTo(step, false);
+  });
 }
 
 /** Leaves the workspace for the conversation: back past all of its steps, or out of the address. */
 export function leave(): void {
-  const depth = depthOf(history.state);
-  if (depth === 0) {
-    goTo(undefined, false);
-    return;
-  }
+  // Gone at once; the history follows once a sheet that just closed has taken its entry out.
   leaving = true;
   changed();
-  history.go(-depth);
+  whenSettled(() => {
+    const depth = depthOf(history.state);
+    if (depth === 0) {
+      goTo(undefined, false);
+      return;
+    }
+    leaving = true;
+    changed();
+    history.go(-depth);
+  });
 }
 
 /** The folder a path is in, as Files names folders (`a/b/`), or '' for the top. */

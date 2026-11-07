@@ -1,9 +1,14 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { closeEntry, openEntry } from '../lib/sheet-history';
+
 /** As long as a sheet takes to come in. */
 const CLOSE_MS = 200;
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Under a finger, where Back (Android's button, an edge swipe) is how a sheet is left. */
+const underFinger = () => typeof window.matchMedia === 'function' && !window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
 /**
  * A modal dialog in the browser's top layer: everything behind it is inert, focus moves in (to
@@ -11,7 +16,8 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
  * only the topmost one. Closing plays out before the dialog goes, showing what it showed while
  * open; meanwhile the dialog carries data-closing, for the way out (group-data-closing/modal), and
  * is inert itself: what it still shows takes no taps or keys, so the second tap of a double tap
- * cannot choose an option again (and send a message twice).
+ * cannot choose an option again (and send a message twice). On a phone each open one has an entry in
+ * the history, so Back closes it and goes no further (lib/sheet-history).
  */
 export function Modal({
   open, onClose, label, labelledBy, className = '', children,
@@ -68,6 +74,13 @@ export function Modal({
       el.removeEventListener('close', onClosed);
     };
   }, [mounted]);
+
+  // Back closes it on a phone; closed any other way, its entry goes, without going anywhere.
+  useEffect(() => {
+    if (!open || !underFinger()) return undefined;
+    const entry = openEntry(() => close.current());
+    return () => closeEntry(entry);
+  }, [open]);
 
   useEffect(() => {
     if (!closing) return undefined;

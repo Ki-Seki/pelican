@@ -18,6 +18,7 @@ import { startDemo } from './lib/demo';
 import { forgetDrafts } from './lib/drafts';
 import { isKey } from './lib/keyboard';
 import { retried } from './lib/load';
+import { whenSettled } from './lib/sheet-history';
 import { useMedia } from './lib/media';
 import {
   disableNotifications,
@@ -100,8 +101,11 @@ function useRoute() {
   const params = new URLSearchParams(search);
   const navigate = useCallback((query: string, replace = false) => {
     const url = `${appBase.pathname}${query}`;
-    if (replace) history.replaceState(null, '', url);
-    else history.pushState(null, '', url);
+    // After a sheet that just closed has taken its entry out of the history (lib/sheet-history).
+    whenSettled(() => {
+      if (replace) history.replaceState(null, '', url);
+      else history.pushState(null, '', url);
+    });
     setSearch(query);
   }, []);
   return {
