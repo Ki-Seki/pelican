@@ -312,12 +312,19 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
     if (idle) card.current?.focus({ preventScroll: true });
   }, []);
 
+  // A question of one choice takes a pick or words of your own, as in Desktop, never both: a pick
+  // takes the words under Other out, and words typed there the pick. Where several may be picked,
+  // words go with them.
   const toggle = (q: Question, label: string) => {
     setPicked((prev) => {
       const current = prev[q.question] ?? [];
       const next = q.multiSelect ? (current.includes(label) ? current.filter((l) => l !== label) : [...current, label]) : [label];
       return { ...prev, [q.question]: next };
     });
+    if (!q.multiSelect) setOther((prev) => ({ ...prev, [q.question]: '' }));
+  };
+  const unpick = (q: Question) => {
+    if (!q.multiSelect) setPicked((prev) => (prev[q.question]?.length ? { ...prev, [q.question]: [] } : prev));
   };
 
   const answers = Object.fromEntries(questions.map((q) => {
@@ -340,8 +347,6 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
     if (option) {
       e.preventDefault();
       toggle(q, option.label);
-      // A pick is the answer, as in Desktop: words under Other go, but where several may be picked.
-      if (!q.multiSelect) setOther((prev) => ({ ...prev, [q.question]: '' }));
       return;
     }
     // A letter starts the question's own answer, under Other, as in Desktop.
@@ -350,6 +355,7 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
       if (!field) return;
       e.preventDefault();
       setOther((prev) => ({ ...prev, [q.question]: `${prev[q.question] ?? ''}${e.key}` }));
+      unpick(q);
       field.focus();
     }
   };
@@ -391,7 +397,11 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
                 )}
                 <input
                   value={other[q.question] ?? ''}
-                  onChange={(e) => setOther((prev) => ({ ...prev, [q.question]: e.target.value }))}
+                  onChange={(e) => {
+                    const words = e.target.value;
+                    setOther((prev) => ({ ...prev, [q.question]: words }));
+                    if (words.trim()) unpick(q);
+                  }}
                   placeholder="Other…"
                   className="block h-10 w-full rounded-xl border border-line bg-bg px-3 text-[16px] outline-none"
                 />
