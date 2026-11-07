@@ -492,13 +492,13 @@ describe('the terminal’s Quote', () => {
     ]);
   });
 
-  it('keeps the end of a long output, where a command ends and says what went wrong, from the start of a line', () => {
+  it('cuts a long output as Desktop cuts any quote: its first 1,500 characters, then an …', () => {
     const lines = Array.from({ length: MAX_QUOTE_LINES + 50 }, (_, i) => `line ${i + 1}`);
-    const kept = terminal(lines.join('\n'))!.text.split('\n');
-    expect(kept[0]).toBe('…');
-    expect(kept[1]).toMatch(/^line \d+$/);
-    expect(kept.at(-1)).toBe(`line ${MAX_QUOTE_LINES + 50}`);
-    expect(kept.join('\n').length).toBeLessThanOrEqual(1500);
+    const text = terminal(lines.join('\n'))!.text;
+    expect(text.startsWith('line 1\nline 2\n')).toBe(true);
+    expect(text.endsWith('…')).toBe(true);
+    expect(text.length).toBe(1501);
+    expect(text.slice(0, -1)).toBe(lines.join('\n').slice(0, 1500));
     // Secrets are masked first, as in any quote.
     expect(terminal('$ export TOKEN=ghp_0123456789abcdefghij0123456789abcdef\nok')!.text).not.toContain('ghp_0123456789');
   });

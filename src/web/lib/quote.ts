@@ -105,21 +105,14 @@ export function preparePassage(text: string, lines = false): string {
 
 /**
  * Output of the terminal as a quote holds it: each line without the spaces a screen pads it with,
- * the blank lines around it left out, secrets masked; past Desktop's 1,500 characters, its end,
- * from the start of a line after an …, where a command ends and says what went wrong.
+ * the blank lines around it left out, secrets masked, and cut as Desktop cuts any quote: its first
+ * 1,500 characters, then an ….
  */
 export function terminalPassage(text: string): string {
   const lines = text.split(LINE_BREAK).map((line) => line.trimEnd());
   while (lines.length > 0 && !lines[0]) lines.shift();
   while (lines.length > 0 && !lines.at(-1)) lines.pop();
-  const masked = maskSecrets(lines.join('\n'));
-  if (masked.length <= MAX_QUOTE) return masked;
-  // Room for the … and its line; never the second half of a character outside the BMP first.
-  let kept = masked.slice(masked.length - (MAX_QUOTE - 2));
-  const unit = kept.charCodeAt(0);
-  if (unit >= 0xdc00 && unit <= 0xdfff) kept = kept.slice(1);
-  const start = kept.indexOf('\n');
-  return `…\n${start >= 0 && start < kept.length - 1 ? kept.slice(start + 1) : kept}`;
+  return capQuote(maskSecrets(lines.join('\n')));
 }
 
 /** A quote of `text`, or nothing for one shorter than two characters (Desktop's least). */

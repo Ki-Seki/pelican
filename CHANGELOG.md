@@ -44,8 +44,8 @@ new sessions that start as Claude Code starts them, from its own settings.
   file or a tool's output, and only for a command with nothing hidden in it, as an approval reads
   one. Quote puts what you selected in the terminal, or its screen, above the message box as a quote
   from the terminal, as Claude Desktop attaches one, naming its tab, with a note if you add one; of
-  a long one, its last 1,500 characters, where a command ends and says what went wrong. Claude sees
-  a terminal only that way. `!` commands go into the conversation as before.
+  a long one, its first 1,500 characters, as Desktop cuts any quote. Claude sees a terminal only
+  that way. `!` commands go into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
   output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one
   is open), which opens the side chat with the passage attached, and Quote. On a computer they sit
