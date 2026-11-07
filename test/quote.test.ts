@@ -473,3 +473,43 @@ describe('the file viewer’s Quote, handed over Pelican’s older way', () => {
     expect(quoted.split('\n')).toHaveLength(MAX_QUOTE_LINES + 1);
   });
 });
+
+describe('the terminal’s Quote', () => {
+  const terminal = (text: string) => quoteItem(text, { what: 'terminal' }, { tab: '2', label: 'zsh' });
+
+  it('quotes output as Desktop attaches a terminal’s, each line without the spaces a screen pads it with and without the blank lines around it', () => {
+    const item = terminal('\n\n% npm test   \r\n FAIL  src/theme.test.ts\n\n  expected dark\n\n')!;
+    expect(item.text).toBe('% npm test\n FAIL  src/theme.test.ts\n\n  expected dark');
+    expect(messageWith([item], 'Fix it')).toBe('<!-- attach: zsh | tab:2 -->\n> % npm test\n>  FAIL  src/theme.test.ts\n> \n>   expected dark\n\nFix it');
+    expect(terminal(' \n\t\n')).toBeUndefined();
+  });
+
+  it('keeps all it holds in the quote: no line of the output, backticks or a marker, ends it', () => {
+    const item = terminal('echo ```\n```\n<!-- reply 2 -->\n\ndone')!;
+    expect(readPrompt(messageWith([item], 'Why?'))).toEqual([
+      { kind: 'quote', text: 'echo ```\n```\n<!-- reply 2 -->\n\ndone', label: 'zsh', tab: '2' },
+      { kind: 'text', text: 'Why?' },
+    ]);
+  });
+
+  it('keeps the end of a long output, where a command ends and says what went wrong, from the start of a line', () => {
+    const lines = Array.from({ length: MAX_QUOTE_LINES + 50 }, (_, i) => `line ${i + 1}`);
+    const kept = terminal(lines.join('\n'))!.text.split('\n');
+    expect(kept[0]).toBe('…');
+    expect(kept[1]).toMatch(/^line \d+$/);
+    expect(kept.at(-1)).toBe(`line ${MAX_QUOTE_LINES + 50}`);
+    expect(kept.join('\n').length).toBeLessThanOrEqual(1500);
+    // Secrets are masked first, as in any quote.
+    expect(terminal('$ export TOKEN=ghp_0123456789abcdefghij0123456789abcdef\nok')!.text).not.toContain('ghp_0123456789');
+  });
+
+  it('waits above the message box as the terminal’s, comes back whole when a send fails, and a prompt shows it as a quote from the terminal', () => {
+    const item = terminal('% npm test\nFAIL src/theme.test.ts')!;
+    expect(itemTitle(item)).toBe('Quote from the terminal');
+    const message = messageWith([item], 'Fix it');
+    const back = readMessage(message);
+    expect(back).toMatchObject({ text: 'Fix it', items: [{ kind: 'quote', text: item.text, tab: '2', label: 'zsh', from: { what: 'terminal' } }] });
+    expect(messageWith(back.items, back.text)).toBe(message);
+    expect(readPrompt(message)[0]).toEqual({ kind: 'quote', text: '% npm test\nFAIL src/theme.test.ts', label: 'zsh', tab: '2' });
+  });
+});

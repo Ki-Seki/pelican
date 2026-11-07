@@ -3,20 +3,22 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { api } from '../lib/api';
+import { api, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
-import { ariaKeys, closesPane, composing, isKey, keyText } from '../lib/keyboard';
+import { ariaKeys, closesPane, composing, hasKeyboard, isKey, keyText } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
+import type { WaitingItem } from '../lib/quote';
 import { useComments, useCommentsChat } from '../lib/review';
+import { wantTerminalFocus } from '../lib/terminals';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
 import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import { Segmented } from './Sheet';
 import { waitingCount } from './WaitingItems';
-import { WorkspaceChanges, WorkspaceFiles } from './WorkspaceTabs';
+import { WorkspaceChanges, WorkspaceFiles, WorkspaceTerminal } from './WorkspaceTabs';
 
 /**
  * From this width Changes and files sits beside the conversation instead of over it; under the
@@ -31,6 +33,12 @@ const SEND_KEYS = keyText('commentsSend') ?? '';
 
 /** The tab last looked at in this page, for the next time the view opens without a step of its own. */
 let lastTab: WorkspaceTab = 'changes';
+
+/** Without a trust sheet to ask with, a folder that needs trusting starts no terminal. */
+const noTrust = async (): Promise<TrustChoice | undefined> => undefined;
+
+/** The tab the view shows, or would show on opening: the address's, else the one last looked at. */
+export const shownTab = (step: WorkspaceStep | undefined): WorkspaceTab => step?.tab ?? lastTab;
 
 /**
  * Whether Changes and files is open, and where. On a computer it is a pane beside the conversation
@@ -115,7 +123,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments, askTrust = noTrust, onQuote }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -135,6 +143,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
   /** Sends the line comments to Claude now (they go with the next message otherwise). */
   onSendComments?: () => void;
+  /** The trust sheet, for a terminal in a folder nobody trusted that brings programs: the answer, or none. */
+  askTrust?: (trust: TrustQuestion) => Promise<TrustChoice | undefined>;
+  /** Puts a quote of the terminal above the message box, to go with the next message. */
+  onQuote?: (item: WaitingItem) => void;
 }) {
   const chat = useCommentsChat(cwd);
   const comments = useComments(chat);
@@ -158,8 +170,15 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const switchTab = (to: WorkspaceTab) => {
     lastTab = to;
     tapped.current = true;
+    // Picked on a computer, the terminal takes the keys, to type in at once.
+    if (to === 'terminal' && hasKeyboard()) wantTerminalFocus();
     goTo({ tab: to }, false);
   };
+  // The terminal stays connected while another tab shows, ready at once when it comes back;
+  // until it is first shown, it is not loaded at all.
+  const [terminalShown, setTerminalShown] = useState(false);
+  if (open && tab === 'terminal' && !terminalShown) setTerminalShown(true);
+  if (!open && terminalShown) setTerminalShown(false);
 
   // Read again while it is looked at, and only then: every 5 s while Claude works, every 30 s
   // otherwise, never while it waits for an answer or the view is closed. In a large repository
@@ -208,6 +227,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           options={[
             { value: 'changes', label: git && git.files.length > 0 ? `Changes · ${git.files.length}` : 'Changes' },
             { value: 'files', label: 'Files' },
+            { value: 'terminal', label: 'Terminal' },
           ]}
         />
       )}
@@ -237,9 +257,20 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   // The view's lowest row keeps clear of a phone's or a tablet's home indicator, also beside the
   // conversation: the bar saying Claude waits (a phone's view has it), else the comments, else a
-  // selection's Quote and Copy; the end of what scrolls, too. A computer has no such edge (the
-  // inset is 0 there), so nothing moves.
+  // selection's Quote and Copy, or the terminal's keys; the end of what scrolls, too. A computer
+  // has no such edge (the inset is 0 there), so nothing moves.
   const waits = !docked && Boolean(needsYou);
+  const terminal = terminalShown && (
+    <div className={tab === 'terminal' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      <WorkspaceTerminal
+        cwd={cwd}
+        hidden={tab !== 'terminal'}
+        lowest={waiting.length === 0 && !waits}
+        askTrust={askTrust}
+        onQuote={(item) => onQuote?.(item)}
+      />
+    </div>
+  );
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
   const selectionFoot = useMemo<SelectionFootAt | undefined>(
     () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: true } : {}) } : undefined),
@@ -296,15 +327,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
     return (
       <SendComments.Provider value={onSendComments}>
       <SelectionFoot.Provider value={selectionFoot}>
-      <aside aria-label="Changes and files" onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
-        <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
+      <aside aria-label="Changes and files" data-workspace onKeyDown={onKeyDown} className="absolute inset-y-0 right-0 flex w-(--pane-w) max-w-full flex-col border-l border-line bg-bg">
+        <div data-makes-room="short" className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
           <div className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{baseName(cwd)}</div>
           <button type="button" aria-label="Close" title={`Close (${PANE_KEYS})`} onClick={onClose} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
             <X className="size-[18px]" />
           </button>
         </div>
-        <div className="shrink-0 px-4">{header}</div>
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+        <div data-makes-room="short" className="shrink-0 px-4">{header}</div>
+        {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
+        {terminal}
         <div ref={setFoot} className="shrink-0" />
         {footer}
       </aside>
@@ -319,6 +351,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       ref={view}
       role="region"
       aria-label="Changes and files"
+      data-workspace
       tabIndex={-1}
       onKeyDown={(e) => {
         onKeyDown(e);
@@ -330,15 +363,16 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       className="app-height animate-fade fixed inset-x-0 top-0 z-30 flex flex-col bg-bg outline-none"
     >
       <div className="pt-safe shrink-0">
-        <div className="flex items-center gap-0.5 px-2 py-1.5">
+        <div data-makes-room="short" className="flex items-center gap-0.5 px-2 py-1.5">
           <button type="button" aria-label="Back to the conversation" onClick={onClose} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
             <ChevronLeft className="size-5" />
           </button>
           <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-medium">{baseName(cwd)}</h2>
         </div>
-        <div className="px-3">{header}</div>
+        <div data-makes-room="short" className="px-3">{header}</div>
       </div>
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>
+      {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
+      {terminal}
       <div ref={setFoot} className="shrink-0" />
       {footer}
       {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}

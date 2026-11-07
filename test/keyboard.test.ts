@@ -259,3 +259,18 @@ describe('the key table', () => {
     expect(keys(false, 'newLine')).toEqual(['Enter']);
   });
 });
+
+describe('the terminal’s key', () => {
+  it('is Ctrl+`, as in Claude Desktop, on a Mac too, by the key left of 1 whatever it prints; with Shift, a new terminal', () => {
+    for (const apple of [APPLE, OTHER]) {
+      expect(isKey({ key: '`', code: 'Backquote', ctrlKey: true }, 'terminal', apple)).toBe(true);
+      // A layout where that key prints something else.
+      expect(isKey({ key: '^', code: 'Backquote', ctrlKey: true }, 'terminal', apple)).toBe(true);
+      expect(isKey({ key: '`', code: 'Backquote' }, 'terminal', apple)).toBe(false);
+      expect(isKey({ key: '`', code: 'Backquote', metaKey: true }, 'terminal', apple)).toBe(false);
+      expect(isKey({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true }, 'terminal', apple)).toBe(false);
+      expect(isKey({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true }, 'newTerminal', apple)).toBe(true);
+      expect(isKey({ key: '\u00b0', code: 'Backquote', ctrlKey: true, shiftKey: true }, 'newTerminal', apple)).toBe(true);
+    }
+  });
+});

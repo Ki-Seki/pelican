@@ -1,0 +1,238 @@
+/**
+ * What the terminal's keys send, and what its screen says, for the Terminal tab
+ * (components/WorkspaceTerminal): the phone's key row and line field, and the screen as text.
+ */
+
+import { type TerminalColors, terminalColors } from '../../shared/terminal';
+
+/** The keys of the phone's key row that a phone's keyboard lacks, as a terminal sends them. */
+export type RowKey = 'esc' | 'tab' | 'up' | 'down' | 'left' | 'right';
+
+const ARROWS: Record<'up' | 'down' | 'right' | 'left', string> = { up: 'A', down: 'B', right: 'C', left: 'D' };
+
+/**
+ * A key as a terminal sends it: the arrows as the program asked for them (vim and less ask for
+ * application cursor keys), and with Ctrl held, as xterm sends Ctrl and an arrow.
+ */
+export function keySequence(key: RowKey, { applicationCursor = false, ctrl = false }: { applicationCursor?: boolean; ctrl?: boolean } = {}): string {
+  if (key === 'esc') return '\x1b';
+  if (key === 'tab') return '\t';
+  const letter = ARROWS[key];
+  if (ctrl) return `\x1b[1;5${letter}`;
+  return applicationCursor ? `\x1bO${letter}` : `\x1b[${letter}`;
+}
+
+/**
+ * Ctrl and a character, as a terminal sends it: Ctrl+C is ETX (3), Ctrl+[ is Esc, Ctrl+Space is
+ * NUL. Undefined for a character Ctrl does nothing with.
+ */
+export function controlCharacter(char: string): string | undefined {
+  if (char.length !== 1) return undefined;
+  const code = char.toUpperCase().charCodeAt(0);
+  // @, A to Z, [, \, ], ^ and _ are 64 to 95: Ctrl takes 64 off.
+  if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
+  const digits: Record<string, string> = { ' ': '\x00', '2': '\x00', '3': '\x1b', '4': '\x1c', '5': '\x1d', '6': '\x1e', '7': '\x1f', '/': '\x1f', '-': '\x1f', '8': '\x7f', '?': '\x7f' };
+  return digits[char];
+}
+
+/**
+ * A line that asks for a password or a passphrase, as sudo, ssh, git and gpg ask, in the
+ * languages a system says it in: the line field hides what is typed while the cursor sits after
+ * one. The words have to end there, in a colon, as a prompt does.
+ */
+const SECRET = /(?:(?:^|[^\p{L}\p{N}])(?:pass(?:word|phrase|code)s?|pin|passwort|mot de passe|contraseña|senha|пароль)(?!\p{L})|密码|口令|パスワード|암호|비밀번호).*[:：]\s*$/iu;
+
+export const asksForSecret = (line: string): boolean => SECRET.test(line);
+
+/** The part of xterm's buffer the screen is read through (IBuffer). */
+export type BufferLike = {
+  readonly length: number;
+  readonly baseY: number;
+  readonly viewportY: number;
+  readonly cursorX: number;
+  readonly cursorY: number;
+  getLine(y: number): { readonly isWrapped: boolean; translateToString(trimRight?: boolean, startColumn?: number, endColumn?: number): string } | undefined;
+};
+
+/**
+ * The screen and its scrollback as text (rows `from` up to `to`): a line the terminal wrapped is
+ * one line again, and the empty rows above the first line and under the last are left out.
+ */
+export function bufferText(buffer: BufferLike, from = 0, to = buffer.length): string {
+  const lines: string[] = [];
+  for (let y = Math.max(0, from); y < Math.min(to, buffer.length); y += 1) {
+    const line = buffer.getLine(y);
+    if (!line) continue;
+    // A row that goes on in the next keeps its spaces at the end: they are inside the line.
+    const goesOn = buffer.getLine(y + 1)?.isWrapped ?? false;
+    const text = line.translateToString(!goesOn);
+    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  while (lines.length > 0 && !lines.at(-1)!.trim()) lines.pop();
+  while (lines.length > 0 && !lines[0]!.trim()) lines.shift();
+  return lines.join('\n');
+}
+
+/** The rows on screen now, as text, as bufferText reads them. */
+export const viewportText = (buffer: BufferLike, rows: number): string => bufferText(buffer, buffer.viewportY, buffer.viewportY + rows);
+
+/** What the cursor's row says before the cursor: a prompt, when a program waits for a line. */
+export function lineBeforeCursor(buffer: BufferLike): string {
+  return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true, 0, buffer.cursorX) ?? '';
+}
+
+/** The 16 colors of an xterm.js theme, in the order programs number them. */
+const ANSI_NAMES = [
+  'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+  'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite',
+] as const;
+
+/** The colors a theme draws in, as the server answers a program that asks for one; none unless each is `#rrggbb`. */
+export function themeColors(theme: Partial<Record<'foreground' | 'background' | 'cursor' | (typeof ANSI_NAMES)[number], string>> | undefined): TerminalColors | undefined {
+  if (!theme) return undefined;
+  return terminalColors({ foreground: theme.foreground, background: theme.background, cursor: theme.cursor, ansi: ANSI_NAMES.map((name) => theme[name]) });
+}
+
+/**
+ * A color sequence a program sent (OSC 4, 10, 11 or 12; `data` is what follows the number): whether
+ * it asks for a color, which is the server's to answer, and, where it also sets some, the
+ * sequence that sets those alone, for the page to draw. One that only sets colors is the page's.
+ */
+export function colorQuery(ident: number, data: string): { asks: boolean; sets?: string } {
+  const slots = data.split(';');
+  const sets: string[] = [];
+  let asks = false;
+  if (ident === 4) {
+    for (let at = 0; at + 1 < slots.length; at += 2) {
+      if (slots[at + 1] === '?') asks = true;
+      else sets.push(`${slots[at]};${slots[at + 1]}`);
+    }
+    return asks ? { asks, ...(sets.length > 0 ? { sets: `\x1b]4;${sets.join(';')}\x1b\\` } : {}) } : { asks };
+  }
+  // 10, 11 and 12 each go on to the next with every `;`: text, background, cursor.
+  slots.forEach((slot, at) => {
+    if (ident + at > 12) return;
+    if (slot === '?') asks = true;
+    else sets.push(`\x1b]${ident + at};${slot}\x1b\\`);
+  });
+  return asks ? { asks, ...(sets.length > 0 ? { sets: sets.join('') } : {}) } : { asks };
+}
+
+/** What a deletion took out of a field's text, `before` it and `after`: one stretch, at most. */
+export function takenOut(before: string, after: string): string {
+  const length = before.length - after.length;
+  if (length <= 0) return '';
+  let start = 0;
+  while (start < after.length && before[start] === after[start]) start += 1;
+  return before.slice(start, start + length);
+}
+
+/**
+ * Pasted text as a terminal takes it: without the control characters (C0 but tab, newline and
+ * carriage return; DEL; C1) a web page can put on the clipboard as you copy from it. In a paste
+ * they would act as keys, and ESC [201~ would end the shell's bracketed paste early, so the rest
+ * ran without Enter. xterm (the X11 one), kitty and Windows Terminal leave them out too.
+ */
+export const cleanPaste = (text: string): string => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
+
+/**
+ * Takes a paste into the screen inside `el` before xterm does (its own handler passes the text on
+ * as it is), and hands it on cleaned. Returns what stops it.
+ */
+export function cleanPastes(el: HTMLElement, paste: (text: string) => void): () => void {
+  const onPaste = (event: ClipboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const text = cleanPaste(event.clipboardData?.getData('text/plain') ?? '');
+    if (text) paste(text);
+  };
+  el.addEventListener('paste', onPaste, { capture: true });
+  return () => el.removeEventListener('paste', onPaste, { capture: true });
+}
+
+/**
+ * Text put into the screen's field without a key: the macOS Emoji and Symbols picker, the Windows
+ * emoji panel, some dictation and handwriting input. xterm in screen reader mode sends what keys
+ * type and what input methods compose, and leaves such text in its field, unsent: this hands it
+ * to `take`. What xterm sends itself is left to it: the text of a key press (a keypress since the
+ * key went down, until it is up), of a key an input method takes (keyCode 229, read from the field),
+ * and of a composition. A key held that types nothing, such as Shift, takes nothing away. Returns
+ * what stops it.
+ */
+export function insertedText(field: HTMLElement, take: (text: string) => void): () => void {
+  /** The key down now types the text that comes, which xterm sends. */
+  let typing = false;
+  let composing = false;
+  /** When the last composition ended: the text it puts in comes after, and is xterm's too. */
+  let composed = Number.NEGATIVE_INFINITY;
+  const listeners: Array<[string, (event: Event) => void]> = [
+    ['keydown', (event) => {
+      // A key an input method takes: xterm reads what it puts in the field.
+      typing = (event as KeyboardEvent).keyCode === 229;
+    }],
+    ['keypress', () => {
+      typing = true;
+    }],
+    ['keyup', () => {
+      typing = false;
+    }],
+    ['blur', () => {
+      typing = false;
+    }],
+    ['compositionstart', () => {
+      composing = true;
+    }],
+    ['compositionend', () => {
+      composing = false;
+      composed = performance.now();
+    }],
+    ['input', (event) => {
+      const { inputType, data, isComposing } = event as InputEvent;
+      if (inputType !== 'insertText' || !data || typing || composing || isComposing || performance.now() - composed < 50) return;
+      take(data);
+    }],
+  ];
+  for (const [type, listener] of listeners) field.addEventListener(type, listener);
+  return () => {
+    for (const [type, listener] of listeners) field.removeEventListener(type, listener);
+  };
+}
+
+/** As many lines as xterm's screen reader mode reads out of the output after a key (its own bound). */
+const READ_OUT_LINES = 20;
+
+/** What xterm's screen reader mode keeps of the output to read out (AccessibilityManager). */
+type ReadOut = { _handleChar(char: string): void; _clearLiveRegion(): void; _liveRegionLineCount: number };
+
+/**
+ * Bounds what xterm's screen reader mode reads out of the output: each character printed since the
+ * last key, which it stops taking after 20 lines; output with no line feed in it (a progress bar
+ * drawn over and over, a full-screen program, one long line) went on filling the page. Past as many
+ * characters as 20 full lines hold it stops the same way, saying there is too much to read out.
+ * xterm keeps this to itself; the version is pinned, and test/terminal-inserted.test.ts fails
+ * should it move. Whether it could.
+ */
+export function boundReadOut(t: { readonly cols: number }): boolean {
+  const readOut = (t as unknown as { _core?: { _accessibilityManager?: { value?: ReadOut } } })._core?._accessibilityManager?.value;
+  if (typeof readOut?._handleChar !== 'function' || typeof readOut._clearLiveRegion !== 'function') return false;
+  const take = readOut._handleChar.bind(readOut);
+  const clear = readOut._clearLiveRegion.bind(readOut);
+  let taken = 0;
+  readOut._clearLiveRegion = () => {
+    taken = 0;
+    clear();
+  };
+  readOut._handleChar = (char) => {
+    taken += 1;
+    const most = READ_OUT_LINES * t.cols;
+    if (taken < most) take(char);
+    else if (taken === most && readOut._liveRegionLineCount <= READ_OUT_LINES) {
+      // As xterm ends once 20 lines came: a line feed, and that there is too much to read out.
+      readOut._liveRegionLineCount = READ_OUT_LINES;
+      take('\n');
+    }
+  };
+  return true;
+}
+

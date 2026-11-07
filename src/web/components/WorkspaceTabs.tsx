@@ -4,16 +4,19 @@ import { Component, type ComponentProps, lazy, type ReactNode, Suspense } from '
 import { retried } from '../lib/load';
 
 /**
- * Changes and Files, the tabs of Changes and files, with the diffs, the file viewer and search:
- * most of the pane's code, loaded when it first shows one of them, so a conversation opens without
- * it. One that did not arrive says so in the pane, and the conversation beside it stays.
+ * Changes, Files and Terminal, the tabs of Changes and files, with the diffs, the file viewer and
+ * search, and the terminal: most of the pane's code, loaded when it first shows one of them, so a
+ * conversation opens without it. One that did not arrive says so in the pane, and the conversation
+ * beside it stays.
  */
 const loadChanges = () => import('./WorkspaceChanges');
 const loadFiles = () => import('./WorkspaceFiles');
 const LazyChanges = lazy(() => retried(loadChanges).then((m) => ({ default: m.WorkspaceChanges })));
 const LazyFiles = lazy(() => retried(loadFiles).then((m) => ({ default: m.WorkspaceFiles })));
+// The terminal (xterm.js) is the largest of them, and only the tab loads it: never ahead of need.
+const LazyTerminal = lazy(() => retried(() => import('./WorkspaceTerminal')).then((m) => ({ default: m.WorkspaceTerminal })));
 
-/** Loads both ahead of need, once the conversation is up; one that fails here is asked for again when shown. */
+/** Loads Changes and Files ahead of need, once the conversation is up; one that fails here is asked for again when shown. */
 export function prefetchWorkspace(): void {
   void loadChanges().catch(() => undefined);
   void loadFiles().catch(() => undefined);
@@ -46,4 +49,8 @@ export function WorkspaceChanges(props: ComponentProps<typeof LazyChanges>) {
 
 export function WorkspaceFiles(props: ComponentProps<typeof LazyFiles>) {
   return <Loaded><Suspense fallback={loading}><LazyFiles {...props} /></Suspense></Loaded>;
+}
+
+export function WorkspaceTerminal(props: ComponentProps<typeof LazyTerminal>) {
+  return <Loaded><Suspense fallback={loading}><LazyTerminal {...props} /></Suspense></Loaded>;
 }

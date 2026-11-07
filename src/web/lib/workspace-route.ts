@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 /**
  * Where Changes and files is, kept in the page's address next to the session (`?s=…`):
- * - `w`: the tab, `changes` or `files`; on a phone its being there is what opens the view;
+ * - `w`: the tab, `changes`, `files` or `terminal`; on a phone its being there is what opens the view;
  * - `p`: the file whose diff or text is shown, or in Files a folder (ending in `/`);
  * - `l`: a line of that file;
  * - `t`: what Changes shows: `base` for everything since the branch split, a prompt's id for the
@@ -12,7 +12,7 @@ import { useSyncExternalStore } from 'react';
  * through them, and the view can be left for the conversation in one go. On a computer the pane
  * beside the conversation keeps its place in the address too, without adding entries.
  */
-export type WorkspaceTab = 'changes' | 'files';
+export type WorkspaceTab = 'changes' | 'files' | 'terminal';
 export type WorkspaceStep = { tab: WorkspaceTab; path?: string; line?: number; scope?: string };
 
 const KEYS = ['w', 'p', 'l', 't'] as const;
@@ -21,7 +21,9 @@ const KEYS = ['w', 'p', 'l', 't'] as const;
 export function stepOf(search: string): WorkspaceStep | undefined {
   const params = new URLSearchParams(search);
   const tab = params.get('w');
-  if (tab !== 'changes' && tab !== 'files') return undefined;
+  if (tab !== 'changes' && tab !== 'files' && tab !== 'terminal') return undefined;
+  // The terminal is one view: which terminal it shows is the tab's own, not the address's.
+  if (tab === 'terminal') return { tab };
   const path = params.get('p') ?? '';
   const line = Number(params.get('l'));
   const scope = params.get('t') ?? '';

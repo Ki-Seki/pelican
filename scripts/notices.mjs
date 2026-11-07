@@ -2,7 +2,8 @@
 // metafile) and its web app (dist/web, by the modules Vite puts in it), each with its name, version,
 // license and the full text of its license, and where its source is. Written by `npm run build`,
 // which fails if a package built in is missing from it (scripts/build-server.mjs); npm ships it.
-// The Agent SDK is not built in: npm installs it as a package, with its own license.
+// The Agent SDK and the terminal's PTY (@lydell/node-pty) are not built in: npm installs each as a
+// package, with its own license.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,16 +115,39 @@ function noticesIn(pkg, files) {
   return found;
 }
 
+/**
+ * Where the license of a package that comes with no license file is, when another package of its
+ * project has it: @xterm/headless is built from xterm.js's repository, under the LICENSE that
+ * @xterm/xterm ships, and names no author.
+ */
+const LICENSE_FROM = { '@xterm/headless': '@xterm/xterm' };
+
+/** The license files of `other`, a package beside the one in `folder`, named as its project's. */
+function projectLicense(folder, other) {
+  const modules = folder.slice(0, folder.lastIndexOf('node_modules') + 'node_modules'.length);
+  const at = path.join(modules, other);
+  const { version } = JSON.parse(readFileSync(path.join(at, 'package.json'), 'utf8'));
+  return licenseFiles(at).map((file) => ({ name: `${file.name} (its project's, as ${other} ${version} ships it)`, text: file.text }));
+}
+
+/**
+ * Packages whose code a file of Pelican's own adapts, so that it is built in with that file though
+ * no bundler counts it as theirs: xterm's serializer, in the terminal's copy of the screen.
+ */
+export const ADAPTED = [{ name: '@xterm/addon-serialize', file: 'src/server/terminal-snapshot.ts' }];
+
 /** What a package is, read from its folder. */
 export function readPackage(folder) {
   const manifest = JSON.parse(readFileSync(path.join(folder, 'package.json'), 'utf8'));
+  const files = licenseFiles(folder);
+  const from = files.length === 0 ? LICENSE_FROM[manifest.name] : undefined;
   return {
     folder,
     name: manifest.name,
     version: manifest.version,
     license: licenseOf(manifest),
     author: personOf(manifest.author),
-    files: licenseFiles(folder),
+    files: from ? projectLicense(folder, from) : files,
     header: headerOf(folder, manifest),
   };
 }
@@ -172,13 +196,15 @@ function section(pkg, where, files) {
 /**
  * The text of THIRD_PARTY_NOTICES: the packages built into the server and the web app (their
  * folders), each once, with where it is built in; `helpers`, a bundler whose own code it writes
- * into the server (esbuild's runtime); and `files`, the files built in, for the notices they carry.
- * @param {{ version: string, server: string[], web: string[], helpers?: string[], files?: string[] }} built
+ * into the server (esbuild's runtime); `adapted`, packages whose code a file of Pelican's adapts
+ * (ADAPTED); and `files`, the files built in, for the notices they carry.
+ * @param {{ version: string, server: string[], web: string[], helpers?: string[], adapted?: { folder: string, file: string }[], files?: string[] }} built
  */
-export function notices({ version, server, web, helpers = [], files = [] }) {
+export function notices({ version, server, web, helpers = [], adapted = [], files = [] }) {
   const where = new Map();
   for (const folder of server) where.set(folder, [...(where.get(folder) ?? []), 'the server (dist/server/index.js)']);
   for (const folder of helpers) where.set(folder, [...(where.get(folder) ?? []), 'the server (dist/server/index.js), as the helper code it writes into what it bundles (__toESM, __commonJS and the like)']);
+  for (const { folder, file } of adapted) where.set(folder, [...(where.get(folder) ?? []), `the server (dist/server/index.js), as the code ${file} adapts from it`]);
   for (const folder of web) where.set(folder, [...(where.get(folder) ?? []), 'the web app (dist/web)']);
   const packages = [...where.keys()].map(readPackage).sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
   const rule = '='.repeat(80);
@@ -186,7 +212,7 @@ export function notices({ version, server, web, helpers = [], files = [] }) {
   const head = [
     `Third-party notices for pelican-cc ${version}`,
     '',
-    wrap('Pelican is under the MIT License (LICENSE). Its server, dist/server/index.js, and its web app, dist/web, are built with the packages below in them, each under its own license, whose text follows its name. The Agent SDK is not among them: npm installs it as a package of its own, with its license.'),
+    wrap('Pelican is under the MIT License (LICENSE). Its server, dist/server/index.js, and its web app, dist/web, are built with the packages below in them, each under its own license, whose text follows its name. The Agent SDK and the terminal\'s PTY, @lydell/node-pty, are not among them: npm installs each as a package of its own, with its license.'),
     ...(offered.length > 0 ? [
       '',
       wrap(`Of them, ${offered.map((pkg) => `${pkg.name} ${pkg.version} (${pkg.license})`).join(', ')} ${offered.length === 1 ? 'is' : 'are'} under a license that asks for its source code to be offered: it is the npm package of that name and version, as its section says.`),

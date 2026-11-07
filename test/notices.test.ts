@@ -9,7 +9,7 @@ import { build as esbuild } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { mappedPackages, serverBuild, serverFiles, serverHelpers, serverPackages } from '../scripts/build-server.mjs';
+import { mappedPackages, serverAdapted, serverBuild, serverFiles, serverHelpers, serverPackages } from '../scripts/build-server.mjs';
 import { missing, notices, packageFolder, packagesOf, readPackage } from '../scripts/notices.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -18,6 +18,7 @@ let server: string[];
 let mapped: string[];
 let web: string[];
 let helpers: string[];
+let adapted: Array<{ folder: string; file: string }>;
 let files: string[];
 
 beforeAll(async () => {
@@ -27,6 +28,7 @@ beforeAll(async () => {
   server = serverPackages(metafile, outfile, root);
   mapped = await mappedPackages(`${outfile}.map`);
   helpers = await serverHelpers(outfile, root);
+  adapted = await serverAdapted(root);
   await viteBuild({ configFile: path.join(root, 'vite.config.ts'), logLevel: 'silent', build: { outDir: path.join(dir, 'web'), emptyOutDir: true } });
   const built = JSON.parse(await readFile(path.join(dir, '.third-party-web.json'), 'utf8')) as { folders: string[]; files: string[] };
   web = built.folders;
@@ -49,19 +51,23 @@ describe('the packages built in', () => {
 
   it('in the server, by its metafile, are those its source map names', () => {
     expect(server).toEqual(mapped);
-    expect(names(server)).toEqual(expect.arrayContaining(['hono', '@hono/node-server', 'ws', 'web-push', 'qrcode-generator', 'jws', 'ecdsa-sig-formatter', 'buffer-equal-constant-time']));
+    expect(names(server)).toEqual(expect.arrayContaining(['hono', '@hono/node-server', 'ws', 'web-push', 'qrcode-generator', 'jws', 'ecdsa-sig-formatter', 'buffer-equal-constant-time', '@xterm/headless', '@xterm/addon-unicode11']));
+    // npm installs these as packages of their own, the terminal's PTY loaded only when a terminal starts.
     expect(names(server)).not.toContain('@anthropic-ai/claude-agent-sdk');
+    expect(names(server).filter((name) => name.startsWith('@lydell/'))).toEqual([]);
   });
 
   it('in the web app take in what Vite and Rolldown add, and the stylesheet Tailwind makes', () => {
     expect(names(web)).toEqual(expect.arrayContaining(['react', 'react-dom', 'scheduler', 'react-markdown', 'highlight.js', 'lucide-react', 'qrcode-generator', 'tailwindcss', 'vite', 'rolldown']));
+    // The terminal's screen, in a chunk of its own that only its tab loads.
+    expect(names(web)).toEqual(expect.arrayContaining(['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-unicode11', '@xterm/addon-web-links']));
   });
 });
 
 describe('THIRD_PARTY_NOTICES', () => {
   let text: string;
   beforeAll(() => {
-    text = notices({ version: '0.0.0', server, web, helpers, files });
+    text = notices({ version: '0.0.0', server, web, helpers, adapted, files });
   });
   const sectionOf = (name: string) => {
     const at = text.indexOf(`\n${name} `);
@@ -90,9 +96,21 @@ describe('THIRD_PARTY_NOTICES', () => {
     expect(sectionOf('react')).not.toContain('Notices of others');
   });
 
+  it('credits the xterm.js authors for each of their packages: xterm’s headless one by its project’s license, and the serializer the terminal’s copy of the screen adapts', () => {
+    const headless = sectionOf('@xterm/headless');
+    expect(headless).toMatch(/Built into: the server \(dist\/server\/index\.js\)/);
+    expect(headless).toMatch(/LICENSE \(its project's, as @xterm\/xterm [\d.]+ ships it\):/);
+    expect(headless).toContain('The xterm.js authors');
+    expect(adapted.map(({ folder, file }) => [readPackage(folder).name, file])).toEqual([['@xterm/addon-serialize', 'src/server/terminal-snapshot.ts']]);
+    const serializer = sectionOf('@xterm/addon-serialize');
+    expect(serializer).toContain('Built into: the server (dist/server/index.js), as the code src/server/terminal-snapshot.ts adapts from it');
+    expect(serializer).toContain('The xterm.js authors');
+    for (const name of ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-unicode11', '@xterm/addon-web-links']) expect(sectionOf(name), name).toMatch(/Permission is hereby granted/);
+  });
+
   it('names each package built in, with its version, license and the license in full', () => {
-    expect(missing(text, [...new Set([...server, ...mapped, ...web])])).toEqual([]);
-    for (const folder of [...server, ...web]) {
+    expect(missing(text, [...new Set([...server, ...mapped, ...web, ...adapted.map((each) => each.folder)])])).toEqual([]);
+    for (const folder of [...server, ...web, ...adapted.map((each) => each.folder)]) {
       const { name, version, license } = readPackage(folder);
       const at = text.indexOf(`\n${name} ${version}\nLicense: ${license}\n`);
       expect(at, name).toBeGreaterThan(0);

@@ -27,9 +27,12 @@ npm run build
 ```
 
 `npm run build` also writes `THIRD_PARTY_NOTICES`, which npm ships: each package built into the
-server (by esbuild's metafile) and the web app (by the modules Vite puts in it), with its version
-and license in full. It fails if a package built in is not in it, or comes with no license it can
-name; `scripts/notices.mjs` says how each is read.
+server (by esbuild's metafile, and those whose code a file of Pelican's adapts, such as xterm's
+serializer) and the web app (by the modules Vite puts in it), with its version and license in full.
+It fails if a package built in is not in it, or comes with no license it can name;
+`scripts/notices.mjs` says how each is read. The terminal's PTY, `@lydell/node-pty`, is not built
+in: `node scripts/pty-binaries.mjs`, which CI runs, checks it, as `package-lock.json` pins it, against
+Microsoft's node-pty, and a new version needs its own few files read and pinned there first.
 
 The tests never see your own Claude Code sessions or Pelican sign-in: `test/setup.ts` points them
 at temporary folders before anything reads the environment, and keeps your git settings out of the
@@ -67,6 +70,11 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
 | `src/server/actions.ts`, `markdown.ts` | Branch, delete and Export as Markdown: prompts written as text, and a reply read as Markdown readers read it, kept to itself in any of them |
+| `src/server/terminals.ts`, `pty.ts` | Terminals: the shell in a PTY, the server's copy of its screen, its socket and flow control, and the optional PTY package |
+| `src/server/terminal-snapshot.ts` | The screen a page that comes back gets: xterm's serializer, fixed where it drew otherwise, and what it leaves out |
+| `src/shared/terminal-widths.ts`, `terminal-guards.ts` | What every terminal's xterm draws with, on the server and on a page: Unicode 11's widths with at most 16 marks on a character, and guards against output xterm throws on, or does too much with (counts far past the screen, links, titles) |
+| `src/web/components/WorkspaceTerminal.tsx`, `TerminalScreen.tsx` | The Terminal tab: its terminals, the phone's key row and line field, and the screen (xterm.js, loaded only by the tab) |
+| `src/web/lib/terminal-socket.ts`, `terminal-input.ts`, `terminal-cursor.ts`, `terminals.ts` | A page's connection to a terminal, what its keys and pastes send, its cursor, and Open, Run in terminal and Ctrl+` from the rest of the app |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
@@ -74,7 +82,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build (with the third-party notices), development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
+| `scripts/` | Build (with the third-party notices), development, the browser smoke test, the site, screenshots, icons, what changed upstream, the registry CI installs the package from, and the check that the terminal's binaries are Microsoft's |
 
 ## Keeping up with Claude Code
 

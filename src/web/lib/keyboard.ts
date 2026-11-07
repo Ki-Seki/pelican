@@ -126,8 +126,9 @@ export const KEYS = {
   // Control on a Mac too, as in Desktop's web build: ⌘⇧D is the browser's (bookmark all tabs).
   changes: { label: 'Changes and files', group: 'Panes', scope: 'page', keys: ['ctrl+shift+d'], also: ['mod+shift+d'] },
   files: { label: 'Files', group: 'Panes', scope: 'page', keys: ['mod+shift+f'], soon: true },
-  terminal: { label: 'Terminal', group: 'Panes', scope: 'page', keys: ['ctrl+`'], soon: true },
-  newTerminal: { label: 'New terminal', group: 'Panes', scope: 'page', keys: ['ctrl+shift+`'], soon: true },
+  // Control on a Mac too, as in Desktop; the key left of 1, whatever a keyboard prints on it.
+  terminal: { label: 'Terminal', group: 'Panes', scope: 'page', keys: ['ctrl+`'] },
+  newTerminal: { label: 'New terminal', group: 'Panes', scope: 'page', keys: ['ctrl+shift+`'] },
   closePane: { label: 'Close pane', group: 'Panes', scope: 'page', keys: ['mod+\\'] },
 
   send: { label: 'Send', group: 'Message box', scope: 'box', keys: ({ enterSends }) => (enterSends ? ['enter', 'mod+enter'] : ['mod+enter']) },
@@ -208,11 +209,14 @@ function codeKey(code: string | undefined): string | undefined {
 }
 
 /**
- * The key a keydown names, as a chord writes it. A letter or a digit is what the layout prints on
- * it (an AZERTY A is `a`); anything else held with Shift or ⌥, or that is not a plain character
- * (⌥R gives ®, ⇧, gives <, a Russian layout gives л), is read by where it sits on the keyboard.
+ * The key a keydown names, as a chord writes it. The key left of 1 is the terminal's `` ` ``,
+ * whatever a layout prints on it (a German one prints ^), as Desktop's Ctrl+` is. A letter or a
+ * digit is what the layout prints on it (an AZERTY A is `a`); anything else held with Shift or ⌥,
+ * or that is not a plain character (⌥R gives ®, ⇧, gives <, a Russian layout gives л), is read by
+ * where it sits on the keyboard.
  */
 function keyOf(e: KeyLike): string {
+  if (e.code === 'Backquote') return '`';
   const key = e.key.toLowerCase();
   if (/^[a-z0-9]$/.test(key)) return key;
   if (!e.shiftKey && !e.altKey && /^[\x21-\x7e]$/.test(e.key)) return key;

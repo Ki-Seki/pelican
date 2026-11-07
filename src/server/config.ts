@@ -119,6 +119,8 @@ export const config = {
   keepAwake: process.env.PELICAN_KEEP_AWAKE !== '0',
   /** Demo mode: made-up sessions, nothing runs. */
   demo: false,
+  /** Terminals beside the conversation; --no-terminal turns them off (`!` commands still run). */
+  terminal: true,
 };
 
 export type Config = typeof config;

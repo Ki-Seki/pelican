@@ -1,17 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, FolderGit2, GitBranch, Info, ListChecks, Loader2, MoreHorizontal, SquareTerminal, TriangleAlert, X } from 'lucide-react';
-import { type DragEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MODE_INFO, type PermissionMode, startMode } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
-import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice } from '../lib/api';
+import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
 import { addWaiting, clearDraft, moveDraft, putBackWaiting, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { composing, hasKeyboard } from '../lib/keyboard';
+import { composing, hasKeyboard, isKey } from '../lib/keyboard';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { getPrefs, loadDefaults, markSeen, markTipSeen, newSessionDefaults, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, viewOf } from '../lib/prefs';
@@ -33,9 +33,11 @@ import {
   truncateFrom,
   useSessionView,
 } from '../lib/store';
+import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import type { Item } from '../lib/turns';
+import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
 import { modelOf } from './ModelSheet';
@@ -50,7 +52,7 @@ import { Sheet } from './Sheet';
 import { SideChat, useSideChat } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
-import { PANE_KEYS, useWorkspacePane, Workspace } from './Workspace';
+import { PANE_KEYS, shownTab, useWorkspacePane, Workspace } from './Workspace';
 import { prefetchWorkspace } from './WorkspaceTabs';
 
 /**
@@ -721,6 +723,48 @@ export function Chat({
     ...(turnChanges ? { turns: turnChanges.turns, lines: turnChanges.lines } : {}),
   } : undefined, [cwd, showWorkspace, makeWay, turnChanges]);
 
+  // Ctrl+` shows the terminal and gives it the keys, as in Claude Desktop; pressed in the terminal,
+  // it hides it and the message box has them again. Ctrl+Shift+` opens a new terminal in the
+  // session's folder, as Desktop's New terminal does. The side chat makes way first.
+  const paneTab = shownTab(useWorkspaceStep());
+  const { setOpen: setPaneOpen } = workspace;
+  const terminals = useTerminalsAvailable();
+  useEffect(() => {
+    if (!cwd) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      const fresh = isKey(e, 'newTerminal');
+      if ((!fresh && !isKey(e, 'terminal')) || e.repeat || composing(e) || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      const inTerminal = e.target instanceof Element && Boolean(e.target.closest('[data-terminal]'));
+      if (!fresh && paneShown && paneTab === 'terminal' && inTerminal) {
+        setPaneOpen(false);
+        composer.current?.focus();
+        return;
+      }
+      // Where this Pelican runs none, the tab says why.
+      if (fresh && terminals) askForTerminal(cwd);
+      wantTerminalFocus();
+      makeWay(() => showWorkspace({ tab: 'terminal' }));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cwd, terminals, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
+  // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
+  const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {
+    askForTerminal(cwd, command);
+    makeWay(() => showWorkspace({ tab: 'terminal' }));
+  } : undefined), [cwd, terminals, makeWay, showWorkspace]);
+  // The trust sheet, for a terminal in a folder nobody trusted that brings programs.
+  const askTrust = useCallback(({ brings, commands, more }: TrustQuestion) => new Promise<TrustChoice | undefined>((resolve) => {
+    let settled = false;
+    const once = (choice?: TrustChoice) => {
+      if (settled) return;
+      settled = true;
+      resolve(choice);
+    };
+    setTrustAsk({ brings, commands, more, answer: (choice) => once(choice), cancel: () => once() });
+  }), []);
+
   const tasks = useMemo(
     () => (sessionId && view.offset > 0 ? detail?.tasks ?? [] : currentTasks(view.messages)),
     [sessionId, view.offset, view.messages, detail?.tasks],
@@ -851,6 +895,7 @@ export function Chat({
 
   return (
     <PathLinksContext.Provider value={links}>
+    <RunInTerminal.Provider value={runInTerminal}>
     <CommentsChat.Provider value={viewId}>
     <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
@@ -1045,12 +1090,18 @@ export function Chat({
             if (quote) addWaiting(viewId, quote);
             else if (how !== 'quote') setDraftText({ text, key: Date.now(), append: true, ...(how === 'block' ? { block: true } : {}) });
           }}
+          onQuote={(item) => {
+            // A quote of the terminal waits above the message box, as one of a file does.
+            if (!workspace.docked) workspace.setOpen(false);
+            addWaiting(viewId, item);
+          }}
           onSendComments={() => {
             // Nothing waiting: there was nothing, or it is on its way (a second tap of Send now).
             if (waitingOf(viewId).length === 0) return;
             if (!workspace.docked) workspace.setOpen(false);
             void send('', [], prefs.sendWhileBusy, 'comments');
           }}
+          askTrust={askTrust}
         />
       )}
       {sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}
@@ -1103,6 +1154,7 @@ export function Chat({
       )}
     </div>
     </CommentsChat.Provider>
+    </RunInTerminal.Provider>
     </PathLinksContext.Provider>
   );
 }

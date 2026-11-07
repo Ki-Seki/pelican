@@ -1,7 +1,10 @@
-// Bundles the server into one ESM file, with the packages it uses built in, as CI tested them; the
-// web app is built separately by Vite. Only the Agent SDK stays a package npm installs: it finds
-// the Claude Code it runs in its platform's package, of which npm installs this computer's alone.
-// (From a package that pins its tree with npm-shrinkwrap.json, npm installs every platform's: 2.6 GB.)
+// Bundles the server into one ESM file, with the packages it uses built in, as CI tested them, the
+// terminal's copy of the screen (@xterm/headless, with Unicode 11's widths) among them; the web app
+// is built separately by Vite. Two stay packages npm installs, each finding what it runs in its
+// platform's package, of which npm installs this computer's alone: the Agent SDK, its Claude Code,
+// and the terminal's PTY (@lydell/node-pty, an optional dependency loaded on first use), its native
+// module. (From a package that pins its tree with npm-shrinkwrap.json, npm installs every
+// platform's: 2.6 GB.)
 import { realpathSync } from 'node:fs';
 import { chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +12,23 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 
-import { hasEsbuildRuntime, missing, NOTICES, notices, packageFolder, packagesOf, WEB_PACKAGES } from './notices.mjs';
+import { ADAPTED, hasEsbuildRuntime, missing, NOTICES, notices, packageFolder, packagesOf, WEB_PACKAGES } from './notices.mjs';
+
+/**
+ * xterm's packages carry source maps of their own, which name their sources as xterm's build saw
+ * them (webpack://…), not where they are: read without them, the server's source map names the
+ * files built in, as it does every other package's, and so accounts for them as its metafile does.
+ * @type {import('esbuild').Plugin}
+ */
+const filesAsBuiltIn = {
+  name: 'files-as-built-in',
+  setup(pluginBuild) {
+    pluginBuild.onLoad({ filter: /[\\/]node_modules[\\/]@xterm[\\/].*\.[cm]?js$/ }, async (args) => ({
+      contents: (await readFile(args.path, 'utf8')).replace(/\n\/\/# sourceMappingURL=\S+\s*$/, '\n'),
+      loader: 'js',
+    }));
+  },
+};
 
 /**
  * How the server is built; test/package.test.ts builds it so too.
@@ -21,7 +40,8 @@ export const serverBuild = {
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  external: ['@anthropic-ai/claude-agent-sdk'],
+  external: ['@anthropic-ai/claude-agent-sdk', '@lydell/node-pty'],
+  plugins: [filesAsBuiltIn],
   // Packages written for require() (web-push, ws) require Node's own modules: an ES module has
   // no require of its own, so it is given one.
   banner: { js: "#!/usr/bin/env node\nimport { createRequire as createRequireForPackages } from 'node:module';\nconst require = createRequireForPackages(import.meta.url);" },
@@ -59,6 +79,15 @@ export const serverFiles = (metafile, outfile, cwd = process.cwd()) => {
 export const serverHelpers = async (outfile, cwd = process.cwd()) => (hasEsbuildRuntime(await readFile(path.resolve(cwd, outfile), 'utf8')) ? [path.join(cwd, 'node_modules', 'esbuild')] : []);
 
 /**
+ * The packages whose code a file of Pelican's own adapts (ADAPTED), in the working folder's
+ * node_modules, with that file, which must still say so: their code is in the server too.
+ */
+export const serverAdapted = async (cwd = process.cwd()) => Promise.all(ADAPTED.map(async ({ name, file }) => {
+  if (!(await readFile(path.resolve(cwd, file), 'utf8')).includes(name)) throw new Error(`${file} no longer names ${name}, which scripts/notices.mjs says it adapts`);
+  return { folder: path.join(cwd, 'node_modules', name), file };
+}));
+
+/**
  * The packages a source map names files of: another account of what the bundle holds, which the
  * notices are checked against.
  */
@@ -77,12 +106,14 @@ if (isMain()) {
   }));
   const server = serverPackages(metafile, outfile);
   const helpers = await serverHelpers(outfile);
+  const adapted = await serverAdapted();
   const { version } = JSON.parse(await readFile('package.json', 'utf8'));
-  const text = notices({ version, server, web, helpers, files: [...serverFiles(metafile, outfile), ...webIn] });
-  // Each package built in is in it: by the metafile, by the bundle's source map, by the web app's modules, and esbuild's runtime.
-  const left = missing(text, [...new Set([...server, ...(await mappedPackages(`${outfile}.map`)), ...web, ...helpers])]);
+  const text = notices({ version, server, web, helpers, adapted, files: [...serverFiles(metafile, outfile), ...webIn] });
+  // Each package built in is in it: by the metafile, by the bundle's source map, by the web app's
+  // modules, esbuild's runtime, and the code adapted from others.
+  const left = missing(text, [...new Set([...server, ...(await mappedPackages(`${outfile}.map`)), ...web, ...helpers, ...adapted.map((each) => each.folder)])]);
   if (left.length > 0) throw new Error(`${NOTICES} leaves out ${left.join(', ')}`);
   await writeFile(NOTICES, text);
   await rm(WEB_PACKAGES);
-  console.log(`${NOTICES}: ${server.length + helpers.length} packages in the server, ${web.length} in the web app`);
+  console.log(`${NOTICES}: ${server.length + helpers.length + adapted.length} packages in the server, ${web.length} in the web app`);
 }

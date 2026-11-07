@@ -15,7 +15,10 @@ describe('the steps of Changes and files in the address', () => {
     expect(stepOf('?s=abc')).toBeUndefined();
     expect(stepOf('?s=abc&w=files&p=src%2Fa.ts&l=7')).toEqual({ tab: 'files', path: 'src/a.ts', line: 7 });
     expect(stepOf('?w=changes&t=base&l=0')).toEqual({ tab: 'changes', scope: 'base' });
-    expect(stepOf('?w=terminal')).toBeUndefined();
+    // The terminal is one view: a path or a line in the address means nothing to it.
+    expect(stepOf('?w=terminal&p=a.ts&l=3')).toEqual({ tab: 'terminal' });
+    expect(stepOf('?w=shell')).toBeUndefined();
+    expect(withStep('?s=abc', { tab: 'terminal' })).toBe('?s=abc&w=terminal');
     expect(withStep('?s=abc', { tab: 'changes', path: 'a b.ts', scope: 'u1' })).toBe('?s=abc&w=changes&p=a+b.ts&t=u1');
     expect(withStep('?new&cwd=%2Fx&w=files', undefined)).toBe('?new&cwd=%2Fx');
     expect(folderOf('src/settings/Settings.tsx')).toBe('src/settings/');

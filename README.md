@@ -73,9 +73,10 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
   Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
   anything else to download.
-- **Changes and files, as in Claude Desktop.** What each turn changed, what is uncommitted, or
-  everything since your branch split, with diffs. Search and read the folder; a path in a reply
-  opens the file at its line. Comment on a line or quote it, and Create PR asks Claude.
+- **Changes, files and a terminal, as in Claude Desktop.** What each turn changed, what is
+  uncommitted, or everything since your branch split, with diffs. Search and read the folder; a
+  path in a reply opens the file at its line. Comment on a line or quote it, and Create PR asks
+  Claude. Your own shell sits beside them, with a line field and a key row on a phone.
 - **Your usage, from every app.** Tokens, sessions and streaks by project, model and app, with your
   plan's limits, or the cost Claude Code estimates on an API key.
 - **Made for a phone, good on a computer.** One hand, dictation, a notification when Claude needs
@@ -107,7 +108,7 @@ Remote Control can answer a prompt waiting in your terminal; Pelican cannot. Mor
 Pelican runs Claude Code itself, so your settings, `CLAUDE.md`, hooks, skills, subagents and MCP
 servers work as they do in the terminal, and so does any login: a Claude plan, an API key, Bedrock,
 Google Cloud or Microsoft Foundry. What Pelican does not do: Remote Control, cloud sessions, a
-worktree for each new session, a terminal of its own, or editing files by hand. [The full table](https://ki-seki.github.io/pelican/docs.html#coverage) goes through Claude
+worktree for each new session, or editing files by hand. [The full table](https://ki-seki.github.io/pelican/docs.html#coverage) goes through Claude
 Code's features one by one.
 
 ## Security
@@ -121,6 +122,9 @@ Whoever can use Pelican can run commands as you, so:
 - What Claude writes renders in a sandboxed frame that cannot reach Pelican, as a still picture
   until you tap Run.
 - A folder runs nothing of its own, such as hooks or MCP servers, until you trust it.
+- A terminal is your shell, as you: it opens under the same checks, runs in a folder as Claude Code
+  does there, keeps nothing on disk and ends with Pelican. Nothing runs in it without you, and
+  Claude sees it only in what you quote.
 
 The whole model is in [SECURITY.md](SECURITY.md).
 

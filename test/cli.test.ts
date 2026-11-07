@@ -148,6 +148,21 @@ describe('a program that holds Pelican’s port', () => {
   }, 30_000);
 });
 
+describe('`pelican --no-terminal`', () => {
+  it('starts Pelican with no terminal, which says why', async () => {
+    const c = await computer();
+    expect((await run(c, ['--help'])).out).toMatch(/--no-terminal +Offer no terminal; ! commands still run/);
+    const port = await freePort();
+    const pelican = await start(c, ['--port', String(port), '--no-auth', '--no-terminal']);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/terminals`, { headers: { 'X-Pelican': '1' } });
+      expect(await response.json()).toEqual({ available: false, reason: 'The terminal is off: Pelican was started with --no-terminal.', terminals: [] });
+    } finally {
+      pelican.kill('SIGTERM');
+    }
+  }, 30_000);
+});
+
 describe('where a command reaches Pelican', () => {
   it('is where it listens: a wildcard on loopback, ::1 as itself, a name as it resolves', () => {
     expect(callable('127.0.0.1', 7860)).toBe('http://127.0.0.1:7860/');

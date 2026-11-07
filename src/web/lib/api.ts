@@ -32,6 +32,7 @@ import type {
 import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
+import type { NewTerminal, TerminalInfo, TerminalList, TerminalRunning } from '../../shared/terminal';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
 import { DemoRefusal, requestKey, STATIC_DEMO, staticRequest } from './static-demo';
 
@@ -48,13 +49,16 @@ export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString
 export type SentState = 'there' | 'gone' | 'large';
 
 /** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
+/** What a folder nobody trusted brings, to ask about before Claude Code (or a terminal) starts in it: its items, the commands in them, and the files it shows part of. */
+export type TrustQuestion = { brings: string[]; commands?: CommandAt[][]; more?: string[] };
+
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly signIn = false,
     /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about, the commands in it, and the files it shows part of. */
-    readonly trust?: { brings: string[]; commands?: CommandAt[][]; more?: string[] },
+    readonly trust?: TrustQuestion,
     /** The demo saying what it does not do, not something going wrong. */
     readonly demo = false,
   ) {
@@ -182,6 +186,20 @@ async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
     throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn), trust);
   }
   return response.json();
+}
+
+/**
+ * Asks whether this browser is still signed in, as a socket closed for its sign-in
+ * (SIGNED_OUT_CLOSE) has it wonder; when it is not, the app shows the sign-in.
+ */
+export function checkSignedIn(): void {
+  if (STATIC_DEMO) return;
+  void reach(apiUrl('auth'), { headers: { ...MARK } })
+    .then((response) => (response.ok ? response.json() as Promise<AuthState> : undefined))
+    .then((state) => {
+      if (state?.required && !state.signedIn) onSignedOut();
+    })
+    .catch(() => undefined);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -351,6 +369,20 @@ export const api = {
       throw new ApiError(body.error ?? response.statusText, response.status);
     }
     return ((await response.json()) as { attachment: Attachment }).attachment;
+  },
+  /** Every terminal, and whether this Pelican runs any (the first ask loads the PTY). */
+  terminals: () => request<TerminalList>('terminals'),
+  /** A new terminal: the user's shell in a folder, at this size, with a command to run there or none. */
+  openTerminal: (body: NewTerminal) => send<{ terminal: TerminalInfo }>('POST', 'terminals', body).then((r) => r.terminal),
+  /** A terminal, and whether a program runs in it now, a job in the background too. */
+  terminal: (id: string) => request<TerminalRunning>(`terminals/${encodeURIComponent(id)}`),
+  /** Ends a terminal: its shell is hung up, as closing a window does. */
+  closeTerminal: (id: string) => send<{ ok: boolean }>('DELETE', `terminals/${encodeURIComponent(id)}`),
+  /** The address of a terminal's socket, at a size (relative to the page, as api/ws). */
+  terminalSocket: (id: string, cols: number, rows: number) => {
+    const url = new URL(`api/terminal?id=${encodeURIComponent(id)}&cols=${cols}&rows=${rows}`, appBase);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return url.toString();
   },
   pushKey: () => request<{ key: string | null }>('push/key').then((r) => r.key),
   subscribePush: (subscription: PushSubscriptionJSON, openUrl: string) =>

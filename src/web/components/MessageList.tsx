@@ -12,6 +12,7 @@ import type { ViewMode } from '../lib/prefs';
 import { SessionContext } from '../lib/session-context';
 import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
+import { InReply } from '../lib/terminals';
 import { describeTool } from '../lib/tools';
 import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
 import { openImage } from './Lightbox';
@@ -156,8 +157,9 @@ const AssistantTurn = memo(function AssistantTurn({
         ) : seg.kind === 'card' ? (
           <ToolCallView key={seg.key} call={seg.part.call} cwd={cwd} running={running} defaultOpen={view === 'verbose'} />
         ) : seg.kind === 'text' ? (
-          // A paragraph swiped to the left is quoted (a phone's swipe to reply).
-          <SwipeQuote key={seg.key}><Markdown text={seg.text} className="my-2" /></SwipeQuote>
+          // A paragraph swiped to the left is quoted (a phone's swipe to reply); a shell command in
+          // Claude's own words can be run in the terminal.
+          <SwipeQuote key={seg.key}><InReply.Provider value><Markdown text={seg.text} className="my-2" /></InReply.Provider></SwipeQuote>
         ) : seg.image.omitted ? null : !loadsInPlace(imageSrc(seg.image)) ? (
           <div key={seg.key} className="my-2"><RemoteImage src={imageSrc(seg.image)} /></div>
         ) : (
@@ -694,7 +696,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
   return (
     <div>
       {run.partial.map((block, i) => {
-        if (block.type === 'text') return block.text ? <StreamingMarkdown key={i} text={block.text} className="my-2" /> : null;
+        if (block.type === 'text') return block.text ? <InReply.Provider key={i} value><StreamingMarkdown text={block.text} className="my-2" /></InReply.Provider> : null;
         // Normal says that Claude thinks; the other views show what, as it comes.
         if (block.type === 'thinking') return <Thinking key={i} text={view === 'normal' ? '' : block.thinking} live defaultOpen />;
         const summary = describeTool(block.name, partialTarget(block), cwd);

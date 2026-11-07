@@ -51,7 +51,7 @@ describe('the keyboard shortcuts sheet', () => {
         'Close a menu or sheet: Esc',
       ],
       'This session': ['Side chat: Ctrl ;', 'Transcript view: Ctrl O'],
-      Panes: ['Changes and files: Ctrl Shift D', 'Close pane: Ctrl \\'],
+      Panes: ['Changes and files: Ctrl Shift D', 'Terminal: Ctrl `', 'New terminal: Ctrl Shift `', 'Close pane: Ctrl \\'],
       'Message box': [
         'Send: Enter Ctrl Enter',
         'New line: Shift Enter',

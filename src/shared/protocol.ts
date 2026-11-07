@@ -1,6 +1,7 @@
 // Types shared by the server and the web app: REST payloads and WebSocket events.
 
 import type { PermissionMode } from './modes';
+import type { TerminalAvailability } from './terminal';
 
 export type { PermissionMode } from './modes';
 
@@ -465,6 +466,14 @@ export type ClientEvent =
   | { type: 'subscribe'; sessionId: string }
   | { type: 'unsubscribe'; sessionId: string };
 
+/**
+ * The close code of a socket (api/ws, or a terminal's) whose browser is no longer signed in: a
+ * new token or password, or a cookie that expired. The server checks every second, with the
+ * sign-in the socket opened with; the page asks whether it is still signed in, and shows the
+ * sign-in when it is not.
+ */
+export const SIGNED_OUT_CLOSE = 4401;
+
 export type ServerInfo = {
   machine: string;
   home: string;
@@ -478,4 +487,6 @@ export type ServerInfo = {
    * brings; `newer`, the version of the user's own `claude` when that one is newer.
    */
   claudeCode?: { version?: string; path?: string; newer?: string };
+  /** Whether this server runs terminals, and why not; GET /api/terminals says for sure. */
+  terminal?: TerminalAvailability;
 };

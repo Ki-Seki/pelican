@@ -35,6 +35,7 @@ Options
       --name <name>           Name shown for this machine (default: its host name)
       --no-auth               Ask no one to sign in. Only when something in front
                               of Pelican already authenticates.
+      --no-terminal           Offer no terminal; ! commands still run
       --demo                  Show made-up sessions; nothing runs
       --open                  Open the browser
   -v, --version               Print the versions of Pelican and the Claude Code it runs
@@ -58,6 +59,7 @@ const OPTIONS = {
   host: { type: 'string', short: 'H' },
   name: { type: 'string' },
   'no-auth': { type: 'boolean' },
+  'no-terminal': { type: 'boolean' },
   demo: { type: 'boolean' },
   open: { type: 'boolean' },
   off: { type: 'boolean' },
@@ -275,6 +277,7 @@ function serviceFlags(values: ReturnType<typeof parse>['values']): string[] {
     ...(values.host ? ['--host', values.host] : []),
     ...(values.name ? ['--name', values.name] : []),
     ...(values['no-auth'] ? ['--no-auth'] : []),
+    ...(values['no-terminal'] ? ['--no-terminal'] : []),
   ];
 }
 
@@ -409,6 +412,7 @@ async function main(): Promise<void> {
   if (values.host) config.host = values.host;
   if (values.name) config.machine = values.name;
   if (values['no-auth']) config.auth = 'none';
+  if (values['no-terminal']) config.terminal = false;
   if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
     throw new UsageError(`Not a port: ${values.port ?? `${process.env.PELICAN_PORT} (PELICAN_PORT)`}`);
   }

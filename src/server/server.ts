@@ -4,25 +4,26 @@ import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { ClientEvent, RunState, ServerEvent } from '../shared/protocol.js';
+import { type ClientEvent, type RunState, type ServerEvent, SIGNED_OUT_CLOSE } from '../shared/protocol.js';
+import { TERMINAL_LIMITS } from '../shared/terminal.js';
 import { app } from './app.js';
-import { loadAuth, signedIn } from './auth.js';
+import { loadAuth, refreshAuth, signedIn } from './auth.js';
 import { config } from './config.js';
 import { connect, subscribe } from './feed.js';
 import { keepDays, sweepUploads } from './files.js';
+import { heartbeat } from './heartbeat.js';
 import { initPush } from './push.js';
 import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
 import { askedBySystemd, LAUNCHD_EXIT_TIMEOUT_S, launchdExitTimeout, launchdJob, runCommand } from './service.js';
 import { hurryShells, runningShells, shellsEvent, shutdownGrace, stopAllShells } from './shell-runs.js';
 import { RunChannel } from './stream.js';
+import { attachTerminal, closeAllTerminals } from './terminals.js';
 import { watchWaiting } from './waiting.js';
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 /** A browser follows a handful of sessions at once; more from one socket is not a browser. */
 const MAX_SUBSCRIPTIONS = 64;
-/** Proxies close idle sockets (Cloudflare after 100 s); a ping this often keeps them open and finds dead ones. */
-const HEARTBEAT_MS = 25_000;
 /**
  * Unsent bytes past which a socket gets no more run updates until it catches up (a phone on a slow
  * link): each update replaces the last, so only the newest is sent once the backlog is gone.
@@ -59,8 +60,45 @@ function guardRejections(): void {
   });
 }
 
+/**
+ * The sockets of api/ws, each with the sign-in it opened with. A socket lives on after the
+ * request that opened it, so its sign-in is looked at again every second: once it signs nobody in
+ * (a new token or password, which Pelican notices within a second, or a cookie that expired), the
+ * socket closes (SIGNED_OUT_CLOSE). A terminal's socket is checked the same way (terminals.ts),
+ * and before each key it passes on.
+ */
+const SIGN_IN_CHECK_MS = 1000;
+const sockets = new Map<WebSocket, () => boolean>();
+let checkingSignIn: NodeJS.Timeout | undefined;
+
+function keepSignedIn(ws: WebSocket, stillSignedIn: () => boolean): void {
+  sockets.set(ws, stillSignedIn);
+  ws.once('close', () => sockets.delete(ws));
+  if (checkingSignIn) return;
+  checkingSignIn = setInterval(() => {
+    // The sign-in files read again now, not up to a second from now: a reset closes them within one.
+    refreshAuth(Date.now(), true);
+    for (const [socket, still] of sockets) {
+      if (still()) continue;
+      sockets.delete(socket);
+      socket.close(SIGNED_OUT_CLOSE, 'Signed out');
+    }
+    if (sockets.size > 0) return;
+    clearInterval(checkingSignIn);
+    checkingSignIn = undefined;
+  }, SIGN_IN_CHECK_MS);
+  checkingSignIn.unref();
+}
+
 /** The path of a request target, without parsing it: a malformed target must not throw. */
 const pathOf = (url: string | undefined) => (url ?? '/').split('?')[0] ?? '/';
+
+/** The query of a request target, the same way. */
+const queryOf = (url: string | undefined) => {
+  const target = (url ?? '').split('#')[0]!;
+  const at = target.indexOf('?');
+  return new URLSearchParams(at < 0 ? '' : target.slice(at + 1));
+};
 
 /**
  * Starts the HTTP server and the WebSocket that streams sessions. Resolves once it listens.
@@ -74,6 +112,14 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
   // Client events are a few hundred bytes; nothing bigger is read. What goes out is mostly JSON,
   // compressed: Tailscale Serve and SSH tunnels pass it on as it is.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: { threshold: 1024 } });
+  // A terminal's socket of its own (terminals.ts): its output never waits behind a session's, nor
+  // a permission prompt behind its output. Keystrokes, pastes in parts and control messages, each
+  // at most a frame; output compressed fast, which makes it many times smaller.
+  const terminalSockets = new WebSocketServer({
+    noServer: true,
+    maxPayload: TERMINAL_LIMITS.frame,
+    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 1 } },
+  });
 
   const { url, server } = await new Promise<{ url: string; server: ReturnType<typeof serve> }>((resolve, reject) => {
     const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, (info: AddressInfo) => {
@@ -88,8 +134,10 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     socket.on('error', () => socket.destroy());
     try {
       const forwarded = req.headers['x-forwarded-host'];
+      const target = pathOf(req.url);
+      const terminal = target.endsWith('/api/terminal');
       // The same checks as every request: a known Host, a page of Pelican's own, a signed-in browser.
-      const ok = pathOf(req.url).endsWith('/api/ws')
+      const ok = (terminal || target.endsWith('/api/ws'))
         && hostAllowed(req.headers.host)
         && originAllowed(req.headers.origin, req.headers.host, Array.isArray(forwarded) ? forwarded[0] : forwarded)
         && signedIn(req.headers.cookie, req.headers.authorization);
@@ -97,7 +145,16 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      const { cookie, authorization } = req.headers;
+      const stillSignedIn = () => signedIn(cookie, authorization);
+      if (terminal) {
+        terminalSockets.handleUpgrade(req, socket, head, (ws) => attachTerminal(ws, queryOf(req.url), stillSignedIn));
+      } else {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          keepSignedIn(ws, stillSignedIn);
+          wss.emit('connection', ws, req);
+        });
+      }
     } catch {
       socket.destroy();
     }
@@ -135,33 +192,8 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
       if (event) send(event);
     };
 
-    // A socket that does not answer a ping is gone (a phone that changed networks, a closed lid):
-    // it is dropped with its subscriptions, instead of being polled for until TCP gives up. A ping
-    // waits behind what was sent before it, though: a phone on a slow link still reading pictures
-    // is kept while its backlog goes down. That shows only once a whole message has gone out, and
-    // one large message can take longer than a heartbeat, so a backlog gets a second heartbeat.
-    // Pages cannot see pings, so a tick tells them the socket still works.
-    let answered = true;
-    /** What was still to send at the last heartbeat, and heartbeats since that last went down. */
-    let backlog = 0;
-    let stalled = 0;
-    ws.on('pong', () => {
-      answered = true;
-    });
-    const heartbeat = setInterval(() => {
-      const left = ws.bufferedAmount;
-      if (answered) {
-        answered = false;
-        backlog = left;
-        stalled = 0;
-        ws.ping();
-        send({ type: 'tick' });
-        return;
-      }
-      stalled = left < backlog ? 0 : stalled + 1;
-      backlog = left;
-      if (stalled > (left > 0 ? 1 : 0)) ws.terminate();
-    }, HEARTBEAT_MS);
+    // A socket that does not answer a ping is gone, and dropped with its subscriptions.
+    const stopBeating = heartbeat(ws, () => send({ type: 'tick' }));
     // A frame too large or malformed closes this socket; unheard, the error would stop the server.
     ws.on('error', () => ws.terminate());
 
@@ -189,7 +221,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     });
 
     ws.on('close', () => {
-      clearInterval(heartbeat);
+      stopBeating();
       clearInterval(catchingUp);
       disconnect();
       for (const unsubscribe of subscriptions.values()) unsubscribe();
@@ -227,6 +259,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
       console.log(`[pelican] Giving ${what} up to ${Math.round(grace / 100) / 10} seconds to end.${process.stdin.isTTY ? ` Ctrl+C again ends ${waiting === 1 ? 'it' : 'them'} now.` : ''}`);
     }
     const shells = stopAllShells(grace, { asked: askedBySystemd(signal) });
+    closeAllTerminals();
     closeAll();
     server.close();
     void Promise.all([shells, new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
@@ -239,8 +272,10 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     clearInterval(sweeping);
     process.off('SIGINT', shutdown);
     process.off('SIGTERM', shutdown);
-    for (const client of wss.clients) client.terminate();
+    closeAllTerminals();
+    for (const client of [...wss.clients, ...terminalSockets.clients]) client.terminate();
     wss.close();
+    terminalSockets.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };
   return { url, close };

@@ -8,11 +8,12 @@ can read your sessions and have Claude run commands as you, so treat access to i
 - **Every browser signs in, also on this computer.** At first start Pelican makes a random access
   token, kept in `~/.config/pelican/token.json` (readable only by you), and prints a link with it,
   the way Jupyter does. Opening that link signs the browser in; `pelican token` prints it again and
-  `pelican token --reset` replaces it, signing every browser out at once (a running Pelican notices
-  within a second). Other accounts and programs on the computer, containers and VMs that can reach
-  `127.0.0.1` included, get nowhere without it. The link is printed only on a terminal, never into
-  a log (a service's output file), and is never put on a command line: on macOS `--open` hands it
-  to the browser through a file only you can read; elsewhere `--open` opens the sign-in page.
+  `pelican token --reset` replaces it, signing every browser out at once, the connections and
+  terminals it has open included (a running Pelican notices within a second). Other accounts and
+  programs on the computer, containers and VMs that can reach `127.0.0.1` included, get nowhere
+  without it. The link is printed only on a terminal, never into a log (a service's output file),
+  and is never put on a command line: on macOS `--open` hands it to the browser through a file only
+  you can read; elsewhere `--open` opens the sign-in page.
 - **A phone signs in with a one-time code**, never the token: the QR codes of `pelican phone`, of
   the start banner and of Settings carry a code that works once and for two minutes, and a new
   token or password voids the codes made before it. `pelican phone` talks only to the Pelican
@@ -126,6 +127,45 @@ can read your sessions and have Claude run commands as you, so treat access to i
   settings only; git does not run there at all. In a trusted folder, git runs for the Changes panel
   with hooks, the file-system monitor, external diffs and text converters off, reads paths
   literally, refuses `..`, and shows nothing of a work tree outside the folder.
+- **A terminal is your shell, as you, with the same doors.** A terminal runs your login shell on
+  this computer, in the folder a request names (in the app, the session's), and can do there
+  whatever you can in a terminal. Its socket opens only as Pelican's other one does: a signed-in
+  browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; it closes
+  within a second once that browser is signed out, and takes nothing more from it; and it runs in a
+  folder as Claude Code does, so a folder nobody trusted that brings programs is asked about first,
+  and in one kept to your settings only, git runs none of the repository's filters, file-system
+  monitor or hooks folder (the settings Claude Code and `!` commands get there). The shell's
+  environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude Code's mark
+  (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the terminal or
+  service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
+  page sends at most 64 KB at a time; a page that stops reading is let go rather than kept in
+  memory, and the shell waits for a slow one instead. What the server keeps of a terminal's screen,
+  and what a page draws of it, is bounded too: 2,000 lines, at most 16 combining marks on a
+  character, however many a program prints and whatever it puts between them, the latest 2,048 links
+  (OSC 8) on a page, each to an address of at most 2,083 characters, none on the server, no title,
+  and at most 20 lines' worth of output for a screen reader to read out, also of output with no line
+  feed in it. A sequence that repeats a character (REP), scrolls, inserts or deletes lines, or moves
+  by tab stops does so at most a screen's worth of times (REP a line's), whatever count it gives, as
+  more changes nothing; and the server's copy takes output in a piece at a time, so the rest of
+  Pelican is answered in between, also while a program floods the screen. Output xterm throws on
+  stops neither Pelican nor a page's screen. A terminal lives in memory only: one unused for 12
+  hours with nothing running in it is closed, closing one hangs up its shell (SIGHUP, as closing a
+  window does), and all end with Pelican. Nothing runs in a terminal without you: the page sends its
+  shell only what you type, paste or click, a paste without its control characters, so text copied
+  from a web page cannot end the shell's paste early and run (the server's copy answers what a
+  program asks of the terminal, once, a color too, from the colors the page says it draws in), and
+  Run in terminal, on a shell command in Claude's reply (never in a file, or a tool's or a
+  subagent's output), asks before it runs it, and is there only for a command that shows all it
+  holds: none with a control character a shell takes as a key, or anything an approval would write
+  out (a character that hides or turns text around, or a space other than a plain one where a shell
+  reads it as part of a word, read as above), which the server refuses too. Claude sees nothing of
+  a terminal unless you put it in a message (Quote, at most its last 1,500 characters). A link in a terminal opens only with Cmd or Ctrl held, or a
+  tap on a phone, and only an `http` or `https` one, in a new tab with no way back to Pelican. The
+  demo has no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is
+  pinned to one version, and CI checks that its files, for every platform, are those of Microsoft's
+  node-pty of that version, against the integrity the npm registry publishes for it; that the few
+  lines of its own, which pick the platform's files, are those read for that version; and that none
+  of its packages runs anything as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'
@@ -172,10 +212,12 @@ can read your sessions and have Claude run commands as you, so treat access to i
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.
 - **What gets installed is what was tested.** The packages Pelican's server uses are built into
-  it, as CI tested them, and npm installs one: the Agent SDK, pinned to one version, with the
-  Claude Code it bundles for your computer, each checked against the registry's integrity hash.
-  Beside it npm installs the packages the SDK lists as its peers, which Pelican never loads. The
-  package ships no `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
+  it, as CI tested them, and npm installs two: the Agent SDK, pinned to one version, with the
+  Claude Code it bundles for your computer, and the terminal's optional PTY, `@lydell/node-pty`,
+  pinned to one version, with its native module for your computer, which that version pins to its
+  own, each checked against the registry's integrity hash. Beside them npm installs the packages
+  the SDK lists as its peers, which Pelican never loads. The package ships no
+  `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
   `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
@@ -190,7 +232,8 @@ notification keys and subscriptions, the folders you trusted or kept to your set
 sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
 long they waited for you, and a note of the running server in `~/.local/state/pelican`. Its pins
-and archive are its own: Claude Desktop's are neither read nor written.
+and archive are its own: Claude Desktop's are neither read nor written. Terminals, and what they
+show, are kept in memory only.
 
 ## Reporting a vulnerability
 
