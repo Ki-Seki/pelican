@@ -4,7 +4,8 @@
 // prompt (resumeSessionAt) and Pelican keeps the cut; Undo rewind resumes the session whole until
 // the next message; Claude at work gets 409; Claude Code's check refusing to drop more than the
 // prompt's turn (resumeDropsTurn) falls back to the whole session; the demo refuses; and Fork from
-// here copies up to just before a prompt, or the end of a reply.
+// here copies up to just before a prompt (none before the first, also after a SessionStart hook's
+// context), or the end of a reply.
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -17,6 +18,7 @@ import { saveUpload } from '../src/server/files';
 import { closeAll, getRun, sendMessage } from '../src/server/runner';
 import { loadMessages } from '../src/server/sessions';
 import { transcriptPath } from '../src/server/transcripts';
+import { rememberChoice } from '../src/server/trust';
 import { type MessagesRequest, type StandIn, standInApi, textOf, until } from './stand-in-api';
 
 const home = vi.hoisted(() => {
@@ -288,3 +290,36 @@ describe('Rewind to here, in the Claude Code the Agent SDK bundles', () => {
     expect((await ask(`/api/sessions/${id}/rewind/undo`, {})).status).toBe(409);
   });
 });
+
+describe('the conversation’s first prompt', () => {
+  it('goes back in code only, also after a SessionStart hook’s context: Fork from here starts it again in a new session', async () => {
+    // A folder whose own settings add context as each session starts, as many plugins do.
+    const hooked = path.join(path.dirname(folder), 'hooked');
+    mkdirSync(path.join(hooked, '.claude'), { recursive: true });
+    const hook = path.join(hooked, '.claude', 'start.sh');
+    writeFileSync(hook, '#!/bin/sh\necho \'{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Remember the house style."}}\'\n', { mode: 0o755 });
+    writeFileSync(path.join(hooked, '.claude', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] } }));
+    await rememberChoice(hooked, 'trusted');
+    let id: string | undefined;
+    for (const text of ['Hooked: First question', 'Hooked: Second question']) {
+      id = await sendMessage(id ? { sessionId: id } : { cwd: hooked }, { text, attachments: [], settings: {} });
+      const sent = id;
+      await until(() => getRun(sent)?.busy === false, 90_000, `the turn of “${text}”`);
+    }
+    const first = await uuidOf(id!, 'Hooked: First question');
+    // Claude Code wrote the hook's context first: the prompt has a parent, which is no conversation.
+    const rows = readFileSync((await transcriptPath(id!))!, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const parent = rows.find((row) => row.uuid === rows.find((r) => r.uuid === first)!.parentUuid);
+    expect(parent).toMatchObject({ type: 'attachment', attachment: { type: 'hook_additional_context' } });
+    const check = await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: first, dryRun: true }));
+    expect(check.body.conversationStays).toBe('It is the conversation’s first message: Fork from here starts it again in a new session.');
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: first, restore: 'conversation' })).status).toBe(409);
+    const fork = await json<{ sessionId: string | null; prompt: { text: string } }>(await ask(`/api/sessions/${id}/fork`, { before: first }));
+    expect(fork.body).toEqual({ sessionId: null, prompt: { text: 'Hooked: First question', attachments: [] } });
+    // The second prompt has the first before it: it goes back, and a copy holds the first.
+    const second = await uuidOf(id!, 'Hooked: Second question');
+    const copy = await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, { before: second }));
+    expect(words(await loadMessages(copy.body.sessionId))).toContain('Hooked: First question');
+  }, 240_000);
+});
+

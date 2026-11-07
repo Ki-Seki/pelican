@@ -383,9 +383,39 @@ function fromUser(message: ChatMessage | undefined): boolean {
   return typed.length > 0 && !typed.every((b) => b.type === 'text' && (INTERRUPTED.test(b.text.trim()) || parseTaskNotice(b.text)));
 }
 
+/** Part of the conversation itself: Claude's message, or one of the user's that is not context Claude Code added. */
+const spoken = (node: Node) => node.message?.role === 'assistant' || (node.message?.role === 'user' && !node.message.meta);
+
+/**
+ * The entry just before the node at `at` in the conversation, where Claude Code resumes, or a copy
+ * ends, to leave it out: its parent. None where nothing of the conversation itself comes before it,
+ * only what Claude Code writes ahead of one, such as a SessionStart hook's context: then it is the
+ * conversation's first message, as its logical parent (the message before it, past such rows) says,
+ * and nothing comes before it to go back to.
+ */
+function entryAt(t: Transcript, at: number): string | undefined {
+  const node = t.chain[at];
+  return node?.parent && t.chain.slice(0, at).some(spoken) ? node.parent : undefined;
+}
+
+/**
+ * The entry just before a message of the conversation the transcript holds now (entryAt): `entry`
+ * none for the conversation's first. Undefined when the message is not in the conversation.
+ */
+export async function entryBefore(file: string, uuid: string): Promise<{ entry?: string } | undefined> {
+  await readHistory(file);
+  const t = transcripts.get(file);
+  if (!t?.leaf) return undefined;
+  conversation(t);
+  const at = t.chainIndex.get(uuid);
+  if (at === undefined) return undefined;
+  const entry = entryAt(t, at);
+  return entry ? { entry } : {};
+}
+
 /** Where a prompt is in the conversation a transcript holds now, for going back to before it (rewind.ts). */
 export type PromptPlace = {
-  /** The entry just before it, where Claude Code resumes to leave it out; none for the conversation's first. */
+  /** The entry just before it, where Claude Code resumes to leave it out; none for the conversation's first (entryAt). */
   before?: string;
   /** A compaction came after it: the conversation Claude Code carries on no longer holds it. */
   compacted: boolean;
@@ -413,7 +443,8 @@ export async function promptPlace(file: string, uuid: string): Promise<PromptPla
     if (after.logicalParent !== undefined || after.message?.compactSummary) compacted = true;
     if (fromUser(after.message)) later += 1;
   }
-  return { ...(node.parent ? { before: node.parent } : {}), compacted, later, end: t.leaf.uuid };
+  const before = entryAt(t, at);
+  return { ...(before ? { before } : {}), compacted, later, end: t.leaf.uuid };
 }
 
 /**
