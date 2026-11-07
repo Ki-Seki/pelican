@@ -162,7 +162,7 @@ export function SettingsSheet({
       />
       {defaults && mode === 'bypassPermissions' && <SheetNote tone="warn">{modeNote(defaults, model)}</SheetNote>}
       <SheetNote>
-        Claude Code’s settings: the terminal and Claude Desktop start new sessions with them too. A change here is saved in{' '}
+        Claude Code’s own settings, which the terminal and Claude Desktop read too. A change here is saved in{' '}
         <span className="font-mono break-all">{where}</span>, as Claude Code’s /model, /effort, /fast and /config save it.
       </SheetNote>
       {file?.state === 'invalid' && (

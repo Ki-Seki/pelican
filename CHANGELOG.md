@@ -27,8 +27,8 @@ changes as `/model` does.
   and a new session's model and mode sheets say when the folder's or managed settings decide.
 - **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
   mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
-  as `/model`, `/effort`, `/fast` and `/config` save it, so the terminal, Claude Desktop, this
-  computer and your phone start new sessions the same way: `model`, the model's
+  as `/model`, `/effort`, `/fast` and `/config` save it, so new sessions in the terminal and in
+  Pelican, on this computer or your phone, start the same way: `model`, the model's
   `modelSettings.<model>.effortLevel`, `fastMode` and `permissions.defaultMode`. Max effort and
   Ultracode are not offered there, as Claude Code keeps neither as a default, and Bypass never is.
   A model, an effort or fast mode picked in a session's model sheet is saved too, as `/model`,

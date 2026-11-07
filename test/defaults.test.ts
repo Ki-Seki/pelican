@@ -82,7 +82,7 @@ describe('where the values come from, said where it is not plain', () => {
   it('says plainly when new sessions start in Bypass, and when a folder asks for a mode Claude Code does not take from it', () => {
     expect(modeNote(BUILT_IN, MODELS[0])).toBeUndefined();
     expect(modeNote(with_({ permissionMode: { value: 'bypassPermissions', source: 'user' } }), MODELS[0]))
-      .toBe('Your Claude Code settings start new sessions in Bypass permissions: Claude runs everything without asking, as in the terminal.');
+      .toBe('Your Claude Code settings start new sessions in Bypass permissions: Claude runs everything without asking.');
     expect(modeNote(with_({ permissionMode: { value: 'default', source: 'local', ignored: { mode: 'bypassPermissions', source: 'local', why: 'folder' } } }), MODELS[0]))
       .toMatch(/^This folder’s \.claude\/settings\.local\.json asks for Bypass permissions, which Claude Code takes only from your own settings, so sessions here start in Manual\.$/);
     expect(modeNote(with_({ permissionMode: { value: 'plan', source: 'project', user: 'acceptEdits' } }), MODELS[0]))

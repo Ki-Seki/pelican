@@ -89,7 +89,7 @@ export function modeNote(defaults: StartDefaults, model: ModelOption | undefined
   const start = startModeFor(defaults, model);
   const label = (m: PermissionMode) => MODE_INFO[m].label;
   if (start === 'bypassPermissions') {
-    return `${mode.source === 'managed' ? 'Managed settings start' : 'Your Claude Code settings start'} new sessions in Bypass permissions: Claude runs everything without asking, as in the terminal.`;
+    return `${mode.source === 'managed' ? 'Managed settings start' : 'Your Claude Code settings start'} new sessions in Bypass permissions: Claude runs everything without asking.`;
   }
   if (mode.ignored?.why === 'folder') {
     return `${SOURCE_LABEL[mode.ignored.source]} ask${s(mode.ignored.source)} for ${label(mode.ignored.mode)}, which Claude Code takes only from your own settings${mode.ignored.mode === 'bypassPermissions' ? ', so sessions here start in Manual' : ''}.`;
