@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import pkg from '../package.json' with { type: 'json' };
 import { changesBetween, compareVersions, type InstallInfo, isNewerVersion, type UpdateInfo, type UpdateState } from '../src/shared/update';
+import { app } from '../src/server/app';
 import { accessToken } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { LABEL } from '../src/server/service';
@@ -1219,8 +1220,15 @@ describe('who may update, and to what', () => {
   }, 30_000);
 
   it('takes no request past 1 MB, as no other route does', async () => {
-    const big = { version: NEXT, when: 'now', padding: 'x'.repeat(2 * 1024 * 1024) };
-    for (const where of ['/api/update', '/api/update/cancel']) expect((await api('POST', where, big)).status, where).toBe(413);
+    // Asked of the app itself: over a socket, a 413 sent before the body is can reset the connection first.
+    const big = JSON.stringify({ version: NEXT, when: 'now', padding: 'x'.repeat(2 * 1024 * 1024) });
+    for (const where of ['/api/update', '/api/update/cancel']) {
+      const response = await app.request(`${origin()}${where}`, {
+        method: 'POST', body: big,
+        headers: { host: new URL(origin()).host, 'x-pelican': '1', 'content-type': 'application/json', 'content-length': String(big.length), ...signedIn() },
+      });
+      expect(response.status, where).toBe(413);
+    }
     expect(await npmRuns()).toEqual([]);
     expect((await api('GET', '/api/update')).body.state).toBeUndefined();
   }, 30_000);
