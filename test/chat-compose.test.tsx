@@ -18,7 +18,9 @@ const server = vi.hoisted(() => ({
   answers: [] as Array<Error | undefined>,
   /** Holds the next send's answer until it settles: a slow link, or a Claude still starting. */
   hold: undefined as Promise<void> | undefined,
-  sent: [] as Array<{ text: string; attachments: string[]; trust?: string }>,
+  sent: [] as Array<{ text: string; attachments: string[]; trust?: string; mode?: string }>,
+  /** Queued messages taken back, by id. */
+  unqueued: [] as string[],
   /** The `!` commands asked to run; each takes its answer from `answers`, as a send does. */
   shells: [] as string[],
   session: {} as Partial<SessionSummary>,
@@ -86,7 +88,10 @@ vi.mock('../src/web/lib/api', async (original) => {
         return { shell: { id: `sh-${server.shells.length}`, command, startedAt: Date.now(), output: '' } };
       },
       upload: async (file: File): Promise<Attachment> => ({ id: `up-${file.name}`, name: file.name, mime: file.type || 'text/plain', size: file.size, path: `/tmp/${file.name}` }),
-      unqueue: async () => ({}),
+      unqueue: async (_id: string, uuid: string) => {
+        server.unqueued.push(uuid);
+        return {};
+      },
     },
   };
 });
@@ -124,7 +129,7 @@ const { commentsOf, setComments } = await import('../src/web/lib/review');
 const { addWaiting, setWaiting, waitingOf } = await import('../src/web/lib/drafts');
 const { fileItem, messageWith } = await import('../src/web/lib/quote');
 type WaitingItem = import('../src/web/lib/quote').WaitingItem;
-const { setRun } = await import('../src/web/lib/store');
+const { getView, setRun } = await import('../src/web/lib/store');
 const { goTo } = await import('../src/web/lib/workspace-route');
 
 /** The title's ▾, which opens the session's menu. */
@@ -147,7 +152,7 @@ afterEach(async () => {
   // Opened beside the conversation, Changes and files stays open from one session to the next, in
   // memory as well as in storage: the next test starts with it closed, as a first visit does.
   setPrefs({ workspacePane: false });
-  Object.assign(server, { answers: [], hold: undefined, sent: [], shells: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
+  Object.assign(server, { answers: [], hold: undefined, sent: [], unqueued: [], shells: [], session: {}, run: null, after: [], gitReads: 0, git: { repo: false } });
   // A view of Changes and files left open keeps its step in the address; one closed on a phone
   // goes back through the history a moment later, which must land before the next test begins.
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -679,6 +684,31 @@ describe('Commit changes and Create PR', () => {
     expect(server.sent[1]!.text).toBe(createPrRequest({ repo: 'acme/app', branch: 'feat/x', baseBranch: 'main', cwd: CWD, draft: false }));
     // It shows in the conversation as Desktop shows it.
     expect(await screen.findByText('/create-pr')).toBeTruthy();
+  });
+
+  it('while Claude works, wait for the end of the turn as a queued message, whatever Settings says; the button says so, and Take back takes it out of the queue', async () => {
+    server.git = repository;
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [] };
+    // Settings has typed messages sent at once while Claude works: a request is queued all the same.
+    setPrefs({ sendWhileBusy: 'steer' });
+    session();
+    await loaded();
+    fireEvent.click(await paneButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit changes' }, LAZY));
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]).toMatchObject({ text: COMMIT_REQUEST, mode: 'queue' });
+    // Not in the conversation yet: in the queue, and on its button, until the turn ends.
+    const uuid = (server.sent[0] as { uuid?: string }).uuid!;
+    expect(getView(SESSION).messages.some((m) => m.uuid === uuid)).toBe(false);
+    act(() => setRun(SESSION, { ...server.run!, queued: [{ uuid, text: COMMIT_REQUEST }] }));
+    fireEvent.click(await paneButton());
+    const queued = await screen.findByRole('group', { name: 'Commit changes, queued' }, LAZY);
+    expect(queued.textContent).toContain('Queued');
+    expect(screen.queryByRole('button', { name: 'Commit changes' })).toBeNull();
+    fireEvent.click(within(queued).getByRole('button', { name: 'Take back' }));
+    expect(server.unqueued).toEqual([uuid]);
+    act(() => setRun(SESSION, { ...server.run!, queued: [] }));
+    expect(await screen.findByRole('button', { name: 'Commit changes' })).toBeTruthy();
   });
 
   it('put the request in the message box first on ⌘-click, after what is typed: nothing is sent', async () => {

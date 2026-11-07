@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, MoreHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { GitFile } from '../../shared/protocol';
+import type { GitFile, QueuedPrompt } from '../../shared/protocol';
 import { api, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { entries, PATH_ACTIONS } from '../lib/actions';
 import { announce } from '../lib/announce';
@@ -180,7 +180,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onRequest, onAddToMessage, onSendComments, askTrust = noTrust, onSendNow }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onRequest, queued, onUnqueue, onAddToMessage, onSendComments, askTrust = noTrust, onSendNow }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -195,8 +195,11 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   onRewind?: (point: RewindPoint) => void;
   /** Commit changes and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
   requests?: boolean;
-  /** A request to Claude from Changes' foot: sent now, or put in the message box first (⌘-click, a long press). */
+  /** A request to Claude from Changes' foot: sent now (queued while Claude works), or put in the message box first (⌘-click, a long press). */
   onRequest?: (text: string, how: 'send' | 'box') => void;
+  /** What waits for the end of Claude's turn, and taking one back: a request queued says so on its button. */
+  queued?: QueuedPrompt[];
+  onUnqueue?: (uuid: string) => void;
   /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */
   /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
@@ -352,6 +355,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           setScope={(to) => goTo(to, false)}
           {...(onRewind ? { onRewind } : {})}
           {...(requests && onRequest ? { onRequest } : {})}
+          {...(queued ? { queued } : {})}
+          {...(onUnqueue ? { onUnqueue } : {})}
         />
       )}
       {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} changed={changedFiles} />}

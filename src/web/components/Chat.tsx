@@ -1461,14 +1461,17 @@ export function Chat({
           cwd={cwd}
           {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: requestRewind }) } : {})}
           {...(sessionId && !sideChat ? {
-            // Commit changes and Create PR: sent at once, as Desktop sends them (a steer or queued while
-            // Claude works, as Settings says), or put in the message box first; on a phone the
-            // conversation comes back to show it.
+            // Commit changes and Create PR: sent at once, as Desktop sends them, or put in the message
+            // box first; on a phone the conversation comes back to show it. While Claude works a
+            // request waits for the end of the turn, as a queued message, whatever Settings says for
+            // what is typed: never steered into the work at hand. Its button says so, with Take back.
             onRequest: (text: string, how: 'send' | 'box') => {
               if (!workspace.docked) workspace.setOpen(false);
               if (how === 'box') setDraftText({ text, key: Date.now(), append: true, block: true });
-              else void send(text, [], prefs.sendWhileBusy, 'chat');
+              else void send(text, [], 'queue', 'chat');
             },
+            queued: view.run?.queued ?? [],
+            onUnqueue: (uuid: string) => void api.unqueue(sessionId, uuid).catch(() => undefined),
           } : {})}
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
 import { type MouseEvent, useState } from 'react';
 
-import type { GitFile, GitStatus, SessionChanges, TurnChanges } from '../../shared/protocol';
+import type { GitFile, GitStatus, QueuedPrompt, SessionChanges, TurnChanges } from '../../shared/protocol';
 import { entries, type MenuEntry, PATH_ACTIONS, PROMPT_ACTIONS, type PathTarget } from '../lib/actions';
 import { announce } from '../lib/announce';
 import { api } from '../lib/api';
@@ -84,17 +84,47 @@ function FileRow({ file, comments, onOpen, onMenu }: { file: Row; comments?: num
 }
 
 /**
+ * A request queued for the end of Claude's turn, where its button was: its name, that it is
+ * queued, and Take back, which takes it out of the queue, as the queue above the message box does.
+ */
+function QueuedRequest({ icon: Icon, label, onTakeBack }: { icon: typeof GitCommitHorizontal; label: string; onTakeBack: () => void }) {
+  return (
+    <div role="group" aria-label={`${label}, queued`} title="Queued: sent when this turn ends" className="flex h-11 items-center rounded-full bg-bg text-[14px] ring-1 ring-line pointer-fine:h-9 pointer-fine:text-[13.5px]">
+      <span className="flex items-center gap-2 pr-3 pl-4 text-muted">
+        <Icon className="size-4 shrink-0 text-faint" />
+        {label}
+        <span className="text-faint">· Queued</span>
+      </span>
+      <span aria-hidden className="h-5 w-px shrink-0 bg-line" />
+      <button type="button" onClick={onTakeBack} className="h-full rounded-r-full pr-4 pl-3 text-fg hover:bg-hover">Take back</button>
+    </div>
+  );
+}
+
+/**
  * Commit changes and Create PR at the foot of Changes, as Claude Desktop has them: requests to
- * Claude in Desktop's words. A tap sends one at once (a steer or queued while Claude works, as
- * Settings says); ⌘-click (Ctrl-click), or a long press on a phone, puts it in the message box
+ * Claude in Desktop's words. A tap sends one at once; while Claude works it is queued for the end
+ * of the turn, never steered into it, whatever Settings says for what is typed, and its button says
+ * so, with Take back. ⌘-click (Ctrl-click), or a long press on a phone, puts it in the message box
  * first. Create PR's ▾ picks Create PR or Create draft PR for the button, remembered here as
  * Desktop remembers it. There is no Push: Create PR pushes.
  */
-function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready: string; draft: string }; onRequest: (text: string, how: 'send' | 'box') => void }) {
+function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
+  commit?: string;
+  pr?: { ready: string; draft: string };
+  onRequest: (text: string, how: 'send' | 'box') => void;
+  /** What waits for the end of Claude's turn, a request among it. */
+  queued?: QueuedPrompt[];
+  onUnqueue?: (uuid: string) => void;
+}) {
   const { prKind } = usePrefs();
   const [kinds, setKinds] = useState<{ at: MenuAnchor; keys: boolean }>();
   const prText = pr && (prKind === 'draft' ? pr.draft : pr.ready);
   const prLabel = prKind === 'draft' ? 'Create draft PR' : 'Create PR';
+  const waiting = (text: string | undefined) => (text ? queued.find((prompt) => prompt.text === text) : undefined);
+  const commitQueued = waiting(commit);
+  // Either kind, as it was sent: the ▾ may have changed since.
+  const prQueued = pr && (waiting(pr.ready) ?? waiting(pr.draft));
   const commitPress = useLongPress<HTMLButtonElement>(() => commit && onRequest(commit, 'box'), { enabled: Boolean(commit) });
   const prPress = useLongPress<HTMLButtonElement>(() => prText && onRequest(prText, 'box'), { enabled: Boolean(prText) });
   const click = (text: string) => (e: MouseEvent) => onRequest(text, e.metaKey || e.ctrlKey ? 'box' : 'send');
@@ -110,13 +140,17 @@ function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready
   if (!commit && !prText) return null;
   return (
     <div data-requests className="mx-3 mt-2 flex flex-wrap gap-2.5 border-t border-line px-px pt-3">
-      {commit && (
+      {commit && commitQueued && onUnqueue && <QueuedRequest icon={GitCommitHorizontal} label="Commit changes" onTakeBack={() => onUnqueue(commitQueued.uuid)} />}
+      {commit && !(commitQueued && onUnqueue) && (
         <button type="button" {...commitPress} onContextMenu={(e) => { commitPress.onContextMenu(e); own(e); }} onClick={click(commit)} title={title('Commit changes')} className={`${pill} px-4 ${commitPress.className}`}>
           <GitCommitHorizontal className="size-4 shrink-0 text-muted" />
           Commit changes
         </button>
       )}
-      {prText && (
+      {pr && prQueued && onUnqueue && (
+        <QueuedRequest icon={GitPullRequest} label={prQueued.text === pr.draft ? 'Create draft PR' : 'Create PR'} onTakeBack={() => onUnqueue(prQueued.uuid)} />
+      )}
+      {prText && !(prQueued && onUnqueue) && (
         <div className="flex h-11 items-center rounded-full bg-bg ring-1 ring-line pointer-fine:h-9">
           <button type="button" {...prPress} onContextMenu={(e) => { prPress.onContextMenu(e); own(e); }} onClick={click(prText)} title={title(prLabel)} className={`flex h-full items-center gap-2 rounded-l-full pr-3 pl-4 text-[14px] text-fg hover:bg-hover pointer-fine:text-[13.5px] ${prPress.className}`}>
             <GitPullRequest className="size-4 shrink-0 text-muted" />
@@ -146,7 +180,7 @@ function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready
  * turn's edits come from Claude Code's own records and show in any folder. A turn ends with its
  * prompt's Rewind to here. A file's row has its path's menu, as Desktop's diff file list does.
  */
-export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind, onRequest }: {
+export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind, onRequest, queued, onUnqueue }: {
   cwd: string;
   sessionId?: string;
   step: WorkspaceStep;
@@ -162,6 +196,9 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   onRewind?: (point: RewindPoint) => void;
   /** A request to Claude (Commit changes, Create PR): sent now, or put in the message box first. */
   onRequest?: (text: string, how: 'send' | 'box') => void;
+  /** What waits for the end of Claude's turn, and taking one out of the queue: a request queued shows on its button. */
+  queued?: QueuedPrompt[];
+  onUnqueue?: (uuid: string) => void;
 }) {
   const scope = scopeOf(step);
   const chat = useCommentsChat(cwd);
@@ -284,7 +321,7 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
             {entry.label}
           </button>
         ))}
-      {requests && onRequest && <RequestsFoot {...requests} onRequest={onRequest} />}
+      {requests && onRequest && <RequestsFoot {...requests} onRequest={onRequest} {...(queued ? { queued } : {})} {...(onUnqueue ? { onUnqueue } : {})} />}
       <ActionMenu
         open={Boolean(picking)}
         onClose={() => setPicking(undefined)}
