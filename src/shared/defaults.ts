@@ -54,7 +54,16 @@ export type StartDefaults = {
   };
   /** Claude Code's user settings file, the one file Pelican changes. */
   file: UserSettingsFile;
+  /**
+   * What the folder's own settings set for a new session that is not taken yet: a folder's count
+   * only once it is trusted, as in Claude Code, and Pelican asks first. None where they count, or
+   * where the user kept the folder to their own settings.
+   */
+  waiting?: FolderSetting[];
 };
+
+/** What a folder's settings may set for a new session, as the sheets name it. */
+export type FolderSetting = 'model' | 'effort' | 'fast' | 'ultracode' | 'mode';
 
 /**
  * ok: read, and Claude Code reads it too. missing: none yet (a change creates it). invalid: not

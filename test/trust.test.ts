@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import type { StartDefaults } from '../src/shared/defaults';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
 import { getRun } from '../src/server/runner';
@@ -123,6 +124,57 @@ describe('a folder nobody trusted', () => {
   it('that brings nothing starts without a question', async () => {
     expect(await trustQuestion(plain)).toBeUndefined();
     expect(await launchFor(plain)).toEqual(FULL_SETTINGS);
+  });
+}, 20_000);
+
+describe('a folder’s own settings for new sessions', () => {
+  const headers = { host: 'localhost:7860', 'x-pelican': '1', 'content-type': 'application/json' };
+  const defaults = async (dir: string) => (await app.request(`/api/defaults?cwd=${encodeURIComponent(dir)}`, { headers })).json() as Promise<StartDefaults>;
+  const sources = (read: StartDefaults) => [read.model.source, read.fast.source, read.ultracode.source, read.permissionMode.source, ...Object.values(read.effort.byModel).map((e) => e.source), read.effort.fallback?.source];
+
+  it('wait for it to be trusted: asked about with the rest, and not what a new session starts with until then', async () => {
+    const dir = path.join(root, 'costly');
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ model: 'opus', ultracode: true, fastMode: true, effortLevel: 'high', permissions: { defaultMode: 'plan' } }));
+    await writeFile(path.join(dir, '.claude', 'settings.local.json'), JSON.stringify({ modelSettings: { 'claude-opus-5-5': { effortLevel: 'xhigh' } } }));
+
+    // Nobody trusted it: what new sessions start with is the user's, and its own are said to wait.
+    const untrusted = await defaults(dir);
+    expect(sources(untrusted)).not.toContain('project');
+    expect(sources(untrusted)).not.toContain('local');
+    expect(untrusted).toMatchObject({ model: { value: 'default' }, ultracode: { value: false }, fast: { value: false }, permissionMode: { value: 'auto' } });
+    expect(untrusted.waiting).toEqual(['model', 'effort', 'fast', 'ultracode', 'mode']);
+    // Its first session asks first, with them listed, and Claude Code does not start.
+    const started = await app.request('/api/sessions', { method: 'POST', headers, body: JSON.stringify({ cwd: dir, text: 'hi' }) });
+    expect(started.status).toBe(409);
+    expect((await started.json() as { brings: string[] }).brings).toEqual(expect.arrayContaining([
+      'Permission mode: plan', 'Model: opus', 'Effort: high', 'Fast mode: on', 'Ultracode: on', 'Effort for claude-opus-5-5: xhigh',
+    ]));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await readFile(launched, 'utf8').catch(() => '')).toBe('');
+
+    // Kept to the user's settings: never the folder's, and nothing waits.
+    await rememberChoice(dir, 'user-only');
+    const userOnly = await defaults(dir);
+    expect(sources(userOnly)).not.toContain('project');
+    expect(userOnly.waiting).toBeUndefined();
+
+    // Trusted: they count, each from its file.
+    await rememberChoice(dir, 'trusted');
+    const trusted = await defaults(dir);
+    expect(trusted).toMatchObject({
+      model: { value: 'opus', source: 'project' }, ultracode: { value: true, source: 'project' }, fast: { value: true, source: 'project' },
+      permissionMode: { value: 'plan', source: 'project' }, effort: { byModel: { 'claude-opus-5-5': { level: 'xhigh', source: 'local' } } },
+    });
+    expect(trusted.waiting).toBeUndefined();
+  });
+
+  it('that set none of these bring nothing more to ask about', async () => {
+    const dir = path.join(root, 'quiet');
+    await mkdir(path.join(dir, '.claude'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ includeCoAuthoredBy: false, cleanupPeriodDays: 60 }));
+    expect(await folderBrings(dir)).toEqual([]);
+    expect((await defaults(dir)).waiting).toBeUndefined();
   });
 }, 20_000);
 

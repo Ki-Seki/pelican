@@ -423,9 +423,17 @@ function* fromSettings(settings: unknown): Generator<Item> {
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   if (strings(permissions.allow).length > 0) yield said(`Allowed without asking: ${strings(permissions.allow).join(', ')}`);
   if (strings(permissions.additionalDirectories).length > 0) yield said(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`);
-  if (typeof permissions.defaultMode === 'string' && !['default', 'plan', 'dontAsk'].includes(permissions.defaultMode)) {
-    yield said(`Permission mode: ${permissions.defaultMode}`);
+  // What a new session starts with (defaults.ts): a folder's applies only once it is trusted, as in
+  // Claude Code, so it is asked about rather than taken. Its model, effort, fast mode and Ultracode
+  // cost what they cost, and its mode, Plan too, decides how the session goes.
+  if (typeof permissions.defaultMode === 'string') yield said(`Permission mode: ${permissions.defaultMode}`);
+  if (typeof settings.model === 'string' && settings.model.trim()) yield said(`Model: ${settings.model}`);
+  if (typeof settings.effortLevel === 'string') yield said(`Effort: ${settings.effortLevel}`);
+  for (const [model, entry] of Object.entries(isObject(settings.modelSettings) ? settings.modelSettings : {})) {
+    if (isObject(entry) && typeof entry.effortLevel === 'string') yield said(`Effort for ${model}: ${entry.effortLevel}`);
   }
+  if (typeof settings.fastMode === 'boolean') yield said(`Fast mode: ${settings.fastMode ? 'on' : 'off'}`);
+  if (typeof settings.ultracode === 'boolean') yield said(`Ultracode: ${settings.ultracode ? 'on' : 'off'}`);
   const plugins = isObject(settings.enabledPlugins) ? Object.entries(settings.enabledPlugins).filter(([, on]) => on).map(([name]) => name) : [];
   if (plugins.length > 0) yield said(`Plugins: ${plugins.join(', ')}`);
   if (isObject(settings.extraKnownMarketplaces) && Object.keys(settings.extraKnownMarketplaces).length > 0) {

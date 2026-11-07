@@ -90,8 +90,12 @@ can read your sessions and have Claude run commands as you, so treat access to i
   helper commands and environment variables in its Claude Code settings, servers in its `.mcp.json`,
   slash commands, skills and agents that run a shell or tools without asking, filters in its git
   config. Claude Code asks before it runs them in a terminal, but never in a session started through
-  its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has trusted that
-  brings any of these, Pelican lists them, read from the folder's files as Claude Code reads them
+  its SDK, so Pelican asks. Its Claude Code settings can also pick what a session starts with and
+  what it costs, a model, an effort, fast mode, Ultracode or a mode (Plan too), which count only once
+  the folder is trusted, as in Claude Code: until then a new session's model and mode sheets say they
+  wait, and they are asked about with its programs. Before Claude Code first starts in a folder
+  nobody has trusted that brings any of these, Pelican lists them, read from the folder's files as
+  Claude Code reads them
   (those of the folder and its parents up to the repository's top, and the `.mcp.json` of each
   folder above it but your home folder and those that hold it; a skill's `SKILL.md` in any case, as
   a Mac finds it, and commands and agents at any depth, a folder of them nested more than ten deep
@@ -237,8 +241,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   pictures are left out.
 - **Of Claude Code's settings, Pelican writes four keys of one file, when you pick them.** What
   new sessions start with is Claude Code's own settings: Pelican reads them through the Agent SDK's
-  `resolveSettings`, the user's, a folder's (only once the folder is trusted, as a session there
-  would) and managed ones, which runs nothing. Settings › New sessions start with, and a model, an
+  `resolveSettings`, the user's, a folder's (only once the folder is trusted, as in Claude Code, and
+  never where you kept it to your settings) and managed ones, which runs nothing. Settings › New sessions start with, and a model, an
   effort or fast mode picked in a session's model sheet, change Claude Code's user settings file
   (`settings.json` in `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json`) as Claude Code's own
   `/model`, `/effort`, `/fast` and `/config` do, and nothing else: `model`,

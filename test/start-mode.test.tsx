@@ -211,6 +211,17 @@ describe('a new session', () => {
     expect(calls.created[0]!.settings).toEqual({});
   });
 
+  it('says the folder’s own settings wait until it is trusted, where nobody trusted it yet', async () => {
+    claudeCode.byFolder.set('/code/app', said({ waiting: ['model', 'ultracode', 'mode'] }));
+    chat();
+    await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Auto'));
+    fireEvent.click(screen.getByLabelText('Model, effort and speed'));
+    expect(within(lastSheet()).getByText('This folder’s own settings for the model and Ultracode wait until you trust the folder, which Pelican asks before the session starts.')).toBeTruthy();
+    fireEvent.click(within(lastSheet()).getByText('Done'));
+    fireEvent.click(screen.getByLabelText('Permission mode'));
+    expect(within(lastSheet()).getByText('This folder’s own settings for the mode wait until you trust the folder, which Pelican asks before the session starts.')).toBeTruthy();
+  });
+
   it('starts in a mode picked for it, and keeps a pick of Manual on a model without Auto', async () => {
     chat();
     await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Auto'));

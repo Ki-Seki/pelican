@@ -625,6 +625,8 @@ export function Chat({
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         onOpen(created, true);
       }
+      // Trusted now, or kept to your settings: the folder's own settings count, or never will.
+      if (trust) void queryClient.invalidateQueries({ queryKey: ['defaults'] });
     } catch (error) {
       // Nothing reached Claude: take the message back. What waited with it waits again; words from
       // the box go back to it, files and all, above anything typed since. What the chat sent leaves

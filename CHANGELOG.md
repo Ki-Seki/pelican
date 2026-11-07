@@ -230,7 +230,8 @@ settings; and updates from Settings.
 - **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
   permission mode come from Claude Code's settings, the files the terminal and Claude Desktop read:
   yours (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`), the folder's
-  `.claude/settings.json` and `.claude/settings.local.json` once it is trusted, and managed
+  `.claude/settings.json` and `.claude/settings.local.json` once it is trusted (until then a new
+  session's model and mode sheets say they wait, and its first message asks), and managed
   settings, each over the one before, as in Claude Code 2.1.318. Pelican keeps no defaults of its
   own: its High effort is gone, and so are the picks each browser kept under Settings; those kept
   before 0.5.0 are no longer read. A model starts with the effort Claude Code keeps for it
@@ -402,6 +403,11 @@ settings; and updates from Settings.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
+- A folder nobody trusted whose Claude Code settings pick a model, an effort, fast mode, Ultracode
+  or a mode, Plan too, is asked about before its first session, with those listed beside its
+  programs: a folder's settings count only once it is trusted, as in Claude Code. Before, they
+  applied with no question where the folder brought nothing else, so a cloned repository could turn
+  on Ultracode and fast mode.
 - A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
   reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
   Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed
