@@ -195,8 +195,10 @@ export function StartIn({ start, home, onStart }: { start: Start; home?: string;
         aria-label={`Folder: ${label}`}
         onClick={() => setOpen(true)}
         className="mx-auto mt-1 flex h-10 max-w-full min-w-0 items-center gap-1 rounded-full px-3 font-mono text-[12.5px] text-faint hover:bg-hover hover:text-fg"
+        {...('scratch' in start ? {} : { title: start.cwd })}
       >
-        <span className="min-w-0 truncate">{label}</span>
+        {/* A long path gives way from its start, keeping the folder's name, as the header's does. */}
+        {'scratch' in start ? <span className="min-w-0 truncate">{label}</span> : <span dir="rtl" className="min-w-0 truncate text-left"><bdi dir="ltr">{label}</bdi></span>}
         <ChevronDown className="size-3.5 shrink-0" />
       </button>
       <Sheet open={open} onClose={() => setOpen(false)} title="Start in">

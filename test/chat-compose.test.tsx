@@ -472,6 +472,16 @@ describe('a new session moved to another folder before it starts', () => {
     await waitFor(() => expect(screen.getByLabelText('Permission mode').textContent).toBe('Plan'));
   });
 
+  it('names the folder in the middle of the empty chat with its name kept, a long path giving way from its start, as the header does', () => {
+    const deep = '/tmp/pelican-check/v50-gate/fb-scratch/live/repos/cloned-app';
+    wrap(<Chat newCwd={deep} home="/home/me" machine="studio" wide={false} onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
+    const folder = screen.getByLabelText(`Folder: ${deep}`);
+    const path = folder.querySelector('span[dir="rtl"]')!;
+    expect(path.className).toContain('truncate');
+    expect(path.querySelector('bdi[dir="ltr"]')?.textContent).toBe(deep);
+    expect(folder.getAttribute('title')).toBe(deep);
+  });
+
   it('never takes Bypass along: in the other folder it starts as a new session there does', async () => {
     wrap(<Chat newCwd={CWD} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />);
     fireEvent.click(screen.getByLabelText('Permission mode'));

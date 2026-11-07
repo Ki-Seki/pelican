@@ -405,7 +405,8 @@ settings; and updates from Settings.
   are, with their Temporary chip and Show them, rather than "No sessions yet" and "0 sessions". Such a folder reads `/tmp` everywhere, as it was picked,
   not `/private/tmp` in the session.
 - The header's folder gives way from its start, "…/repos/acme-web", and leaves the branch its room,
-  where a pane beside the conversation left a bare branch icon; the list counts "1 session", not
+  where a pane beside the conversation left a bare branch icon, and so does New session's folder
+  under "What should Claude do?", which cut the folder's name; the list counts "1 session", not
   "1 sessions".
 - The model chip waits quietly until Claude Code has said which models there are, rather than
   reading "Model High" for the first seconds.
