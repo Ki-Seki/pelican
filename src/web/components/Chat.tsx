@@ -57,7 +57,7 @@ import { modelOf, SavedForNewSessions } from './ModelSheet';
 import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PaneColumn } from './PaneColumn';
-import { PermissionCard } from './PermissionCard';
+import { keepAskedInView, PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
 import { RewindDialog, RewindPicker, type RewindPoint, type RewindProblem } from './Rewind';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
@@ -1064,12 +1064,28 @@ export function Chat({
   const asking = request?.id;
   useEffect(() => {
     const el = root.current;
-    if (!asking || !el || !window.matchMedia('(max-height: 380px)').matches) return;
-    // Its start at the top, its foot above the message box: as much of it as there is room for.
-    requestAnimationFrame(() => {
-      const card = el.querySelector('[data-dock] section');
-      if (card) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    });
+    if (!asking || !el) return undefined;
+    const short = window.matchMedia('(max-height: 380px)');
+    let frame = 0;
+    // Where the whole chat scrolls, its start at the top, its foot above the message box: as much of
+    // it as there is room for. Anywhere, the start of what it asks about above its buttons.
+    const show = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const card = el.querySelector('[data-dock] section');
+        if (!card) return;
+        if (short.matches) el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        const scroller = short.matches ? el : el.querySelector<HTMLElement>('[data-dock]');
+        if (scroller) keepAskedInView(scroller, card);
+      });
+    };
+    show();
+    // Turned on its side, or upright again, while the card waits: shown so again.
+    short.addEventListener?.('change', show);
+    return () => {
+      cancelAnimationFrame(frame);
+      short.removeEventListener?.('change', show);
+    };
   }, [asking]);
   useEffect(() => {
     if (!busy || !sessionId) return undefined;

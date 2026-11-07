@@ -381,7 +381,11 @@ settings; and updates from Settings.
   what it asks about scrolling between them, cut a little way off each at a quiet line, as in
   Claude Desktop, rather than right under the title; on a short screen a card that waits gets the
   room it needs, and on a phone on its side, where the whole chat scrolls, the chat scrolls to a
-  card that comes and its foot stays just above the message box.
+  card that comes and its foot stays just above the message box. An approval shows what it asks
+  about above Allow and Deny, a command whole or its first lines, whatever the height, the words
+  above it going under the title where there is not room for both: on a Pixel 7 on its side
+  `npm test` sat under the buttons, and showed only with a swipe; there, too, what Always allow
+  saves sits beside Allow and Deny where it fits, rather than on a line of its own.
 - On a phone with its keyboard up, the message box, Send, Stop and the model and mode stay above the
   keyboard, also with a quote waiting and a card above: the card gives way first.
 - On Android a sheet settles at the bottom edge, the page under it dimmed: Chrome scrolled the

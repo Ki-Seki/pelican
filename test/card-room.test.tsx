@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-// What is scrolled under a card's head or its foot, where they stick (src/web/components/
-// PermissionCard.tsx), is cut at a quiet line, a little way off, as Claude Desktop cuts it: a
-// question's title sat on half an option. jsdom lays nothing out: each part's place is set here.
-import { act, cleanup, render } from '@testing-library/react';
+// A card with less room than it needs (src/web/components/PermissionCard.tsx): what it asks about
+// shows above its buttons, as on an upright phone (on a Pixel 7 on its side `npm test` sat under
+// Allow and Deny), and what is scrolled under its head or its foot is cut at a quiet line, a little
+// way off, as Claude Desktop cuts it (a question's title sat on half an option). jsdom lays nothing
+// out: each part's place on the screen is set here.
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PermissionRequest } from '../src/shared/protocol';
@@ -10,7 +12,7 @@ import type { PermissionRequest } from '../src/shared/protocol';
 Object.assign(globalThis, { ResizeObserver: class { observe() {} unobserve() {} disconnect() {} } });
 Object.assign(window, { matchMedia: (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }) });
 
-const { PermissionCard } = await import('../src/web/components/PermissionCard');
+const { keepAskedInView, PermissionCard } = await import('../src/web/components/PermissionCard');
 
 const SESSION = 'cccccccc-0000-4000-8000-0000000000b2';
 const ask = (input: Record<string, unknown>, extra: Partial<PermissionRequest> = {}): PermissionRequest => ({ id: 'p1', sessionId: SESSION, toolName: 'Bash', input, createdAt: Date.now(), ...extra });
@@ -38,9 +40,59 @@ function card(request = ask({ command: 'npm test', description: 'Run the tests' 
   return {
     root,
     head: root.querySelector('[data-card-head]')!,
+    asks: root.querySelector('[data-asks]')!,
     foot: root.querySelector('[data-card-foot]')!,
   };
 }
+
+describe('what an approval asks about, where the card has little room', () => {
+  it('is scrolled into view above Allow and Deny when it lies under them, the words above it going under the head', () => {
+    const { root, head, asks, foot } = card();
+    const scroller = document.createElement('div');
+    // As on a Pixel 7 on its side: the command's box 34 px, 9 px of it above the foot.
+    place(head, 0, 36);
+    place(asks, 87, 121);
+    place(foot, 96, 208);
+    keepAskedInView(scroller, root);
+    expect(scroller.scrollTop).toBe(33);
+  });
+
+  it('is left as it is when it shows above them', () => {
+    const { root, head, asks, foot } = card();
+    const scroller = document.createElement('div');
+    place(head, 0, 36);
+    place(asks, 87, 121);
+    place(foot, 136, 200);
+    keepAskedInView(scroller, root);
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it('shows the start of a long command, a few lines of it, at most as far as the head allows', () => {
+    const { root, head, asks, foot } = card(ask({ command: Array.from({ length: 8 }, (_, i) => `echo ${i}`).join('\n') }));
+    const scroller = document.createElement('div');
+    place(head, 0, 36);
+    place(asks, 120, 300);
+    place(foot, 130, 250);
+    keepAskedInView(scroller, root);
+    // Three lines' worth above the foot's room: 64 - (130 - 8 - 120).
+    expect(scroller.scrollTop).toBe(62);
+    // Where the head is near, only so far as to keep it clear of the head's room.
+    scroller.scrollTop = 0;
+    place(asks, 50, 300);
+    place(foot, 80, 200);
+    keepAskedInView(scroller, root);
+    expect(scroller.scrollTop).toBe(6);
+  });
+
+  it('keeps what "always" saves beside Allow and Deny where the foot must leave room (a phone on its side), on a line of its own elsewhere', () => {
+    card();
+    const allow = screen.getByRole('button', { name: 'Allow' });
+    const always = screen.getByRole('button', { name: 'Always allow npm test * in this project' });
+    expect(always.parentElement!.parentElement).toBe(allow.parentElement);
+    expect(always.parentElement!.className).toContain('basis-full');
+    expect(always.parentElement!.className).toContain('[@media(max-height:380px)]:basis-auto');
+  });
+});
 
 describe('what is scrolled under a card’s head or its foot', () => {
   it('is marked, for the quiet line and the room there, and not while nothing is under them', async () => {

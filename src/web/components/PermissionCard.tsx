@@ -25,6 +25,8 @@ const str = (value: unknown) => (typeof value === 'string' ? value : '');
 const HEAD = 'sticky top-0 z-[1] bg-panel pt-3';
 const FOOT = 'sticky bottom-0 z-[1] bg-panel pb-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]';
 
+/** How much of the start of what a card asks about must show above its buttons: three lines of a command, or all of a shorter one. */
+const ASKED_START_PX = 64;
 /** The room a card's head and foot keep, with a quiet line, where what it asks about is cut under them (styles.css). */
 const CUT_ROOM_PX = 8;
 
@@ -62,6 +64,27 @@ function useCutEdges(card: React.RefObject<HTMLElement | null>) {
       observer?.disconnect();
     };
   }, [card]);
+}
+
+/**
+ * Where a card has less room than it needs (`scroller`, what it scrolls in: the dock, or on a phone
+ * on its side the whole chat), what it asks about shows above its buttons, as on an upright phone:
+ * the start of a command, a diff or the files to send, never under Allow and Deny. Scrolled for it
+ * where it would not show, the words above it going under the card's head, which stays, as far as
+ * there is room for them.
+ */
+export function keepAskedInView(scroller: HTMLElement, card: Element): void {
+  const asks = card.querySelector('[data-asks]');
+  const head = card.querySelector('[data-card-head]');
+  const foot = card.querySelector('[data-card-foot]');
+  if (!asks || !head || !foot) return;
+  const at = asks.getBoundingClientRect();
+  const want = Math.min(at.height, ASKED_START_PX);
+  const footTop = foot.getBoundingClientRect().top;
+  // Cut by the foot, it is cut at the foot's room and line.
+  const shown = Math.min(at.height, footTop - (at.bottom > footTop + 0.5 ? CUT_ROOM_PX : 0) - at.top);
+  if (shown >= want) return;
+  scroller.scrollTop += Math.min(want - shown, Math.max(0, at.top - head.getBoundingClientRect().bottom - CUT_ROOM_PX));
 }
 
 /** The files a SendUserFile call names: a list, or one as a bare string, as Claude Code takes it. */
@@ -280,7 +303,7 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
       {shownTarget && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{shownTarget.text}</div>}
       {reason && <div className="mt-1 text-[12.5px] text-faint">{reason.text}</div>}
-      <div className="mt-2">
+      <div data-asks className="mt-2">
         {edit ? (
           <Diff before={edit.before} after={edit.after} maxLines={160} />
         ) : workflow ? (
@@ -323,16 +346,16 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
           </div>
         </div>
       ) : (
-        <>
-          <div className="flex flex-wrap gap-2 pt-3">
-            {request.defaultToNo ? <>{deny}{allow}</> : <>{allow}{deny}</>}
-          </div>
+        // What "always" saves goes on a line of its own; on a phone on its side, where the foot must
+        // leave room above it for what the card asks about, beside Allow and Deny where it fits.
+        <div className="flex flex-wrap gap-2 pt-3">
+          {request.defaultToNo ? <>{deny}{allow}</> : <>{allow}{deny}</>}
           {always && (
-            <div className="mt-2 flex">
+            <div className="flex max-w-full basis-full [@media(max-height:380px)]:basis-auto">
               <Button wrap disabled={busy} onClick={() => decide({ behavior: 'allow', remember: true })}>{always.text}</Button>
             </div>
           )}
-        </>
+        </div>
       )}
       {error && <div className="mt-2 text-[12.5px] text-danger">{error}</div>}
       </div>
