@@ -130,6 +130,20 @@ describe('the session list on a computer', () => {
     expect(location.search).toBe('?s=66666666-2222-4333-8444-555555555555');
   });
 
+  it('floating in, goes as the pointer moves anywhere off it, though it never was on it', async () => {
+    computer(1440);
+    setPrefs({ sidebar: 'hidden' });
+    await page();
+    fireEvent.pointerEnter(document.querySelector('[data-sidebar-edge]')!, { pointerType: 'mouse' });
+    // A pointer moving on it keeps it.
+    fireEvent.pointerMove(list(), { pointerType: 'mouse' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(listShown()).toBe(true);
+    // It floated in under a pointer that moved straight on over the conversation.
+    fireEvent.pointerMove(document.querySelector('main')!, { pointerType: 'mouse' });
+    await waitFor(() => expect(listShown()).toBe(false));
+  });
+
   it('hidden, floats in for ⇧⌘K, its search taking the keys', async () => {
     computer(1440);
     setPrefs({ sidebar: 'hidden' });

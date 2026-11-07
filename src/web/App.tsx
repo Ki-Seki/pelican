@@ -302,16 +302,32 @@ function Main() {
       e.preventDefault();
       setPeek(undefined);
     };
+    const onIt = (target: EventTarget | null) => Boolean(aside.current?.contains(target as Node) || (target as Element | null)?.closest?.('[data-sidebar-button]'));
     const onDown = (e: PointerEvent) => {
-      if (!aside.current?.contains(e.target as Node) && !(e.target as Element).closest?.('[data-sidebar-button]')) setPeek(undefined);
+      if (!onIt(e.target)) setPeek(undefined);
+    };
+    // The pointer moving anywhere off it puts it away as leaving it does, though it may never have
+    // been on it: the list floats in under a pointer that can move straight off, or out of the window.
+    let off = false;
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      if (onIt(e.target)) {
+        off = false;
+        clearTimeout(leaving.current);
+      } else if (!off) {
+        off = true;
+        peekLeave();
+      }
     };
     window.addEventListener('keydown', onKey, true);
     document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('pointermove', onMove, true);
     return () => {
       window.removeEventListener('keydown', onKey, true);
       document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('pointermove', onMove, true);
     };
-  }, [peek]);
+  }, [peek, peekLeave]);
 
   // Desktop's keys for the whole page: ⌘K the command menu, ⇧⌘K finds a session (on a phone the
   // list comes first; hidden, it floats in), ⇧⌘O starts one, ⇧⌘, opens Settings, ⌘B shows or hides
