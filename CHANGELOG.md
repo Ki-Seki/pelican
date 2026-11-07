@@ -245,7 +245,7 @@ settings; and updates from Settings.
   new sessions start in it, as Claude Code's do, and Settings and the new session's mode sheet say
   so; a fork, Fork from here or a `/clear` of a session in Bypass starts as a new session would.
   Settings › New sessions start with shows all this and where each value comes from, and a new
-  session's model and mode sheets say when the folder's or managed settings decide.
+  session's model and mode sheets say when the folder's or managed settings decide, or wait.
 - **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
   mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
   as `/model`, `/effort`, `/fast` and `/config` save it, so new sessions in the terminal and in
