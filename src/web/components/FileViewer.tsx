@@ -171,7 +171,8 @@ export function LinesBar({ target, place }: { target: LinesTarget; place: string
   const list = entries(LINES_ACTIONS, target, 'row', hasKeyboard() ? 'pointer' : 'touch');
   return (
     <div data-lines-bar className={place}>
-      <div role="toolbar" aria-label="Picked lines" className="flex h-11 items-center rounded-2xl border border-line bg-panel pr-1 pl-3.5 text-[14px] shadow-lg pointer-fine:h-9 pointer-fine:text-[13px]">
+      {/* A finger's 44 px inside its border: Copy, Quote and Add comment are as tall as the bar within it. */}
+      <div role="toolbar" aria-label="Picked lines" className="flex h-[46px] items-center rounded-2xl border border-line bg-panel pr-1 pl-3.5 text-[14px] shadow-lg pointer-fine:h-9 pointer-fine:text-[13px]">
         <span className="min-w-0 flex-1 truncate text-muted tabular-nums">{target.to > target.from ? `Lines ${target.from}\u2013${target.to}` : `Line ${target.from}`}</span>
         {list.map((entry, i) => 'run' in entry && (
           <span key={entry.id} className="flex h-full items-center">
