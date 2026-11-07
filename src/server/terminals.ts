@@ -266,8 +266,8 @@ class Term {
     this.screen = new HeadlessTerminal({ cols, rows, scrollback: TERMINAL_LIMITS.scrollback, allowProposedApi: true, logLevel: 'off' });
     // Characters as wide as the pages draw them (TerminalScreen takes the same widths): an emoji
     // takes two cells there, and the screen a page gets back places what follows it, and the
-    // cursor, by counting cells. A cell takes at most 16 combining marks, so no output grows one,
-    // or the screen a page gets, without bound.
+    // cursor, by counting cells. A cell takes at most 11 combining marks (MARKS_PER_CHARACTER), so
+    // no output grows one, or the screen a page gets, without bound.
     loadWidths(this.screen, Unicode11Addon);
     // Output xterm throws on stops neither the copy nor Pelican, where a throw would be fatal, and
     // none takes it long or grows it without bound. It keeps no links: nothing follows one here,

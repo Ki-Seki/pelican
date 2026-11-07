@@ -15,6 +15,7 @@ import WebSocket from 'ws';
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
 import { TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
+import { MARKS_PER_CHARACTER } from '../src/shared/terminal-widths';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
@@ -520,6 +521,9 @@ describe('flow control', () => {
 
 describe('marks on a character', () => {
   const marks = (n: number) => '\u0301'.repeat(n);
+  /** The most marks a cell takes, and the most code points it holds with its letter. */
+  const MARKS = MARKS_PER_CHARACTER;
+  const FULL = MARKS + 1;
 
   /** The most code points a cell of the page's screen holds. */
   const heaviest = (shown: Page) => {
@@ -535,10 +539,10 @@ describe('marks on a character', () => {
   // What xterm passes over between marks, going on joining them to the letter before: a DEL, the
   // C1 string terminator, a sequence it does not take.
   for (const [name, between] of [['a DEL', '\u007f'], ['U+009C', '\u009c'], ['ESC [ 1 < m', '\u001b[1<m']]) {
-    it(`are at most 16 on a cell of the copy and of the pages, with ${name} after every 16`, async () => {
+    it(`are at most 11 on a cell of the copy and of the pages, with ${name} after every 11`, async () => {
       const file = path.join(dir, 'marks.txt');
       // One letter, then two million marks.
-      await writeFile(file, `a${`${marks(16)}${between}`.repeat(125_000)}b\n`);
+      await writeFile(file, `a${`${marks(MARKS)}${between}`.repeat(Math.ceil(2_000_000 / MARKS))}b\n`);
       // A narrow screen, whose scrollback the marks overflow: what it keeps is all a page gets.
       const size = { cols: 20, rows: 5 };
       const terminal = await open(work(), size);
@@ -549,20 +553,20 @@ describe('marks on a character', () => {
       const ready = await late.readied();
       // xterm takes in what it is given a moment later, the screen a page is sent too.
       for (const seen of [shown, late]) await until(() => seen.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
-      // A mark that started a cell of its own, and 16 more on it, where the page saw it all and
+      // A mark that started a cell of its own, and 11 more on it, where the page saw it all and
       // where the copy's screen came.
-      expect(heaviest(shown)).toBe(17);
-      expect(heaviest(late)).toBe(17);
+      expect(heaviest(shown)).toBe(FULL);
+      expect(heaviest(late)).toBe(FULL);
       expect(late.lines()).toEqual(shown.lines());
       // The lines the copy keeps, each of 20 such cells (and a NUL before each that begins with a
       // mark, so it joins nothing before it), and no more however many came.
-      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * 18 + 10_000);
+      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * (FULL + 1) + 10_000);
     }, 90_000);
   }
 
-  it('are at most 16 on a cell, and a letter keeps its first 16, in one run however long', async () => {
+  it('are at most 11 on a cell, and a letter keeps its first 11, in one run however long', async () => {
     const file = path.join(dir, 'marks-run.txt');
-    await writeFile(file, `a${marks(40)}b\n`);
+    await writeFile(file, `a${marks(30)}b\n`);
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
     shown.type(`cat ${file}; echo DO''NE\r`);
@@ -573,8 +577,8 @@ describe('marks on a character', () => {
     for (const seen of [shown, late]) {
       const y = seen.lines().findIndex((line) => line.startsWith('a\u0301'));
       const line = seen.screen.buffer.active.getLine(y)!;
-      // The letter and 16; then a mark, a cell of its own, and the 16 after it; then the last 7, and b.
-      expect([0, 1, 2, 3].map((x) => line.getCell(x)?.getChars())).toEqual([`a${marks(16)}`, marks(17), marks(7), 'b']);
+      // The letter and 11; then a mark, a cell of its own, and the 11 after it; then the last 7, and b.
+      expect([0, 1, 2, 3].map((x) => line.getCell(x)?.getChars())).toEqual([`a${marks(MARKS)}`, marks(FULL), marks(7), 'b']);
     }
   }, 30_000);
 });
