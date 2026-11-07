@@ -495,11 +495,14 @@ describe('a reply in the export', () => {
       ['a line of HTML with blanks in it', `<div>\na${' '.repeat(120_000)}b\n</div>`],
       ['a line of HTML with tabs in it', `<div>\na${'\t'.repeat(120_000)}b\n</div>`],
     ] as const) {
-      // Time spent working, not time passed: a busy computer slows the clock, not the work.
+      // Time spent working, not time passed: a busy computer slows the clock, not the work. A slow
+      // one slows the work too: the costliest of these take about half a second on a laptop and up
+      // to 1.5 s on CI's runners, where those that took time with the square of a run took 7 s to
+      // minutes on the laptop.
       const started = process.cpuUsage();
       reply(said);
       const spent = process.cpuUsage(started);
-      expect((spent.user + spent.system) / 1000, name).toBeLessThan(1500);
+      expect((spent.user + spent.system) / 1000, name).toBeLessThan(4000);
     }
     // Written, it is at most a few times its size, however it is made to grow: a long address its links by reference use
     // again and again, and lazy lines in footnotes in containers, each written inside them.
