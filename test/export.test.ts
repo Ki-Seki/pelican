@@ -14,6 +14,7 @@ import { exportMarkdown } from '../src/server/actions';
 import { config } from '../src/server/config';
 import { sideChatPrompt } from '../src/server/side-chat';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
+import { shortPath } from '../src/web/lib/format';
 
 // Transcripts written here as Claude Code writes them, in a folder of this test's: nothing of this
 // computer's Claude Code is read.
@@ -91,7 +92,8 @@ describe('Export as Markdown', () => {
     expect(title).toBe('Side chat');
     expect(markdown).toBe([
       '# Side chat', '',
-      `Folder: \`${folder}\``, '',
+      // As the app names it: a Mac's /private/var as /var, where its temp folder is.
+      `Folder: \`${shortPath(folder)}\``, '',
       '## You', '',
       'Why CSS variables?', '',
       '## Claude', '',
@@ -563,7 +565,7 @@ describe('the export, each line where it was', () => {
       const sessionId = await session(n++, 'At home', [user('Hi'), claude(text('Done.'))]);
       expect((await exportMarkdown(sessionId)).markdown).toContain('\n\nFolder: `~/code/acme-web`\n\n');
       config.home = path.join(home, 'elsewhere');
-      expect((await exportMarkdown(sessionId)).markdown).toContain(`\n\nFolder: \`${folder}\`\n\n`);
+      expect((await exportMarkdown(sessionId)).markdown).toContain(`\n\nFolder: \`${shortPath(folder)}\`\n\n`);
     } finally {
       config.home = savedHome;
     }
@@ -575,7 +577,7 @@ describe('the export, each line where it was', () => {
     try {
       const sessionId = await session(n++, 'Odd folder', [user('Hi'), claude(text('Done.'))]);
       const { markdown } = await exportMarkdown(sessionId);
-      expect(markdown).toContain(`Folder: \`${path.join(home, 'code', 'x ## Claude ')}\``);
+      expect(markdown).toContain(`Folder: \`${shortPath(path.join(home, 'code', 'x ## Claude '))}\``);
       expect(speakers(markdown)).toEqual(['h1 Odd folder', 'h2 You', 'h2 Claude']);
     } finally {
       folder = saved;
