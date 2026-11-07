@@ -698,7 +698,7 @@ describe('a side chat opened as a session of its own (from the list, a search, t
   it('is read only here too: questions, and nothing that runs commands or changes files', async () => {
     computer(1440);
     setPrefs({ workspacePane: true });
-    server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
+    server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, github: 'acme/app', files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
     server.after = [tasks];
     // The session itself, for comparison: its own box, its tasks, Commit and Create PR, Rewind to here.
     history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
@@ -731,10 +731,10 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     await within(changes).findByText('cache.ts', {}, LAZY);
     expect(within(changes).queryByRole('button', { name: 'Rewind to here' })).toBeNull();
     fireEvent.click(within(changes).getByRole('button', { name: /^Show:/ }));
-    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Uncommitted'));
+    fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('All changes'));
     await waitFor(() => expect(location.search).not.toContain('t=u1'));
     await within(changes).findByText('cache.ts', {}, LAZY);
-    for (const name of ['Commit', 'Push', 'Create PR']) expect(within(changes).queryByRole('button', { name })).toBeNull();
+    for (const name of ['Commit changes', 'Push', 'Create PR']) expect(within(changes).queryByRole('button', { name })).toBeNull();
     // A ! is a question's, as in the side chat beside a session: nothing runs.
     fireEvent.change(box, { target: { value: '!npm test' } });
     expect(screen.queryByText('Shell command')).toBeNull();

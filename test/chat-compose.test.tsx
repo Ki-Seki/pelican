@@ -118,6 +118,7 @@ beforeAll(() => {
 const { ApiError } = await import('../src/web/lib/api');
 const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft } = await import('../src/web/lib/drafts');
+const { COMMIT_REQUEST, createPrRequest } = await import('../src/shared/requests');
 const { setPrefs } = await import('../src/web/lib/prefs');
 const { commentsOf, setComments } = await import('../src/web/lib/review');
 const { addWaiting, setWaiting, waitingOf } = await import('../src/web/lib/drafts');
@@ -508,9 +509,9 @@ describe('line comments, as in Claude Desktop', () => {
       await loaded();
       // Written in the file this session's pane shows.
       await waitFor(() => expect(document.querySelector('[data-line="2"]')).toBeTruthy(), LAZY);
-      fireEvent.click(document.querySelector('[data-line="2"]')!);
+      fireEvent.click(screen.getByRole('button', { name: 'Add comment on line 2' }));
       fireEvent.change(screen.getByLabelText('Comment for Claude'), { target: { value: 'Name it b2' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add comment' }));
       expect(commentsOf(SESSION)).toMatchObject([{ path: 'src/a.ts', line: 2, note: 'Name it b2' }]);
       expect(commentsOf(CWD)).toEqual([]);
       cleanup();
@@ -624,15 +625,37 @@ describe('line comments, as in Claude Desktop', () => {
   });
 });
 
-describe('Commit, Push and Create PR', () => {
-  it('fill the message box with a request to Claude, to be read and sent from there: nothing runs', async () => {
-    server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
+describe('Commit changes and Create PR', () => {
+  const repository: GitStatus = { repo: true, branch: 'feat/x', base: 'main', remote: true, github: 'acme/app', files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
+
+  it('send Claude Desktop’s request at once on a tap, leaving what is typed and what waits; there is no Push', async () => {
+    server.git = repository;
     session();
     await loaded();
     fireEvent.change(box(), { target: { value: 'First this.' } });
     fireEvent.click(await paneButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit changes' }, LAZY));
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    expect(server.sent[0]!.text).toBe(COMMIT_REQUEST);
+    expect(box().value).toBe('First this.');
+    expect(screen.queryByRole('button', { name: /^Push/ })).toBeNull();
+    // On a phone the conversation came back, to show the request go: Changes again for the next.
+    fireEvent.click(await paneButton());
     fireEvent.click(await screen.findByRole('button', { name: 'Create PR' }, LAZY));
-    await waitFor(() => expect(box().value).toMatch(/^First this\.\n\nCreate a pull request from feat\/x into main/));
+    await waitFor(() => expect(server.sent).toHaveLength(2));
+    expect(server.sent[1]!.text).toBe(createPrRequest({ repo: 'acme/app', branch: 'feat/x', baseBranch: 'main', cwd: CWD, draft: false }));
+    // It shows in the conversation as Desktop shows it.
+    expect(await screen.findByText('/create-pr')).toBeTruthy();
+  });
+
+  it('put the request in the message box first on ⌘-click, after what is typed: nothing is sent', async () => {
+    server.git = repository;
+    session();
+    await loaded();
+    fireEvent.change(box(), { target: { value: 'First this.' } });
+    fireEvent.click(await paneButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit changes' }, LAZY), { metaKey: true, ctrlKey: true });
+    await waitFor(() => expect(box().value).toBe(`First this.\n\n${COMMIT_REQUEST}\n\n`));
     expect(server.sent).toEqual([]);
   });
 });
@@ -672,11 +695,14 @@ describe('a file open in Changes and files', () => {
     expect(server.sent[0]!.text).toBe('<!-- attach: src/a.ts:1-2 -->\n> const a = 1;\n> const b = 2;\n\nWhy both?');
   });
 
-  it('mentions the file in the message box, after what is typed', async () => {
+  it('attaches the file from its ⋯, as Desktop’s Attach as context, leaving what is typed', async () => {
     const pane = await open();
-    fireEvent.click(within(pane).getByRole('button', { name: 'Mention' }));
-    await waitFor(() => expect(box().value).toBe('First this. @src/a.ts '));
-    expect(screen.queryByRole('list', { name: 'Quotes' })).toBeNull();
+    fireEvent.click(within(pane).getByRole('button', { name: 'More for a.ts' }));
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'src/a.ts' })).getByText('Attach as context'));
+    const chips = await screen.findByRole('list', { name: 'With your next message' });
+    expect(within(chips).getByText('a.ts')).toBeTruthy();
+    expect(box().value).toBe('First this.');
+    setWaiting(SESSION, []);
   });
 });
 
