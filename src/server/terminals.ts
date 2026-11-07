@@ -1026,6 +1026,12 @@ function readsFile(shell: string): '.' | 'source' | undefined {
   return undefined;
 }
 
+/** `text` in single quotes as sh, bash and zsh read them: nothing in it expanded. */
+const shQuoted = (text: string) => `'${text.replaceAll('\'', '\'\\\'\'')}'`;
+
+/** `text` in single quotes as fish reads them, where a backslash escapes a quote or a backslash. */
+const fishQuoted = (text: string) => `'${text.replace(/[\\']/g, '\\$&')}'`;
+
 /** csh and tcsh: histchars kept, then emptied, so that they take no `!` from the history in what they read next… */
 const CSH_OFF = 'set _pelican_off\nif ($?histchars) then\nset _pelican_histchars = $histchars:q\nendif\nset histchars = ""\n';
 /** …and put back as it was. */
@@ -1034,17 +1040,27 @@ const CSH_BACK = 'if ($?_pelican_off) then\nif ($?_pelican_histchars) then\nset 
 /**
  * What a shell's file has it do before the command, and for csh and tcsh a second file, read after
  * the first on the line typed, which tcsh goes on to also when the command stopped on an error or
- * Ctrl+C: csh and tcsh take a `!` from the history in a file they read too, so histchars, kept, is
- * emptied while they read the command, so they take none, and put back as it was after.
+ * Ctrl+C:
+ * - bash, zsh and fish (4 and later) put the command itself in the shell's history, quoted so that
+ *   nothing in it is expanded, for Up and Enter to run it again rather than the line that read the
+ *   file. bash takes that line out as it does (`history -s`); fish, and zsh with HIST_IGNORE_SPACE,
+ *   leave it out, typed with a space before it (typedLine).
+ * - csh and tcsh take a `!` from the history in a file they read too: histchars, kept, is emptied
+ *   while they read the command, so they take none, and put back as it was after.
  */
-function aroundCommand(shell: string): { before: string; after?: string } {
+function aroundCommand(command: string, shell: string): { before: string; after?: string } {
+  if (shell === 'bash') return { before: `if [[ -o history ]]; then builtin history -s -- ${shQuoted(command)}; fi\n` };
+  if (shell === 'zsh') return { before: `builtin print -rs -- ${shQuoted(command)}\n` };
+  // fish 3 has no `history append`, and would search its history for these words instead.
+  if (shell === 'fish') return { before: command.startsWith('-') ? '' : `if string match -qr '^([4-9]|[1-9][0-9])' $FISH_VERSION\n    builtin history append ${fishQuoted(command)}\nend\n` };
   if (shell === 'csh' || shell === 'tcsh') return { before: CSH_OFF, after: CSH_BACK };
   return { before: '' };
 }
 
 /** The line typed for `shell` to read `file`, and `after` (csh's) once it has. */
-function typedLine(reads: '.' | 'source', file: string, after?: string): string {
-  return after ? `${reads} ${file}; ${reads} ${after}` : `${reads} ${file}`;
+function typedLine(shell: string, reads: '.' | 'source', file: string, after?: string): string {
+  if (after) return `${reads} ${file}; ${reads} ${after}`;
+  return `${/^(bash|zsh|fish)$/.test(shell) ? ' ' : ''}${reads} ${file}`;
 }
 
 /** Writes a new file, readable by this account alone: none that is there already, or a link, is written through. */
@@ -1068,7 +1084,7 @@ export async function commandFile(command: string, shell: string): Promise<{ fil
   const { dir, own } = await commandFolder();
   // PowerShell reads in only a file whose name ends .ps1.
   const file = path.join(dir, `${randomUUID()}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
-  const { before, after } = aroundCommand(shell);
+  const { before, after } = aroundCommand(command, shell);
   const then = after === undefined ? undefined : `${file}.after`;
   const remove = own ? [dir] : [file, ...(then ? [then] : [])];
   try {
@@ -1078,7 +1094,7 @@ export async function commandFile(command: string, shell: string): Promise<{ fil
     for (const made of remove) await rm(made, { recursive: true, force: true }).catch(() => undefined);
     throw await notWritten(dir, error);
   }
-  return { file, line: typedLine(reads, file, then), remove };
+  return { file, line: typedLine(shell, reads, file, then), remove };
 }
 
 /**
