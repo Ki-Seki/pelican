@@ -73,3 +73,4 @@ describe('a pull request’s live status', () => {
     expect(PULL_URL.test('https://github.com.evil.example/acme/web/pull/1')).toBe(false);
   });
 });
+

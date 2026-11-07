@@ -3,6 +3,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 
 import type { PrStatus } from '../shared/protocol.js';
+import { GITHUB_PULL } from '../shared/requests.js';
 import { config } from './config.js';
 
 const run = promisify(execFile);
@@ -11,7 +12,7 @@ const run = promisify(execFile);
  * A pull request on GitHub, as Claude Desktop's Create PR asks Claude to name one in its
  * `<pr-created>` tag: the only address gh is ever asked about, and only to read it.
  */
-export const PULL_URL = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[1-9][0-9]{0,9}$/;
+export const PULL_URL = GITHUB_PULL;
 
 /** What a page shows of a pull request is read again at most this often, however many pages ask. */
 const FRESH_MS = 30_000;

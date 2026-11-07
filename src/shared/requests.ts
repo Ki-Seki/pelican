@@ -5,6 +5,13 @@
  * (web/lib/requests); the demo writes them into its made-up sessions.
  */
 
+/**
+ * A pull request on github.com, exactly, as Claude Desktop's Create PR asks Claude to name one in
+ * its `<pr-created>` tag: the only address whose card names its repository as GitHub's and shows
+ * what GitHub says of it (gh is asked about it, and about nothing else).
+ */
+export const GITHUB_PULL = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[1-9][0-9]{0,9}$/;
+
 /** Claude Desktop's Create PR request is wrapped in this tag, whole; it shows as /create-pr. */
 export const CREATE_PR_OPEN = '<create-pr-command>';
 export const CREATE_PR_CLOSE = '</create-pr-command>';

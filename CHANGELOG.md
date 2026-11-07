@@ -359,9 +359,11 @@ settings; and updates from Settings.
   GitHub CLI as you, only where it is installed and signed in, only for an address of the form
   `https://github.com/<owner>/<repo>/pull/<n>` that Claude named in Desktop's `<pr-created>` tag,
   from no repository, with no prompt and within 10 seconds, at most every half minute for a pull
-  request; it changes nothing. Pelican runs no git that changes anything: Commit changes and Create
-  PR are requests to Claude, which runs git and gh under your permission rules. The demo asks
-  nothing of GitHub.
+  request; it changes nothing. Only such an address's card names its repository as GitHub's: any other's names
+  its host first, as the browser would open it, so a host made to look like GitHub's
+  (`github-com.pr-review.example`) does not pass for it. Pelican runs no git that changes anything:
+  Commit changes and Create PR are requests to Claude, which runs git and gh under your permission
+  rules. The demo asks nothing of GitHub.
 - Updating from Settings takes a request from Pelican's own page, signed in, as every change does,
   and never in either demo; it installs nothing but pelican-cc, at the newest version npm's registry
   names, which the request must name exactly, with npm's integrity checks and no package scripts,

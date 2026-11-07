@@ -199,7 +199,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   a shell), only for an address of the form `https://github.com/<owner>/<repo>/pull/<n>`, from the
   system's temporary folder (no repository), with gh's prompts off and none of Pelican's settings in
   its environment, within 10 seconds, and at most every 30 seconds for one pull request, whatever
-  pages ask. It reads; it changes nothing. The demo asks nothing.
+  pages ask. It reads; it changes nothing. The demo asks nothing. Only such an address's card
+  names a repository as GitHub's: a card for any other names its host first, whole, as the browser
+  would open it (a name in another script as its punycode, without a user name), so a host made to
+  look like GitHub's reads as what it is.
 - **Only the files Claude sent are shown, and only as files.** In the sessions Pelican runs,
   Pelican tells Claude Code it shows the files Claude sends (`CLAUDE_CODE_ATTACHMENTS_BY_PATH`, set
   for Claude Code alone, never for a `!` command), which turns on SendUserFile and nothing else. In
