@@ -228,6 +228,16 @@ settings; and updates from Settings.
 
 ### Fixes
 
+- An agent Claude left working in the background shows as Claude Code and Claude Desktop show one:
+  under its step, Running in background with its steps, its time and what it is doing, then
+  Finished, Failed or Stopped in background. Opened, its steps are read again every few seconds
+  while it runs (they stayed as they were when first opened), with Stop in a session Pelican runs;
+  once Claude Code says it ended, what it returned, or why it failed, is in its card, and the line
+  where Claude heard of its end leads there instead of repeating it. It is a step of its own, never
+  folded away among the others. What Claude Code tells Claude when it starts such an agent ("Async
+  agent launched successfully…", its id and its output file) no longer shows, nor its pointer to a
+  report the agent handed back, which shows in its place; a report handed back while Claude worked
+  no longer shows as a message you sent.
 - On a phone, a tap near the end of the conversation lands on what was tapped: the conversation no
   longer moves under the lifting finger to reach its end, unless something arrived while the finger
   was down, as the last reply's actions, now always under it, are tapped there.
