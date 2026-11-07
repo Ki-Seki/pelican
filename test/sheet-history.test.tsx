@@ -67,8 +67,12 @@ function Sheets({ onNavigate }: { onNavigate?: () => void }) {
 
 const open = (name: string) => act(() => screen.getByRole('button', { name }).click());
 const shown = () => [...document.querySelectorAll('dialog[open]:not([data-closing])')].map((dialog) => dialog.querySelector('h2')?.textContent);
+/** Back, as the browser's button: once the step back has landed (later on a busy computer), and what it set off with it. */
 const back = () => act(async () => {
+  // Heard first: the sheets' own listener keeps a step that was theirs alone from the others.
+  const landed = new Promise((resolve) => window.addEventListener('popstate', resolve, { once: true, capture: true }));
   history.back();
+  await landed;
   await new Promise((resolve) => setTimeout(resolve, 20));
 });
 
