@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll } from 'vitest';
+import { afterAll, afterEach } from 'vitest';
 
 const root = mkdtempSync(path.join(os.tmpdir(), 'pelican-test-'));
 Object.assign(process.env, {
@@ -29,4 +29,10 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 if (typeof document !== 'undefined') {
   const { configure } = await import('@testing-library/dom');
   configure({ asyncUtilTimeout: 3000 });
+  // A sheet closed on a phone takes its entry in the history back out with a step back, which
+  // lands a moment later: before the next test, whose page it would otherwise move.
+  afterEach(async () => {
+    const { sheetHistorySettled } = await import('../src/web/lib/sheet-history');
+    await sheetHistorySettled();
+  });
 }

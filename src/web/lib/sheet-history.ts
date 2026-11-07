@@ -136,6 +136,11 @@ export function closeEntry(entry: Entry): void {
   });
 }
 
+/** For the tests: once the page's own steps back have been made, which land a moment after a sheet closes. */
+export function sheetHistorySettled(): Promise<void> {
+  return new Promise((resolve) => whenSettled(resolve));
+}
+
 /** For the tests: as a page just loaded. */
 export function resetSheetHistory(): void {
   open.splice(0);
