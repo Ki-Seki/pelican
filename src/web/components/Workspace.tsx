@@ -362,29 +362,14 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // selection's Quote and Copy, or the terminal's keys; the end of what scrolls, too. A computer
   // has no such edge (the inset is 0 there), so nothing moves.
   const waits = !docked && Boolean(needsYou);
-  const terminal = terminalShown && (
-    <div className={tab === 'terminal' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-      <WorkspaceTerminal
-        cwd={cwd}
-        hidden={tab !== 'terminal'}
-        lowest={waiting.length === 0 && !waits}
-        askTrust={askTrust}
-        onQuote={quoteHere}
-      />
-    </div>
-  );
-  const [foot, setFoot] = useState<HTMLDivElement | null>(null);
-  const selectionFoot = useMemo<SelectionFootAt | undefined>(
-    () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: true } : {}) } : undefined),
-    [foot, waiting.length, waits],
-  );
-
+  // On a phone the terminal's keys stay at the foot, by the keyboard: what waits shows above them.
+  const footInTerminal = !docked && tab === 'terminal';
   // What waits goes with the next message, as comments do in Claude Desktop; Send now (⌘↵) sends it
   // on its own. Beside the conversation its chips are in view above the message box, so the foot
   // is only Send now; on a phone, where the view covers the box, it says what waits.
   const count = waitingCount(waiting);
   const footer = waiting.length > 0 && (
-    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
+    <div className={`flex shrink-0 items-center gap-2 border-t border-line py-2 pr-2 pl-4 ${waits || footInTerminal ? '' : 'pb-safe'} ${docked ? 'justify-end' : ''}`}>
       {!docked && (
         <span className="min-w-0 flex-1 text-[13px] leading-snug text-muted">
           {count.said}<span className="text-faint"> {count.one ? 'waits' : 'wait'} for your next message</span>
@@ -398,6 +383,24 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       )}
     </div>
   );
+  const terminal = terminalShown && (
+    <div className={tab === 'terminal' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      <WorkspaceTerminal
+        cwd={cwd}
+        hidden={tab !== 'terminal'}
+        lowest={(footInTerminal || waiting.length === 0) && !waits}
+        {...(footInTerminal && footer ? { above: footer } : {})}
+        askTrust={askTrust}
+        onQuote={quoteHere}
+      />
+    </div>
+  );
+  const [foot, setFoot] = useState<HTMLDivElement | null>(null);
+  const selectionFoot = useMemo<SelectionFootAt | undefined>(
+    () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: true } : {}) } : undefined),
+    [foot, waiting.length, waits],
+  );
+
   // ⌘↵ anywhere in Changes and files sends the comments, as in Claude Desktop; beside the
   // conversation, ⌘\ closes it, as it closes the side chat there. Keys pressed in a sheet opened
   // from here reach this too (React passes them up its own tree): those are the sheet's.
@@ -479,7 +482,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       {tab !== 'terminal' && <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-[max(1rem,env(safe-area-inset-bottom))]">{body}</div>}
       {terminal}
       <div ref={setFoot} className="shrink-0" />
-      {footer}
+      {!footInTerminal && footer}
       {/* Said aloud when it comes: the page behind, where Pelican says such things, is covered. */}
       <div aria-live="polite" className="shrink-0">
         {needsYou && (

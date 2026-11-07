@@ -652,6 +652,16 @@ describe('the Terminal tab on a phone', () => {
     }
   });
 
+  it('says what waits for the next message between the screen and the keys, which stay by the keyboard', async () => {
+    coarse = true;
+    list.terminals = [terminal('t1')];
+    tab({ above: <div data-testid="waits">1 quote waits for your next message</div> });
+    await waitFor(() => expect(shows()).toBe('t1'));
+    const keys = screen.getByRole('toolbar', { name: 'Keys' });
+    expect(screen.getByTestId('waits').compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId('waits').compareDocumentPosition(document.querySelector('[data-terminal]')!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
   it('opens its menu on a long press under a finger, whose Select text opens the screen as text, to quote or copy', async () => {
     coarse = true;
     list.terminals = [terminal('t1')];

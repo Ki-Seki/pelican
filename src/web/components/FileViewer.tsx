@@ -429,7 +429,7 @@ function OpenFile({ cwd, path, line, onAddToMessage }: FileViewerProps) {
               onKeyDown={onKeyDown}
               onContextMenu={onContextMenu}
               style={{ WebkitTouchCallout: 'none' }}
-              className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] [tab-size:4] [@media(hover:none)]:select-none ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
+              className={`rounded-lg border border-line font-mono text-[12px] leading-[1.6] outline-none [tab-size:4] [@media(hover:none)]:select-none ${wrap ? 'overflow-hidden' : 'overflow-x-auto'}`}
             >
               {highlight ? <Highlighted text={text} language={language} /> : texts.map((_, i) => <LineRow key={i} n={i + 1} />)}
             </div>

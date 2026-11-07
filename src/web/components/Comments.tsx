@@ -76,14 +76,14 @@ export function CommentBox({ note, onNote, onSave, onCancel }: { note: string; o
         }}
         className="block w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-[16px] leading-snug outline-none placeholder:text-faint focus:border-fg pointer-fine:text-[14px]"
       />
-      <div className="mt-2 flex items-center justify-end gap-1.5">
-        <button type="button" onClick={onCancel} className="mr-auto h-11 rounded-full px-3 text-[14px] text-muted hover:bg-hover hover:text-fg pointer-fine:mr-0 pointer-fine:h-8 pointer-fine:text-[13px]">Cancel</button>
+      <div className="mt-2 flex items-center justify-end gap-1">
+        <button type="button" onClick={onCancel} className="mr-auto h-11 rounded-full px-2.5 text-[14px] whitespace-nowrap text-muted hover:bg-hover hover:text-fg pointer-fine:mr-0 pointer-fine:h-8 pointer-fine:px-3 pointer-fine:text-[13px]">Cancel</button>
         {sends && (
-          <button type="button" disabled={!ready} onClick={() => onSave(true)} aria-keyshortcuts={ariaKeys('commentSend')} className="flex h-11 items-center gap-1.5 rounded-full bg-chip px-4 text-[14px] hover:bg-hover disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3 pointer-fine:text-[13px]">
+          <button type="button" disabled={!ready} onClick={() => onSave(true)} aria-keyshortcuts={ariaKeys('commentSend')} className="flex h-11 items-center gap-1.5 rounded-full bg-chip px-3.5 text-[14px] whitespace-nowrap hover:bg-hover disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3 pointer-fine:text-[13px]">
             Send to Claude{sendKey && <span aria-hidden className="text-[11.5px] text-faint">{sendKey}</span>}
           </button>
         )}
-        <button type="submit" disabled={!ready} aria-keyshortcuts={addKey ? ariaKeys('commentAdd') : undefined} className="flex h-11 items-center gap-1.5 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3.5 pointer-fine:text-[13px]">
+        <button type="submit" disabled={!ready} aria-keyshortcuts={addKey ? ariaKeys('commentAdd') : undefined} className="flex h-11 items-center gap-1.5 rounded-full bg-fg px-3.5 text-[14px] font-medium whitespace-nowrap text-bg disabled:opacity-40 pointer-fine:h-8 pointer-fine:px-3.5 pointer-fine:text-[13px]">
           Add comment{addKey && <span aria-hidden className="text-[11.5px] font-normal opacity-60">{addKey}</span>}
         </button>
       </div>

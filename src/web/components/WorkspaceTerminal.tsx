@@ -111,7 +111,7 @@ const Centered = ({ children }: { children: ReactNode }) => (
  * key row and the line field under the screen type, with the phone's own keyboard, dictation and
  * input methods.
  */
-export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
+export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote, above }: {
   cwd: string;
   /** Another tab of the pane is shown: the terminal stays connected, ready to show again at once. */
   hidden: boolean;
@@ -124,6 +124,8 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
   askTrust: (trust: TrustQuestion) => Promise<TrustChoice | undefined>;
   /** Puts a quote of the terminal's text above the message box. */
   onQuote: (item: WaitingItem) => void;
+  /** On a phone, what the view says waits for the next message: between the screen and the keys, as P21 has it. */
+  above?: ReactNode;
 }) {
   const queryClient = useQueryClient();
   // A touch screen types with the line field, a keyboard into the screen: decided once, as a
@@ -386,10 +388,10 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     void forget(terminal).then(() => open(terminal.cwd, undefined, true));
   };
 
-  if (list.isLoading) return <Centered><Loader2 className="size-5 animate-spin" /></Centered>;
+  if (list.isLoading) return <><Centered><Loader2 className="size-5 animate-spin" /></Centered>{above}</>;
   // A list that came once stays through a refetch that failed (the offline line says so).
-  if (list.error && !list.data) return <Centered><span className="text-danger">{(list.error as Error).message}</span></Centered>;
-  if (list.data && !list.data.available) return <Centered><p className="max-w-xs"><Reason text={list.data.reason ?? 'There is no terminal here.'} /></p></Centered>;
+  if (list.error && !list.data) return <><Centered><span className="text-danger">{(list.error as Error).message}</span></Centered>{above}</>;
+  if (list.data && !list.data.available) return <><Centered><p className="max-w-xs"><Reason text={list.data.reason ?? 'There is no terminal here.'} /></p></Centered>{above}</>;
 
   const shownRuns = Boolean(shown && !shown.exit && !shownLost);
   const elsewhere = (list.data?.terminals ?? []).filter((t) => !within(t.cwd, cwd));
@@ -525,16 +527,19 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
       {ended && shown ? (
         <div className={`flex shrink-0 items-center gap-2 border-t border-line pt-2 pr-2 pl-4 text-[13px] text-muted ${safe}`}>
           <span className="min-w-0 flex-1 truncate">{shownLost || !shown.exit ? 'This terminal is no longer running' : endedWords(shown.exit)}</span>
-          <button type="button" onClick={() => startAgain(shown)} className="h-9 shrink-0 rounded-full bg-fg px-4 font-medium text-bg">Start again</button>
+          <button type="button" onClick={() => startAgain(shown)} className="h-11 shrink-0 rounded-full bg-fg px-4 font-medium text-bg pointer-fine:h-9">Start again</button>
         </div>
       ) : crowded ? (
         <div className={`flex shrink-0 items-center gap-2 border-t border-line pt-2 pr-2 pl-4 text-[13px] text-muted ${safe}`}>
           <span className="min-w-0 flex-1">This terminal shows on as many pages as it can.</span>
-          <button type="button" onClick={() => setAttempt((n) => n + 1)} className="h-9 shrink-0 rounded-full bg-chip px-4 text-fg">Try again</button>
+          <button type="button" onClick={() => setAttempt((n) => n + 1)} className="h-11 shrink-0 rounded-full bg-chip px-4 text-fg pointer-fine:h-9">Try again</button>
         </div>
       ) : touch && shown ? (
-        <PhoneKeys screen={screen} mode={mode} program={shown.program} safe={safe} />
-      ) : null}
+        <>
+          {above}
+          <PhoneKeys screen={screen} mode={mode} program={shown.program} safe={safe} />
+        </>
+      ) : above}
 
       <ScreenText
         {...(asText ? { text: asText } : {})}
