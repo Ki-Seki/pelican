@@ -201,18 +201,75 @@ describe('a terminal', () => {
     await until(() => shown.lines().includes('ran 42'), 10_000, 'the command');
   }, 20_000);
 
-  it('types a command as a paste where the shell takes pastes, so its lines go in together, then Enter', async () => {
+  it('has the shell read the command from a file of its own, readable by this account alone, its lines together, then Enter', async () => {
     // A shell that says it takes pastes, as zsh does, and writes down all it is sent.
     const typed = path.join(dir, 'typed');
     Object.assign(testShell, { file: '/bin/sh', args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
+    try {
+      const terminal = await open(work(), { command: 'echo one\necho two' });
+      await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
+      // Typed: `.` and the file, which holds the command as it was shown.
+      const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
+      expect(file).toBeDefined();
+      expect(readFileSync(file!, 'utf8')).toBe('echo one\necho two\n');
+      expect((await stat(file!)).mode & 0o777).toBe(0o600);
+      expect((await stat(path.dirname(file!))).mode & 0o777).toBe(0o700);
+      // Gone with the terminal.
+      await api('DELETE', `/api/terminals/${terminal.id}`);
+      await until(() => !existsSync(file!), 5000, 'the file to go');
+    } finally {
+      Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+    }
+  }, 20_000);
+
+  it('types the command as a paste for a shell that reads no file of commands, so its lines go in together, then Enter', async () => {
+    const typed = path.join(dir, 'typed-elsewhere');
+    const shell = path.join(dir, 'elvish');
+    await symlink('/bin/sh', shell);
+    Object.assign(testShell, { file: shell, args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
     try {
       await open(work(), { command: 'echo one\necho two' });
       await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
       expect(readFileSync(typed, 'utf8')).toBe('\u001b[200~echo one\necho two\u001b[201~\r');
     } finally {
       Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      await rm(shell);
     }
   }, 20_000);
+
+  // As in the review: a history file holding a secret (made up here), and a command in Claude's
+  // reply that would print it, or send it off, were a `!` in it expanded from the history. zsh reads
+  // its history file at start with an rc file of its own (here an empty one), as a login shell does.
+  for (const [name, file, args] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i']], ['zsh', '/bin/zsh', ['-d', '-i']]] as const) {
+    it.skipIf(!existsSync(file))(`runs the command as it shows, with no \`!\` in it taken from ${name}’s history`, async () => {
+      const history = path.join(dir, `history-${name}`);
+      await writeFile(history, 'export AWS_SECRET_ACCESS_KEY=AKIA-SCRATCH-NOT-REAL-1234\necho second\n');
+      const zdotdir = path.join(dir, `zdotdir-${name}`);
+      await mkdir(zdotdir, { recursive: true });
+      await writeFile(path.join(zdotdir, '.zshrc'), '');
+      const before = { HISTFILE: process.env.HISTFILE, ZDOTDIR: process.env.ZDOTDIR };
+      Object.assign(testShell, { file, args: [...args] });
+      Object.assign(process.env, { HISTFILE: history, ZDOTDIR: zdotdir });
+      try {
+        const shown = page((await open(work(), { command: 'echo "exfil: !?AWS_SECRET?" "!!" "!-2" done-$((6 * 7))' })).id);
+        await shown.readied();
+        await shown.sees(/done-42/, 10_000);
+        await pause(200);
+        expect(shown.output).not.toMatch(/AKIA-SCRATCH/);
+        expect(shown.lines().join('\n')).toContain('exfil: !?AWS_SECRET? !! !-2 done-42');
+        // The shell has the history all the same: typed at its prompt by you, `!` works as ever.
+        const from = shown.output.length;
+        shown.type('echo "ran !?second?"\r');
+        await shown.sees(/ran echo second/, 10_000, from);
+      } finally {
+        for (const [variable, value] of Object.entries(before)) {
+          if (value === undefined) delete process.env[variable];
+          else process.env[variable] = value;
+        }
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 30_000);
+  }
 
   it('runs no command that does not show all it holds', async () => {
     // Keys a shell's line editor takes (Ctrl+U, Esc, a carriage return), or text turned around.

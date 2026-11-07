@@ -53,15 +53,17 @@ settings; and updates from Settings.
   Ctrl+C gets through at once.
 - **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or `fish`
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
-  session's folder, pasted there, so its lines go in together. The question shows the whole command,
-  wrapped, its lines numbered and counted, and the blanks a line is padded with drawn, so nothing of
-  it sits past the block's edge. Only Claude's replies offer it, not a file or a tool's output, and
-  only for a command with nothing hidden in it, as an approval reads one, nor laid out to put part
-  of it out of sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider
-  than 500 columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above the message box as a quote
-  from the terminal, as Claude Desktop attaches one, naming its tab, with a note if you add one; of
-  a long one, its first 1,500 characters, as Desktop cuts any quote. Claude sees a terminal only
-  that way. `!` commands go into the conversation as before.
+  session's folder, which reads it from a file of its own (`.` or `source`), so its lines go in
+  together and run as they read: a `!` in it is not taken from your shell's history, as bash and zsh
+  take one in what is typed at their prompt. The question shows the whole command, wrapped, its
+  lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
+  the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
+  command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
+  sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider than 500
+  columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above
+  the message box as a quote from the terminal, as Claude Desktop attaches one, naming its tab, with
+  a note if you add one; of a long one, its first 1,500 characters, as Desktop cuts any quote.
+  Claude sees a terminal only that way. `!` commands go into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
   output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one
   is open), which opens the side chat with the passage attached, and Quote. On a computer they sit
@@ -385,9 +387,10 @@ settings; and updates from Settings.
   (`npm_*`, `INIT_CWD`, `NODE`), Claude Code's own (`CLAUDECODE` and `CLAUDE_CODE_*`, such as how it
   was started, or the id, messaging socket and token of a Claude Code session Pelican was started
   from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
-  most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk. The demo
-  has none, and `pelican --no-terminal` (also for `pelican service install`) starts Pelican without
-  them.
+  most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk but a
+  command Run in terminal runs, for its shell to read, readable by you alone and removed with its
+  terminal. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
+  starts Pelican without them.
 - Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
   tells the program in front of the shell, found with `ps` as End's question finds it, that the
   window changed (SIGWINCH, as a resize does), and where that program is not this account's to
@@ -418,10 +421,13 @@ settings; and updates from Settings.
   fits a block that scrolls sideways, and a command laid out to put part of it out of sight is
   neither offered nor run, by the page's reading and the server's alike: a run of more than 16
   blanks (300 spaces after `ls -la` hid a `; touch …` that ran), more than 2 blank lines in a row, a
-  line wider than 500 columns, or more than 50 lines. A step's Run in terminal, and a `!` command's,
-  asks the same question, the command itself shown rather than the step's description of it, and
-  is never offered on a step you denied, on a subagent's or a workflow's step, or for a PowerShell
-  step where the terminal's shell is not PowerShell.
+  line wider than 500 columns, or more than 50 lines. The command is not typed at the shell's
+  prompt, where bash, zsh and csh expand a `!` from the history, double quotes and all, so
+  `echo "!?SECRET?"` printed a secret from the history file: the shell reads it from a file of its
+  own, readable by you alone and removed with the terminal. A step's Run in terminal, and a `!`
+  command's, asks the same question, the command itself shown rather than the step's description of
+  it, and is never offered on a step you denied, on a subagent's or a workflow's step, or for a
+  PowerShell step where the terminal's shell is not PowerShell.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
   the few lines of @lydell's own against those read for this version, that this version pins each

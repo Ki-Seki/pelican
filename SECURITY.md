@@ -173,17 +173,21 @@ can read your sessions and have Claude run commands as you, so treat access to i
   shell reads it as part of a word, read as above), nor one laid out to put part of itself out of
   sight: a run of more than 16 blanks (as 300 spaces after `ls -la` hid a `; touch …` that ran),
   more than 2 blank lines in a row, a line wider than 500 columns or more than 50 lines; all of
-  which the server refuses too, by the same reading. Claude sees nothing of a terminal unless you
-  put it in a message (Quote, at most its first 1,500 characters). A link in a terminal says where
-  it goes before it opens, as the browser would ask for it (an international name in its `xn--`
-  form): pointed at, at the foot of the screen, and tapped on a phone, in a question with Open,
-  since a program's link (OSC 8) can read as any words; it opens only with Cmd or Ctrl held, or once
-  Open is tapped, and only an `http` or `https` one, in a new tab with no way back to Pelican. The
-  demo has no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is
-  pinned to one version, and CI checks that its files, for every platform, are those of Microsoft's
-  node-pty of that version, against the integrity the npm registry publishes for it; that the few
-  lines of its own, which pick the platform's files, are those read for that version; and that none
-  of its packages runs anything as npm installs it.
+  which the server refuses too, by the same reading. The command is not typed at the shell's prompt,
+  where bash, zsh and csh expand a `!` from the history first, double quotes and all, so
+  `echo "!?SECRET?"` would print a secret from your history file, or a `curl` send it off: the shell
+  reads it from a file of its own (`. file`, `source file`), in a folder only you can read, removed
+  with the terminal, and it runs as it reads. Claude sees nothing of a terminal unless you put it in
+  a message (Quote, at most its first 1,500 characters). A link in a terminal says where it goes
+  before it opens, as the browser would ask for it (an international name in its `xn--` form):
+  pointed at, at the foot of the screen, and tapped on a phone, in a question with Open, since a
+  program's link (OSC 8) can read as any words; it opens only with Cmd or Ctrl held, or once Open is
+  tapped, and only an `http` or `https` one, in a new tab with no way back to Pelican. The demo has
+  no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is pinned to
+  one version, and CI checks that its files, for every platform, are those of Microsoft's node-pty
+  of that version, against the integrity the npm registry publishes for it; that the few lines of
+  its own, which pick the platform's files, are those read for that version; and that none of its
+  packages runs anything as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'
@@ -311,7 +315,9 @@ sessions you pinned or archived (their ids), the usage figures it counted from t
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
 long they waited for you, a note of the running server, and what the last look for an update found,
 in `~/.local/state/pelican`. Its pins and archive are its own: Claude Desktop's are neither read nor
-written. Terminals, and what they show, are kept in memory only.
+written. Terminals, and what they show, are kept in memory only; a command Run in terminal runs is
+written for its shell to read, in a folder of the system's temporary one that only you can read,
+and removed with its terminal, and that folder when Pelican stops.
 
 ## Reporting a vulnerability
 
