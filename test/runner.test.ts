@@ -1219,8 +1219,8 @@ describe('workflows', () => {
     // What an agent returned is not sent with each frame: the agent opened reads it from its files.
     expect(shown.agents[0]).not.toHaveProperty('resultPreview');
     expect(shown.agents[0]).not.toHaveProperty('promptPreview');
-    // Its task row says its name and how far its agents got, not its description twice.
-    expect(state().tasks).toEqual([{ id: 'w1', description: 'demo-review', type: 'local_workflow', summary: '1/2 agents' }]);
+    // Its task row says its name and how far its agents got, not its description twice, and leads to its card.
+    expect(state().tasks).toEqual([{ id: 'w1', description: 'demo-review', type: 'local_workflow', summary: '1/2 agents', toolUseId: 'toolu_w' }]);
     expect(state().progress).toBeUndefined();
 
     // Frames without the list only tick usage: the list stays, and nothing is sent for them.

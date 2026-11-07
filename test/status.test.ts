@@ -37,9 +37,9 @@ describe('a session another app has', () => {
     expect(elsewherePlaceholder({ situation: 'open', app: 'Claude Desktop' })).toBeUndefined();
   });
 
-  it('says background work between turns as tasks', () => {
-    expect(statusLabel('idle', undefined, 1)).toBe('1 task');
-    expect(statusLabel('idle', undefined, 3)).toBe('3 tasks');
+  it('says background work between turns as in background: a task is Claude’s to-do list’s', () => {
+    expect(statusLabel('idle', undefined, 1)).toBe('1 in background');
+    expect(statusLabel('idle', undefined, 3)).toBe('3 in background');
     expect(statusLabel('idle')).toBe('');
     expect(statusLabel('running', undefined, 3)).toBe('Working');
   });

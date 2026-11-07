@@ -153,7 +153,7 @@ export function demoWorkflowRun(sessionId: string, cwd: string): RunState | unde
     settings: { model: 'default', effort: 'high', permissionMode: 'acceptEdits' },
     partial: [],
     permissions: [],
-    tasks: [{ id: FIXES.task, description: FIXES.name, type: 'local_workflow', summary: `${fixes.agents.filter((a) => a.state === 'done').length}/${fixes.agents.length} agents` }],
+    tasks: [{ id: FIXES.task, description: FIXES.name, type: 'local_workflow', summary: `${fixes.agents.filter((a) => a.state === 'done').length}/${fixes.agents.length} agents`, toolUseId: FIXES.call }],
     workflows: { [FIXES.call]: fixes },
     lastTurn: { durationMs: 9_000, outputTokens: 610 },
     context: { percent: 18, tokens: 36_000, max: 200_000 },

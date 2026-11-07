@@ -625,6 +625,39 @@ describe('line comments, as in Claude Desktop', () => {
   });
 });
 
+describe('what runs in the background', () => {
+  const tasks = [
+    { id: 'bash_1', description: 'Start the dev server', type: 'local_bash', output: true },
+    { id: 'w1', description: 'checkout-fixes', type: 'local_workflow', summary: '1/2 agents', toolUseId: 'toolu_w' },
+  ];
+  const ctrlAltB = () => fireEvent.keyDown(box(), { key: 'b', code: 'KeyB', ctrlKey: true, altKey: true });
+
+  it('reads “2 in background”; ⌃B (Ctrl+Alt+B off a Mac) opens the list with the keys in it, and closes it again', async () => {
+    server.run = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [], tasks };
+    session();
+    await loaded();
+    const bar = await screen.findByRole('region', { name: '2 in background' });
+    expect(within(bar).getByRole('button', { expanded: false }).textContent).toContain('2 in background');
+    ctrlAltB();
+    await waitFor(() => expect(bar.contains(document.activeElement)).toBe(true));
+    expect(within(bar).getByRole('button', { expanded: true })).toBeTruthy();
+    // A command's row stops it; a workflow's leads to its card, where its one Stop is.
+    expect(within(bar).getAllByRole('button', { name: 'Stop' })).toHaveLength(1);
+    expect(within(bar).getByRole('button', { name: /checkout-fixes/ }).getAttribute('title')).toBe('Show the workflow');
+    fireEvent.keyDown(document.activeElement!, { key: 'b', code: 'KeyB', ctrlKey: true, altKey: true });
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+  });
+
+  it('/tasks opens the same, as Claude Code names it; with nothing running it says so', async () => {
+    server.run = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] };
+    session();
+    await loaded();
+    sendText('/tasks');
+    expect(await screen.findByText('Nothing runs in the background here.')).toBeTruthy();
+    expect(server.sent).toEqual([]);
+  });
+});
+
 describe('Commit changes and Create PR', () => {
   const repository: GitStatus = { repo: true, branch: 'feat/x', base: 'main', remote: true, github: 'acme/app', files: [{ path: 'src/a.ts', status: 'modified', added: 1 }] };
 

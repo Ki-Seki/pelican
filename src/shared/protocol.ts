@@ -411,7 +411,8 @@ export type ScheduledCheck = { id: string; what: string; next?: number; repeats:
 
 /**
  * `output`: a command or watcher whose output can be read while it runs; `summary`: what an agent
- * says it is doing; `toolUseId`: the call that started it, whose card follows it.
+ * says it is doing, or how far a workflow's agents got; `toolUseId`: the call that started it, whose
+ * card follows it; `type`: an agent's kind, or Claude Code's task type (`local_bash`, `local_workflow`).
  */
 export type BackgroundTask = { id: string; description: string; type: string; output?: boolean; summary?: string; toolUseId?: string };
 

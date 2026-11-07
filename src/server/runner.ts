@@ -603,12 +603,18 @@ export class SessionRun {
       ...(this.activity ? { activity: this.activity } : {}),
       ...(this.tasks.length > 0 ? {
         tasks: this.tasks.map((task) => {
-          // A workflow, by its name, as Claude Code's task panel lists it, with how far its agents got.
+          // A workflow, by its name, as Claude Code's task panel lists it, with how far its agents got,
+          // and its call, whose card its row leads to: Stop is there.
           const flow = this.flows.get(task.id);
           if (flow) {
             const { agents } = liveWorkflow(flow);
             const done = agents.filter((a) => a.state === 'done').length;
-            return { ...task, description: flow.name ?? task.description, ...(agents.length > 0 ? { summary: `${done}/${agents.length} agents` } : {}) };
+            return {
+              ...task,
+              description: flow.name ?? task.description,
+              ...(agents.length > 0 ? { summary: `${done}/${agents.length} agents` } : {}),
+              ...(flow.toolUseId ? { toolUseId: flow.toolUseId } : {}),
+            };
           }
           const report = this.progress.get(task.id);
           const summary = report?.summary ?? report?.lastTool;

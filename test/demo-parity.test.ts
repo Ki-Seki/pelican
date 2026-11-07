@@ -155,7 +155,8 @@ describe('the demo shows workflows', () => {
     expect(finished?.agents.map((a) => a.label)).toEqual(['review:server', 'review:client', 'verify:server', 'verify:client']);
     const run = demoRunState(WORKFLOWS);
     expect(run?.workflows?.toolu_demo_wf_fixes).toMatchObject({ status: 'running', name: 'checkout-fixes', taskId: 'w7p3m0rtc' });
-    expect(run?.tasks).toEqual([{ id: 'w7p3m0rtc', description: 'checkout-fixes', type: 'local_workflow', summary: '1/2 agents' }]);
+    // Its row in the bar leads to its card, where its Stop is.
+    expect(run?.tasks).toEqual([{ id: 'w7p3m0rtc', description: 'checkout-fixes', type: 'local_workflow', summary: '1/2 agents', toolUseId: 'toolu_demo_wf_fixes' }]);
     expect(demoRunStatus(WORKFLOWS)).toBe('idle');
     expect(demoRunTasks(WORKFLOWS)).toBe(1);
   });

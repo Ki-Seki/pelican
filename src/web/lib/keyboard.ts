@@ -130,8 +130,9 @@ export const KEYS = {
   archive: { label: 'Archive', group: 'This session', scope: 'page', keys: ['mod+alt+a'] },
   sideChat: { label: 'Side chat', group: 'This session', scope: 'page', keys: ['mod+;'] },
   transcriptView: { label: 'Transcript view', group: 'This session', scope: 'page', keys: ['ctrl+o'] },
-  // A Mac's alone: elsewhere Control is the shortcut key, and Ctrl+B shows and hides the sidebar.
-  backgroundTasks: { label: 'Background tasks', group: 'This session', scope: 'page', keys: ({ apple }) => (apple === false ? [] : ['ctrl+b']), soon: true },
+  // Desktop's ⌃B on a Mac. Elsewhere Control is the shortcut key and Ctrl+B shows and hides the
+  // sidebar, as ⌘B does on a Mac: there it is Ctrl+Alt+B, as Desktop's ⌥⌘ keys are Ctrl+Alt there.
+  backgroundTasks: { label: 'Background tasks', group: 'This session', scope: 'page', keys: ({ apple }) => (apple === false ? ['ctrl+alt+b'] : ['ctrl+b']) },
 
   // Control on a Mac too, as in Desktop's web build: ⌘⇧D is the browser's (bookmark all tabs).
   changes: { label: 'Changes', group: 'Panes', scope: 'page', keys: ['ctrl+shift+d'], also: ['mod+shift+d'] },

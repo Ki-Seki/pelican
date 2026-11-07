@@ -1,14 +1,15 @@
 import type { RunState, SessionStatus, SessionSummary } from '../../shared/protocol';
 
 /**
- * What a session is doing, in words. `tasks`: background tasks and subagents still running in it
- * (and checks Claude stays running for), said between turns as "2 tasks".
+ * What a session is doing, in words. `tasks`: background tasks, agents and workflows still running
+ * in it (and checks Claude stays running for), said between turns as "2 in background": "task" is
+ * Claude's to-do list's word.
  */
 export function statusLabel(status: SessionStatus, runningIn?: string, tasks = 0): string {
   if (status === 'running') return 'Working';
   if (status === 'waiting') return runningIn ? `Needs you in ${runningIn}` : 'Needs you';
   if (status === 'live') return runningIn ? `Working in ${runningIn}` : 'Working elsewhere';
-  if (tasks > 0) return tasks === 1 ? '1 task' : `${tasks} tasks`;
+  if (tasks > 0) return `${tasks} in background`;
   return '';
 }
 

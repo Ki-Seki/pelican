@@ -54,7 +54,7 @@ describe('the keyboard shortcuts sheet', () => {
         'Show or hide the sidebar: Ctrl B',
         'Close a menu or sheet: Esc',
       ],
-      'This session': ['Rename: Ctrl Alt R', 'Fork: Ctrl Alt O', 'Archive: Ctrl Alt A', 'Side chat: Ctrl ;', 'Transcript view: Ctrl O'],
+      'This session': ['Rename: Ctrl Alt R', 'Fork: Ctrl Alt O', 'Archive: Ctrl Alt A', 'Side chat: Ctrl ;', 'Transcript view: Ctrl O', 'Background tasks: Ctrl Alt B'],
       Panes: ['Changes: Ctrl Shift D', 'Files: Ctrl Shift F', 'Terminal: Ctrl `', 'New terminal: Ctrl Shift `', 'Close pane: Ctrl \\'],
       'Message box': [
         'Send: Enter Ctrl Enter',
@@ -88,8 +88,7 @@ describe('the keyboard shortcuts sheet', () => {
       const { label } = KEYS[id];
       if (!keyWorks(id)) expect(listed, label).not.toContain(label);
     }
-    // Still to come: Background tasks, picking an answer by its number.
-    expect(listed).not.toContain('Background tasks');
+    // Still to come: picking an answer by its number.
     expect(listed).not.toContain('Pick an answer');
     // The browser's own (Copy, Paste) are shown in menus, not here.
     expect(listed).not.toContain('Copy');

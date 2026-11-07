@@ -48,11 +48,11 @@ describe('the session list', () => {
     const active = (await screen.findByText('Active')).closest('section')!;
     const rows = within(active).getAllByRole('link');
     expect(rows.map((row) => row.getAttribute('aria-label')?.split(', ').slice(0, 2).join(', '))).toEqual([
-      'Watch the dev server, 2 tasks',
-      'Check the export queue, 1 task',
+      'Watch the dev server, 2 in background',
+      'Check the export queue, 1 in background',
       'Fix the login test, Working',
     ]);
-    expect(within(active).getByText('2 tasks')).toBeTruthy();
+    expect(within(active).getByText('2 in background')).toBeTruthy();
     // The same title in the same folder folds, but not into one still at work.
     expect(screen.queryByText(/earlier/)).toBeNull();
   });

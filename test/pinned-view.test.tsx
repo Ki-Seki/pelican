@@ -139,7 +139,7 @@ describe('pinned sessions in the list', () => {
     expect(titles('Active')).toEqual(['Add a dark theme']);
     const pinned = within(pinnedSection());
     expect(pinned.getByText('Needs you')).toBeTruthy();
-    expect(pinned.getByText('2 tasks')).toBeTruthy();
+    expect(pinned.getByText('2 in background')).toBeTruthy();
     expect(pinned.getByRole('button', { name: '2 earlier' })).toBeTruthy();
     expect(pinned.getAllByRole('link')[0]!.getAttribute('aria-label')).toBe('Fix the login test, Needs you, pinned, app, 5 minutes ago');
     // Their heading says so: the rows carry no pin of their own; each has its ⋯, which has Unpin.

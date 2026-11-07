@@ -73,7 +73,7 @@ describe('Claude Desktop’s web keys', () => {
     expect(shown('archive')).toBe('mod+alt+a');
     expect(shown('sideChat')).toBe('mod+;');
     expect(shown('transcriptView')).toBe('ctrl+o');
-    expect(shown('backgroundTasks')).toBe('ctrl+b');
+    expect(chordsOf('backgroundTasks', { enterSends: true, apple: APPLE })[0]).toBe('ctrl+b');
     expect(shown('changes')).toBe('ctrl+shift+d');
     expect(shown('files')).toBe('mod+shift+f');
     expect(shown('terminal')).toBe('ctrl+`');
@@ -270,14 +270,21 @@ describe('the key table', () => {
 });
 
 describe('the sidebar’s key', () => {
-  it('is ⌘B, as in Claude Desktop, Ctrl+B elsewhere; Background tasks’ ⌃B is then a Mac’s alone', () => {
+  it('is ⌘B, as in Claude Desktop, Ctrl+B elsewhere; Background tasks are Desktop’s ⌃B on a Mac, Ctrl+Alt+B elsewhere', () => {
     expect(chordsOf('sidebar')[0]).toBe('mod+b');
     expect(isKey({ key: 'b', code: 'KeyB', metaKey: true }, 'sidebar', APPLE)).toBe(true);
     expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'sidebar', OTHER)).toBe(true);
-    // On a Mac Control+B is another key, Background tasks' once it comes; elsewhere it is the sidebar's.
+    // On a Mac Control+B is another key, Background tasks'; elsewhere it is the sidebar's.
     expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'sidebar', APPLE)).toBe(false);
     expect(chordsOf('backgroundTasks', { enterSends: true, apple: true })).toEqual(['ctrl+b']);
-    expect(chordsOf('backgroundTasks', { enterSends: true, apple: false })).toEqual([]);
+    expect(chordsOf('backgroundTasks', { enterSends: true, apple: false })).toEqual(['ctrl+alt+b']);
+    expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'backgroundTasks', APPLE)).toBe(true);
+    expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true }, 'backgroundTasks', OTHER)).toBe(false);
+    expect(isKey({ key: 'b', code: 'KeyB', ctrlKey: true, altKey: true }, 'backgroundTasks', OTHER)).toBe(true);
+    // AltGr, which types a character off a Mac, is no Ctrl+Alt+B.
+    expect(isKey({ key: '{', code: 'KeyB', ctrlKey: true, altKey: true, getModifierState: () => true }, 'backgroundTasks', OTHER)).toBe(false);
+    expect(keyText('backgroundTasks', APPLE)).toBe('⌃B');
+    expect(keyText('backgroundTasks', OTHER)).toBe('Ctrl+Alt+B');
   });
 });
 

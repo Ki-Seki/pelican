@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Archive, ArchiveRestore, BarChart3, CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, Cpu, Download, FileDiff, Folder,
+  Activity, Archive, ArchiveRestore, BarChart3, CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, Cpu, Download, FileDiff, Folder,
   Gauge, GitBranch, GitFork, Info, ListChecks, Loader2, type LucideIcon, MessagesSquare, Pencil, Pin, PinOff, Plug, Plus, ShieldCheck, SquareTerminal, TriangleAlert, X, Zap,
 } from 'lucide-react';
 import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,6 +47,7 @@ import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
 import { buildItems, splitFiles, type Item } from '../lib/turns';
+import { revealWorkflow } from '../lib/workflows';
 import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { ContextPanel, ContextRing } from './ContextPanel';
@@ -224,32 +225,52 @@ function TaskOutputSheet({ sessionId, task, onClose }: { sessionId: string; task
   );
 }
 
+/** "1 in background", "3 in background · 1 scheduled": what Claude left running here, and the checks it stays running for. */
+const inBackground = (tasks: number, scheduled: number) =>
+  [tasks > 0 ? `${tasks} in background` : '', scheduled > 0 ? `${scheduled} scheduled` : ''].filter(Boolean).join(' · ');
+
 /**
- * Background tasks (shells and agents Claude left running) and the check-ins Claude scheduled.
- * One shows as a row; more fold into a single row, so they never crowd the conversation, and open
- * into a short list. A command's row opens what it printed; an agent's says what it is doing.
+ * Background tasks (shells, agents and workflows Claude left running) and the check-ins Claude
+ * scheduled, "1 in background", as Claude Code's /tasks lists them (⌃B opens them, as in Claude
+ * Desktop, or /tasks). One shows as a row; more fold into a single row, so they never crowd the
+ * conversation, and open into a short list. A command's row opens what it printed and stops it; an
+ * agent's says what it is doing and leads to its card, which has Stop too; a workflow's leads to its
+ * card, where its one Stop is.
  */
-function BackgroundTasks({ sessionId, tasks, scheduled, onCancel }: {
+function BackgroundTasks({ sessionId, tasks, scheduled, open, setOpen, onCancel, ref }: {
   sessionId: string;
   tasks: BackgroundTask[];
   scheduled: ScheduledCheck[];
+  /** The list open, folded into one row while there are more than one. */
+  open: boolean;
+  setOpen: (open: boolean) => void;
   /** Asks Claude to cancel a check: it is Claude's to cancel, as in the CLI. */
   onCancel: (check: ScheduledCheck) => void;
+  ref?: React.Ref<HTMLDivElement>;
 }) {
-  const [open, setOpen] = useState(false);
   const [reading, setReading] = useState<BackgroundTask>();
   const stop = (id: string) => void api.stopTask(sessionId, id);
-  const row = (task: BackgroundTask) => (
-    <div key={task.id} className="flex items-center gap-2 py-1 pr-1 pl-3 text-[12.5px] text-muted">
-      <Pulse />
-      <span className="min-w-0 flex-1 truncate">
+  const row = (task: BackgroundTask) => {
+    // A workflow's Stop is on its card alone; an agent's and a workflow's row leads to the card.
+    const workflow = task.type === 'local_workflow';
+    const card = task.toolUseId;
+    const words = (
+      <>
         {task.description || 'Background task'}
         {task.summary && <span className="text-faint"> · {task.summary}</span>}
-      </span>
-      {task.output && <button type="button" onClick={() => setReading(task)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Output</button>}
-      <button type="button" onClick={() => stop(task.id)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Stop</button>
-    </div>
-  );
+      </>
+    );
+    return (
+      <div key={task.id} className="flex items-center gap-2 py-1 pr-1 pl-3 text-[12.5px] text-muted">
+        <Pulse />
+        {card ? (
+          <button type="button" onClick={() => revealWorkflow(card)} title={workflow ? 'Show the workflow' : 'Show the agent'} className="relative min-w-0 flex-1 truncate text-left after:absolute after:-inset-y-2 after:inset-x-0 hover:text-fg">{words}</button>
+        ) : <span className="min-w-0 flex-1 truncate">{words}</span>}
+        {task.output && <button type="button" onClick={() => setReading(task)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Output</button>}
+        {!workflow && <button type="button" onClick={() => stop(task.id)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Stop</button>}
+      </div>
+    );
+  };
   // Claude stays running here for these; it says when the next one is due.
   const check = (item: ScheduledCheck) => (
     <div key={item.id} className="flex h-9 items-center gap-2 pr-1 pl-3 text-[12.5px] text-muted">
@@ -260,27 +281,28 @@ function BackgroundTasks({ sessionId, tasks, scheduled, onCancel }: {
     </div>
   );
   const sheet = <TaskOutputSheet sessionId={sessionId} {...(reading ? { task: reading } : {})} onClose={() => setReading(undefined)} />;
+  const label = inBackground(tasks.length, scheduled.length);
   if (tasks.length + scheduled.length === 1) {
-    return <div className="mx-auto mb-2 max-w-3xl rounded-full border border-line bg-panel">{tasks[0] ? row(tasks[0]) : check(scheduled[0]!)}{sheet}</div>;
+    return <div ref={ref} role="region" aria-label={label} className="mx-auto mb-2 max-w-3xl rounded-full border border-line bg-panel">{tasks[0] ? row(tasks[0]) : check(scheduled[0]!)}{sheet}</div>;
   }
   if (tasks.length === 0) {
-    return <div className="mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel py-0.5">{scheduled.map(check)}</div>;
+    return <div ref={ref} role="region" aria-label={label} className="mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel py-0.5">{scheduled.map(check)}</div>;
   }
   const latest = tasks.at(-1)!;
   return (
-    <div className="mx-auto mb-2 max-w-3xl">
+    <div ref={ref} role="region" aria-label={label} className="mx-auto mb-2 max-w-3xl">
       {open ? (
         <div className="rounded-2xl border border-line bg-panel py-1">
-          <button type="button" onClick={() => setOpen(false)} className="flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted hover:text-fg">
-            <span className="min-w-0 flex-1 truncate">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}{scheduled.length > 0 ? ` · ${scheduled.length} scheduled` : ''}</span>
+          <button type="button" aria-expanded onClick={() => setOpen(false)} className="flex h-8 w-full items-center gap-2 px-3 text-left text-[12.5px] text-muted hover:text-fg">
+            <span className="min-w-0 flex-1 truncate">{label}</span>
             <ChevronDown className="size-4 shrink-0" />
           </button>
           <div className="max-h-[30vh] overflow-y-auto overscroll-contain">{tasks.map(row)}{scheduled.map(check)}</div>
         </div>
       ) : (
-        <button type="button" onClick={() => setOpen(true)} className="flex h-8 w-full items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted hover:text-fg">
+        <button type="button" aria-expanded={false} onClick={() => setOpen(true)} className="flex h-8 w-full items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted hover:text-fg">
           <Pulse />
-          <span className="shrink-0 tabular-nums">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}{scheduled.length > 0 ? ` · ${scheduled.length} scheduled` : ''}</span>
+          <span className="shrink-0 tabular-nums">{label}</span>
           <span className="min-w-0 flex-1 truncate text-faint">{latest.description || 'Background task'}</span>
           <ChevronUp className="size-4 shrink-0" />
         </button>
@@ -436,6 +458,9 @@ export function Chat({
   const [rewindWork, setRewindWork] = useState<{ working: boolean; problem?: RewindProblem }>({ working: false });
   const [picking, setPicking] = useState(false);
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
+  // What runs in the background here, its list open (⌃B, /tasks).
+  const [backgroundOpen, setBackgroundOpen] = useState(false);
+  const backgroundBar = useRef<HTMLDivElement>(null);
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
   const { data: limits } = useQuery({ queryKey: ['usage'], queryFn: api.usage, refetchInterval: 60_000, enabled: !demo });
@@ -1129,8 +1154,24 @@ export function Chat({
       .catch((error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
   };
   const showContext = () => setContextAt(root.current?.querySelector('[data-context-ring]') ?? null);
-  const act = useRef({ fork, archive, rename, showPane, togglePane, showContext, send, settings: shown, models });
-  act.current = { fork, archive, rename, showPane, togglePane, showContext, send, settings: shown, models };
+  // ⌃B, as in Claude Desktop, and /tasks, as Claude Code names it: what runs in the background here,
+  // its list open with the keys in it, or closed again from there; with nothing running, said so.
+  const showBackground = () => {
+    const run = getView(viewId).run;
+    if ((run?.tasks?.length ?? 0) + (run?.scheduled?.length ?? 0) === 0) {
+      setNote('Nothing runs in the background here.');
+      return;
+    }
+    if (backgroundBar.current?.contains(document.activeElement)) {
+      setBackgroundOpen(false);
+      composer.current?.focus();
+      return;
+    }
+    setBackgroundOpen(true);
+    requestAnimationFrame(() => backgroundBar.current?.querySelector<HTMLElement>('button')?.focus());
+  };
+  const act = useRef({ fork, archive, rename, showPane, togglePane, showContext, showBackground, send, settings: shown, models });
+  act.current = { fork, archive, rename, showPane, togglePane, showContext, showBackground, send, settings: shown, models };
   const linesWords = lines ? [lines.added > 0 ? `+${lines.added}` : '', lines.removed > 0 ? `−${lines.removed}` : ''].filter(Boolean).join(' ') : '';
   const contextWords = context ? `${context.percent}%` : '';
   const pinned = Boolean(session?.pinned);
@@ -1162,6 +1203,7 @@ export function Chat({
       });
       add({ id: 'mode', group: 'session', label: 'Mode', icon: ShieldCheck, description: 'Permission mode', key: 'mode', run: () => composer.current?.openSheet('mode') });
     }
+    if (!sideChat) add({ id: 'tasks', group: 'session', label: 'Background tasks', icon: Activity, name: 'tasks', aliases: ['bashes'], description: 'Background tasks', key: 'backgroundTasks', run: () => act.current.showBackground() });
     add({ id: 'usage', group: 'session', label: 'Usage and activity', icon: BarChart3, name: 'usage', description: 'Usage and activity', run: () => setUsageOpen(true) });
     if (session) {
       add({ id: 'pin', group: 'pelican', label: pinned ? 'Unpin' : 'Pin', icon: pinned ? PinOff : Pin, run: () => void changeListed(queryClient, session, { pinned: !pinned }).catch(() => undefined) });
@@ -1185,7 +1227,8 @@ export function Chat({
   useCommandContext(commandContext);
 
   // Desktop's keys for this session: ⌥⌘R renames it, ⌥⌘O forks it, ⌥⌘A archives it, ⇧⌘F shows its
-  // files, while no sheet or menu is open.
+  // files, ⌃B its background tasks (Ctrl+Alt+B off a Mac), while no sheet or menu is open. A key
+  // typed in the terminal is the shell's (tmux's Ctrl+B).
   const archivedNow = useRef(archived);
   archivedNow.current = archived;
   useEffect(() => {
@@ -1196,12 +1239,13 @@ export function Chat({
       else if (isKey(e, 'fork')) act.current.fork();
       else if (isKey(e, 'archive')) act.current.archive(!archivedNow.current);
       else if (isKey(e, 'files') && cwd) act.current.togglePane('files');
+      else if (isKey(e, 'backgroundTasks') && !sideChat && !(e.target instanceof Element && e.target.closest('[data-terminal]'))) act.current.showBackground();
       else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessionId, cwd]);
+  }, [sessionId, cwd, sideChat]);
 
   return (
     <PathLinksContext.Provider value={links}>
@@ -1298,7 +1342,15 @@ export function Chat({
         )}
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
-          <BackgroundTasks sessionId={sessionId} tasks={view.run?.tasks ?? []} scheduled={view.run?.scheduled ?? []} onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')} />
+          <BackgroundTasks
+            ref={backgroundBar}
+            sessionId={sessionId}
+            tasks={view.run?.tasks ?? []}
+            scheduled={view.run?.scheduled ?? []}
+            open={backgroundOpen}
+            setOpen={setBackgroundOpen}
+            onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')}
+          />
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
