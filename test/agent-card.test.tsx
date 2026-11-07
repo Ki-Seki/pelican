@@ -150,6 +150,24 @@ describe('a background agent’s card', () => {
     expect(pages.mock.calls.length).toBe(asked);
   }, 25_000);
 
+  it('in a session another app runs, reads its steps again while they are open, and once more when Claude Code says it ended', async () => {
+    let all = stepsOf(1, 2);
+    const pages = serve(() => all);
+    // No run here: it may be at work in the app that runs the session.
+    const rendered = show([call, launched()]);
+    expect(within(card()).getByText('Started in background')).toBeTruthy();
+    fireEvent.click(within(card()).getByText('Steps so far'));
+    await screen.findByText('file2.ts');
+    all = stepsOf(1, 3);
+    await screen.findByText('file3.ts', undefined, { timeout: 8000 });
+    all = stepsOf(1, 4);
+    goOn(rendered, [call, launched(), said('n', notice('completed', 'Agent "Look for flaky tests" finished', USAGE))]);
+    await screen.findByText('file4.ts', undefined, { timeout: 4000 });
+    const asked = pages.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    expect(pages.mock.calls.length).toBe(asked);
+  }, 30_000);
+
   it('once Claude Code said it ended, shows how and what it returned in the card, and the line about its end leads there', async () => {
     serve(() => stepsOf(1, 12));
     show([call, launched(), said('n', notice('completed', 'Agent "Look for flaky tests" finished', `<result>Two tests are **flaky**: both wait for a timer.</result>\n${USAGE}`)), reply('c', 'Both flaky tests wait for a timer.')], 'normal');

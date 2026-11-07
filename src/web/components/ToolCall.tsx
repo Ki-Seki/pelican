@@ -525,11 +525,11 @@ function AgentSteps({ agentId, cwd, live = false, watch = false, startOpen = fal
     seen.current = total;
   }, [data, dataUpdatedAt]);
   // It just ended: what it did in its last seconds, once.
-  const wasLive = useRef(live);
+  const wasFollowing = useRef(following);
   useEffect(() => {
-    if (wasLive.current && !live && open) void refetch();
-    wasLive.current = live;
-  }, [live, open, refetch]);
+    if (wasFollowing.current && !following && open) void refetch();
+    wasFollowing.current = following;
+  }, [following, open, refetch]);
   // Earlier pages, asked for one at a time, up to where the newest begins; let go if it was read again.
   const [earlier, setEarlier] = useState<{ messages: ChatMessage[]; offset: number; joins: number }>();
   const [loading, setLoading] = useState(false);
@@ -639,14 +639,20 @@ function useBackgroundAgent(call: ToolCall): AgentState {
     return () => clearTimeout(timer);
   }, [ending]);
   const reported = live || ending ? progress ?? last.current?.progress : undefined;
-  return {
+  const phase = ended ? 'ended' : live || ending ? 'running' : 'unknown';
+  const shown = live ? task : undefined;
+  // The same state while what it says stays the same: the run's report comes anew many times a
+  // second while Claude writes, and the step need not be drawn again for it.
+  const said = JSON.stringify([phase, shown, reported, !run]);
+  return useMemo(() => ({
     run: agent,
-    phase: ended ? 'ended' : live || ending ? 'running' : 'unknown',
-    ...(live && task ? { task } : {}),
+    phase,
+    ...(shown ? { task: shown } : {}),
     ...(reported ? { progress: reported } : {}),
     ...(ended ? { ended } : {}),
     elsewhere: !run,
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [agent, ended, said]);
 }
 
 /** Where an agent that Claude did not wait for runs, in Claude Desktop's words: in background, or elsewhere. */
@@ -949,8 +955,13 @@ export const ToolCallView = memo(function ToolCallView(props: StepProps) {
 function BackgroundAgentStep(props: StepProps) {
   const state = useBackgroundAgent(props.call);
   // Until Claude Code says it began it, it is a step on its way like any other.
-  return <Step {...props} {...(state.run.background ? { agent: state } : {})} />;
+  return <AgentStep {...props} {...(state.run.background ? { agent: state } : {})} />;
 }
+
+/** Drawn again only when what a background agent's step shows changed. */
+const AgentStep = memo(function AgentStep(props: StepProps & { agent?: AgentState }) {
+  return <Step {...props} />;
+});
 
 function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { agent?: AgentState }) {
   const [open, setOpen] = useState(defaultOpen);
