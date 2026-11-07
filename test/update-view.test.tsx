@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// Settings › About, of updates (src/web/components/UpdateSection.tsx): quiet until npm's registry
+// Settings, of updates, at its top (src/web/components/UpdateSection.tsx): quiet until npm's registry
 // has a newer Pelican; then what changed, and Update, or the command to run and why; what an update
 // would end, with Update now and Update when idle; the update as it goes, and what failed. And a
-// page that connects again to another version loads its app, once (src/web/lib/update.ts).
+// page that connects again to another version loads its app, once, and says so (src/web/lib/update.ts).
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -53,7 +53,7 @@ vi.mock('../src/web/lib/socket', () => ({
 }));
 
 const { UpdateSection } = await import('../src/web/components/UpdateSection');
-const { APP_VERSION, page, useNewVersion } = await import('../src/web/lib/update');
+const { APP_VERSION, page, updatedTo, useNewVersion } = await import('../src/web/lib/update');
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>
@@ -74,7 +74,7 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-describe('Settings › About, of updates', () => {
+describe('Settings, of updates', () => {
   it('says nothing while this is the newest Pelican, or in the demo, which asks nothing', async () => {
     const { container, rerender } = render(<UpdateSection open />, { wrapper });
     await waitFor(() => expect(server.asked).toEqual([true]));
@@ -189,5 +189,16 @@ describe('a page back after Pelican started again', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reload).toHaveBeenCalledTimes(1);
     reload.mockRestore();
+  });
+
+  it('says once, in the page loaded again for it, that Pelican is now that version', () => {
+    // A page loaded any other way says nothing.
+    expect(updatedTo()).toBeUndefined();
+    // Loaded again for another version, this page's own: said once, not again after a reload.
+    sessionStorage.setItem('pelican-reloaded-for', '9.9.9');
+    expect(updatedTo()).toBeUndefined();
+    sessionStorage.setItem('pelican-reloaded-for', APP_VERSION);
+    expect(updatedTo()).toBe(APP_VERSION);
+    expect(updatedTo()).toBeUndefined();
   });
 });

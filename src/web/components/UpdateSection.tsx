@@ -71,7 +71,7 @@ function Changes({ text, version }: { text: string; version: string }) {
 const button = 'relative h-8 shrink-0 rounded-full px-3.5 text-[13px] font-medium after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4 disabled:opacity-50';
 
 /**
- * Settings › About: when npm's registry has a newer Pelican, says so quietly, with what changed,
+ * At the top of Settings: when npm's registry has a newer Pelican, says so quietly, with what changed,
  * and either Update (where Pelican can update itself) or the command to run instead, and why.
  * Before updating it lists what the restart would end, with Update now and Update when idle; then
  * it follows the update to the restart, after which the page loads the new version (useNewVersion).
@@ -134,7 +134,7 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
   };
 
   return (
-    <section aria-label="Update" className="mx-3 mb-2 border-t border-line pt-2.5 text-[13px] leading-relaxed text-muted">
+    <section aria-label="Update" className="mx-3 mt-1 mb-1 border-b border-line pb-3 text-[13px] leading-relaxed text-muted">
       {state?.phase === 'preparing' ? (
         <Line busy text={`Getting ${version} and checking that it starts. Nothing changes until it does.`} action={<button type="button" onClick={() => take(api.cancelUpdate())} disabled={sending} className={`${button} bg-chip`}>Cancel</button>} />
       ) : state?.phase === 'waiting' ? (

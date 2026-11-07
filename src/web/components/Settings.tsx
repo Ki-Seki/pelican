@@ -97,6 +97,8 @@ export function SettingsSheet({
   const { data: phoneAddress } = useQuery({ queryKey: ['phone-address'], queryFn: api.phoneAddress, enabled: open && onLoopback && !info?.demo, staleTime: 60_000 });
   return (
     <Sheet open={open} onClose={onClose} title="Settings" done>
+      {/* A newer Pelican on npm, first thing here (the gear has a dot for it); neither demo has one. */}
+      {info && <UpdateSection open={open} demo={info.demo} />}
       <SheetHeading>Appearance</SheetHeading>
       <Segmented<Theme>
         value={prefs.theme}
@@ -222,8 +224,6 @@ export function SettingsSheet({
         <br />
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>
       </div>
-      {/* A newer Pelican on npm, said here only; neither demo has one. */}
-      {info && <UpdateSection open={open} demo={info.demo} />}
       {info?.auth && <SheetOption icon={<LogOut className="size-4" />} label="Sign out" danger onSelect={onSignOut} />}
       {/* Only what Claude Code keeps as a default: no Max effort and no Ultracode, which are a session's; never Bypass. */}
       <ModelSheet

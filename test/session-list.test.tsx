@@ -43,6 +43,19 @@ const list = () => render(
 );
 
 describe('the session list', () => {
+  it('counts what it shows, and marks Settings’ gear while a newer Pelican is out', async () => {
+    const view = list();
+    expect(await screen.findByText(/^Claude Code · \d+ sessions$/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Settings' }).querySelector('.bg-run')).toBeNull();
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <SessionList machine="studio" onOpen={() => {}} onNew={() => {}} onSettings={() => {}} connected update="0.5.1" />
+      </QueryClientProvider>,
+    );
+    const gear = await screen.findByRole('button', { name: 'Settings: Pelican 0.5.1 is out' });
+    expect(gear.querySelector('.bg-run')).toBeTruthy();
+  });
+
   it('keeps a session with background tasks among the active ones, saying how many, unfolded', async () => {
     list();
     const active = (await screen.findByText('Active')).closest('section')!;

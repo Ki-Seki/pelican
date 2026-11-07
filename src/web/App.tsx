@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Keyboard, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { Keyboard, Loader2, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Settings as SettingsIcon, X } from 'lucide-react';
 import { Component, type ComponentProps, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionSummary } from '../shared/protocol';
@@ -35,7 +35,7 @@ import { socket } from './lib/socket';
 import { defaultStart, newSessionQuery } from './lib/start';
 import { STATIC_DEMO } from './lib/static-demo';
 import { setWaitingCount } from './lib/title';
-import { useNewVersion } from './lib/update';
+import { updatedTo, useNewVersion } from './lib/update';
 import { fitToVisibleViewport } from './lib/viewport';
 
 // The conversation (Markdown, code highlighting, diffs) and Settings load when first needed: the
@@ -203,8 +203,22 @@ function Main() {
   const wide = useMedia('(min-width: 1024px)');
   const queryClient = useQueryClient();
   const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
-  // Back after Pelican started again as another version (an update): the page loads that version's app.
+  // Back after Pelican started again as another version (an update): the page loads that version's
+  // app, which says once that Pelican is now that version.
   useNewVersion();
+  const [updated, setUpdated] = useState(updatedTo);
+  useEffect(() => {
+    if (updated) announce(`Pelican updated to ${updated}.`);
+  }, [updated]);
+  // A newer Pelican on npm, as the server last heard (it asks once a day, and when Settings opens):
+  // a dot on Settings' gear, which says more at its top.
+  const { data: update } = useQuery({
+    queryKey: ['update'],
+    queryFn: () => api.update(),
+    enabled: Boolean(info) && !info?.demo && !STATIC_DEMO,
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
   const [connected, setConnected] = useState(socket.connected);
   const [notifications, setNotifications] = useState<NotificationState>('off');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -425,6 +439,15 @@ function Main() {
           <span className="font-medium text-fg">Demo.</span> {STATIC_DEMO ? 'Pelican running in your browser, with made-up sessions; nothing you do here is sent anywhere.' : 'Sample sessions on a made-up machine; nothing you do here runs or changes anything.'}
         </div>
       )}
+      {updated && (
+        <div className="mx-3 mb-1 flex items-center gap-2 rounded-xl bg-chip py-1 pr-1 pl-3 text-[12.5px] leading-snug text-muted">
+          <span className="min-w-0 flex-1 py-1">
+            <span className="font-medium text-fg">Pelican updated to {updated}.</span>{' '}
+            <a href={`https://github.com/Ki-Seki/pelican/releases/tag/v${updated}`} target="_blank" rel="noreferrer" className="underline decoration-faint underline-offset-2 hover:text-fg">What’s new</a>
+          </span>
+          <button type="button" aria-label="Dismiss" onClick={() => setUpdated(undefined)} className="relative grid size-7 shrink-0 place-items-center rounded-full text-faint after:absolute after:-inset-2 hover:text-fg"><X className="size-3.5" /></button>
+        </div>
+      )}
     </>
   );
 
@@ -450,6 +473,7 @@ function Main() {
       connected={connected}
       banner={banner}
       {...(wide ? { top: <SidebarButton shown={!collapsed} onToggle={toggleSidebar} /> } : {})}
+      {...(update?.latest ? { update: update.latest } : {})}
     />
   );
   // While the list is hidden: in the conversation's header, and where a page has none.
