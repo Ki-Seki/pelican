@@ -281,7 +281,8 @@ export function ChipEditor({ item, touch, anchor, frame, canShow, onNote, onShow
     }
   };
 
-  const mono = item.kind !== 'quote' || Boolean(item.path);
+  // A comment's code, a file, lines of a file and a terminal's output read in the code font, as the conversation shows them.
+  const mono = item.kind !== 'quote' || Boolean(item.path || item.tab);
   const body = item.kind === 'file' ? (item.path ?? item.text) : item.text;
   const title = itemTitle(item);
   const Icon = item.kind === 'comment' ? MessageSquare : item.kind === 'file' ? FileText : TextQuote;

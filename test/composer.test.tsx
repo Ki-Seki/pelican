@@ -188,6 +188,23 @@ describe('what waits above the message box', () => {
     expect(screen.getByRole('button', { name: 'Quote “It follows the system until you pick one.”' })).toBeTruthy();
   });
 
+  it('opened, show a terminal’s output in the code font, its columns as they were, as the conversation does; a reply’s words in the text’s', () => {
+    media[COMPUTER] = true;
+    renderComposer('w-terminal');
+    act(() => {
+      addWaiting('w-terminal', quoteItem('drwxr-xr-x   4 me  staff  128 src', { what: 'terminal' }, { tab: '1', label: 'zsh' })!);
+      addWaiting('w-terminal', quote('It follows the system until you pick one.'));
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Quote “drwxr-xr-x/ }));
+    const output = within(screen.getByRole('dialog', { name: 'Quote from the terminal' })).getByText(/^drwxr-xr-x/);
+    expect(output.className).toMatch(/\bfont-mono\b/);
+    expect(output.className).toMatch(/\bwhitespace-pre-wrap\b/);
+    expect(output.textContent).toBe('drwxr-xr-x   4 me  staff  128 src');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quote “It follows/ }));
+    expect(within(screen.getByRole('dialog', { name: /^Quote from Claude’s reply/ })).getByText(/^It follows/).className).not.toMatch(/\bfont-mono\b/);
+  });
+
   it('closed from inside on a computer, give the keys back to the chip they were opened from, or to the box once it has gone', async () => {
     media[COMPUTER] = true;
     const { box } = renderComposer('w10');
