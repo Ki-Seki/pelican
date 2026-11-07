@@ -51,26 +51,72 @@ async function repositoryOf(cwd: string): Promise<string | undefined> {
   }
 }
 
-/**
- * The repository's default branch, as Claude Code's /diff compares against it ("since your branch
- * split from the default branch"): the one the remote's HEAD names, else a local main or master.
- * `ref` is what git compares with; `name` what people call it.
- */
-async function defaultBranch(cwd: string): Promise<{ name: string; ref: string } | undefined> {
-  const remote = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], 5000).then((out) => out.trim(), () => '');
-  if (/^origin\/[\w./-]+$/.test(remote) && !remote.includes('..')) return { name: remote.slice('origin/'.length), ref: `refs/remotes/${remote}` };
-  for (const name of ['main', 'master']) {
-    if (await git(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], 5000).then(() => true, () => false)) return { name, ref: `refs/heads/${name}` };
+/** A git command whose exit code says something (merge-base, show-ref): the code, and what it printed. */
+async function gitCode(cwd: string, args: string[]): Promise<{ code: number; stdout: string }> {
+  try {
+    return { code: 0, stdout: await git(cwd, args, 5000) };
+  } catch (error) {
+    const failed = error as { code?: unknown; stdout?: unknown };
+    return { code: typeof failed.code === 'number' ? failed.code : -1, stdout: typeof failed.stdout === 'string' ? failed.stdout : '' };
   }
-  return undefined;
 }
 
-/** Where the branch split from the default branch, when it is another branch: a commit's full id. */
-async function splitPoint(cwd: string, branch: string | undefined): Promise<string | undefined> {
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * The repository's default branch, as Claude Code's /diff finds it (2.1.318): the branch origin's
+ * HEAD names, when origin has it; else origin's main or master; else main.
+ */
+async function defaultBranch(cwd: string): Promise<string> {
+  const onOrigin = async (name: string) => (await gitCode(cwd, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${name}`])).code === 0;
+  const head = await gitCode(cwd, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  const named = head.code === 0 ? head.stdout.trim().replace(/^origin\//, '') : '';
+  if (named && await onOrigin(named)) return named;
+  for (const name of ['main', 'master']) if (await onOrigin(name)) return name;
+  return 'main';
+}
+
+/**
+ * What Changes compares with, by Claude Code's /diff: on a branch other than the default one that
+ * has commits beyond where the two meet (`split`), that point, the newer of where it meets origin's
+ * copy and the local one, so the commits and what is not committed show together; else (`head`:
+ * on the default branch, or nothing committed beyond it) the last commit. `none`: no default
+ * branch to compare with (a detached head, a history of its own), also the last commit.
+ */
+type BranchBase = { kind: 'split'; base: string; commit: string } | { kind: 'head'; base: string } | { kind: 'none' };
+
+async function branchBase(cwd: string, branch: string | undefined): Promise<BranchBase> {
+  if (!branch) return { kind: 'none' };
   const base = await defaultBranch(cwd);
-  if (!base || !branch || branch === base.name) return undefined;
-  const sha = await git(cwd, ['merge-base', 'HEAD', base.ref], 5000).then((out) => out.trim(), () => '');
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : undefined;
+  if (base.startsWith('-')) return { kind: 'none' };
+  if (branch === base) return { kind: 'head', base };
+  const tries = await Promise.all([`origin/${base}`, base].map((ref) => gitCode(cwd, ['merge-base', 'HEAD', ref])));
+  const [first, second] = tries.filter((t) => t.code === 0).map((t) => t.stdout.trim()).filter((id) => COMMIT_ID.test(id));
+  if (!first) return { kind: 'none' };
+  const newer = second && second !== first && (await gitCode(cwd, ['merge-base', '--is-ancestor', first, second])).code === 0 ? second : first;
+  const head = await gitCode(cwd, ['rev-parse', 'HEAD']);
+  if (head.code !== 0) return { kind: 'none' };
+  return head.stdout.trim() === newer ? { kind: 'head', base } : { kind: 'split', base, commit: newer };
+}
+
+/** Kept clear of what is not a host's name: an address, localhost, a name with no dot. */
+const HOST_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const REPO_PART = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * The GitHub repository a remote's address names, as Claude Desktop reads origin's: `owner/name`
+ * on github.com (or a host under it), from `git@github.com:owner/name.git` or an https, ssh or git
+ * address. None for another host, a local path, or anything else.
+ */
+export function githubRepo(url: string): string | undefined {
+  const trimmed = url.trim();
+  const found = /^[^@/:#?\x00-\x20\x7f]+@([^:\s]+):([^/\s]+)\/([^/\s]+?)(?:\.git)?$/.exec(trimmed)
+    ?? /^(?:https?|ssh|git|git\+ssh|ssh\+git|git\+https?):\/\/(?:[^@/#?\x00-\x20\x7f]+@)?([^/:\s]+)(?::\d+)?\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(trimmed);
+  if (!found) return undefined;
+  const host = found[1]!.toLowerCase();
+  const [owner, name] = [found[2]!, found[3]!];
+  if (!REPO_PART.test(owner) || !REPO_PART.test(name) || [owner, name].some((part) => part === '.' || part === '..')) return undefined;
+  return HOST_NAME.test(host) && (host === 'github.com' || host.endsWith('.github.com')) ? `${owner}/${name}` : undefined;
 }
 
 /**
@@ -99,9 +145,11 @@ async function changedSince(cwd: string, commit: string): Promise<GitFile[]> {
 }
 
 /**
- * What changed in the session's folder, with line counts: since the last commit (`uncommitted`,
- * the default), or since the branch split from the default branch (`base`), its commits and what
- * is not committed yet, new files included. Also the branch, its upstream, and the default branch.
+ * What changed in the session's folder, with line counts: since the last commit (`uncommitted`),
+ * or all of it (`base`), by Claude Code's /diff: on a branch with commits beyond where it split from
+ * the default branch, since then, those commits and what is not committed yet together, the files
+ * not committed yet first; else since the last commit. New files included. Also the branch, its
+ * upstream, the default branch it is compared with, and the GitHub repository origin names.
  */
 export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'uncommitted'): Promise<GitStatus> {
   if (!(await repositoryOf(cwd))) return { repo: false };
@@ -145,22 +193,33 @@ export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'un
       out.files.push({ path: local(entry.slice(2))!, status: 'untracked' });
     }
   }
-  const base = await defaultBranch(cwd).catch(() => undefined);
-  if (base) out.base = base.name;
+  const found = await branchBase(cwd, out.branch).catch((): BranchBase => ({ kind: 'none' }));
+  if (found.kind !== 'none') out.base = found.base;
+  if (found.kind === 'split') out.split = true;
   // Somewhere to push to: a remote with an address, read from the config, which contacts nothing.
   // Not `git remote`, which also names one that has only a fetch line (a system or managed git
   // config may set `remote.origin.fetch`), and so names origin in every repository.
-  if (await git(cwd, ['config', '--get-regexp', '^remote\\..+\\.(push)?url$'], 5000).then((found) => found.trim() !== '', () => false)) out.remote = true;
-  // Since the branch split: what git diff says changed since then, and the new files status found.
+  if (await git(cwd, ['config', '--get-regexp', '^remote\\..+\\.(push)?url$'], 5000).then((listed) => listed.trim() !== '', () => false)) {
+    out.remote = true;
+    const origin = await gitCode(cwd, ['remote', 'get-url', 'origin']);
+    const github = origin.code === 0 ? githubRepo(origin.stdout) : undefined;
+    if (github) out.github = github;
+  }
+  // All of it, on a branch that split: what git diff says changed since then, and the new files
+  // status found; the files not committed yet first, as /diff lists them.
   let since: string | undefined;
   if (scope === 'base') {
-    since = await splitPoint(cwd, out.branch);
-    if (!since) return { ...out, files: [] };
-    const untracked = out.files.filter((f) => f.status === 'untracked');
-    try {
-      out.files = [...await changedSince(cwd, since), ...untracked];
-    } catch {
-      out.files = untracked;
+    out.uncommitted = out.files.length;
+    if (found.kind === 'split') {
+      since = found.commit;
+      const pending = new Set(out.files.map((f) => f.path));
+      const untracked = out.files.filter((f) => f.status === 'untracked');
+      try {
+        const changed = (await changedSince(cwd, since)).map((f) => (pending.has(f.path) ? f : { ...f, committed: true as const }));
+        out.files = [...changed.filter((f) => !f.committed), ...untracked, ...changed.filter((f) => f.committed)];
+      } catch {
+        out.files = untracked;
+      }
     }
   }
   // Line counts against the last commit (or the empty tree before the first one), or the split.
@@ -233,9 +292,10 @@ async function diffPath(cwd: string, file: string): Promise<void> {
 }
 
 /**
- * The diff of one file against the last commit, or (`base`) against where the branch split from
- * the default branch; an untracked file shows as all added. A renamed file is diffed with its old
- * path (`from`), as git pairs them, so it shows what changed in it rather than a whole new file.
+ * The diff of one file against the last commit, or (`base`) against what all of the changes are
+ * compared with, by Claude Code's /diff (see gitStatus); an untracked file shows as all added. A
+ * renamed file is diffed with its old path (`from`), as git pairs them, so it shows what changed
+ * in it rather than a whole new file.
  */
 export async function gitDiff(cwd: string, file: string, scope: 'uncommitted' | 'base' = 'uncommitted', from?: string): Promise<string> {
   if (!(await repositoryOf(cwd))) return '';
@@ -243,9 +303,10 @@ export async function gitDiff(cwd: string, file: string, scope: 'uncommitted' | 
   if (from) await diffPath(cwd, from);
   let diff = '';
   try {
-    const branch = scope === 'base' ? (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 5000)).trim() : undefined;
-    const against = scope === 'base' ? await splitPoint(cwd, branch) : 'HEAD';
-    if (against) diff = await git(cwd, ['diff', '-M', against, '--', ...(from && from !== file ? [from] : []), file]);
+    const branch = scope === 'base' ? (await gitCode(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim() : '';
+    const found = branch ? await branchBase(cwd, branch) : undefined;
+    const against = found?.kind === 'split' ? found.commit : 'HEAD';
+    diff = await git(cwd, ['diff', '-M', against, '--', ...(from && from !== file ? [from] : []), file]);
   } catch {
     diff = '';
   }

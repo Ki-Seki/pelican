@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { gitDiff, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
+import { gitDiff, githubRepo, gitStatus, inside, listTree, readProjectFile, UNTRACKED_COUNTED } from '../src/server/workspace';
 import { headerOnly } from '../src/web/lib/diff-header';
 
 let repo: string;
@@ -195,11 +195,86 @@ describe('workspace', () => {
       expect(byPath['c.txt']).toMatchObject({ status: 'untracked', added: 1 });
       expect(await gitDiff(work, 'a.txt', 'base')).toContain('+more');
       expect(await gitDiff(work, 'a.txt')).toBe('');
-      // On the default branch itself there is no split to show.
+      // As /diff lists them: what is not committed yet first, then what only the branch's commits changed.
+      expect(since.files.map((f) => [f.path, Boolean(f.committed)])).toEqual([['b.txt', false], ['c.txt', false], ['a.txt', true]]);
+      expect(since).toMatchObject({ base: 'main', split: true, uncommitted: 2 });
+      // On the default branch itself, all of it is what is not committed yet, compared with main as it is.
       git('stash', '-q', '-u');
       git('switch', '-q', 'main');
       const onMain = await gitStatus(work, 'base');
-      expect(onMain.repo && onMain.files).toEqual([]);
+      expect(onMain).toMatchObject({ base: 'main', files: [], uncommitted: 0 });
+      expect(onMain.repo && onMain.split).toBeFalsy();
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  // Claude Code's /diff (2.1.318): the branch against where it meets the default branch only when it
+  // has commits beyond it, the newer of origin's and the local one; otherwise the last commit.
+  it('compares all of it as Claude Code’s /diff does: the newer of origin’s and the local split, or the last commit', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-rule-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work }).toString().trim();
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'a.txt'), 'one\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      // A branch with nothing committed of its own: all of it is what is not committed, against main.
+      git('switch', '-q', '-c', 'feat/fresh');
+      await writeFile(path.join(work, 'a.txt'), 'one\ntwo\n');
+      const fresh = await gitStatus(work, 'base');
+      expect(fresh).toMatchObject({ branch: 'feat/fresh', base: 'main', uncommitted: 1 });
+      expect(fresh.repo && fresh.split).toBeFalsy();
+      expect(fresh.repo && fresh.files.map((f) => [f.path, f.added])).toEqual([['a.txt', 1]]);
+      git('checkout', '-q', '--', 'a.txt');
+      // origin's main is ahead of the local one, and the branch starts from it: that is where it splits.
+      git('switch', '-q', 'main');
+      await writeFile(path.join(work, 'b.txt'), 'b\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'second');
+      const second = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/main', second);
+      git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+      git('reset', '-q', '--hard', 'HEAD~1');
+      git('switch', '-q', '-c', 'feat/ahead', second);
+      await writeFile(path.join(work, 'c.txt'), 'c\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'third');
+      const ahead = await gitStatus(work, 'base');
+      if (!ahead.repo) throw new Error('not a repository');
+      expect(ahead).toMatchObject({ base: 'main', split: true, uncommitted: 0 });
+      // Against the local main, b.txt would show as changed; against origin's, only c.txt is the branch's.
+      expect(ahead.files.map((f) => f.path)).toEqual(['c.txt']);
+      expect(await gitDiff(work, 'c.txt', 'base')).toContain('+c');
+      // A detached head has no branch to compare: the last commit.
+      git('switch', '-q', '--detach', 'HEAD');
+      const detached = await gitStatus(work, 'base');
+      expect(detached.repo && detached.base).toBeUndefined();
+      expect(detached.repo && detached.files).toEqual([]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  it('names the GitHub repository origin points at, as Claude Desktop reads its address', async () => {
+    expect(githubRepo('git@github.com:acme/web.git')).toBe('acme/web');
+    expect(githubRepo('https://github.com/acme/web.git')).toBe('acme/web');
+    expect(githubRepo('https://github.com/acme/web')).toBe('acme/web');
+    expect(githubRepo('https://user@github.com/acme/web.git/')).toBe('acme/web');
+    expect(githubRepo('ssh://git@ssh.github.com:443/acme/web.git')).toBe('acme/web');
+    expect(githubRepo('https://GitHub.com/acme/web.git')).toBe('acme/web');
+    for (const elsewhere of ['https://gitlab.com/acme/web.git', 'git@git.example.com:acme/web.git', '/tmp/remotes/web.git', 'file:///tmp/web.git', 'https://github.com/acme', 'https://github.com/acme/../web', 'https://github.com.evil.example/acme/web']) {
+      expect(githubRepo(elsewhere)).toBeUndefined();
+    }
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-github-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: work });
+      execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/web.git'], { cwd: work });
+      expect(await gitStatus(work)).toMatchObject({ remote: true, github: 'acme/web' });
+      execFileSync('git', ['remote', 'set-url', 'origin', '/tmp/remotes/web.git'], { cwd: work });
+      const local = await gitStatus(work);
+      expect(local).toMatchObject({ remote: true });
+      expect(local.repo && local.github).toBeUndefined();
     } finally {
       await rm(work, { recursive: true, force: true });
     }

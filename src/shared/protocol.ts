@@ -450,7 +450,8 @@ export type UsageLimit = {
 
 export type Account = { email?: string; organization?: string; plan?: string };
 
-export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string };
+/** A file changed in a folder, as git says; `committed`: changed by commits alone, nothing of it waits to be committed. */
+export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string; committed?: true };
 
 /** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it, with each edit's lines added up, as /diff counts them. */
 export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as its first edit left it. */ line?: number };
@@ -467,10 +468,15 @@ export type TurnChanges = { uuid: string; n: number; text: string; at?: number; 
 export type SessionChanges = { turns: TurnChanges[]; lines: Record<string, number> };
 /**
  * A folder's changes, as git says. `upstream`: the branch it pushes to, when set; `base`: the
- * repository's default branch, which "since the branch split" compares with; `remote`: the
- * repository has a remote to push to.
+ * default branch All changes is compared with, by Claude Code's /diff ("vs main"), when there is
+ * one; `split`: the branch has commits beyond where it split from `base`, so All changes holds
+ * them as well as what is not committed; `remote`: the repository has a remote to push to;
+ * `github`: origin is that repository on GitHub (`owner/name`). With all of the changes, also
+ * `uncommitted`: how many files are not committed yet.
  */
-export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; branch?: string; upstream?: string; base?: string; remote?: boolean; ahead?: number; behind?: number; files: GitFile[] };
+export type GitStatus = { repo: false; untrusted?: boolean } | {
+  repo: true; branch?: string; upstream?: string; base?: string; split?: boolean; remote?: boolean; github?: string; ahead?: number; behind?: number; uncommitted?: number; files: GitFile[];
+};
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };

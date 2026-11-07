@@ -857,10 +857,11 @@ export function Chat({
     return () => clearTimeout(timer);
   }, [cwd]);
 
-  // Files changed in the session's folder, for the badge on the Changes button: read when the chat
-  // opens and as each turn ends; Changes and files reads it more often only while it is looked at.
-  const { data: git } = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd!), enabled: Boolean(cwd) });
-  const changes = git?.repo ? git.files.length : 0;
+  // All of the changes in the session's folder, as Claude Code's /diff counts them (the branch
+  // against where it split from the default branch when it has commits beyond it, else what is not
+  // committed), for the Changes button's lines: read when the chat opens and as each turn ends;
+  // Changes and files reads it more often only while it is looked at.
+  const { data: git } = useQuery({ queryKey: ['git', cwd, 'base'], queryFn: () => api.git(cwd!, 'base'), enabled: Boolean(cwd) });
   // What each turn changed, from Claude Code's records: for the line under a turn, and Show in Changes.
   const { data: turnChanges } = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: Boolean(sessionId), staleTime: 30_000 });
   useEffect(() => {
