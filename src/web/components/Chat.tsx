@@ -55,6 +55,7 @@ import { MessageList } from './MessageList';
 import { modelOf, SavedForNewSessions } from './ModelSheet';
 import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
+import { PaneColumn } from './PaneColumn';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
 import { RewindDialog, RewindPicker, type RewindPoint, type RewindProblem } from './Rewind';
@@ -637,8 +638,8 @@ export function Chat({
   const title = session?.title ?? (firstText?.type === 'text' ? shortTitle(promptGist(firstText.text)) : scratch ? 'New scratch session' : newCwd ? 'New session' : '');
   const cwd = session?.cwd || view.run?.cwd || newCwd;
   const workspace = useWorkspacePane(Boolean(cwd));
-  // A side chat has none of its own; Changes and files and it take turns beside the conversation,
-  // one on screen at a time.
+  // A side chat has none of its own. Beside the conversation it shares a column with Changes, Files
+  // and the Terminal: under them from 1280px, in their place below that (PaneColumn).
   const composer = useRef<ComposerHandle>(null);
   const side = useSideChat(sessionId, Boolean(sessionId) && !sideChat, workspace, () => composer.current?.focus());
   /** The side chat's message box, where a passage taken for it waits for the question. */
@@ -657,7 +658,8 @@ export function Chat({
     focusBox: () => composer.current?.focus(),
     ...(sideBox && !sideChat ? { sideChat: { open: sideOpen, start: startSide } } : {}),
   }), [viewId, sideBox, sideChat, sideOpen, startSide]);
-  const paneShown = workspace.open && !side.docked;
+  // Under 1280px the side chat, asked for last, takes the pane's place beside the conversation; the pane waits behind it.
+  const paneShown = workspace.open && !side.hidesPane;
   const permissions = view.run?.permissions ?? [];
   // One request at a time, the oldest first, as Claude Code asks: the rest wait behind it.
   const request = permissions[0];
@@ -1408,7 +1410,10 @@ export function Chat({
         </div>
       )}
 
-      {cwd && (
+      {/* Beside the conversation on a computer: the pane, and the side chat under it or in its place. */}
+      <PaneColumn
+        stacked={side.stacked}
+        pane={cwd && (
         <Workspace
           open={paneShown}
           docked={workspace.docked}
@@ -1437,8 +1442,9 @@ export function Chat({
           }}
           askTrust={askTrust}
         />
-      )}
-      {sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}
+        )}
+        side={sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}
+      />
       <TrustSheet ask={trustAsk} {...(cwd ? { folder: cwd } : {})} {...(home ? { home } : {})} onDone={() => setTrustAsk(undefined)} />
       {sessionId && !sideChat && (
         <RewindDialog

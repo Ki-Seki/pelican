@@ -361,34 +361,106 @@ describe('the side chat', () => {
     expect(pane()).toBeNull();
   });
 
-  it('takes the place of Changes and files beside the conversation, which comes back when it closes or is asked for', async () => {
+  it('from 1280px, sits under an open pane in one column, the height shared with a handle, which the keys move and this browser remembers', async () => {
     computer(1440);
     setPrefs({ workspacePane: true });
     session();
     await loaded();
-    const changes = () => screen.queryByRole('complementary', { name: 'Changes and files' });
-    await waitFor(() => expect(changes()).not.toBeNull());
-    act(() => {
-      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
-    });
+    await waitFor(() => expect(changesPane()).not.toBeNull());
+    toggle();
+    // Both beside the conversation: the pane on top, the side chat under it, in the one column.
     expect(pane()).not.toBeNull();
-    expect(changes()).toBeNull();
-    // Closed: Changes and files is back where it was.
+    expect(changesPane()).not.toBeNull();
+    const column = document.querySelector<HTMLElement>('[data-pane-column="stacked"]')!;
+    expect(column.querySelector('[data-pane-part="pane"]')!.contains(changesPane())).toBe(true);
+    expect(column.querySelector('[data-pane-part="side"]')!.contains(pane())).toBe(true);
+    // Stacked, the name says enough: the line under it goes.
+    expect(within(pane()!).queryByText('Reads this session · changes nothing')).toBeNull();
+    const handle = screen.getByRole('separator', { name: 'Resize the side chat' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('42');
+    fireEvent.keyDown(handle, { key: 'ArrowDown' });
+    fireEvent.keyDown(handle, { key: 'ArrowDown' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('52');
+    expect(localStorage.getItem('pelican:side-chat-split')).toBe('0.52');
+    // The pane closed, the side chat takes the whole column, and back.
+    fireEvent.click(within(changesPane()!).getByRole('button', { name: 'Close' }));
+    expect(pane()).not.toBeNull();
+    expect(document.querySelector('[data-pane-column="stacked"]')).toBeNull();
+    expect(within(pane()!).getByText('Reads this session · changes nothing')).toBeTruthy();
+    fireEvent.click(paneButton());
+    expect(pane()).not.toBeNull();
+    expect(changesPane()).not.toBeNull();
+    // Opened again in this browser, the column is shared as it was left.
+    cleanup();
+    session();
+    await loaded();
+    toggle();
+    expect(screen.getByRole('separator', { name: 'Resize the side chat' }).getAttribute('aria-valuenow')).toBe('52');
+    // Its Close leaves the pane the whole column; the pane's, the side chat.
     fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
     expect(pane()).toBeNull();
-    expect(changes()).not.toBeNull();
-    // Asked for while the side chat is there: it takes its place.
-    act(() => {
-      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
-    });
-    expect(changes()).toBeNull();
+    expect(changesPane()).not.toBeNull();
+    expect(screen.queryByRole('separator')).toBeNull();
+  });
+
+  it('from 1280px, a pane opened or closed under the side chat neither starts it again nor loses what it holds', async () => {
+    computer(1280);
+    twoSideChats();
+    session();
+    await loaded();
+    toggle();
+    await within(pane()!).findByText('A project’s users would read each other’s builds.');
+    fireEvent.change(within(pane()!).getByLabelText('Side question'), { target: { value: 'and per team?' } });
+    const box = within(pane()!).getByLabelText('Side question');
+    fireEvent.click(paneButton());
+    expect(changesPane()).not.toBeNull();
+    // The same box, with what was typed, the conversation as it was.
+    expect(within(pane()!).getByLabelText('Side question')).toBe(box);
+    expect((box as HTMLTextAreaElement).value).toBe('and per team?');
+    expect(within(pane()!).getByText('A project’s users would read each other’s builds.')).toBeTruthy();
+    fireEvent.click(within(changesPane()!).getByRole('button', { name: 'Close' }));
+    expect(within(pane()!).getByLabelText('Side question')).toBe(box);
+  });
+
+  it('between 1024 and 1279px takes the pane’s place, which waits behind it, and the one asked for last comes in front', async () => {
+    computer(1100);
+    setPrefs({ workspacePane: true });
+    session();
+    await loaded();
+    await waitFor(() => expect(changesPane()).not.toBeNull());
+    toggle();
+    expect(pane()).not.toBeNull();
+    expect(changesPane()).toBeNull();
+    expect(screen.queryByRole('separator')).toBeNull();
+    // Closed: the pane is back where it was.
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
+    expect(pane()).toBeNull();
+    expect(changesPane()).not.toBeNull();
+    // The pane asked for while the side chat is there: it comes in front, and the side chat waits behind it.
+    toggle();
+    fireEvent.change(within(pane()!).getByLabelText('Side question'), { target: { value: 'and per team?' } });
     fireEvent.click(paneButton());
     expect(pane()).toBeNull();
-    expect(changes()).not.toBeNull();
+    expect(changesPane()).not.toBeNull();
+    expect(within(document.querySelector('header')!).getByRole('button', { name: 'Changes' }).getAttribute('aria-pressed')).toBe('true');
+    // Cmd/Ctrl+; brings it forward, as it was; the pane waits in turn.
+    toggle();
+    expect(changesPane()).toBeNull();
+    expect((within(pane()!).getByLabelText('Side question') as HTMLTextAreaElement).value).toBe('and per team?');
+    // ⌃⇧D, which hides Changes while they show, shows them from behind the side chat.
+    act(() => {
+      fireEvent.keyDown(window, { key: 'D', code: 'KeyD', ctrlKey: true, shiftKey: true });
+    });
+    expect(changesPane()).not.toBeNull();
+    expect(pane()).toBeNull();
+    // The pane closed, the side chat waiting behind it shows again.
+    fireEvent.click(within(changesPane()!).getByRole('button', { name: 'Close' }));
+    expect(changesPane()).toBeNull();
+    expect(pane()).not.toBeNull();
   });
 
   it('in a folder git does not track, where no turn changed files, starts in Files, and gives the place back to the Changes tab tapped or asked for', async () => {
-    computer(1280);
+    computer(1100);
     setPrefs({ workspacePane: true });
     server.turns = [];
     history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
@@ -414,7 +486,7 @@ describe('the side chat', () => {
     expect(changes()).toBeNull();
     fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
     await stays();
-    // And when Changes and files is asked for from its button.
+    // And when Changes and files is asked for from its button, the side chat waiting behind it.
     act(() => {
       fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
@@ -423,6 +495,10 @@ describe('the side chat', () => {
     expect(pane()).toBeNull();
     await stays();
     // Closed for good and opened again from the header's Changes, it shows Changes, asked for by name.
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
+    fireEvent.click(within(pane()!).getByRole('button', { name: 'Close' }));
     fireEvent.click(within(changes()!).getByRole('button', { name: 'Close' }));
     expect(changes()).toBeNull();
     fireEvent.click(paneButton());
@@ -436,7 +512,6 @@ describe('the side chat', () => {
   });
 
   describe('asked for a file or a turn’s changes', () => {
-    const changes = () => screen.queryByRole('complementary', { name: 'Changes and files' });
     const file = () => screen.queryByRole('group', { name: 'The text of src/cache.ts' });
     /** The session's side chat, its first question answered, as the computer lists it. */
     const answered = () => {
@@ -444,48 +519,72 @@ describe('the side chat', () => {
       server.sideMessages = [asked('q1', 'Where is the key made?', 1), answer('a2', 'In `src/cache.ts:1`, from the user.')];
     };
 
-    it('in the conversation, while the side chat sits in the pane’s place: the side chat makes way', async () => {
+    it('in the conversation, from 1280px: the file opens in the pane, over the side chat, which stays as it was', async () => {
       computer(1440);
-      setPrefs({ workspacePane: true });
+      answered();
       server.after = [answer('a1', 'The key is made in `src/cache.ts:1`.')];
       session();
       await loaded();
-      await waitFor(() => expect(changes()).not.toBeNull());
-      act(() => {
-        fireEvent.keyDown(window, { key: ';', ctrlKey: true });
-      });
-      expect(changes()).toBeNull();
-      fireEvent.click(await screen.findByRole('link', { name: 'src/cache.ts:1' }));
-      expect(pane()).toBeNull();
-      expect(changes()).not.toBeNull();
+      toggle();
+      await within(pane()!).findByRole('link', { name: 'src/cache.ts:1' });
+      fireEvent.click(screen.getAllByRole('link', { name: 'src/cache.ts:1' }).find((link) => !pane()!.contains(link))!);
+      expect(changesPane()).not.toBeNull();
+      expect(pane()).not.toBeNull();
       await waitFor(() => expect(file()).not.toBeNull(), LAZY);
       expect(location.search).toContain('p=src%2Fcache.ts');
     });
 
-    it('under a turn, “files changed”: the side chat makes way for that turn’s changes', async () => {
-      computer(1280);
+    it('in the conversation, under 1280px, while the side chat sits in the pane’s place: the pane comes in front, the side chat waiting behind it', async () => {
+      computer(1100);
+      setPrefs({ workspacePane: true });
+      server.after = [answer('a1', 'The key is made in `src/cache.ts:1`.')];
+      session();
+      await loaded();
+      await waitFor(() => expect(changesPane()).not.toBeNull());
+      toggle();
+      expect(changesPane()).toBeNull();
+      fireEvent.click(await screen.findByRole('link', { name: 'src/cache.ts:1' }));
+      expect(pane()).toBeNull();
+      expect(changesPane()).not.toBeNull();
+      await waitFor(() => expect(file()).not.toBeNull(), LAZY);
+      expect(location.search).toContain('p=src%2Fcache.ts');
+      // Still open behind it: Cmd/Ctrl+; brings it forward.
+      toggle();
+      expect(pane()).not.toBeNull();
+      expect(changesPane()).toBeNull();
+    });
+
+    it('under a turn, “files changed”, under 1280px: the side chat makes way for that turn’s changes', async () => {
+      computer(1100);
       setPrefs({ workspacePane: true });
       server.after = [answer('a1', 'Done: the cache is cleaned up.')];
       session();
       await loaded();
-      act(() => {
-        fireEvent.keyDown(window, { key: ';', ctrlKey: true });
-      });
+      toggle();
       fireEvent.click(await screen.findByRole('button', { name: /1 file changed/ }));
       expect(pane()).toBeNull();
-      expect(changes()).not.toBeNull();
+      expect(changesPane()).not.toBeNull();
       expect(location.search).toContain('t=u1');
     });
 
-    it('in the side chat’s answer, beside the conversation: it shows the file in its place', async () => {
+    it('in the side chat’s answer, beside the conversation: from 1280px the file opens above it; under that, in its place', async () => {
       computer(1440);
-      setPrefs({ workspacePane: true });
       answered();
       session();
       await loaded();
-      act(() => {
-        fireEvent.keyDown(window, { key: ';', ctrlKey: true });
-      });
+      toggle();
+      fireEvent.click(await within(pane()!).findByRole('link', { name: 'src/cache.ts:1' }));
+      expect(pane()).not.toBeNull();
+      await waitFor(() => expect(file()).not.toBeNull(), LAZY);
+      expect(changesPane()!.closest('[data-pane-part="pane"]')).not.toBeNull();
+      cleanup();
+      forgetLastTab();
+      history.replaceState(null, '', '/');
+      setPrefs({ workspacePane: false });
+      computer(1100);
+      session();
+      await loaded();
+      toggle();
       fireEvent.click(await within(pane()!).findByRole('link', { name: 'src/cache.ts:1' }));
       expect(pane()).toBeNull();
       await waitFor(() => expect(file()).not.toBeNull(), LAZY);

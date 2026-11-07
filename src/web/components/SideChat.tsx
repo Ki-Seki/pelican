@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, SquarePen, X } from 'lucide-react';
-import { type KeyboardEvent, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { type KeyboardEvent, type RefObject, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import type { ChatMessage, RunSettings, SendMode, SessionSummary } from '../../shared/protocol';
 import { shortTitle } from '../../shared/titles';
@@ -13,15 +13,18 @@ import { useMedia } from '../lib/media';
 import { messageWith, promptGist, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { socket } from '../lib/socket';
 import { addLocalMessage, adoptView, loadLatest, removeLocalMessage, useSessionView } from '../lib/store';
+import { useWorkspaceStep } from '../lib/workspace-route';
 import { ActionMenu } from './ActionMenu';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { MessageList } from './MessageList';
+import { useDockedMark } from './PaneColumn';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { Sheet } from './Sheet';
 
 /**
- * From this width the side chat sits beside the conversation, as Changes and files does, and under
- * the second the session list folds away while it does (styles.css); on narrower screens it is a
+ * From this width the side chat sits beside the conversation, in the column Changes, Files and the
+ * Terminal sit in (PaneColumn), and under the second, the session list folds away while it does
+ * (styles.css) and the column has room for one of them at a time; on narrower screens it is a
  * sheet over the conversation.
  */
 const BESIDE = '(min-width: 1024px)';
@@ -146,15 +149,20 @@ export function useSideChatAsked(sessionId: string | undefined, show: () => void
   }, [sessionId, show]);
 }
 
-/** Changes and files, as Chat has it (Workspace's useWorkspacePane): where the side chat takes turns with it. */
+/** Changes, Files and the Terminal, as Chat has them (Workspace's useWorkspacePane): the pane the side chat shares its column with. */
 type Pane = { open: boolean; setOpen: (open: boolean) => void; dockable: boolean };
 
 export type SideChatState = {
+  /** Open for this session: shown, or, under 1280px, waiting behind the pane asked for since. */
   open: boolean;
-  /** Beside the conversation, where Changes and files sits when it is docked. */
+  /** Beside the conversation, in the column it shares with the pane. */
   docked: boolean;
-  /** Docked on a screen too narrow for the session list as well: the list has folded away. */
-  folded: boolean;
+  /** Under the pane in that column, from 1280px, where there is room for both. */
+  stacked: boolean;
+  /** Under 1280px, where the column holds one of them, in front of the pane, which waits behind it. */
+  hidesPane: boolean;
+  /** Under 1280px, open but behind the pane asked for since, as it was: Cmd/Ctrl+; brings it forward. */
+  behind: boolean;
   /**
    * Opens it. Given a question, asks it there: in the side chat shown, or, when it was closed, in a
    * new one, from the session as it is now (as a question with /btw is asked).
@@ -167,9 +175,10 @@ export type SideChatState = {
   start: (item: WaitingItem) => void;
   close: () => void;
   /**
-   * Puts it away for what is asked for in its place, then does that: a file named in the
-   * conversation or in an answer, a turn's changes. Beside the conversation at once; a sheet first
-   * plays its way out, as it holds the rest of the page until it has gone.
+   * Makes way for what is asked for in the pane: a file named in the conversation or in an answer,
+   * a turn's changes, a tab. Beside the conversation the pane opens over the side chat (from
+   * 1280px) or in front of it; a sheet first plays its way out, as it holds the rest of the page
+   * until it has gone.
    */
   makeWay: (then: () => void) => void;
   /** A question to ask as it opens, new each time (`key`). */
@@ -180,14 +189,16 @@ export type SideChatState = {
 
 /**
  * Whether the session's side chat is open, and where. Cmd/Ctrl+; opens and closes it, as in
- * Claude Desktop. On a computer it takes the place of Changes and files beside the conversation,
- * one at a time: opening it puts that pane aside, closing it brings the pane back, and asking for
- * the pane (its button, Cmd/Ctrl+Shift+D) closes the side chat.
+ * Claude Desktop. On a computer it sits in the column beside the conversation: alone, all of it;
+ * with the pane open, from 1280px under it, and under that in its place, the one asked for last in
+ * front and the other waiting behind it (the pane's button, a path or ⌃⇧D bring the pane forward,
+ * Cmd/Ctrl+; the side chat), each coming back as the other closes.
  */
 export function useSideChat(sessionId: string | undefined, available: boolean, pane: Pane, keysBack?: () => void): SideChatState {
   const beside = useMedia(BESIDE);
   const roomy = useMedia(ROOMY);
   const [open, setOpen] = useState(false);
+  const [front, setFront] = useState<'side' | 'pane'>('side');
   const [question, setQuestion] = useState<{ text: string; key: number }>();
   // What had the keys when it opened, to have them again when it closes (a sheet does this itself).
   const opener = useRef<Element | null>(null);
@@ -196,6 +207,7 @@ export function useSideChat(sessionId: string | undefined, available: boolean, p
       if (next && !was) opener.current = document.activeElement;
       return next;
     });
+    if (next) setFront('side');
   }, []);
   const isOpen = available && open;
   const openNow = useRef(isOpen);
@@ -213,13 +225,25 @@ export function useSideChat(sessionId: string | undefined, available: boolean, p
     toggle(true);
   }, [toggle, sessionId]);
   const close = useCallback(() => toggle(false), [toggle]);
-  const docked = isOpen && beside;
+
+  const { open: paneOpen, setOpen: setPaneOpen, dockable } = pane;
+  const shared = isOpen && beside && dockable && paneOpen;
+  const stacked = shared && roomy;
+  const hidesPane = shared && !roomy && front === 'side';
+  const behind = shared && !roomy && front === 'pane';
+  const docked = isOpen && beside && !behind;
+  const sheeted = isOpen && !beside;
 
   const sheet = useRef<HTMLDivElement>(null);
-  const shown = useRef({ isOpen, docked });
-  shown.current = { isOpen, docked };
+  const shown = useRef({ sheeted });
+  shown.current = { sheeted };
   const makeWay = useCallback((then: () => void) => {
-    const dialog = shown.current.isOpen && !shown.current.docked ? sheet.current?.closest('dialog') : null;
+    if (!shown.current.sheeted) {
+      setFront('pane');
+      then();
+      return;
+    }
+    const dialog = sheet.current?.closest('dialog');
     toggle(false);
     if (dialog?.open) dialog.addEventListener('close', () => then(), { once: true });
     else then();
@@ -247,24 +271,30 @@ export function useSideChat(sessionId: string | undefined, available: boolean, p
       // A sheet that is open keeps the keys, unless it is the side chat's own.
       if (!open && document.querySelector('dialog[open]')) return;
       e.preventDefault();
-      toggle(!open);
+      // Waiting behind the pane, it comes in front; shown, it closes.
+      if (behind) setFront('side');
+      else toggle(!open);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [available, open, docked, roomy, toggle]);
+  }, [available, open, behind, toggle]);
 
-  // Asked for while the side chat is beside the conversation, Changes and files takes its place.
-  const { open: paneIsOpen, setOpen: setPaneOpen, dockable } = pane;
-  const paneWasOpen = useRef(paneIsOpen);
+  // The pane asked for while the side chat is in front of it (under 1280px), by its key, which
+  // shows it (or a tab of it) without making way: it comes in front. Its key hides it while it
+  // shows Changes, which it did behind the side chat: then it opens again, as it was asked for.
+  const tab = useWorkspaceStep()?.tab;
+  const before = useRef({ paneOpen, tab, hidesPane });
   useEffect(() => {
-    const changed = paneWasOpen.current !== paneIsOpen;
-    paneWasOpen.current = paneIsOpen;
-    if (!changed || !docked || !dockable) return;
-    toggle(false);
-    if (!paneIsOpen) setPaneOpen(true);
-  }, [paneIsOpen, setPaneOpen, dockable, docked, toggle]);
+    const was = before.current;
+    before.current = { paneOpen, tab, hidesPane };
+    if (!isOpen || !beside || roomy || front !== 'side') return;
+    if (was.paneOpen === paneOpen && (!paneOpen || was.tab === tab)) return;
+    if (!paneOpen && !was.hidesPane) return;
+    setFront('pane');
+    if (!paneOpen) setPaneOpen(true);
+  }, [paneOpen, tab, hidesPane, isOpen, beside, roomy, front, setPaneOpen]);
 
-  return { open: isOpen, docked, folded: docked && !roomy, show, start, close, makeWay, sheet, ...(question ? { question } : {}) };
+  return { open: isOpen, docked, stacked, hidesPane, behind, show, start, close, makeWay, sheet, ...(question ? { question } : {}) };
 }
 
 const pendingMessage = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now(), pending: true });
@@ -422,13 +452,7 @@ export function SideChat({
   };
 
   // Beside the conversation on a screen under 1280px, the session list makes way (styles.css).
-  useLayoutEffect(() => {
-    if (!state.docked) return undefined;
-    document.documentElement.dataset.pane = 'docked';
-    return () => {
-      delete document.documentElement.dataset.pane;
-    };
-  }, [state.docked]);
+  useDockedMark(state.docked);
 
   // Its ▾: the session's other side chats, the latest first, each by its first question, then New
   // side chat (unless it shows a new one already).
@@ -507,6 +531,7 @@ export function SideChat({
     return (
       <aside
         aria-label="Side chat"
+        data-stacked={state.stacked || undefined}
         className="absolute inset-y-0 right-0 flex w-(--pane-w) flex-col border-l border-line bg-bg"
         onKeyDown={(e: KeyboardEvent) => {
           // Keys pressed in a menu opened from here (its ▾) reach this too (React passes them up its own tree): those are the menu's.
@@ -528,18 +553,21 @@ export function SideChat({
           e.stopPropagation();
         }}
       >
-        <div className="flex shrink-0 items-center gap-1 pt-1.5 pr-2 pl-5">
+        <div className={`flex shrink-0 items-center gap-1 pr-2 pl-5 ${state.stacked ? 'pt-2.5' : 'pt-1.5'}`}>
           <h2 className="flex min-w-0 flex-1 text-[13px] text-muted">{name}</h2>
           <button type="button" aria-label="Close" title={`Close (${SIDE_CHAT_KEYS})`} onClick={state.close} className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg">
             <X className="size-[18px]" />
           </button>
         </div>
-        <p className="shrink-0 px-5 pb-1 text-[12px] text-faint">{READS}</p>
+        {/* Under the pane, where its height is shared, the name says enough. */}
+        {!state.stacked && <p className="shrink-0 px-5 pb-1 text-[12px] text-faint">{READS}</p>}
         {body}
         {sideChats}
       </aside>
     );
   }
+  // Under 1280px, behind the pane asked for since: it waits there as it was.
+  if (state.behind) return null;
   return (
     <Sheet
       open={state.open}
