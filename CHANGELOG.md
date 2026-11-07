@@ -3,8 +3,8 @@
 ## 0.5.0
 
 A terminal beside the conversation, quotes with notes, and every action where it is used, as in
-Claude Desktop, with its keys; and new sessions that start as Claude Code starts them, from its own
-settings.
+Claude Desktop, with its keys; new sessions that start as Claude Code starts them, from its own
+settings; and updates from Settings.
 
 ### Highlights
 
@@ -120,6 +120,21 @@ settings.
 - **Back on a phone closes what is open.** Android's Back, and the browser's, closes the sheet or
   menu that is open, and goes no further.
 
+- **Update from Settings.** Pelican asks npm's registry for a newer version once a day, and when
+  Settings opens, and says so there, quietly, with what changed, from the new version's
+  CHANGELOG.md; offline it says nothing. Where npm installed Pelican into its global folder, Update
+  installs that very version: first into a folder of its own, where Pelican checks that it starts,
+  then over your install, with the same prefix and npm's integrity checks, and Pelican starts again,
+  through launchd or systemd when it runs as a service, in its own place when it runs in a terminal;
+  pages reconnect by themselves on the new version. While anything runs that the restart would end
+  (Claude working or waiting for you, background agents, workflows and commands, a terminal's
+  program, a `!` command), Settings lists it first, with Update now and Update when idle, which
+  waits until nothing has run for a minute, and can be cancelled. Transcripts, files, pins, settings
+  and drafts stay. Run by npx, from a clone, from another prefix than npm's (as a script of your own
+  may keep it), by pnpm, Yarn, Bun or Volta, or from a folder root owns, Settings shows the command
+  to run instead, and why. If anything fails, the running version goes on, and Settings says what
+  failed.
+
 ### Changes in behavior
 
 - **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
@@ -196,6 +211,11 @@ settings.
 
 ### Security
 
+- Updating from Settings takes a request from Pelican's own page, signed in, as every change does,
+  and never in either demo; it installs nothing but pelican-cc, at the newest version npm's registry
+  names, which the request must name exactly, with npm's integrity checks and no package scripts,
+  and only where npm itself installed Pelican in its global folder, which this account can write to.
+  Pelican never runs sudo. SECURITY.md says what it runs, and when.
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
@@ -236,6 +256,9 @@ settings.
 
 ### Site, docs and project
 
+- The docs say how to update from Settings: what Pelican asks npm's registry and when, which
+  installs update themselves, the command for the others, what an update ends, and how Pelican
+  starts again.
 - The docs describe where every action is: each thing's list and its ways in, the session menu,
   the header's buttons, Context, the message box's +, the command menu, the keys, the session list
   hiding and floating, and Back on a phone.

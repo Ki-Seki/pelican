@@ -245,6 +245,33 @@ can read your sessions and have Claude run commands as you, so treat access to i
   the SDK lists as its peers, which Pelican never loads. The package ships no
   `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
   `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
+- **An update installs only pelican-cc, from npm's registry, and only when you ask.** Once a day,
+  and when Settings opens (at most every five minutes), Pelican asks the registry npm uses
+  (`npm config get registry`, run by the npm beside the Node running Pelican, as all npm commands
+  here are) for pelican-cc's document, and nothing else; when it names a newer version as `latest`,
+  Pelican downloads that version's tarball from the registry, checks it against the integrity the
+  registry gives, and reads its `CHANGELOG.md`, which Settings shows as text (no HTML; a link opens
+  in a new tab). Offline, or when the registry fails, it says nothing. With an update to show,
+  Pelican finds how it was installed, once: from the real path of its own script and
+  `npm prefix --global`. It updates itself only where npm installed it into npm's global folder, and
+  this account can write there; anywhere else (npx, a source checkout, another prefix, a project,
+  pnpm, Yarn, Bun, Volta, a folder root owns) it shows the command to run instead, and why, and
+  never installs over a version something else keeps. Nothing is installed until the signed-in owner
+  presses Update on Pelican's own page: the same checks as every change (Pelican's header, its
+  origin, signed in), refused in the demo, and the site's demo has no server at all. The request
+  must name the very version the registry named newest, and Pelican writes the command itself, run
+  directly, never through a shell,
+  `npm install -g --prefix <folder> --registry <registry> --ignore-scripts pelican-cc@<version>`
+  (with its audit, funding and update notices off): first into a new folder in the system's
+  temporary folder, where `node <its pelican> --version` must say that version (the folder then
+  goes), then into this install's prefix; npm checks every tarball against the registry's integrity,
+  and runs no package's scripts. Then `node <pelican> --version` again; if it fails, npm installs
+  the running version back. Then, as Pelican's service,
+  `launchctl kickstart -k gui/<uid>/io.github.ki-seki.pelican` or
+  `systemctl --user --no-block restart pelican.service`; in a terminal, Pelican ends what it runs,
+  as a stop does, and starts its own script again in its own process (`process.execve`), with the
+  arguments and environment it was started with; on a Node without it, it says to restart it. While
+  the install is replaced, Pelican starts nothing new. Pelican never runs `sudo`.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
@@ -257,9 +284,9 @@ one, in the session's `tool-results` folder, readable only by you. It stores upl
 notification keys and subscriptions, the folders you trusted or kept to your settings, which
 sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
-long they waited for you, and a note of the running server in `~/.local/state/pelican`. Its pins
-and archive are its own: Claude Desktop's are neither read nor written. Terminals, and what they
-show, are kept in memory only.
+long they waited for you, a note of the running server, and what the last look for an update found,
+in `~/.local/state/pelican`. Its pins and archive are its own: Claude Desktop's are neither read nor
+written. Terminals, and what they show, are kept in memory only.
 
 ## Reporting a vulnerability
 
