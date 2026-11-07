@@ -208,10 +208,11 @@ describe('a terminal', () => {
     try {
       const terminal = await open(work(), { command: 'echo one\necho two' });
       await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
-      // Typed: `.` and the file, which holds the command as it was shown.
+      // Typed: `.` and the file, which prints the command first, dimmed, from a word in single quotes,
+      // then holds it as it was shown.
       const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
       expect(file).toBeDefined();
-      expect(readFileSync(file!, 'utf8')).toBe('echo one\necho two\n');
+      expect(readFileSync(file!, 'utf8')).toBe("command printf '\\033[2m%s\\033[0m\\n' 'echo one\necho two'\necho one\necho two\n");
       expect((await stat(file!)).mode & 0o777).toBe(0o600);
       expect((await stat(path.dirname(file!))).mode & 0o777).toBe(0o700);
       // Gone with the terminal.
