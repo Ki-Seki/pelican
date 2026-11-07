@@ -21,7 +21,7 @@ import { splitFiles } from './turns';
  * The demo acts out the moments it exists to show, and says calmly what it cannot do. Allow on the
  * waiting edit plays out the rest of that step: the edit lands, the next task starts and Claude
  * says what it did. A message gets a reply that says what Claude would do with it. Rewind to here
- * takes the conversation back, with Undo rewind, in the page. Anything else
+ * takes the conversation back (with Undo rewind) and Fork copies it, in the page. Anything else
  * that would change something gets the one demo note. Both demos run this: the site's, which has no
  * server, and `pelican --demo`, whose server runs nothing; nothing here leaves the page.
  */
@@ -43,6 +43,7 @@ type Story = {
 
 const stories = new Map<string, Story>();
 const folders = new Map<string, string>();
+const titles = new Map<string, string>();
 let home = '';
 
 const storyOf = (id: string): Story => {
@@ -400,6 +401,41 @@ function undoRewind(sessionId: string): { ok: boolean } {
   return { ok: true };
 }
 
+/**
+ * Fork, and Fork from here, acted out in the page: a session of the demo's own with the
+ * conversation copied up to just before a prompt (whose words come back for its box), up to a
+ * reply, or whole, as it reads now. Before the first prompt there is nothing to copy.
+ */
+function fork(sessionId: string, body: Record<string, unknown>): { sessionId: string | null; prompt?: { text: string; attachments: [] } } {
+  const messages = getView(sessionId).messages;
+  const before = str(body.before);
+  const upTo = str(body.upTo);
+  let copy = messages;
+  let prompt: { text: string; attachments: [] } | undefined;
+  if (before || upTo) {
+    const at = messages.findIndex((m) => m.uuid === (before || upTo));
+    if (at < 0) throw new ApiError(NOT_HERE, 404);
+    copy = messages.slice(0, before ? at : at + 1);
+    if (before) prompt = { text: wordsOf(messages[at]!), attachments: [] };
+  }
+  if (!copy.some(typed)) return { sessionId: null, ...(prompt ? { prompt } : {}) };
+  const id = newId();
+  const cwd = folders.get(sessionId) ?? '';
+  folders.set(id, cwd);
+  const story = storyOf(id);
+  story.summary = {
+    id,
+    title: `${titles.get(sessionId) ?? stories.get(sessionId)?.summary?.title ?? 'Session'} (fork)`,
+    cwd,
+    project: cwd.split('/').filter(Boolean).at(-1) ?? '',
+    lastActivity: Date.now(),
+    createdAt: Date.now(),
+    status: 'idle',
+  };
+  story.added = copy.map((m) => ({ ...m }));
+  return { sessionId: id, ...(prompt ? { prompt } : {}) };
+}
+
 const statusOf = (run: RunState): SessionStatus => (run.permissions.length > 0 ? 'waiting' : run.busy ? 'running' : 'idle');
 
 function lastReply(messages: ChatMessage[]): string | undefined {
@@ -476,7 +512,10 @@ function adjust(path: string, data: unknown): unknown {
   if (/^defaults(\?|$)/.test(path) && !changedDefaults) startDefaults = data as StartDefaults;
   if (path === 'sessions') {
     const { sessions } = data as { sessions: SessionSummary[] };
-    for (const session of sessions) folders.set(session.id, session.cwd);
+    for (const session of sessions) {
+      folders.set(session.id, session.cwd);
+      titles.set(session.id, session.title);
+    }
     const started = [...stories.values()].flatMap((story) => (story.summary ? [story.summary] : []));
     return { sessions: [...started, ...sessions].map(summarize).sort((a, b) => b.lastActivity - a.lastActivity) };
   }
@@ -515,6 +554,7 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
   if (id && rest.startsWith('/queued/')) return unqueue(id, decodeURIComponent(rest.slice('/queued/'.length)));
   if (id && rest === '/rewind') return rewind(id, body);
   if (id && rest === '/rewind/undo') return undoRewind(id);
+  if (id && rest === '/fork') return fork(id, body);
   if (id && (rest === '/settings' || rest === '/mode')) {
     const run = currentRun(id);
     const settings = rest === '/mode' ? { ...run?.settings, permissionMode: body.permissionMode as RunSettings['permissionMode'] } : (body.settings as RunSettings);

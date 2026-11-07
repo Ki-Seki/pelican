@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
-// Rewind to here on the page, as Claude Desktop has it: its dialog, with the three choices only
-// when files changed after the message; one tap when none did; Undo rewind at the "Rewound here"
-// marker, until the next message; and /rewind, which asks which message.
+// Rewind to here and Fork from here on the page, as Claude Desktop has them: its dialog, with the
+// three choices only when files changed after the message; one tap when none did; Undo rewind at
+// the "Rewound here" marker, until the next message; /rewind, which asks which message; and Fork
+// from here, whose new session's box has the prompt's words and files.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, RewindCheck, RewindDone, RewindRestore, Rewound, RunState } from '../src/shared/protocol';
+import type { Attachment, ChatMessage, RewindCheck, RewindDone, RewindRestore, Rewound, RunState } from '../src/shared/protocol';
 
 const SESSION = '33333333-2222-4333-8444-555555555555';
+const FORKED = '44444444-2222-4333-8444-555555555555';
 const CWD = '/code/acme-web';
 const at = Date.now() - 600_000;
+const FILE: Attachment = { id: 'up-1', name: 'notes.md', mime: 'text/markdown', size: 12, path: '/uploads/up-1/notes.md' };
 
 /** What the computer answers, as each test sets it. */
 const server = vi.hoisted(() => ({
@@ -73,6 +76,10 @@ vi.mock('../src/web/lib/api', async (original) => {
         server.rewound = undefined;
         return { ok: true };
       },
+      forkBefore: async (_id: string, before: string) => ({
+        sessionId: before === 'u1' ? null : FORKED,
+        prompt: { text: `<!-- reply 1 -->\n> The toggle sits under Display.\n\nKeep it there\n\n\n${before === 'u1' ? 'Add a dark theme to the settings page' : 'Now remember the choice'}`, attachments: [FILE] },
+      }),
     },
   };
 });
@@ -94,22 +101,25 @@ beforeAll(() => {
 });
 
 const { Chat } = await import('../src/web/components/Chat');
-const { setWaiting } = await import('../src/web/lib/drafts');
+const { loadDraft, waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { CommandMenu, showCommandMenu } = await import('../src/web/components/CommandMenu');
 
 afterEach(async () => {
   cleanup();
   localStorage.clear();
   setWaiting(SESSION, []);
+  setWaiting(FORKED, []);
   media = {};
   Object.assign(server, { check: undefined, hold: undefined, rewinds: [], undos: 0, rewound: undefined, run: null, failure: undefined });
   await new Promise((resolve) => setTimeout(resolve, 0));
   history.replaceState(null, '', '/');
 });
 
+const onOpen = vi.fn();
+const onStartIn = vi.fn();
 const open = () => render(
   <QueryClientProvider client={new QueryClient()}>
-    <Chat sessionId={SESSION} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />
+    <Chat sessionId={SESSION} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={onOpen} onStartIn={onStartIn} />
     <CommandMenu sessions={[]} onOpenSession={() => {}} />
   </QueryClientProvider>,
 );
@@ -265,5 +275,22 @@ describe('/rewind', () => {
     expect(within(list).getAllByRole('button').map((b) => b.textContent?.replace(/\d{1,2}:\d{2}.*$/, ''))).toEqual(['Add a dark theme to the settings page', 'Now remember the choice']);
     fireEvent.click(within(list).getByText('Now remember the choice'));
     await waitFor(() => expect(server.rewinds).toEqual([['u2', 'conversation']]));
+  });
+});
+
+describe('Fork from here', () => {
+  it('opens a copy up to just before the prompt, its words, quotes and files in the new session’s box', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    open();
+    await loaded();
+    const bubble = screen.getByText('Now remember the choice', { selector: 'div' }).closest('.group\\/user') as HTMLElement;
+    fireEvent.click(within(bubble).getByRole('button', { name: 'Fork from here' }));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(FORKED));
+    expect(loadDraft(FORKED)).toMatchObject({ text: 'Now remember the choice', attachments: [FILE] });
+    expect(waitingOf(FORKED)).toMatchObject([{ kind: 'quote', text: 'The toggle sits under Display.', note: 'Keep it there' }]);
+    // The first prompt: a new session in the folder, with them.
+    fireEvent.click(within(screen.getByText('Add a dark theme to the settings page', { selector: 'div' }).closest('.group\\/user') as HTMLElement).getByRole('button', { name: 'Fork from here' }));
+    await waitFor(() => expect(onStartIn).toHaveBeenCalledWith({ cwd: CWD }, true));
+    expect(loadDraft(`new:${CWD}`)).toMatchObject({ text: 'Add a dark theme to the settings page', attachments: [FILE] });
   });
 });

@@ -3,7 +3,8 @@
 // Claude Code's own copies (rewindFiles); the conversation starts again at the entry before the
 // prompt (resumeSessionAt) and Pelican keeps the cut; Undo rewind resumes the session whole until
 // the next message; Claude at work gets 409; Claude Code's check refusing to drop more than the
-// prompt's turn (resumeDropsTurn) falls back to the whole session; and the demo refuses.
+// prompt's turn (resumeDropsTurn) falls back to the whole session; the demo refuses; and Fork from
+// here copies up to just before a prompt, or the end of a reply.
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -216,6 +217,23 @@ describe('Rewind to here, in the Claude Code the Agent SDK bundles', () => {
     expect((await page(id)).rewound).toBeUndefined();
     await reply(id, 'Guard: Third question');
     expect(JSON.stringify(turnOf('Guard: Third question')!.messages)).toContain('Guard: Second question');
+  }, 240_000);
+
+  it('Fork from here: from a prompt the copy ends just before it, its words coming back for the new box; from a reply, at the reply', async () => {
+    const id = await session(['Fork: First question', 'Fork: Second question']);
+    const second = await uuidOf(id, 'Fork: Second question');
+    const fromPrompt = await json<{ sessionId: string; prompt: { text: string } }>(await ask(`/api/sessions/${id}/fork`, { before: second }));
+    expect(fromPrompt.status).toBe(200);
+    expect(fromPrompt.body.prompt).toEqual({ text: 'Fork: Second question', attachments: [] });
+    const copied = words(await loadMessages(fromPrompt.body.sessionId));
+    expect(copied).toContain('Fork: First question');
+    expect(copied).not.toContain('Fork: Second question');
+    const reply = (await loadMessages(id)).findLast((m) => m.role === 'assistant')!;
+    const fromReply = await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, { upTo: reply.uuid }));
+    expect(words(await loadMessages(fromReply.body.sessionId))).toEqual(expect.arrayContaining(['Fork: Second question', 'Reply to: Fork: Second question']));
+    // The first prompt has nothing before it: no copy, the words for a new session's box.
+    const first = await json<{ sessionId: string | null; prompt: { text: string } }>(await ask(`/api/sessions/${id}/fork`, { before: await uuidOf(id, 'Fork: First question') }));
+    expect(first.body).toEqual({ sessionId: null, prompt: { text: 'Fork: First question', attachments: [] } });
   }, 240_000);
 
   it('is refused in the demo, as all it would change is', async () => {

@@ -77,7 +77,7 @@ describe('the demo', () => {
   });
 
   it('says calmly, in one wording, what it does not act out', async () => {
-    const refused = await api.fork(SESSION).catch((error: unknown) => error);
+    const refused = await api.rename(SESSION, 'Dark theme').catch((error: unknown) => error);
     expect(isDemoNote(refused)).toBe(true);
     expect((refused as Error).message).toBe(DEMO_NOTE);
     const upload = await api.upload(new File(['x'], 'a.txt')).catch((error: unknown) => error);
@@ -123,6 +123,22 @@ describe('the demo', () => {
     // The first message has nothing before it to start again from.
     const first = await api.rewind(sessionId, 'first', 'conversation').catch((error: unknown) => error);
     expect((first as Error).message).toBe(FIRST_MESSAGE);
+  });
+
+  it('forks in the page: from a prompt up to just before it, its words for the new box; from a reply, up to it', async () => {
+    const { sessionId } = await api.create({ cwd: CWD, text: 'Add a footer', attachments: [], settings: {}, uuid: 'first' });
+    vi.runAllTimers();
+    await api.send(sessionId, { text: 'Make it dark', attachments: [], settings: {}, uuid: 'second' });
+    vi.runAllTimers();
+    const { sessionId: copy, prompt } = await api.forkBefore(sessionId, 'second');
+    expect(prompt).toEqual({ text: 'Make it dark', attachments: [] });
+    expect((await api.messages(copy!)).messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect((await api.session(copy!)).session).toMatchObject({ title: 'Add a footer (fork)', cwd: CWD });
+    const reply = getView(sessionId).messages.at(-1)!;
+    const whole = await api.fork(sessionId, { upTo: reply.uuid });
+    expect((await api.messages(whole!)).messages.map((m) => m.uuid)).toContain('second');
+    // Before the first prompt nothing is copied: its words go to a new session's box.
+    expect(await api.forkBefore(sessionId, 'first')).toEqual({ sessionId: null, prompt: { text: 'Add a footer', attachments: [] } });
   });
 
   it('starts a new session in the page, which the list and the chat then show', async () => {

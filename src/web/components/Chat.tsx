@@ -1057,18 +1057,18 @@ export function Chat({
     }
     api.rename(sessionId, words).then(refresh, (error: Error) => setSendError({ text: error.message, note: isDemoNote(error) }));
   };
-  // Fork from here, on a prompt: a new session up to just before it, the prompt's words in its box
-  // (its quotes waiting above it), as Desktop's Fork from here does. The first prompt has nothing
-  // before it: a new session in the same folder, with them.
+  // Fork from here, on a prompt: a new session up to just before it, the prompt's words in its box,
+  // its quotes waiting above it and its files and pictures attached, as Desktop's Fork from here
+  // does. The first prompt has nothing before it: a new session in the same folder, with them.
   const forkFrom = (prompt: Extract<Item, { kind: 'user' }>) => {
     if (!sessionId) return;
-    const { items: waiting, text } = readMessage(prompt.text);
-    const fill = (view: string) => {
-      saveDraft(view, text);
-      putBackWaiting(view, waiting);
-    };
-    api.fork(sessionId, { before: prompt.key })
-      .then(async (id) => {
+    api.forkBefore(sessionId, prompt.key)
+      .then(async ({ sessionId: id, prompt: back }) => {
+        const { items: waiting, text } = readMessage(back.text);
+        const fill = (view: string) => {
+          saveDraft(view, text, back.attachments);
+          putBackWaiting(view, waiting);
+        };
         const next = await branchSettings();
         if (id) {
           void queryClient.invalidateQueries({ queryKey: ['sessions'] });

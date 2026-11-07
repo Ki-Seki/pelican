@@ -27,18 +27,6 @@ export async function fork(sessionId: string, upTo?: string, title?: string): Pr
   return result.sessionId;
 }
 
-/**
- * Where a branch that rewrites the message `uuid` starts: the message just
- * before it, or null when `uuid` is the first one (the branch is then a new
- * session in the same folder). Undefined when the message is not there.
- */
-export async function messageBefore(sessionId: string, uuid: string): Promise<string | null | undefined> {
-  const { messages } = await shownMessages(sessionId);
-  const at = messages.findIndex((m) => m.uuid === uuid);
-  if (at < 0) return undefined;
-  return at === 0 ? null : messages[at - 1]!.uuid;
-}
-
 export async function remove(sessionId: string): Promise<void> {
   if (config.demo) throw new Error('This is the demo: nothing changes.');
   const info = await sessionInfo(sessionId);

@@ -260,9 +260,15 @@ export const api = {
    */
   side: (id: string, body: { question: string; settings: RunSettings; uuid: string }) =>
     send<{ sessionId: string }>('POST', `sessions/${encodeURIComponent(id)}/side`, body),
-  /** A copy of the session; with `before`, the copy stops just before that message (null: it was the first). */
-  fork: (id: string, options: { before?: string; upTo?: string; title?: string } = {}) =>
+  /** A copy of the session as its conversation reads (Fork); with `upTo`, it ends at that message (Fork from here, on a reply). */
+  fork: (id: string, options: { upTo?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
+  /**
+   * Fork from here, on a prompt: a copy that ends just before it, and the prompt's words and files
+   * for the new session's box. Before the first prompt there is nothing to copy: no session.
+   */
+  forkBefore: (id: string, before: string) =>
+    send<{ sessionId: string | null; prompt: { text: string; attachments: Attachment[] } }>('POST', `sessions/${encodeURIComponent(id)}/fork`, { before }),
   remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
   /** Put the session away from the list (true), unpinned, or bring it back (false); nothing else changes. */
   archive: (id: string, archived: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/archive`, { archived }),

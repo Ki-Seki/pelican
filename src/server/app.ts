@@ -17,7 +17,7 @@ import type { Attachment, PermissionDecision, RewindRestore, RunSettings, SendMo
 import { revealHidden } from '../shared/hidden.js';
 import { commandRunnable, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
-import { exportMarkdown, fork, messageBefore, remove } from './actions.js';
+import { exportMarkdown, fork, remove } from './actions.js';
 import { forget, keep } from './kept.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn } from './auth.js';
 import { config } from './config.js';
@@ -33,7 +33,7 @@ import { exactBytes } from './open.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
 import { getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
-import { checkRewind, RewindRefusal, rewindTo, undoRewind } from './rewind.js';
+import { checkRewind, promptBack, RewindRefusal, rewindTo, undoRewind } from './rewind.js';
 import { liveCut } from './rewound.js';
 import { savedOutputPage } from './shell.js';
 import { startShell, stopShell } from './shell-runs.js';
@@ -49,7 +49,7 @@ import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadPage, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary, shownMessages } from './sessions.js';
 import { transcriptImage } from './history.js';
 import { instance } from './running.js';
-import { transcriptPath } from './transcripts.js';
+import { rawEntry, transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 import { AGENT_ID, CALL_ID, subagentPage, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
 
@@ -366,19 +366,32 @@ app.patch('/api/sessions/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * A copy of the session to carry on separately (Fork), as the conversation reads: up to the cut
+ * while it is rewound. Fork from here: from a reply (`upTo`), the copy ends at the reply; from a
+ * prompt (`before`), it ends just before the prompt, and the prompt's words and files come back
+ * for the new session's message box (`prompt`). Nothing comes before the first prompt: no copy is
+ * made (`sessionId` null), and the caller starts a new session in the folder with them.
+ */
 app.post('/api/sessions/:id/fork', async (c) => {
   const id = c.req.param('id');
-  const body = await c.req.json<{ upTo?: string; before?: string; title?: string }>().catch(() => ({} as { upTo?: string; before?: string; title?: string }));
-  // The conversation as it reads: up to the cut, while it is rewound.
-  let upTo = body.upTo ?? (await liveCut(id))?.entry;
-  if (body.before) {
-    const previous = await messageBefore(id, body.before);
-    if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
-    // Nothing comes before the first prompt: the caller starts a new session instead.
-    if (previous === null) return c.json({ sessionId: null });
-    upTo = previous;
+  const body = await c.req.json<{ upTo?: unknown; before?: unknown; title?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+  const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 200) : undefined;
+  const { messages } = await shownMessages(id);
+  const shown = (uuid: string) => messages.some((m) => m.uuid === uuid);
+  if (body.before !== undefined) {
+    const before = uuidOf(body.before);
+    const file = await transcriptPath(id);
+    if (!before || !file || !shown(before)) return c.json({ error: 'That message is not in this conversation.' }, 404);
+    // Where the conversation goes back to before the prompt: the entry just before it, as a rewind resumes.
+    const entry = (await rawEntry(file, before))?.parentUuid ?? null;
+    const prompt = await promptBack(file, before);
+    const back = { text: prompt.text, attachments: prompt.attachments };
+    return c.json({ sessionId: entry === null ? null : await fork(id, entry, title), prompt: back });
   }
-  return c.json({ sessionId: await fork(id, upTo, body.title) });
+  const upTo = body.upTo === undefined ? (await liveCut(id))?.entry : uuidOf(body.upTo);
+  if (body.upTo !== undefined && (!upTo || !shown(upTo))) return c.json({ error: 'That message is not in this conversation.' }, 404);
+  return c.json({ sessionId: await fork(id, upTo, title) });
 });
 
 /**
