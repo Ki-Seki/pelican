@@ -239,6 +239,18 @@ function Main() {
   }), [queryClient]);
 
   const open = useCallback((id: string, replace = false) => navigate(`?s=${encodeURIComponent(id)}`, replace), [navigate]);
+  // Picked by name (the list, ⌘K), a side chat opens as its session's side chat, on it, beside the
+  // session or over it, not as a copy of the session; one whose session is gone opens on its own.
+  const openPicked = useCallback((id: string) => {
+    const listed = queryClient.getQueryData<SessionSummary[]>(['sessions']);
+    const of = listed?.find((s) => s.id === id)?.sideChatOf;
+    if (!of || !listed?.some((s) => s.id === of)) {
+      open(id);
+      return;
+    }
+    askSideChat(of, id);
+    if (of !== sessionId) open(of);
+  }, [queryClient, open, sessionId]);
   useEffect(() => onNotificationOpen((id) => open(id)), [open]);
 
   // Both demos act out what they can in the page (lib/demo).
@@ -424,7 +436,7 @@ function Main() {
       selectedId={sessionId}
       onOpen={(id) => {
         setPeek(undefined);
-        open(id);
+        openPicked(id);
       }}
       onNew={(start) => {
         setPeek(undefined);
@@ -546,7 +558,7 @@ function Main() {
         </main>
         {settings}
         <ShortcutsSheet />
-        <CommandMenu sessions={sessions ?? []} onOpenSession={open} />
+        <CommandMenu sessions={sessions ?? []} onOpenSession={openPicked} />
       </div>
     );
   }
@@ -555,7 +567,7 @@ function Main() {
       {main ?? list}
       {settings}
       <ShortcutsSheet />
-      <CommandMenu sessions={sessions ?? []} onOpenSession={open} />
+      <CommandMenu sessions={sessions ?? []} onOpenSession={openPicked} />
     </div>
   );
 }
