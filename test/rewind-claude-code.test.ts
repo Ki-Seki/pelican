@@ -124,6 +124,36 @@ describe('Rewind to here, in the Claude Code the Agent SDK bundles', () => {
     expect(words(after.messages)).toContain('Code: Third question');
   }, 240_000);
 
+  it('Code and conversation: both go back, the conversation first', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Both: Read the notes', 'Both: Write the notes', 'Both: Third question'], { permissionMode: 'acceptEdits' });
+    const write = await uuidOf(id, 'Both: Write the notes');
+    const done = await json<RewindDone>(await ask(`/api/sessions/${id}/rewind`, { uuid: write, restore: 'both' }));
+    expect(done).toEqual({ status: 200, body: { files: [notes], insertions: 1, deletions: 1, prompt: { text: 'Both: Write the notes', attachments: [] } } });
+    expect(readFileSync(notes, 'utf8')).toBe(ORIGINAL);
+    const shown = await page(id);
+    expect(shown.rewound).toMatchObject({ prompt: write });
+    expect(words(shown.messages)).toContain('Both: Read the notes');
+    expect(words(shown.messages)).not.toContain('Both: Write the notes');
+  }, 240_000);
+
+  it('Code and conversation is all or nothing: code that cannot go back leaves the conversation whole', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Whole: Read the notes', 'Whole: Write the notes'], { permissionMode: 'acceptEdits' });
+    // A copy of a session has no copies of its files (forkSession copies none): its code cannot go back.
+    const copy = (await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, {}))).body.sessionId;
+    const write = await uuidOf(copy, 'Whole: Write the notes');
+    const refused = await json(await ask(`/api/sessions/${copy}/rewind`, { uuid: write, restore: 'both' }));
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/^Couldn’t restore the code from this point\./);
+    expect(readFileSync(notes, 'utf8')).toBe('Changed by Claude.\n');
+    const shown = await page(copy);
+    expect(shown.rewound).toBeUndefined();
+    expect(words(shown.messages)).toContain('Whole: Write the notes');
+    // Its dialog says so before: no code to put back, only the conversation.
+    expect((await json<RewindCheck>(await ask(`/api/sessions/${copy}/rewind`, { uuid: write, dryRun: true }))).body).toEqual({ files: [], insertions: 0, deletions: 0 });
+  }, 240_000);
+
   it('the conversation starts again at the entry before the prompt, and Pelican keeps the cut: the prompt’s words and pictures come back for the box', async () => {
     const id = await session(['Cut: First question', 'Cut: Second question']);
     const image = await saveUpload(new File([Buffer.from(PIXEL, 'base64')], 'pixel.png', { type: 'image/png' }));
