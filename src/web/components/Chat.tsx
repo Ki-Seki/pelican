@@ -24,7 +24,7 @@ import { retried } from '../lib/load';
 import { cancelCheck, resend } from '../lib/next-steps';
 import { type PathLinks, PathLinksContext } from '../lib/path-links';
 import { defaultChange, forModel, modeNote, modelNote } from '../lib/defaults';
-import { getPrefs, markSeen, markTipSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, tipSeen, usePrefs, VIEW_OPTIONS, viewMode, viewOf } from '../lib/prefs';
+import { getPrefs, markSeen, nextView, saveSessionChoice, sessionChoice, setSessionView, usePrefs, VIEW_OPTIONS, viewMode, viewOf } from '../lib/prefs';
 import { messageWith, olderQuote, promptGist, readMessage, sendNowMessage, type WaitingItem } from '../lib/quote';
 import { CommentsChat } from '../lib/review';
 import { fromRecorded, runningWith } from '../lib/settings';
@@ -32,7 +32,7 @@ import { addShell } from '../lib/shells';
 import { socket } from '../lib/socket';
 import type { Start } from '../lib/start';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
-import { elsewhere, elsewherePlaceholder, elsewhereTip, TIP_KEYS } from '../lib/status';
+import { elsewhere, elsewherePlaceholder } from '../lib/status';
 import {
   addLocalMessage,
   adoptView,
@@ -457,7 +457,6 @@ export function Chat({
   const [rewind, setRewind] = useState<RewindAsk>();
   const [rewindWork, setRewindWork] = useState<{ working: boolean; problem?: RewindProblem }>({ working: false });
   const [picking, setPicking] = useState(false);
-  const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   // What runs in the background here, its list open (⌃B, /tasks).
   const [backgroundOpen, setBackgroundOpen] = useState(false);
   const backgroundBar = useRef<HTMLDivElement>(null);
@@ -1361,17 +1360,9 @@ export function Chat({
           </div>
         )}
         {limitNotice(limits) && <Notice tone={limitReached(limits) ? 'error' : 'info'}>{limitNotice(limits)}</Notice>}
-        {/* Another app has the session: each way it can (open, working, waiting there) is explained
-            once in this browser, the first time it happens. After that the status says it, the
-            message box says what sending does, and the session menu names an app it is open in. */}
-        {other && !tipsSeen.has(TIP_KEYS[other.situation]) && (
-          <Notice onDismiss={() => {
-            markTipSeen(TIP_KEYS[other.situation]);
-            setTipsSeen((seen) => new Set(seen).add(TIP_KEYS[other.situation]));
-          }}>
-            {elsewhereTip(other)}
-          </Notice>
-        )}
+        {/* Another app has the session: the status says it (Working in Claude Desktop, Needs you in
+            the terminal), the empty message box says what sending does, and the session menu's foot
+            names an app it is open in. No tip says it again. */}
         {modelList?.signedIn === false && (
           <Notice tone="error">
             Claude Code is not signed in on {machine || 'this machine'}. Run <code className="font-mono">claude</code> in a terminal there, sign in, then come back.

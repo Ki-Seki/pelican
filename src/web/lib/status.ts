@@ -28,15 +28,6 @@ export function elsewhere(session: SessionSummary | undefined, run: RunState | u
   return undefined;
 }
 
-/** Each situation is explained once in a browser, by a tip that stays until it is closed. */
-export const TIP_KEYS: Record<Elsewhere['situation'], string> = { open: 'open-elsewhere', working: 'working-elsewhere', waiting: 'waiting-elsewhere' };
-
-export function elsewhereTip({ situation, app }: Elsewhere): string {
-  if (situation === 'open') return `Also open in ${app}, which shows what you send here once you reopen the session there.`;
-  if (situation === 'working') return `Claude is working on this session in ${app}. A message sent here starts a second Claude on the same conversation.`;
-  return `Claude is waiting for an answer in ${app}; answer it there. A message sent here starts a second Claude on the same conversation.`;
-}
-
 /** While another app works or waits, the empty message box says what sending does. */
 export function elsewherePlaceholder({ situation, app }: Elsewhere): string | undefined {
   if (situation === 'open') return undefined;

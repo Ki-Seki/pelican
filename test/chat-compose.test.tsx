@@ -950,14 +950,14 @@ describe('Ctrl+O', () => {
 });
 
 describe('a session another app is waiting in, while Claude is idle here', () => {
-  it('says so, and that a message sent here starts a second Claude', async () => {
+  it('says so in its status and in the box, which says that a message sent here starts a second Claude; no tip says it again', async () => {
     server.session = { status: 'waiting', runningIn: 'the terminal' };
     server.run = { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] };
     session();
     const header = (await screen.findByText('Needs you in the terminal')).closest('header');
     expect(header).toBeTruthy();
-    expect(screen.getByText(/Claude is waiting for an answer in the terminal; answer it there\. A message sent here starts a second Claude/)).toBeTruthy();
     expect(box().placeholder).toBe('Needs you in the terminal · a message starts a second Claude');
+    expect(screen.queryByText(/answer it there/)).toBeNull();
   });
 });
 

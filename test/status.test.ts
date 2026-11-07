@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RunState, SessionSummary } from '../src/shared/protocol';
-import { elsewhere, elsewherePlaceholder, elsewhereTip, statusLabel, TIP_KEYS } from '../src/web/lib/status';
+import { elsewhere, elsewherePlaceholder, statusLabel } from '../src/web/lib/status';
 
 const session = (extra: Partial<SessionSummary>): SessionSummary =>
   ({ id: 's', title: 'Fix the login test', cwd: '/code/app', project: 'app', lastActivity: 0, status: 'idle', ...extra });
@@ -24,13 +24,9 @@ describe('a session another app has', () => {
     expect(elsewhere(session({ status: 'waiting' }), undefined)).toBeUndefined();
   });
 
-  it('says its state in the status words, explains each situation once, and the box says what sending does', () => {
+  it('says its state in the status words, and the box says what sending does', () => {
     expect(statusLabel('waiting', 'the terminal')).toBe('Needs you in the terminal');
     expect(statusLabel('live', 'Claude Desktop')).toBe('Working in Claude Desktop');
-    expect(new Set(Object.values(TIP_KEYS)).size).toBe(3);
-    expect(TIP_KEYS.open).toBe('open-elsewhere');
-    expect(elsewhereTip({ situation: 'open', app: 'Claude Desktop' })).toBe('Also open in Claude Desktop, which shows what you send here once you reopen the session there.');
-    expect(elsewhereTip({ situation: 'waiting', app: 'the terminal' })).toMatch(/^Claude is waiting for an answer in the terminal; answer it there\. A message sent here starts a second Claude/);
     expect(elsewherePlaceholder({ situation: 'working', app: 'the terminal' })).toBe('Working in the terminal · a message starts a second Claude');
     expect(elsewherePlaceholder({ situation: 'waiting', app: 'Claude Desktop' })).toBe('Needs you in Claude Desktop · a message starts a second Claude');
     expect(elsewherePlaceholder({ situation: 'working', app: 'another app' })).toBe('Working elsewhere · a message starts a second Claude');
