@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.0
+
+New sessions start as Claude Code starts them, from Claude Code's own settings, which Settings now
+changes as `/model` does.
+
+### Changes in behavior
+
+- **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
+  permission mode come from Claude Code's settings, the files the terminal and Claude Desktop read:
+  yours (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`), the folder's
+  `.claude/settings.json` and `.claude/settings.local.json` once it is trusted, and managed
+  settings, each over the one before, as in Claude Code 2.1.318. Pelican keeps no defaults of its
+  own: its High effort is gone, and so are the picks each browser kept under Settings; those kept
+  before 0.5.0 are no longer read. A model starts with the effort Claude Code keeps for it
+  (`/effort` keeps one per model), else Claude Code's own for it, and with fast mode where your
+  settings turn it on (not with `fastModePerSessionOptIn`). Ultracode is on only where a settings
+  file turns it on, as in Claude Code, whose commands never save it. Where no file names a mode, a
+  session starts in Auto, as the terminal now does ("Auto mode is now Claude Code's default
+  permission mode"), or in Manual on a model without Auto or where settings turn Auto off; Auto and
+  Bypass count only from your own or managed settings, never from a folder's (a folder's Bypass
+  starts in Manual), as in Claude Code. Where your own or managed settings make Bypass the default,
+  new sessions start in it, as Claude Code's do, and Settings and the new session's mode sheet say
+  so; a branch, an edited earlier prompt or a `/clear` of a session in Bypass starts as a new
+  session would. Settings › New sessions start with shows all this and where each value comes from,
+  and a new session's model and mode sheets say when the folder's or managed settings decide.
+- **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
+  mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
+  as `/model`, `/effort`, `/fast` and `/config` save it, so the terminal, Claude Desktop, this
+  computer and your phone start new sessions the same way: `model`, the model's
+  `modelSettings.<model>.effortLevel`, `fastMode` and `permissions.defaultMode`. Max effort and
+  Ultracode are not offered there, as Claude Code keeps neither as a default, and Bypass never is.
+  A model, an effort or fast mode picked in a session's model sheet is saved too, as `/model`,
+  `/effort` and `/fast` save it in the terminal; Max effort, Ultracode and the mode stay with the
+  session. A settings file that is not valid JSON is left as it is, and Settings says so. A running
+  session keeps the model, effort and mode it started with, as in Claude Code.
+- A session's effort shows as Claude Code applies it, its own default for the model included.
+
 ## 0.4.1
 
 Pinned sessions and the files Claude sends you, as in Claude Desktop; approvals that show what a

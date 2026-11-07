@@ -1,6 +1,6 @@
 {
   "name": "pelican-cc",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Every Claude Code session on your computer, on your phone. No wrapper, no relay, no account.",
   "keywords": [
     "claude",
