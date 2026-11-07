@@ -64,9 +64,10 @@ async function nameBeforeRequests(file: string): Promise<string | undefined> {
  * session's title through them: the prompt Claude Code recorded before them, else the first. The
  * SDK's `summary`, which names it in the list, the header and the notifications, says so.
  */
-async function named(info: SDKSessionInfo, file: string | undefined): Promise<SDKSessionInfo> {
-  if (info.customTitle || !info.summary || !namesRequest(info.summary) || !file) return info;
-  const name = await nameBeforeRequests(file) ?? (info.firstPrompt && !namesRequest(info.firstPrompt) ? info.firstPrompt : undefined);
+async function named(info: SDKSessionInfo, transcript: () => Promise<string | undefined>): Promise<SDKSessionInfo> {
+  if (info.customTitle || !info.summary || !namesRequest(info.summary)) return info;
+  const file = await transcript();
+  const name = (file && await nameBeforeRequests(file)) || (info.firstPrompt && !namesRequest(info.firstPrompt) ? info.firstPrompt : undefined);
   return name ? { ...info, summary: name } : info;
 }
 
@@ -187,7 +188,7 @@ async function refresh(): Promise<SDKSessionInfo[]> {
     const dir = seen.get(entry.file)?.info?.cwd ?? turn?.cwd;
     const found = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
       ?? await getSessionInfo(entry.id).catch(() => undefined);
-    const info = found && await named(found, entry.file);
+    const info = found && await named(found, async () => entry.file);
     const sideChatOf = info ? await sideChatSource(entry.file) : undefined;
     const sideQuestion = sideChatOf ? await sideChatQuestion(entry.file) : undefined;
     seen.set(entry.file, {
@@ -231,7 +232,7 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
   const found = (cached?.cwd ? await getSessionInfo(sessionId, { dir: cached.cwd }).catch(() => undefined) : undefined)
     ?? await getSessionInfo(sessionId).catch(() => undefined);
   if (!found) return cached;
-  const info = await named(found, await transcriptPath(sessionId));
+  const info = await named(found, () => transcriptPath(sessionId));
   let cwd = info.cwd || cached?.cwd;
   if (!cwd) {
     const file = await transcriptPath(sessionId);
