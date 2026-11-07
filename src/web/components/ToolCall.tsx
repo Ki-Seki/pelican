@@ -834,15 +834,12 @@ function Detail({ call, cwd, outcome, agent }: { call: ToolCall; cwd?: string; o
   }
 }
 
-export function TodoList({ input }: { input: Record<string, unknown> }) {
+/** Claude's task list as a TodoWrite left it, under its step line: what was done, under way and to come. */
+function TodoList({ input }: { input: Record<string, unknown> }) {
   const todos = todosOf(input);
-  const done = todos.filter((t) => t.status === 'completed').length;
   return (
     <div className="rounded-xl border border-line bg-panel px-3 py-2.5">
-      <div className="mb-1.5 text-[12px] text-faint">
-        Tasks · {done}/{todos.length}
-      </div>
-      <ul className="space-y-1">
+      <ul aria-label="Tasks" className="space-y-1">
         {todos.map((todo, i) => (
           <li key={i} className="flex items-start gap-2 text-[13.5px] leading-snug">
             {todo.status === 'completed' ? (
@@ -1048,7 +1045,6 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
     }, { added: 0, removed: 0 });
   }, [call]);
 
-  if (call.name === 'TodoWrite' && !call.sameTasks) return <div className="my-1.5"><TodoList input={call.input} /></div>;
   // A workflow, as Claude Code shows one: its phases and agents, never its script's first line.
   if (call.name === 'Workflow') return <WorkflowCard call={call} {...(cwd ? { cwd } : {})} running={running} defaultOpen={defaultOpen} />;
   // Files and visuals only from calls that ran: a call Claude only wrote (one no app answered, or

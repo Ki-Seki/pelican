@@ -91,13 +91,12 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'Task':
       return { icon: Bot, verb: str(input.subagent_type) ? `Agent · ${str(input.subagent_type)}` : 'Agent', target: str(input.description), words: true };
     case 'TodoWrite': {
-      // Where the list stands: "2/4 · Remembering the choice", as the bar above the composer says it.
+      // One line in the conversation, where the list stood then: "Tasks · 1 of 4 done". The bar
+      // above the message box is its one live view; the line opens to the list as it was.
       const todos = todosOf(input);
-      if (todos.length === 0) return { icon: ListChecks, verb: 'Update tasks' };
+      if (todos.length === 0) return { icon: ListChecks, verb: 'Tasks', target: 'cleared', prose: true };
       const done = todos.filter((t) => t.status === 'completed').length;
-      const current = todos.find((t) => t.status === 'in_progress');
-      const what = current ? current.activeForm || current.content : done === todos.length ? 'All done' : undefined;
-      return { icon: ListChecks, verb: 'Update tasks', target: [`${done}/${todos.length}`, what].filter(Boolean).join(' · '), prose: true };
+      return { icon: ListChecks, verb: 'Tasks', target: `${done} of ${todos.length} done`, prose: true };
     }
     case 'TaskCreate':
       return { icon: ListChecks, verb: 'Add task', target: str(input.subject) ?? str(input.title), prose: true };

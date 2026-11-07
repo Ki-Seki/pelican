@@ -143,26 +143,23 @@ describe('task lists in the conversation', () => {
     uuid: `a-${id}`, role: 'assistant',
     blocks: [{ type: 'tool_use', id, name: 'TodoWrite', input: { todos: names.map((content, i) => ({ content, status: states[i], activeForm: `${content}ing` })) } }],
   });
-  const quiet = (messages: ChatMessage[]) => {
+  const steps = (messages: ChatMessage[]) => {
     const turn = buildItems(messages).find((i) => i.kind === 'assistant');
-    return turn?.kind === 'assistant' ? turn.parts.map((p) => (p.kind === 'tool' ? Boolean(p.call.sameTasks) : undefined)) : [];
+    return turn?.kind === 'assistant' ? turn.parts.map((p) => (p.kind === 'tool' ? describeTool(p.call.name, p.call.input).target : undefined)) : [];
   };
 
-  it('are shown whole when new, changed or finished, and as a line when the same tasks move along', () => {
-    expect(quiet([
+  it('are each one step line, new, changed or finished alike: the bar above the box is the list’s live view', () => {
+    expect(steps([
       todo('1', ['in_progress', 'pending', 'pending']),
       todo('2', ['completed', 'in_progress', 'pending']),
       todo('3', ['completed', 'in_progress', 'pending'], ['Read', 'Write', 'Test', 'Ship']),
-      todo('4', ['completed', 'completed', 'in_progress', 'pending'], ['Read', 'Write', 'Test', 'Ship']),
-      todo('5', ['completed', 'completed', 'completed', 'completed'], ['Read', 'Write', 'Test', 'Ship']),
-      todo('6', ['completed', 'completed', 'completed', 'completed'], ['Read', 'Write', 'Test', 'Ship']),
-    ])).toEqual([false, true, false, true, false, true]);
+      todo('4', ['completed', 'completed', 'completed', 'completed'], ['Read', 'Write', 'Test', 'Ship']),
+    ])).toEqual(['0 of 3 done', '1 of 3 done', '1 of 4 done', '4 of 4 done']);
   });
 
-  it('say where they stand on that line', () => {
+  it('say where they stand on that line, as Tasks', () => {
     const input = { todos: [{ content: 'Read', status: 'completed' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }, { content: 'Test', status: 'pending' }] };
-    expect(describeTool('TodoWrite', input)).toMatchObject({ verb: 'Update tasks', target: '1/3 · Writing' });
-    expect(describeTool('TodoWrite', { todos: [{ content: 'Read', status: 'completed' }] })).toMatchObject({ target: '1/1 · All done' });
-    expect(describeTool('TodoWrite', {}).target).toBeUndefined();
+    expect(describeTool('TodoWrite', input)).toMatchObject({ verb: 'Tasks', target: '1 of 3 done' });
+    expect(describeTool('TodoWrite', { todos: [] })).toMatchObject({ verb: 'Tasks', target: 'cleared' });
   });
 });

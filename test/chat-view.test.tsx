@@ -327,15 +327,13 @@ describe('what you decided stays visible', () => {
 describe('task lists', () => {
   const todos = { todos: [{ content: 'Read', status: 'completed' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] };
 
-  it('show as a card when new, and as a line that opens to the list when they only move along', () => {
+  it('show as one step line, Tasks · 1 of 2 done, which opens to the list as it was', () => {
     render(<ToolCallView call={tool('TodoWrite', todos, 'ok')} running={false} />);
-    expect(screen.getByText('Tasks · 1/2')).toBeTruthy();
-    cleanup();
-    render(<ToolCallView call={tool('TodoWrite', todos, 'ok', false, { sameTasks: true })} running={false} />);
-    expect(screen.queryByText('Tasks · 1/2')).toBeNull();
-    expect(screen.getByText('1/2 · Writing')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Update tasks/ }));
-    expect(screen.getByText('Tasks · 1/2')).toBeTruthy();
+    expect(screen.getByText('1 of 2 done')).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Tasks' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Tasks/ }));
+    const list = screen.getByRole('list', { name: 'Tasks' });
+    expect([...list.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['Read', 'Writing']);
   });
 });
 

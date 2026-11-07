@@ -1,6 +1,5 @@
 import { errorLine, nextStep } from '../../shared/errors';
 import type { AgentLaunch, ChatMessage, ImageBlock, ToolResultBlock, TurnChanges } from '../../shared/protocol';
-import { todosOf } from '../../shared/tasks';
 import { launchOf, parseTaskNotice, type TaskNotice, workflowOf } from '../../shared/workflows';
 
 export type ToolCall = {
@@ -8,8 +7,6 @@ export type ToolCall = {
   name: string;
   input: Record<string, unknown>;
   result?: ToolResultBlock;
-  /** A TodoWrite that only moves the same tasks along, which a line says better than the whole list again. */
-  sameTasks?: true;
   /** A Workflow call, or an Agent call whose agent ran in the background: how Claude Code said it ended, in the conversation. */
   ended?: TaskNotice;
   /** A Workflow call whose run a later call resumed (its id): that call's card shows the run. */
@@ -274,7 +271,6 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   const withOutput = new Set<string>();
   let turn: Extract<Item, { kind: 'assistant' }> | undefined;
   let lastDay: string | undefined;
-  let tasks: { names: string; done: boolean } | undefined;
   /** Workflow calls so far, by id, for their ends to join them; and each run's calls, in order. */
   const workflows = new Map<string, ToolCall>();
   const runs = new Map<string, ToolCall[]>();
@@ -415,16 +411,7 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
       else if (block.type === 'image') turn!.parts.push({ kind: 'image', key, image: block });
       else if (block.type === 'tool_use') {
         const result = results.get(block.id);
-        let sameTasks = false;
-        if (block.name === 'TodoWrite') {
-          // The list shows in full when it is new, its tasks change, or the last one is done;
-          // an update that only moves along the same tasks shows as one line.
-          const todos = todosOf(block.input);
-          const next = { names: JSON.stringify(todos.map((t) => t.content)), done: todos.length > 0 && todos.every((t) => t.status === 'completed') };
-          sameTasks = next.names === tasks?.names && !(next.done && !tasks.done);
-          tasks = next;
-        }
-        const call: ToolCall = { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}), ...(sameTasks ? { sameTasks: true } : {}) };
+        const call: ToolCall = { id: block.id, name: block.name, input: block.input, ...(result ? { result } : {}) };
         if (block.name === 'Workflow') {
           workflows.set(block.id, call);
           const runId = launchOf(result)?.runId;

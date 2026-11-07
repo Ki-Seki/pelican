@@ -65,7 +65,6 @@ import { showCommandMenu } from './CommandMenu';
 import { exportSession, type MenuProblem, RenameSheet, SessionMenu } from './SessionMenu';
 import { Sheet } from './Sheet';
 import { SideChat, useSideChat, useSideChatAsked } from './SideChat';
-import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
 import { lineCount, shownTab, useWorkspacePane, Workspace } from './Workspace';
 import type { WorkspaceTab } from '../lib/workspace-route';
