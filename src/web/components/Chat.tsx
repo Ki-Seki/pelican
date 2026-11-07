@@ -351,6 +351,35 @@ function TasksBar({ tasks }: { tasks: Todo[] }) {
   );
 }
 
+/**
+ * While Claude waits for an answer, Claude's task list and what runs in the background fold into
+ * this one line under its card, so the card and its buttons sit near the thumb and the conversation
+ * keeps its room; a tap unfolds them until the card is answered.
+ */
+function FoldedBars({ tasks, background, onUnfold }: { tasks: Todo[]; background: string; onUnfold: () => void }) {
+  const done = tasks.filter((t) => t.status === 'completed').length;
+  const current = tasks.find((t) => t.status === 'in_progress');
+  return (
+    <button type="button" aria-expanded={false} onClick={onUnfold} className="relative mx-auto mb-2 flex h-8 w-full max-w-3xl items-center gap-2 rounded-full border border-line bg-panel px-3 text-left text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:text-fg">
+      {tasks.length > 0 && (
+        <>
+          <ListChecks className="size-3.5 shrink-0" />
+          <span className="shrink-0 tabular-nums">{done}/{tasks.length}</span>
+          <span className="min-w-0 flex-1 truncate">{current ? current.activeForm || current.content : done === tasks.length ? 'All done' : 'Tasks'}</span>
+        </>
+      )}
+      {background && (
+        <span className={`flex min-w-0 items-center gap-2 ${tasks.length > 0 ? 'shrink-0' : 'flex-1'}`}>
+          {tasks.length > 0 && <span aria-hidden className="text-faint">·</span>}
+          <Pulse />
+          <span className="truncate tabular-nums">{background}</span>
+        </span>
+      )}
+      <ChevronUp className="size-4 shrink-0" />
+    </button>
+  );
+}
+
 /** The demo's note, with its way out on the site: a link to install. */
 function NoteText({ text }: { text: string }) {
   const at = STATIC_DEMO ? text.indexOf('Install Pelican') : -1;
@@ -461,6 +490,8 @@ export function Chat({
   const [picking, setPicking] = useState(false);
   // What runs in the background here, its list open (⌃B, /tasks).
   const [backgroundOpen, setBackgroundOpen] = useState(false);
+  // The card Claude waits on whose bars were unfolded (FoldedBars): they fold again for the next one.
+  const [unfoldedFor, setUnfoldedFor] = useState<string>();
   const backgroundBar = useRef<HTMLDivElement>(null);
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -956,6 +987,9 @@ export function Chat({
   );
   // A side chat's tasks are the copy of its session's, not work of its own.
   const showTasks = !sideChat && tasks.length > 0 && (busy || tasks.some((t) => t.status !== 'completed'));
+  const inBackgroundNow = Boolean(sessionId) && (view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0) > 0;
+  // While Claude waits for an answer, the two fold into one line under its card, until unfolded.
+  const folded = Boolean(request) && unfoldedFor !== request?.id && (showTasks || inBackgroundNow);
 
   useEffect(() => setSessionTitle(title), [title]);
   useEffect(() => () => setSessionTitle(undefined), []);
@@ -1189,6 +1223,8 @@ export function Chat({
       composer.current?.focus();
       return;
     }
+    // Folded under a card Claude waits on, they unfold first.
+    setUnfoldedFor(getView(viewId).run?.permissions?.[0]?.id);
     setBackgroundOpen(true);
     requestAnimationFrame(() => backgroundBar.current?.querySelector<HTMLElement>('button')?.focus());
   };
@@ -1367,8 +1403,12 @@ export function Chat({
           </section>
         )}
         <div className="shrink-0">
+        {folded ? (
+          <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
+        ) : (
+          <>
         {showTasks && <TasksBar tasks={tasks} />}
-        {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
+        {sessionId && inBackgroundNow && (
           <BackgroundTasks
             ref={backgroundBar}
             sessionId={sessionId}
@@ -1378,6 +1418,8 @@ export function Chat({
             setOpen={setBackgroundOpen}
             onCancel={(check) => void send(cancelCheck(check), [], prefs.sendWhileBusy, 'chat')}
           />
+        )}
+          </>
         )}
         {prefs.suggestions && view.run?.suggestion && !busy && (
           <div className="mx-auto mb-2 flex max-w-3xl">
