@@ -102,9 +102,9 @@ export const handbackOrigin = (agent: DemoAgent) => ({
 
 /**
  * Claude Code's notice of the agent's end, as it writes it into the conversation: `completed`, with
- * its report handed back as a message of its own, and its figures; `killed`, stopped by you.
+ * its report handed back as a message of its own, and its figures; `killed`, stopped by you, with none.
  */
-export function agentNotice(agent: DemoAgent, status: 'completed' | 'killed', usage: DemoAgent['usage'] | undefined = agent.usage): string {
+export function agentNotice(agent: DemoAgent, status: 'completed' | 'killed', usage?: DemoAgent['usage']): string {
   return [
     '<task-notification>',
     `<task-id>${agent.agentId}</task-id>`,

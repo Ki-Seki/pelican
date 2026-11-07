@@ -11,6 +11,7 @@ import { loadMessages, sentFiles } from '../src/server/sessions';
 import { readLastTurn } from '../src/server/transcripts';
 import { gitStatus } from '../src/server/workspace';
 import { subagentPage, workflowAgentPage, workflowView } from '../src/server/workflows';
+import { parseTaskNotice } from '../src/shared/workflows';
 import { agentOf, buildItems, type ToolCall } from '../src/web/lib/turns';
 
 const DEV = 'c4b7d2e9-8888-4c8d-9e1f-000000000010';
@@ -218,6 +219,10 @@ describe('in the demo’s page', async () => {
     expect(view.run?.progress).toBeUndefined();
     const items = buildItems(view.messages);
     expect(items.at(-1)).toMatchObject({ kind: 'notice', text: `Agent "${OUTDATED.description}" was stopped by user` });
+    // As Claude Code says it of an agent stopped: with no figures, which are a finished agent's.
+    const said = view.messages.at(-1)!.blocks[0];
+    expect(said?.type === 'text' && parseTaskNotice(said.text)).toMatchObject({ status: 'killed', summary: `Agent "${OUTDATED.description}" was stopped by user` });
+    expect(said?.type === 'text' && parseTaskNotice(said.text)).not.toHaveProperty('usage');
   });
 
   it('the agent at work finishes a while after its session is first opened: its report, the notice of its end, Claude’s answer', async () => {

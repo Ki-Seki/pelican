@@ -110,7 +110,7 @@ export const AGENTS_DEMO: DemoSession = {
       { role: 'assistant', at: at + 3_000, content: [text('Both are working in the background. I’ll tell you what each one finds when it is done.')] },
       // The report the licenses agent handed back, then Claude Code's notice of its end.
       { role: 'user', at: done - 1_000, content: handbackText(LICENSES), extra: { isMeta: true, origin: handbackOrigin(LICENSES) } },
-      { role: 'user', at: done, content: agentNotice(LICENSES, 'completed'), extra: { origin: { kind: 'task-notification', producer: 'session-task' } } },
+      { role: 'user', at: done, content: agentNotice(LICENSES, 'completed', LICENSES.usage), extra: { origin: { kind: 'task-notification', producer: 'session-task' } } },
       { role: 'assistant', at: done + 9_000, content: [text(LICENSES.reply)] },
     ];
     return rows;

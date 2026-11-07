@@ -359,7 +359,7 @@ function stopTask(sessionId: string, taskId: string): { ok: boolean } {
   const workflows = rest.workflows && Object.fromEntries(Object.entries(rest.workflows).map(([call, w]) => [call, w.taskId === taskId && isLive(w.status) ? stopped(w) : w]));
   runAs(sessionId, { ...rest, ...(workflows ? { workflows } : {}) });
   const agent = DEMO_AGENTS.find((a) => a.call === task.toolUseId);
-  if (agent) say(sessionId, user([{ type: 'text', text: agentNotice(agent, 'killed', undefined) }]));
+  if (agent) say(sessionId, user([{ type: 'text', text: agentNotice(agent, 'killed') }]));
   return { ok: true };
 }
 
