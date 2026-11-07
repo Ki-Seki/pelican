@@ -118,6 +118,7 @@ export function useUpdateContext(next?: UpdateContext): void {
   checked = undefined;
   tried = undefined;
   checking = undefined;
+  loading = undefined;
   changelogs.clear();
   cancelWaiting();
   claimed = false;
@@ -340,25 +341,60 @@ async function registry(): Promise<string> {
 type Release = { version: string; tarball: string; integrity: string; node?: string };
 type Checked = { at: number; registry: string; latest?: Release };
 
+/**
+ * A release as Pelican takes one, from the registry or from what it remembered of it: a version,
+ * an http(s) tarball and a sha512 integrity, which npm checks the tarball against.
+ */
+function releaseOf(raw: { version?: unknown; tarball?: unknown; integrity?: unknown; node?: unknown } | undefined): Release | undefined {
+  if (!raw || typeof raw.version !== 'string' || !VERSION.test(raw.version)) return undefined;
+  if (typeof raw.tarball !== 'string' || typeof raw.integrity !== 'string' || !/^sha512-/.test(raw.integrity)) return undefined;
+  let tarball: URL;
+  try {
+    tarball = new URL(raw.tarball);
+  } catch {
+    return undefined;
+  }
+  if (tarball.protocol !== 'https:' && tarball.protocol !== 'http:') return undefined;
+  return { version: raw.version, tarball: tarball.href, integrity: raw.integrity, ...(typeof raw.node === 'string' ? { node: raw.node } : {}) };
+}
+
+/** Whether a tarball is the registry's own, at its origin: the only place Pelican downloads one from. */
+function onRegistry(tarball: string, base: string): boolean {
+  try {
+    return new URL(tarball).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
 let checked: Checked | undefined;
 /** When the registry was last asked, whether it answered or not. */
 let tried: number | undefined;
 let checking: Promise<Checked | undefined> | undefined;
+let loading: Promise<void> | undefined;
 
 const stored = () => path.join(config.stateDir, 'update.json');
 
-/** The last answer, kept across restarts, so a Pelican started often still asks once a day. */
-async function remembered(): Promise<void> {
-  if (checked) return;
-  try {
-    const kept = JSON.parse(await readFile(stored(), 'utf8')) as Checked;
-    if (typeof kept.at === 'number' && typeof kept.registry === 'string') {
-      checked = kept;
+/**
+ * The last answer, kept across restarts, so a Pelican started often still asks once a day. It is
+ * taken as the registry's own would be (releaseOf), only from the registry npm names now, and
+ * never from the future: dated ahead (a clock put back, a file copied in), it would stop the
+ * asking for as long.
+ */
+function remembered(): Promise<void> {
+  loading ??= (async () => {
+    try {
+      const kept = JSON.parse(await readFile(stored(), 'utf8')) as { at?: unknown; registry?: unknown; latest?: Parameters<typeof releaseOf>[0] };
+      const latest = kept.latest === undefined ? undefined : releaseOf(kept.latest);
+      if (typeof kept.at !== 'number' || !Number.isFinite(kept.at) || kept.at > ctx().now() || (kept.latest !== undefined && !latest)) return;
+      if (typeof kept.registry !== 'string' || kept.registry !== (await registry()) || checked) return;
+      checked = { at: kept.at, registry: kept.registry, ...(latest ? { latest } : {}) };
       tried = kept.at;
+    } catch {
+      // None yet, or not one Pelican wrote.
     }
-  } catch {
-    // None yet.
-  }
+  })();
+  return loading;
 }
 
 /** Reads at most `limit` bytes of a response; more is refused. */
@@ -389,29 +425,29 @@ async function askRegistry(base: string): Promise<Release | undefined> {
   const latest = document['dist-tags']?.latest;
   if (typeof latest !== 'string' || !VERSION.test(latest)) throw new Error('the registry named no latest version');
   if (!isNewerVersion(latest, pkg.version)) return undefined;
-  const dist = document.versions?.[latest]?.dist;
-  const tarball = typeof dist?.tarball === 'string' ? new URL(dist.tarball) : undefined;
-  if (!tarball || (tarball.protocol !== 'https:' && tarball.protocol !== 'http:') || typeof dist?.integrity !== 'string' || !/^sha512-/.test(dist.integrity)) {
-    throw new Error(`the registry gave no tarball for ${latest}`);
-  }
-  const node = document.versions?.[latest]?.engines?.node;
-  return { version: latest, tarball: tarball.href, integrity: dist.integrity, ...(typeof node === 'string' ? { node } : {}) };
+  const entry = document.versions?.[latest];
+  const release = releaseOf({ version: latest, tarball: entry?.dist?.tarball, integrity: entry?.dist?.integrity, node: entry?.engines?.node });
+  if (!release) throw new Error(`the registry gave no tarball for ${latest}`);
+  return release;
 }
 
 /**
  * Asks npm's registry for the newest pelican-cc: by itself at most once a day (`everyMs`), and when
- * Settings opens (`settings`) unless it was asked a few minutes ago. A failed ask says nothing, and
- * keeps what the last one found.
+ * Settings opens (`settings`) unless it was asked a few minutes ago; an ask dated ahead of now (the
+ * clock went back) is as old as can be. A failed ask says nothing, and keeps what the last one
+ * found, from that same registry.
  */
 export async function checkForUpdate({ settings = false } = {}): Promise<Checked | undefined> {
   if (config.demo) return undefined;
   await remembered();
   const since = tried === undefined ? Infinity : ctx().now() - tried;
-  if (since < (settings ? updateTiming.settingsMs : updateTiming.everyMs)) return checked;
+  if (since >= 0 && since < (settings ? updateTiming.settingsMs : updateTiming.everyMs)) return checked;
   checking ??= (async () => {
     tried = ctx().now();
     try {
       const base = await registry();
+      // npm names another registry now: what the last one said is no answer of this one.
+      if (checked && checked.registry !== base) checked = undefined;
       const latest = await askRegistry(base);
       checked = { at: tried, registry: base, ...(latest ? { latest } : {}) };
       await mkdir(config.stateDir, { recursive: true });
@@ -479,12 +515,14 @@ const changelogs = new Map<string, Promise<string | undefined>>();
 
 /**
  * What changed from the running version to `release`, from the CHANGELOG.md in its tarball on the
- * registry (the very file npm would install, its integrity checked), read once per version.
+ * registry (the very file npm would install, its integrity checked), downloaded only from the
+ * registry's own origin, read once per version.
  */
-function changesTo(release: Release): Promise<string | undefined> {
+function changesTo(release: Release, base: string): Promise<string | undefined> {
   let changes = changelogs.get(release.version);
   if (!changes) {
     changes = (async () => {
+      if (!onRegistry(release.tarball, base)) return undefined;
       const response = await ctx().fetch(release.tarball, { signal: AbortSignal.timeout(60_000) });
       if (!response.ok) return undefined;
       const data = await bodyOf(response, 64 * 1024 * 1024);
@@ -845,7 +883,7 @@ export async function updateInfo(fresh = false): Promise<UpdateInfo> {
   if (!latest) return info;
   info.latest = latest.version;
   const [changes, how, busy] = await Promise.all([
-    Promise.race([changesTo(latest), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000).unref())]),
+    Promise.race([changesTo(latest, found!.registry), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000).unref())]),
     install(),
     whatWouldEnd(),
   ]);

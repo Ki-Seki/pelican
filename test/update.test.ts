@@ -85,6 +85,8 @@ const registry = {
   /** How the package's document is answered: as npm's registry does, or not. */
   answer: 'ok' as 'ok' | 'error' | 'garbage' | 'wrong-integrity',
   engines: undefined as string | undefined,
+  /** Where its document says the tarballs are: its own address, unless another is given. */
+  tarballsAt: undefined as string | undefined,
   requests: [] as string[],
 };
 
@@ -96,7 +98,7 @@ function packument() {
       // As npm's registry has it from the package.json: what npm links in the prefix's bin.
       name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' },
       ...(registry.engines ? { engines: { node: registry.engines } } : {}),
-      dist: { tarball: `${registry.url}pelican-cc/-/pelican-cc-${version}.tgz`, integrity: registry.answer === 'wrong-integrity' ? integrity(Buffer.from('other')) : integrity(data) },
+      dist: { tarball: `${registry.tarballsAt ?? registry.url}pelican-cc/-/pelican-cc-${version}.tgz`, integrity: registry.answer === 'wrong-integrity' ? integrity(Buffer.from('other')) : integrity(data) },
     }])),
   };
 }
@@ -318,6 +320,7 @@ beforeEach(async () => {
   registry.latest = NEXT;
   registry.answer = 'ok';
   registry.engines = undefined;
+  registry.tarballsAt = undefined;
   registry.requests = [];
   Object.assign(services, { calls: [], ours: true, restartCode: 0, ps: '' });
   started = [];
@@ -726,6 +729,56 @@ describe('the check', () => {
     now += 25 * 3600_000;
     await updateInfo();
     expect(asked()).toBe(3);
+  }, 30_000);
+
+  it('asks again when what it remembered is dated ahead of now, is not what the registry would say, or came from another registry', async () => {
+    const asked = () => registry.requests.filter((request) => request === '/pelican-cc').length;
+    const remember = async (kept: object) => {
+      await mkdir(path.join(dir, 'state'), { recursive: true });
+      await writeFile(path.join(dir, 'state', 'update.json'), JSON.stringify(kept));
+    };
+    const latest = { version: NEXT, tarball: `${registry.url}pelican-cc/-/pelican-cc-${NEXT}.tgz`, integrity: integrity(registry.tarballs.get(NEXT)!) };
+    // Remembered from a minute ago, it is the answer, and the registry is not asked.
+    await remember({ at: Date.now() - 60_000, registry: registry.url, latest });
+    useUpdateContext(context(await globalInstall(prefix())));
+    expect((await updateInfo()).latest).toBe(NEXT);
+    expect(asked()).toBe(0);
+    // Dated a day ahead (a clock put back), it would stop the asking for a day.
+    for (const kept of [
+      { at: Date.now() + 24 * 3600_000, registry: registry.url, latest },
+      // A tarball npm would not take, or no version.
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, tarball: 'file:///etc/hosts' } },
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, integrity: 'sha1-abc' } },
+      { at: Date.now() - 60_000, registry: registry.url, latest: { ...latest, version: `${NEXT} --registry=http://evil.example/` } },
+      // Another registry's answer: npm's names this one now.
+      { at: Date.now() - 60_000, registry: 'http://127.0.0.1:9/', latest },
+    ]) {
+      registry.requests = [];
+      await remember(kept);
+      useUpdateContext(context(await globalInstall(prefix())));
+      expect((await updateInfo()).latest, JSON.stringify(kept)).toBe(NEXT);
+      expect(asked(), JSON.stringify(kept)).toBe(1);
+      expect(JSON.parse(await readFile(path.join(dir, 'state', 'update.json'), 'utf8'))).toMatchObject({ registry: registry.url, latest });
+    }
+  }, 30_000);
+
+  it('downloads a tarball only from the registry’s own origin: one elsewhere is never asked for, and the release notes are linked instead', async () => {
+    const heard: string[] = [];
+    const elsewhere = http.createServer((request, response) => {
+      heard.push(request.url ?? '');
+      response.writeHead(200).end(registry.tarballs.get(NEXT));
+    });
+    await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve));
+    try {
+      registry.tarballsAt = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}/`;
+      useUpdateContext(context(await globalInstall(prefix()), { global: prefix() }));
+      const info = await updateInfo(true);
+      expect(info).toMatchObject({ latest: NEXT, notes: `https://github.com/Ki-Seki/pelican/releases/tag/v${NEXT}`, install: { self: true } });
+      expect(info.changes).toBeUndefined();
+      expect(heard).toEqual([]);
+    } finally {
+      await new Promise((resolve) => elsewhere.close(resolve));
+    }
   }, 30_000);
 
   it('asks nothing in the demo', async () => {
