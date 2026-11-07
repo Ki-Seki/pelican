@@ -542,4 +542,43 @@ describe('a phone on its side', () => {
     touch(4, [60, 60], [60, 60]);
     expect(view.hasAttribute('data-unfolded')).toBe(false);
   });
+
+  it('lets the tap that shows them land on none of them, nor a tap made at once: Files, Changes, End', async () => {
+    history.replaceState(null, '', '/?s=s1&w=files');
+    // Laid out as styles.css folds them: the rows that make room are on screen once unfolded.
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
+      const folded = this.closest('[data-makes-room="short"]') && !this.closest('[data-workspace]')?.hasAttribute('data-unfolded');
+      return (folded ? [] : [{}]) as unknown as DOMRectList;
+    });
+    let clock = 5000;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    try {
+      wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={() => {}} onAddToMessage={() => {}} />);
+      const view = await screen.findByRole('region', { name: 'Changes and files' });
+      const shown = document.createElement('div');
+      shown.setAttribute('data-terminal', '');
+      view.append(shown);
+      const changes = await screen.findByRole('button', { name: /^Changes/ });
+      const tab = () => new URLSearchParams(location.search).get('w');
+      // A tap on the screen shows the tabs; its click lands where Changes now is, and is not taken.
+      fireEvent.pointerDown(shown, { pointerType: 'touch', pointerId: 1, clientX: 50, clientY: 50 });
+      fireEvent.pointerUp(shown, { pointerType: 'touch', pointerId: 1, clientX: 50, clientY: 50 });
+      expect(view.hasAttribute('data-unfolded')).toBe(true);
+      expect(view.hasAttribute('data-settling')).toBe(true);
+      fireEvent.click(changes, { detail: 1 });
+      expect(tab()).toBe('files');
+      // Nor is a tap a moment later.
+      clock += 200;
+      fireEvent.pointerDown(changes, { pointerType: 'touch', pointerId: 2 });
+      fireEvent.click(changes, { detail: 1 });
+      expect(tab()).toBe('files');
+      // Once they have been on screen for a moment, a tap is theirs.
+      clock += 600;
+      fireEvent.pointerDown(changes, { pointerType: 'touch', pointerId: 3 });
+      fireEvent.click(changes, { detail: 1 });
+      expect(tab()).toBe('changes');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });

@@ -145,6 +145,13 @@ body {
   }
 }
 
+/* Rows that came back under a finger take no pointer for a moment (lib/settle): the tap that
+   brought them back, and one made at once, land on nothing of theirs. */
+[data-settling] [data-makes-room],
+[data-makes-room][data-settling] {
+  pointer-events: none;
+}
+
 /* Changes and files, when it sits beside the conversation on a computer (from 1024px). Under 1280px
    the session list is hidden while it is open, so the conversation keeps its room, as when it is
    hidden by hand: the pane marks the page (data-pane), and App hides the list until asked back. */

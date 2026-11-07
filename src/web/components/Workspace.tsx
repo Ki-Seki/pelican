@@ -14,6 +14,7 @@ import { useMedia } from '../lib/media';
 import { setPrefs, usePrefs } from '../lib/prefs';
 import { fileItem, TOO_MANY_REPLIES, type WaitingItem } from '../lib/quote';
 import { useComments, useCommentsChat } from '../lib/review';
+import { type Settling, settleRows } from '../lib/settle';
 import { wantTerminalFocus } from '../lib/terminals';
 import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type WorkspaceTab } from '../lib/workspace-route';
 import { SendComments } from './Comments';
@@ -427,6 +428,19 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   const view = useRef<HTMLDivElement>(null);
   useCovering(open && !docked, view);
+  // What folds away comes back under a finger: it takes no tap for a moment (lib/settle), neither
+  // the tap that brought it back nor one made at once.
+  const settle = useRef<Settling>(undefined);
+  useEffect(() => {
+    const el = view.current;
+    if (!open || docked || !el) return undefined;
+    const rows = settleRows(el, '[data-makes-room]');
+    settle.current = rows;
+    return () => {
+      rows.stop();
+      settle.current = undefined;
+    };
+  }, [open, docked]);
   // A phone on its side folds the view's header and tabs, and the terminal's, away from its screen
   // (styles.css): a tap on the screen shows them, or folds them again; typing in its line folds them.
   const [unfolded, setUnfolded] = useState(false);
@@ -442,7 +456,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
       if (!down || e.pointerId !== down.id) return;
       tap.current = undefined;
       // A tap: not a swipe through the output, a long press for its menu, or two fingers sizing it.
-      if (down.fingers === 1 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && e.timeStamp - down.at < 400) setUnfolded((was) => !was);
+      if (down.fingers !== 1 || Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 10 || e.timeStamp - down.at >= 400) return;
+      // The rows come back under the finger before its click: that click, and a tap at once, are not theirs.
+      if (!unfolded) settle.current?.reveal();
+      setUnfolded(!unfolded);
     },
     onPointerCancel: () => {
       tap.current = undefined;

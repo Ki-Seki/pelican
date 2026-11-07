@@ -32,7 +32,9 @@ settings; and updates from Settings.
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
   while you type, the screen takes the room of the header and tabs above it, and on a phone on its
   side it has that room whether you type or not, a dozen rows on a Pixel 7, a tap on the screen
-  showing them again, with the keys and the line on one row, which the keyboard leaves room for. A
+  showing them again, and doing only that: what comes back takes no tap for half a second, so
+  neither that tap nor one made at once lands on End or Files under the finger; the keys and the
+  line share one row there, which the keyboard leaves room for. A
   row of keys has what a phone lacks: esc, tab, ctrl, the arrows, `|` `~` `/` `-` and paste, a
   finger's size each, scrolling sideways on a narrow phone, and a key there sends what you typed
   first, so tab completes it. A line typed while the connection comes back stays until it can go. A
