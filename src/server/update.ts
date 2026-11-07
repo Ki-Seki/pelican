@@ -120,6 +120,7 @@ export function useUpdateContext(next?: UpdateContext): void {
   checking = undefined;
   changelogs.clear();
   cancelWaiting();
+  claimed = false;
   state = undefined;
 }
 
@@ -591,6 +592,8 @@ export async function whatWouldEnd(): Promise<Interruption[]> {
 // Updating -------------------------------------------------------------------------------------
 
 let state: UpdateState | undefined;
+/** An update asked for, from its request until it is under way or refused: one at a time. */
+let claimed = false;
 /** The update under way: stopped by Cancel while it prepares or waits. */
 let job: { version: string; stop: AbortController } | undefined;
 let waiting: NodeJS.Timeout | undefined;
@@ -864,18 +867,26 @@ export async function startUpdate(version: unknown, when: unknown, confirmed: un
   if (config.demo) throw new UpdateRefused('This is the demo: nothing is installed. Install Pelican to update it.', 403);
   if (typeof version !== 'string' || !VERSION.test(version)) throw new UpdateRefused('Not a version', 400);
   if (when !== 'now' && when !== 'idle') throw new UpdateRefused('when must be now or idle', 400);
-  if (job || updating() || state?.phase === 'waiting' || state?.phase === 'preparing') throw new UpdateRefused('Pelican is already updating.', 409);
+  if (claimed || job || updating() || state?.phase === 'waiting' || state?.phase === 'preparing') throw new UpdateRefused('Pelican is already updating.', 409);
   const found = checked?.latest;
   if (!found || found.version !== version || !isNewerVersion(version, pkg.version)) {
     throw new UpdateRefused(`${version} is not the newest version npm’s registry named${found ? ` (${found.version})` : ''}. Open Settings again.`, 409);
   }
-  const how = await install();
-  if (!how.self || !how.prefix) throw new UpdateRefused(how.why ?? 'Pelican cannot update itself here.', 409);
-  if (!nodeSatisfies(found.node)) throw new UpdateRefused(`Pelican ${version} needs Node ${found.node}.`, 409);
-  if (when === 'now' && confirmed !== true && (await whatWouldEnd()).length > 0) throw new UpdateRefused('Something runs that the update would end: confirm first.', 409);
-  state = { phase: 'preparing', version, when };
-  void carryOut(version, when, checked!.registry, how);
-  return state;
+  const base = checked!.registry;
+  // Claimed before anything is awaited: of two requests at once (a double tap, two pages), the
+  // second is told an update is under way, as it will be once this one has looked.
+  claimed = true;
+  try {
+    const how = await install();
+    if (!how.self || !how.prefix) throw new UpdateRefused(how.why ?? 'Pelican cannot update itself here.', 409);
+    if (!nodeSatisfies(found.node)) throw new UpdateRefused(`Pelican ${version} needs Node ${found.node}.`, 409);
+    if (when === 'now' && confirmed !== true && (await whatWouldEnd()).length > 0) throw new UpdateRefused('Something runs that the update would end: confirm first.', 409);
+    state = { phase: 'preparing', version, when };
+    void carryOut(version, when, base, how);
+    return state;
+  } finally {
+    claimed = false;
+  }
 }
 
 /** Cancel: a wait for idle, or getting the version ready, stops; nothing of this install changed. */

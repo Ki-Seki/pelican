@@ -830,6 +830,20 @@ describe('updating', () => {
     expect(failed.state).toMatchObject({ error: expect.stringMatching(/could not start it in its place \(stand-in/), running: CURRENT });
   }, 30_000);
 
+  it('takes one of two requests at once (a double tap, two pages): the other is told an update is under way', async () => {
+    // What runs takes a moment to read (ps, for a terminal): the second request comes meanwhile.
+    useRunningSources({ ...nothingRuns, terminals: async () => pause(40).then(() => []) });
+    await ready();
+    const answers = await Promise.all([1, 2].map(() => api('POST', '/api/update', { version: NEXT, when: 'now' })));
+    expect(answers.map((answer) => answer.status).sort()).toEqual([202, 409]);
+    expect(answers.find((answer) => answer.status === 409)!.body.error).toBe('Pelican is already updating.');
+    await until('failed');
+    await pause(300);
+    // One install apart, one over this install, one start.
+    expect((await npmRuns()).map((args) => args[3] === prefix() ? 'over' : 'apart')).toEqual(['apart', 'over']);
+    expect(started).toHaveLength(1);
+  }, 30_000);
+
   it('starts in place once what it started has ended, not waiting on the ps it asks, which is one of its own while it runs', async () => {
     await ready();
     // ps lists itself, as the tests' process's child; given time, Pelican would wait it all out.
