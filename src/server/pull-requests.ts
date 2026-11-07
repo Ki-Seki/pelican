@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import type { PrStatus } from '../shared/protocol.js';
 import { GITHUB_PULL } from '../shared/requests.js';
 import { config } from './config.js';
+import { withoutRepository } from './git.js';
 
 const run = promisify(execFile);
 
@@ -114,7 +115,8 @@ export function pullRequestStatus(url: string): Promise<PrStatus> {
   const known = kept(url, now);
   if (known) return known;
   if (!room(now)) return Promise.resolve(NOT_READ);
-  const env: NodeJS.ProcessEnv = { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_SPINNER_DISABLED: '1', NO_COLOR: '1' };
+  // From no repository: none named by Pelican's environment either, nor git settings of its own.
+  const env: NodeJS.ProcessEnv = { ...withoutRepository(process.env), GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_SPINNER_DISABLED: '1', NO_COLOR: '1' };
   for (const name of Object.keys(env)) if (name.startsWith('PELICAN_')) delete env[name];
   const status = inTurn(() => run('gh', ['pr', 'view', url, '--json', 'number,title,state,isDraft,headRefName,baseRefName,statusCheckRollup'], { cwd: os.tmpdir(), env, timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }))
     .then(({ stdout }) => readPull(stdout), () => NOT_READ);

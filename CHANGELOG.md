@@ -408,6 +408,17 @@ settings; and updates from Settings.
   programs: a folder's settings count only once it is trusted, as in Claude Code. Before, they
   applied with no question where the folder brought nothing else, so a cloned repository could turn
   on Ultracode and fast mode.
+- More of what a folder's git config makes git run is asked about, and turned off with your
+  settings only: an external diff, a diff driver's command and text converter, a pager, the program
+  SSH runs as, a password prompt, credential helpers, a signing program and aliases (`!` ones, and
+  those that give a setting with `-c`), and hooks that came in the folder's own hooks folder, as a
+  tarball's `.git` brings them. With your settings only, each gets your own setting, from your
+  system and global git config, or one that runs nothing of the folder's: `git diff` there stops
+  rather than run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the
+  file as it is, and credential helpers are yours alone. Changes' own git runs none of them either,
+  and fetches nothing, not even a partial clone's missing files, whose fetch ran a program the
+  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath`
+  were listed and turned off.
 - A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
   reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
   Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed

@@ -48,6 +48,28 @@ describe('a pull request’s live status', () => {
     }
   });
 
+  it('runs gh from no repository: none that Pelican’s environment names, and no git settings of its own', async () => {
+    const seen = path.join(bin, 'env.txt');
+    await writeFile(path.join(bin, 'gh-env'), `#!/bin/sh\nenv | grep '^GIT_' > '${seen}'\nprintf '%s' '{}'\n`);
+    await chmod(path.join(bin, 'gh-env'), 0o755);
+    const only = await mkdtemp(path.join(os.tmpdir(), 'pelican-gh-env-'));
+    const { symlink, readFile } = await import('node:fs/promises');
+    await symlink(path.join(bin, 'gh-env'), path.join(only, 'gh'));
+    const saved = { dir: process.env.GIT_DIR, count: process.env.GIT_CONFIG_COUNT, key: process.env.GIT_CONFIG_KEY_0, value: process.env.GIT_CONFIG_VALUE_0 };
+    Object.assign(process.env, { PATH: `${only}:${savedPath}`, GIT_DIR: '/somewhere/.git', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.sshCommand', GIT_CONFIG_VALUE_0: 'evil' });
+    try {
+      await pullRequestStatus('https://github.com/acme/web/pull/4242');
+      expect(await readFile(seen, 'utf8')).not.toMatch(/^GIT_(DIR|CONFIG_COUNT|CONFIG_KEY_0|CONFIG_VALUE_0)=/m);
+    } finally {
+      process.env.PATH = savedPath;
+      for (const [name, value] of [['GIT_DIR', saved.dir], ['GIT_CONFIG_COUNT', saved.count], ['GIT_CONFIG_KEY_0', saved.key], ['GIT_CONFIG_VALUE_0', saved.value]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await rm(only, { recursive: true, force: true });
+    }
+  });
+
   it('says nothing where gh is not there to ask', async () => {
     process.env.PATH = '/nonexistent';
     try {
