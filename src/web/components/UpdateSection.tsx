@@ -152,9 +152,10 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
       ) : (
         <>
           {state?.phase === 'failed' && (
-            <p role="alert" className="mb-1.5 text-danger">
-              {state.error} Pelican {state.running} keeps running.
-            </p>
+            <div role="alert" className="mb-1.5">
+              <p className="break-words text-danger">{state.error}</p>
+              <p className="text-fg">Pelican {state.running} keeps running.</p>
+            </div>
           )}
           {info.latest && (
             <>

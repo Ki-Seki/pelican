@@ -159,7 +159,8 @@ describe('Settings › About, of updates', () => {
     cleanup();
     server.info = { ...NEWER, state: { phase: 'failed', version: '0.5.1', error: 'npm could not install 0.5.1: npm error code ENOTFOUND', running: '0.5.0' } };
     render(<UpdateSection open />, { wrapper });
-    expect((await screen.findByRole('alert')).textContent).toBe('npm could not install 0.5.1: npm error code ENOTFOUND Pelican 0.5.0 keeps running.');
+    const alert = await screen.findByRole('alert');
+    expect([...alert.querySelectorAll('p')].map((line) => line.textContent)).toEqual(['npm could not install 0.5.1: npm error code ENOTFOUND', 'Pelican 0.5.0 keeps running.']);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
