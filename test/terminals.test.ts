@@ -3,13 +3,13 @@
 // any profile, so nothing of the computer's own shell setup runs.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import xtermHeadless from '@xterm/headless';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
@@ -21,8 +21,8 @@ import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, parseProcessTable, runsIn, shellEnvironment, terminalState,
-  terminalTiming, testShell,
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, commandFile, onColorRequests, parseProcessTable, runsIn, shellEnvironment,
+  shownFirst, terminalState, terminalTiming, testShell,
 } from '../src/server/terminals';
 import { modesBeyondSnapshot } from '../src/server/terminal-snapshot';
 import { Page, pause, until } from './terminal-page';
@@ -272,7 +272,88 @@ describe('a terminal', () => {
     }, 30_000);
   }
 
-  // Its prompt shows the line that reads the command's file (`. /tmp/pelican-run-…/1`): the command
+  // csh and tcsh take a `!` from the history in a file they read, too. Each reads its history file
+  // at start, as the .tcshrc of a home folder of its own here says to, holding a secret (made up).
+  for (const [name, file] of [['csh', '/bin/csh'], ['tcsh', '/bin/tcsh']] as const) {
+    it.skipIf(!existsSync(file))(`runs the command as it shows in ${name} too, its \`!\` taken from no history, and puts \`!\` back as it was, also after an error`, async () => {
+      const home = path.join(dir, `home-${name}`);
+      await mkdir(home, { recursive: true });
+      const history = path.join(home, 'history');
+      await writeFile(history, 'setenv AWS_SECRET_ACCESS_KEY AKIA-SCRATCH-NOT-REAL-1234\necho second\n');
+      await writeFile(path.join(home, '.tcshrc'), `set history = 100\nset savehist = 100\nset histfile = ${history}\nset prompt = 'PROMPT> '\n`);
+      const before = process.env.HOME;
+      Object.assign(testShell, { file, args: ['-i'] });
+      process.env.HOME = home;
+      try {
+        const shown = page((await open(work(), { command: 'echo "exfil: !?AWS_SECRET?" "!!" done-ok' })).id);
+        await shown.readied();
+        await shown.sees(/!! done-ok/, 10_000);
+        await pause(200);
+        expect(shown.output).not.toMatch(/AKIA-SCRATCH/);
+        expect(shown.lines().join('\n')).toContain('exfil: !?AWS_SECRET? !! done-ok');
+        // Typed at its prompt by you, `!` works as ever.
+        let from = shown.output.length;
+        shown.type('echo "ran !?second?"\r');
+        await shown.sees(/ran echo second/, 10_000, from);
+        // A command that stops on an error, which ends what csh reads: `!` is back all the same.
+        const failed = page((await open(work(), { command: 'echo "first !?AWS_SECRET?" $nope_undefined\necho never' })).id);
+        await failed.readied();
+        await failed.sees(/nope_undefined: Undefined variable/, 10_000);
+        await pause(300);
+        expect(failed.output).not.toMatch(/AKIA-SCRATCH|never\r\n/);
+        from = failed.output.length;
+        failed.type('echo "ran !?second?"\r');
+        await failed.sees(/ran echo second/, 10_000, from);
+      } finally {
+        if (before === undefined) delete process.env.HOME;
+        else process.env.HOME = before;
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 40_000);
+  }
+
+  // The shell's history gets the command itself, for Up and Enter to run it again, rather than the
+  // line that read its file, which is gone with its terminal. zsh leaves that line out where it is
+  // told to (HIST_IGNORE_SPACE, as oh-my-zsh does), and bash takes it out by itself.
+  for (const [name, file, args, rc] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i'], ''], ['zsh', '/bin/zsh', ['-d', '-i'], 'setopt hist_ignore_space\n']] as const) {
+    it.skipIf(!existsSync(file))(`puts the command itself in ${name}’s history, for Up and Enter to run again, and not the line that read it`, async () => {
+      const zdotdir = path.join(dir, `zdotdir-history-${name}`);
+      await mkdir(zdotdir, { recursive: true });
+      await writeFile(path.join(zdotdir, '.zshrc'), rc);
+      const before = { HISTFILE: process.env.HISTFILE, ZDOTDIR: process.env.ZDOTDIR };
+      Object.assign(testShell, { file, args: [...args] });
+      Object.assign(process.env, { HISTFILE: path.join(dir, `history-run-${name}`), ZDOTDIR: zdotdir });
+      try {
+        const command = 'echo "it\'s again-$((6 * 7))" \\\n  && echo "and $((1 + 1))"';
+        const shown = page((await open(work(), { command })).id);
+        await shown.readied();
+        await shown.sees(/and 2\r\n/, 10_000);
+        await pause(300);
+        // Up and Enter: the command again, as it was.
+        let from = shown.output.length;
+        shown.type('\u001b[A');
+        await pause(300);
+        shown.type('\r');
+        await shown.sees(/it's again-42\r\nand 2\r\n/, 10_000, from);
+        await pause(300);
+        // What the history holds now: the command, twice, and not the line that read its file.
+        from = shown.output.length;
+        shown.type('fc -ln 1; echo LIST\'\'ED\r');
+        await shown.sees(/LISTED\r\n/, 10_000, from);
+        const listed = shown.output.slice(from);
+        expect(listed.split('it\'s again-$((6 * 7))').length - 1).toBeGreaterThanOrEqual(2);
+        expect(listed).not.toContain(path.join(config.stateDir, 'run'));
+      } finally {
+        for (const [variable, value] of Object.entries(before)) {
+          if (value === undefined) delete process.env[variable];
+          else process.env[variable] = value;
+        }
+        Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+      }
+    }, 30_000);
+  }
+
+  // Its prompt shows the line that reads the command's file (`. …/run/…`, in Pelican's state folder): the command
   // itself shows under it, dimmed, as a terminal shows what was typed, quotes and all, nothing of it
   // read on the way, then what it prints.
   for (const [name, file, args] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i']], ['zsh', '/bin/zsh', ['-d', '-f', '-i']]] as const) {
@@ -287,7 +368,7 @@ describe('a terminal', () => {
         const lines = shown.lines();
         const at = lines.indexOf("echo \"it's $((6 * 7)) !! `echo tick` 100%\"");
         expect(at, lines.join('\n')).toBeGreaterThan(0);
-        expect(lines[at - 1]).toMatch(/\. \/\S+\/pelican-run-\w+\/\d+$/);
+        expect(lines.slice(0, at).join('')).toMatch(/\. \/\S+\/run\/[\w-]+$/);
         expect(lines[at + 1]).toBe("printf '%s\\n' 'a''b' \"c'd\"");
         expect(lines.slice(at + 2, at + 5)).toEqual(["it's 42 !! tick 100%", 'ab', "c'd"]);
         const cell = (y: number) => shown.screen.buffer.active.getLine(y)!.getCell(0)!;
@@ -352,6 +433,128 @@ describe('a terminal', () => {
     await computer.sees(/40 120\r\n/, 10_000, from);
     expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
   }, 20_000);
+});
+
+describe('Run in terminal’s command files', () => {
+  /** A shell that says it takes pastes, as zsh does, and writes down all it is sent, in `typed`. */
+  const recording = (typed: string) => Object.assign(testShell, { file: '/bin/sh', args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
+  const asBefore = () => Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+  /** Runs `command` in a new terminal of the recording shell: the file its shell was told to read. */
+  async function run(command: string, typed: string): Promise<string> {
+    recording(typed);
+    await open(work(), { command });
+    await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
+    const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
+    expect(file).toBeDefined();
+    return file!;
+  }
+  const runFolder = () => path.join(config.stateDir, 'run');
+  const modeOf = async (name: string) => (await stat(name)).mode & 0o777;
+
+  afterEach(() => {
+    asBefore();
+    config.stateDir = path.join(dir, 'state');
+  });
+
+  it('are in Pelican’s state folder, in a folder of this account’s alone made again whenever it has gone, each under a name nobody can guess', async () => {
+    const first = await run('echo one', path.join(dir, 'typed-1'));
+    // The folder goes, as macOS's cleaner took the one in /tmp once empty for 3 days: the next
+    // command makes it again, rather than failing until Pelican starts again.
+    await rm(path.dirname(first), { recursive: true, force: true });
+    const second = await run('echo two', path.join(dir, 'typed-2'));
+    expect(readFileSync(second, 'utf8').endsWith('echo two\n')).toBe(true);
+    expect(second).not.toBe(first);
+    for (const file of [first, second]) {
+      expect(path.dirname(file)).toBe(runFolder());
+      expect(path.basename(file)).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    expect(await modeOf(runFolder())).toBe(0o700);
+    expect(await modeOf(second)).toBe(0o600);
+    // Opened to others, it is made this account's alone again before a command goes in.
+    closeAllTerminals();
+    await chmod(runFolder(), 0o777);
+    const third = await run('echo three', path.join(dir, 'typed-3'));
+    expect(path.dirname(third)).toBe(runFolder());
+    expect(await modeOf(runFolder())).toBe(0o700);
+  }, 30_000);
+
+  it('are never written through a link, into what is not a folder or into another account’s: the page is told why, not a failure of Pelican’s own', async () => {
+    const elsewhere = path.join(dir, 'elsewhere');
+    await mkdir(elsewhere, { recursive: true });
+    await rm(runFolder(), { recursive: true, force: true });
+    await mkdir(config.stateDir, { recursive: true });
+    const refused = async (pattern: RegExp) => {
+      const response = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command: 'echo hi' });
+      expect(response.status, JSON.stringify(response.body)).toBe(503);
+      expect(response.body.error).toMatch(pattern);
+    };
+    // A link, to a folder anyone could have made: nothing goes through it.
+    await symlink(elsewhere, runFolder());
+    await refused(/run is a link, so Run in terminal writes no command there/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+    await rm(runFolder());
+    // A file where the folder goes.
+    await writeFile(runFolder(), '');
+    await refused(/run is not a folder/);
+    await rm(runFolder());
+    // A folder another account owns (as it seems to Pelican here).
+    await mkdir(runFolder(), { mode: 0o700 });
+    const uid = process.getuid!();
+    const spied = vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
+    try {
+      await refused(/run belongs to another account/);
+    } finally {
+      spied.mockRestore();
+    }
+    expect(readdirSync(runFolder())).toEqual([]);
+    // No terminal was started for any of them.
+    expect((await api('GET', '/api/terminals')).body.terminals).toEqual([]);
+  }, 30_000);
+
+  it('left behind a day by a Pelican that was stopped are taken away; and with a space in the state folder’s path, one goes in a folder of its own, gone with its terminal', async () => {
+    await mkdir(runFolder(), { recursive: true, mode: 0o700 });
+    const old = path.join(runFolder(), 'left-behind');
+    const recent = path.join(runFolder(), 'still-in-use');
+    await writeFile(old, 'echo old\n');
+    await writeFile(recent, 'echo recent\n');
+    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+    await utimes(old, twoDaysAgo, twoDaysAgo);
+    await run('echo now', path.join(dir, 'typed-4'));
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(recent)).toBe(true);
+    closeAllTerminals();
+    // A path the shell would read differently, a space in it: a folder made for the command alone,
+    // in the system's temporary folder, this account's alone too.
+    config.stateDir = path.join(dir, 'state with space');
+    const file = await run('echo spaced', path.join(dir, 'typed-5'));
+    expect(path.dirname(path.dirname(file))).toBe(path.resolve(os.tmpdir()));
+    expect(await modeOf(path.dirname(file))).toBe(0o700);
+    expect(readFileSync(file, 'utf8').endsWith('echo spaced\n')).toBe(true);
+    expect(existsSync(path.join(dir, 'state with space', 'run'))).toBe(false);
+    const [terminal] = (await api('GET', '/api/terminals')).body.terminals as TerminalInfo[];
+    await api('DELETE', `/api/terminals/${terminal!.id}`);
+    await until(() => !existsSync(path.dirname(file)), 5000, 'its folder to go');
+  }, 30_000);
+
+  it('for fish 4, put the command in its history, quoted as fish reads it, and are read with a space before, which fish keeps out of it', async () => {
+    const written = await commandFile('echo "it\'s" \\ done', 'fish');
+    try {
+      expect(written!.line).toBe(` source ${written!.file}`);
+      expect(readFileSync(written!.file, 'utf8')).toBe(
+        `if string match -qr '^([4-9]|[1-9][0-9])' $FISH_VERSION\n    builtin history append 'echo "it\\'s" \\\\ done'\nend\n${shownFirst('echo "it\'s" \\ done', 'fish')}echo "it's" \\ done\n`,
+      );
+      // bash and zsh, quoted as they read it; csh and tcsh, read with what puts `!` back after.
+      const bash = await commandFile('echo \'a\'', 'bash');
+      expect(readFileSync(bash!.file, 'utf8')).toBe(`if [[ -o history ]]; then builtin history -s -- 'echo '\\''a'\\'''; fi\n${shownFirst("echo 'a'", 'bash')}echo 'a'\n`);
+      expect(bash!.line).toBe(` . ${bash!.file}`);
+      const tcsh = await commandFile('echo a', 'tcsh');
+      expect(tcsh!.line).toBe(`source ${tcsh!.file}; source ${tcsh!.file}.after`);
+      expect(tcsh!.remove).toEqual([tcsh!.file, `${tcsh!.file}.after`]);
+      for (const made of [...bash!.remove, ...tcsh!.remove]) await rm(made, { force: true });
+    } finally {
+      for (const made of written?.remove ?? []) await rm(made, { force: true });
+    }
+  });
 });
 
 describe('the size a terminal is drawn at', () => {
@@ -706,13 +909,19 @@ describe('output that works over the whole screen', () => {
     // A page that acknowledges what it gets at once, drawing nothing: only the server's copy works.
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?id=${terminal.id}&cols=500&rows=300`, { headers: signedIn() });
     let output = '';
+    // The screen it is sent first: a prompt the shell printed before the page came is there, not in the output.
+    let screen = '';
     ws.on('message', (data, binary) => {
-      if (!binary) return;
+      if (!binary) {
+        const message = JSON.parse(String(data)) as { type: string; snapshot?: string };
+        if (message.type === 'ready') screen += message.snapshot ?? '';
+        return;
+      }
       output += String(data);
       ws.send(JSON.stringify({ type: 'ack', bytes: (data as Buffer).length }));
     });
     try {
-      await until(() => output.includes('PROMPT$'), 10_000, 'the prompt');
+      await until(() => output.includes('PROMPT$') || screen.includes('PROMPT$'), 10_000, 'the prompt');
       // Each line scrolls the whole screen by its rows: a few KB of them is seconds of work at this size.
       ws.send(Buffer.from("yes $'\\e[300S' | head -c 3000000; echo FLOOD-$((40 + 2))\r"));
       await until(() => terminalState(terminal.id)?.paused === true, 30_000, 'the shell to wait');
@@ -980,6 +1189,20 @@ async function saysRunning(id: string, expected: boolean): Promise<void> {
   }
 }
 
+/** Runs `work` while ps cannot say what runs (it fails, as where it is missing or refused). */
+async function withoutPs<T>(work: () => Promise<T>): Promise<T> {
+  const failing = path.join(dir, 'failing-ps');
+  await mkdir(failing, { recursive: true });
+  await writeFile(path.join(failing, 'ps'), '#!/bin/sh\necho "ps: not allowed" >&2\nexit 1\n', { mode: 0o755 });
+  const before = process.env.PATH;
+  process.env.PATH = `${failing}:${before ?? ''}`;
+  try {
+    return await work();
+  } finally {
+    process.env.PATH = before;
+  }
+}
+
 /** Ends what a test left running, by its process group, as only the test started it. */
 function endGroup(pgid: number | undefined): void {
   if (!pgid) return;
@@ -1079,6 +1302,15 @@ describe('what runs in a terminal', () => {
     expect(parseProcessTable('')).toBeUndefined();
     expect(parseProcessTable('ps: illegal option')).toBeUndefined();
   });
+
+  it('is said to run when the computer cannot say, so End asks first rather than end what may run', async () => {
+    const terminal = await open();
+    await atPrompt(terminal.id);
+    expect(await runningIn(terminal.id)).toBe(false);
+    // The shell is in front, so only ps can tell of a job of its own: it fails.
+    const said = await withoutPs(async () => (await api('GET', `/api/terminals/${terminal.id}`)).body as { terminal: TerminalInfo; running: boolean });
+    expect(said).toEqual({ terminal: expect.objectContaining({ id: terminal.id, program: 'bash' }), running: true });
+  }, 20_000);
 
   it('is said for End to ask first: a program in front, or a job in the background, but not the shell at its prompt', async () => {
     const terminal = await open();
@@ -1366,6 +1598,39 @@ describe('who gets a terminal', () => {
     const ninth = page(terminals[1]!.id);
     await until(() => ninth.closed !== undefined);
     expect(ninth.closed?.code).toBe(TERMINAL_CLOSE.tooManyViewers);
+  }, 60_000);
+
+  it('at most 10 at once: one nobody typed into makes no room while a program runs in it, or while the computer cannot say', async () => {
+    const terminals: TerminalInfo[] = [];
+    for (let n = 0; n < 9; n += 1) terminals.push(await open());
+    for (const terminal of terminals) {
+      const used = await atPrompt(terminal.id);
+      used.type('true\r');
+      await used.sees(/true\r\n/);
+      await used.close();
+    }
+    // A shell that started a program by itself, as a login shell's profile can: nobody typed into
+    // it, and no page shows it, but what runs in it would end with it.
+    Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-c', 'sleep 300; exit'] });
+    let busy: TerminalInfo;
+    try {
+      busy = await open();
+    } finally {
+      Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+    }
+    await saysRunning(busy.id, true);
+    await until(() => terminals.every((t) => terminalState(t.id)!.viewers.length === 0), 5000, 'the pages to go');
+    const another = () => api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24 });
+    expect((await another()).status).toBe(429);
+    expect((await api('GET', '/api/terminals')).body.terminals.map((t: TerminalInfo) => t.id)).toContain(busy.id);
+    // A shell at its prompt nobody typed into, where the computer cannot say whether a job of its runs.
+    await api('DELETE', `/api/terminals/${busy.id}`);
+    const quiet = await open();
+    await saysRunning(quiet.id, false);
+    expect((await withoutPs(another)).status).toBe(429);
+    // Once it can say: nothing runs there, and it makes room.
+    expect((await another()).status).toBe(201);
+    expect((await api('GET', '/api/terminals')).body.terminals.map((t: TerminalInfo) => t.id)).not.toContain(quiet.id);
   }, 60_000);
 
   it('a socket for no terminal, at a size no terminal takes, or sending a frame too large, is closed', async () => {

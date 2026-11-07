@@ -126,6 +126,31 @@ class RunClosed extends Error {
   }
 }
 
+/** How long a message waits for Claude Code to take the settings it goes with; tests shorten it. */
+export const runTiming = { settingsMs: 60_000 };
+
+/**
+ * Claude Code did not answer, within runTiming.settingsMs, as it was given the settings a message
+ * goes with (or those it starts on): the message did not go, and nothing waits on it any longer.
+ * Before, a send held its session's turn (oneAtATime) until that Claude ended, and every message
+ * from another page waited behind it.
+ */
+export class ClaudeNotAnswering extends Error {
+  constructor(ms: number) {
+    const seconds = Math.round(ms / 1000);
+    super(`Claude Code did not answer for ${seconds > 1 ? `${seconds} seconds` : 'a second'} as it was given this message’s settings, so the message was not sent. Send it again once Claude answers; if it never does, it may be stuck.`);
+  }
+}
+
+/** `answer`, unless it takes longer than `ms`: then ClaudeNotAnswering. */
+function answeredWithin<T>(answer: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ClaudeNotAnswering(ms)), ms);
+  });
+  return Promise.race([answer, late]).finally(() => clearTimeout(timer));
+}
+
 /** What a user message holds, as the SDK types it, so an SDK change fails the typecheck here. */
 type UserContent = Exclude<Extract<SDKUserMessage['message'], { role: 'user' }>['content'], string>;
 
@@ -401,6 +426,8 @@ export class SessionRun {
   private costSoFar?: number;
   /** While settings picked here are being applied, Claude Code's reports of the old ones are stale. */
   private applying = 0;
+  /** Claude Code did not answer as it was given settings (ClaudeNotAnswering): it may have taken them later, so the next all go again. */
+  private settingsUnsure = false;
   private modeChanged?: PermissionMode;
   private modeBeforePlan?: PermissionMode;
   private lastReply = '';
@@ -823,7 +850,7 @@ export class SessionRun {
     if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     if (this.sideChat && SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
     await this.applySettings(input.settings);
-    await this.beforeFirst;
+    if (this.beforeFirst) await answeredWithin(this.beforeFirst, runTiming.settingsMs);
     // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
     if (this.closed) throw new RunClosed();
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
@@ -971,6 +998,10 @@ export class SessionRun {
    * They are all the settings the page has: one left out is its default (Default effort is no
    * effort at all), which Claude gets and the run then says it has. Only the mode stays as it is
    * when none is given, as Claude Code changes it too.
+   *
+   * Claude Code has runTiming.settingsMs to answer: past that, ClaudeNotAnswering, so the message
+   * does not go, with settings Claude may not have, and nothing waits on it any longer. Claude may
+   * still take them later: the run keeps the settings it had, and the next go to it all again.
    */
   async applySettings(asked: RunSettings, pick = false): Promise<void> {
     const q = this.q;
@@ -978,24 +1009,38 @@ export class SessionRun {
     // A side chat keeps its own mode, whatever its session's is.
     const next = this.sideChat ? sideChatSettings(asked) : asked;
     const prev = this.settings;
+    const all = this.settingsUnsure;
     const mode = next.permissionMode ?? prev.permissionMode;
     this.settings = { ...next, ...(mode ? { permissionMode: mode } : {}) };
     if (next.permissionMode) this.modeChanged = undefined;
     if (next.permissionMode === 'plan' && prev.permissionMode !== 'plan') this.modeBeforePlan = prev.permissionMode ?? 'default';
+    // Each in turn; none more once Claude Code was given up on.
+    const steps: Array<() => Promise<unknown>> = [];
+    if (all || (next.model ?? 'default') !== (prev.model ?? 'default')) steps.push(() => q.setModel(sdkModel(next.model)));
+    // A new effort level sent without the ultracode key turns ultracode off, so both go together.
+    if (all || (next.effort ?? '') !== (prev.effort ?? '') || Boolean(next.ultracode) !== Boolean(prev.ultracode)) {
+      steps.push(() => q.applyFlagSettings({
+        effortLevel: (next.effort as EffortLevel) ?? null,
+        ultracode: Boolean(next.ultracode),
+        ...(next.ultracode ? { enableWorkflows: true } : {}),
+      }));
+    }
+    if (all || Boolean(next.fast) !== Boolean(prev.fast)) steps.push(() => q.applyFlagSettings({ fastMode: Boolean(next.fast) }));
+    if (mode && (all || (next.permissionMode && (pick || next.permissionMode !== (prev.permissionMode ?? 'default'))))) steps.push(() => q.setPermissionMode(mode));
+    let gaveUp = false;
     this.applying += 1;
     try {
-      if ((next.model ?? 'default') !== (prev.model ?? 'default')) await q.setModel(sdkModel(next.model));
-      // A new effort level sent without the ultracode key turns ultracode off, so both go together.
-      if ((next.effort ?? '') !== (prev.effort ?? '') || Boolean(next.ultracode) !== Boolean(prev.ultracode)) {
-        await q.applyFlagSettings({
-          effortLevel: (next.effort as EffortLevel) ?? null,
-          ultracode: Boolean(next.ultracode),
-          ...(next.ultracode ? { enableWorkflows: true } : {}),
-        });
-      }
-      if (Boolean(next.fast) !== Boolean(prev.fast)) await q.applyFlagSettings({ fastMode: Boolean(next.fast) });
-      if (next.permissionMode && (pick || next.permissionMode !== (prev.permissionMode ?? 'default'))) await q.setPermissionMode(next.permissionMode);
+      await answeredWithin((async () => {
+        for (const step of steps) if (!gaveUp) await step();
+      })(), runTiming.settingsMs);
+      this.settingsUnsure = false;
     } catch (error) {
+      if (error instanceof ClaudeNotAnswering) {
+        gaveUp = true;
+        this.settings = prev;
+        this.settingsUnsure = true;
+        throw error;
+      }
       console.warn('[pelican] could not apply settings', (error as Error).message);
     } finally {
       this.applying -= 1;

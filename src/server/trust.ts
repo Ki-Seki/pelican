@@ -15,14 +15,15 @@ import { lastTurnTime, transcriptPath } from './transcripts.js';
 /**
  * Folder trust. A folder can bring programs of its own: hooks, MCP servers, helper commands and
  * environment variables in its Claude Code settings, commands, skills and agents that run a shell
- * or tools without asking, filters in its git config. Claude Code asks before it runs them in an
- * interactive session, but an SDK session never asks, so Pelican asks instead, before the first
- * Claude Code process in a folder nobody has trusted.
+ * or tools without asking, and the programs its git config names (gitProgram). Claude Code asks
+ * before it runs them in an interactive session, but an SDK session never asks, so Pelican asks
+ * instead, before the first Claude Code process in a folder nobody has trusted.
  *
  * A folder is trusted when Claude Code's own record says so (the CLI's trust dialog, read and never
  * written), when it was trusted in Pelican, when Pelican made it (a scratch folder), or when Claude
  * Code has already run there. "Use my settings only" starts Claude Code there with the user's
- * settings and none of the folder's, and with the folder's git programs turned off.
+ * settings and none of the folder's, and with the folder's git programs turned off, or, where git
+ * cannot be told to leave one out, not at all (gitOff).
  */
 
 export type TrustChoice = 'trusted' | 'user-only';
@@ -790,16 +791,43 @@ const UNREAD_GIT = 'Git config that git could not read';
 
 const BOOLEAN = ['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''];
 
+/** A whole number as git reads one: a sign, decimal, octal or hex digits, and k, m or g. */
+const GIT_NUMBER = /^\s*[+-]?(0x[0-9a-f]+|0[0-7]*|[1-9]\d*)[kmg]?$/i;
+
+/**
+ * A value as git reads a yes or a no where a setting takes either or a program (git_parse_maybe_bool):
+ * true or false, or undefined for what is neither, a program's name.
+ */
+function gitBoolean(value: string): boolean | undefined {
+  const text = value.toLowerCase();
+  if (['true', 'yes', 'on'].includes(text)) return true;
+  if (['false', 'no', 'off', ''].includes(text)) return false;
+  const number = GIT_NUMBER.exec(value)?.[1];
+  return number === undefined ? undefined : /[1-9a-f]/i.test(number.replace(/^0x/i, ''));
+}
+
 /** A command git runs through a shell, written after a `!` or not, as its item. */
 const shellValue = (label: string, value: string): Item => (value.startsWith('!') ? runs(`${label}!`, value.slice(1), 'shell') : runs(label, value, 'shell'));
 
+/** The programs a remote runs for git when given none, which run nothing of the folder's. */
+const PACK_PROGRAMS = new Map([['uploadpack', 'git-upload-pack'], ['receivepack', 'git-receive-pack']]);
+
+/** The tools whose programs these sections name (mergetool.<tool>.cmd and .path…), as an item calls them. */
+const TOOLS = new Map([['mergetool', 'merge tool'], ['difftool', 'diff tool'], ['browser', 'browser'], ['man', 'help viewer'], ['guitool', 'GUI tool']]);
+
 /**
  * What a setting of the repository's git config makes git start, if anything, as its item: what
- * git starts on its own (filters, the file-system monitor, hooks), and what a command git or Claude
- * runs there starts: an external diff and a diff driver's command (git diff), a text converter
- * (git diff, git log -p, git show), a pager (any command in a terminal), the program SSH runs as and
- * a credential helper or password prompt (fetch, pull, push), a signing program (a signed commit),
- * and an alias, which a `!` makes a shell command and `-c` can give any setting.
+ * git starts on its own (filters, the file-system monitor, hooks, a hook the config names, a
+ * command for an alternate's refs, a recent objects hook as it collects garbage), and what a command
+ * git or Claude runs there starts: an external diff and a diff driver's command (git diff), a text
+ * converter (git diff, git log -p, git show), a pager (any command in a terminal), an editor (a
+ * commit's message, an interactive rebase's list), a merge driver (a merge), the program SSH runs
+ * as, a credential helper or password prompt, a proxy for git://, an ext:: remote's command and a
+ * remote's upload-pack or receive-pack (fetch, pull, push), a signing program (a signed commit), a
+ * filter for `add -p`'s diff, a trailer's command, a submodule's update command, the programs of
+ * git mergetool, difftool, send-email, imap-send, help, instaweb, git gui and git svn, and an alias,
+ * which a `!` makes a shell command and `-c` can give any setting; and the setting that lets an
+ * ext:: remote run its command at all.
  */
 function gitProgram(entry: GitEntry): Item | undefined {
   const { section, subsection, key } = nameParts(entry.name);
@@ -822,6 +850,30 @@ function gitProgram(entry: GitEntry): Item | undefined {
     const name = subsection ?? key;
     return value.startsWith('!') ? shellValue(`Git alias ${name}: `, value) : runs(`Git alias ${name}: `, value, 'argv');
   }
+  if (section === 'core' && key === 'editor') return runs('Git editor: ', value, 'shell');
+  if (section === 'sequence' && key === 'editor') return runs('Git sequence editor: ', value, 'shell');
+  if (section === 'merge' && key === 'driver' && subsection !== undefined) return runs(`Git merge driver ${subsection}: `, value, 'shell');
+  const tool = TOOLS.get(section);
+  if (tool && subsection !== undefined && key === 'cmd') return runs(`Git ${tool} ${subsection}: `, value, 'shell');
+  if (tool && subsection !== undefined && key === 'path' && section !== 'guitool') return runs(`Git ${tool} ${subsection}'s program: `, value, 'argv');
+  // ext:: runs the rest as a command, with its arguments, once protocol.ext.allow lets it.
+  if (section === 'remote' && subsection !== undefined && (key === 'url' || key === 'pushurl') && /^ext::/i.test(value)) return runs(`Git remote ${subsection} runs: `, value.slice(5), 'argv');
+  if (section === 'url' && subsection !== undefined && (key === 'insteadof' || key === 'pushinsteadof') && /^ext::/i.test(subsection)) return runs(`Git URLs starting ${value} run: `, subsection.slice(5), 'argv');
+  if (section === 'protocol' && key === 'allow' && (subsection === undefined || subsection.toLowerCase() === 'ext') && value.toLowerCase() !== 'never') return said(`Git lets ext:: remotes run commands: ${entry.name} = ${value}`);
+  const pack = PACK_PROGRAMS.get(key);
+  if (section === 'remote' && subsection !== undefined && pack && value !== pack) return runs(`Git ${pack.slice(4)} for remote ${subsection}: `, value, 'shell');
+  if (section === 'core' && key === 'gitproxy' && !/^none(\s+for\s|$)/i.test(value)) return runs('Git proxy for git://: ', value, 'argv');
+  if (section === 'hook' && subsection !== undefined && key === 'command') return runs(`Git hook ${subsection}: `, value, 'shell');
+  if (section === 'core' && key === 'alternaterefscommand') return runs('Git alternate refs command: ', value, 'shell');
+  if (section === 'gc' && key === 'recentobjectshook') return runs('Git recent objects hook: ', value, 'shell');
+  if (section === 'interactive' && key === 'difffilter') return runs('Git diff filter: ', value, 'shell');
+  if (section === 'trailer' && subsection !== undefined && (key === 'cmd' || key === 'command')) return runs(`Git trailer ${subsection}: `, value, 'shell');
+  if (section === 'submodule' && subsection !== undefined && key === 'update' && value.startsWith('!')) return runs(`Git submodule ${subsection} update: !`, value.slice(1), 'shell');
+  if (section === 'sendemail' && ['tocmd', 'cccmd', 'headercmd'].includes(key)) return runs(`Git send-email ${key}: `, value, 'shell');
+  if (section === 'sendemail' && key === 'smtpserver' && value.startsWith('/')) return runs('Git send-email server: ', value, 'argv');
+  if (section === 'imap' && key === 'tunnel') return runs('Git IMAP tunnel: ', value, 'shell');
+  if (section === 'instaweb' && key === 'httpd') return runs('Git instaweb server: ', value, 'shell');
+  if (section === 'svn' && key === 'authorsprog') return runs('Git svn authors program: ', value, 'argv');
   return undefined;
 }
 
@@ -991,16 +1043,39 @@ function canonical(name: string): string {
 }
 
 /**
+ * The pager a command of git's gets in place of the folder's pager.<cmd>: the user's own core.pager,
+ * else the one in PAGER, else less. A yes would not do: git keeps the command it read before, the
+ * folder's, when told only to page (pager_command_config), so `true` left `git log` in a terminal
+ * running the folder's program; a program, or a no, takes its place.
+ */
+const pagerFor = (own: Map<string, string>): string => [own.get('core.pager'), process.env.PAGER || undefined].find((pager) => pager !== undefined && gitBoolean(pager) !== true) ?? 'less';
+
+/** An editor as git finds one when given none, VISUAL, else EDITOR, else vi, as the shell git runs it with reads them then. */
+const EDITOR = '${VISUAL:-${EDITOR:-vi}}';
+
+/** A merge as git's own, for a merge driver of the folder's: the file merged in place, a conflict marked and said. */
+const MERGE = 'git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B';
+
+/**
  * Git settings, for Claude Code and every git it starts, that turn off what the repository's own
  * config and hooks folder make git run (gitProgram): the folder's settings are left out, so are its
- * programs. Each such setting gets the user's own value from their system and global config, as
- * git would read it without the repository's, or else one that runs nothing of the folder's: no
- * filter, file-system monitor or hooks; an external diff or a diff driver's command of nothing, so
- * `git diff` stops rather than run one (`--no-ext-diff` shows it); `cat` as a text converter,
- * which shows a file as it is; the pager in PAGER, or less; ssh; no password prompt; the format's
- * own signing program; an alias of nothing. Credential helpers are emptied, then given the user's
- * own again. Names as git spells them, so `[filter.Evil]` is turned off as `filter.evil`. A config
- * git could not read in full cannot be turned off, so nothing starts.
+ * programs. Each such setting gets the user's own value from their system and global config, as git
+ * would read it without the repository's, or else one that runs nothing of the folder's: no filter,
+ * file-system monitor, hooks (a hook its config names too) or command for an alternate's refs; an
+ * external diff or a diff driver's command of nothing, so `git diff` stops rather than run one
+ * (`--no-ext-diff` shows it); `cat` as a text converter, which shows a file as it is, and as
+ * `add -p`'s diff filter; the pager in PAGER, or less, also for each command the folder gives a
+ * pager of its own (pagerFor), unless the user's own says not to page it; the editor in VISUAL or
+ * EDITOR, else vi, and for a rebase's list the user's own editor; git's own merge for a merge
+ * driver; ssh; no password prompt; no proxy for git:// (GIT_PROXY_COMMAND empty, as git reads the
+ * folder's before any given after it); no ext:: remote; the format's own signing program; an alias
+ * of nothing; `echo` as a trailer's command, which gives the value as it is; mergetool's,
+ * difftool's, the browser's, send-email's, imap-send's, instaweb's, git gui's and git svn's
+ * programs of nothing, or each tool's own; `man` to show help; `checkout` to update a submodule.
+ * Credential helpers are emptied, then given the user's own again. Names as git spells them, so
+ * `[filter.Evil]` is turned off as `filter.evil`. A config git could not read in full cannot be
+ * turned off, nor a remote's upload-pack or receive-pack (git takes the first it reads, the
+ * folder's) or a recent objects hook (git runs every one it reads), so nothing starts.
  */
 async function gitOff(dir: string): Promise<Record<string, string>> {
   const top = await gitRoot(dir);
@@ -1008,12 +1083,18 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
   const repo = await repositoryConfig(top).catch((): GitConfig => ({ entries: [], includes: [], unread: true }));
   if (!repo) return {};
   if (repo.unread) throw new Error('Git could not read this folder’s git config, so Claude Code cannot start in it with your settings only.');
-  // Each setting to give, with what runs nothing of the folder's, in the order first met.
-  const neutral = new Map<string, [string, string]>();
-  const turnOff = (name: string, value: string) => {
+  // Each setting to give, with what runs nothing of the folder's, in the order first met; one that
+  // depends on the user's own settings is worked out from them.
+  const neutral = new Map<string, [string, string | ((own: Map<string, string>) => string)]>();
+  const turnOff = (name: string, value: string | ((own: Map<string, string>) => string)) => {
     if (!neutral.has(canonical(name))) neutral.set(canonical(name), [name, value]);
   };
   let helpers = false;
+  let extRemote = false;
+  let proxy = false;
+  /** Hooks the config names, by name; and what git cannot be told to leave out. */
+  const hooks = new Set<string>();
+  const kept = new Set<string>();
   for (const entry of repo.entries) {
     const { section, subsection, key } = nameParts(entry.name);
     if (section === 'filter' && subsection !== undefined) {
@@ -1028,23 +1109,60 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
     else if (section === 'diff' && key === 'command') turnOff(`diff.${subsection}.command`, '');
     else if (section === 'diff' && key === 'textconv') turnOff(`diff.${subsection}.textconv`, 'cat');
     else if (section === 'core' && key === 'pager') turnOff('core.pager', process.env.PAGER || 'less');
-    else if (section === 'pager') turnOff(`pager.${key}`, 'true');
+    else if (section === 'pager') turnOff(`pager.${key}`, '');
     else if (section === 'core' && key === 'sshcommand') turnOff('core.sshCommand', 'ssh');
     else if (section === 'core' && key === 'askpass') turnOff('core.askPass', '');
     else if (section === 'credential') helpers = true;
     else if (section === 'gpg' && key === 'program') turnOff(subsection === undefined ? 'gpg.program' : `gpg.${subsection}.program`, SIGNERS[subsection ?? 'openpgp'] ?? 'gpg');
     else if (section === 'gpg') turnOff('gpg.ssh.defaultKeyCommand', '');
     else if (section === 'alias') turnOff(subsection === undefined ? `alias.${key}` : `alias.${subsection}.${key}`, '');
+    else if (section === 'core' && key === 'editor') turnOff('core.editor', EDITOR);
+    else if (section === 'sequence') turnOff('sequence.editor', (own) => own.get('core.editor') ?? `\${GIT_EDITOR:-${EDITOR}}`);
+    else if (section === 'merge') turnOff(entry.name, MERGE);
+    else if (section === 'man') turnOff(entry.name, 'man');
+    // A trailer's value as given, its command `echo`: git runs .cmd rather than .command where both are.
+    else if (section === 'trailer') turnOff(`trailer.${subsection}.cmd`, 'echo');
+    else if (TOOLS.has(section) || section === 'sendemail' || section === 'imap' || section === 'instaweb' || section === 'svn') turnOff(entry.name, '');
+    else if (section === 'remote' && (key === 'url' || key === 'pushurl')) extRemote = true;
+    else if (section === 'url') extRemote = true;
+    else if (section === 'protocol') turnOff('protocol.ext.allow', 'never');
+    else if (section === 'core' && key === 'gitproxy') proxy = true;
+    else if (section === 'hook') hooks.add(subsection!);
+    else if (section === 'core' && key === 'alternaterefscommand') turnOff('core.alternateRefsCommand', 'true');
+    else if (section === 'interactive') turnOff('interactive.diffFilter', 'cat');
+    else if (section === 'submodule') turnOff(entry.name, 'checkout');
+    else kept.add(entry.name);
   }
+  if (kept.size > 0) throw new Error(`Git cannot be told to leave out what this folder’s git config has it run (${[...kept].join(', ')}), so Claude Code cannot start in it with your settings only.`);
   if (await broughtHooks(top)) turnOff('core.hooksPath', '/dev/null');
-  if (neutral.size === 0 && !helpers) return {};
+  // An ext:: remote of the folder's runs nothing, whatever the user's own settings let one do.
+  if (extRemote) turnOff('protocol.ext.allow', 'never');
+  if (neutral.size === 0 && !helpers && !proxy && hooks.size === 0) return {};
   const mine = await userGitConfig(top);
   const own = new Map(mine.map((entry) => [canonical(entry.name), entry.value]));
-  const off: Array<[string, string]> = [...neutral.entries()].map(([name, [spelled, value]]) => [spelled, own.get(name) ?? value]);
+  const off: Array<[string, string]> = [...neutral.entries()].map(([name, [spelled, value]]) => {
+    const theirs = own.get(name);
+    // The user's own pager for the command, or theirs not to page it; else their pager (pagerFor).
+    if (name.startsWith('pager.')) return [spelled, theirs !== undefined && gitBoolean(theirs) !== true ? theirs : pagerFor(own)];
+    if (name === 'protocol.ext.allow' && extRemote) return [spelled, 'never'];
+    return [spelled, theirs ?? (typeof value === 'function' ? value(own) : value)];
+  });
   // The folder's credential helpers emptied, then the user's own, as they come.
   if (helpers) {
     off.push(['credential.helper', '']);
     for (const entry of mine) if (nameParts(entry.name).section.toLowerCase() === 'credential' && nameParts(entry.name).key.toLowerCase() === 'helper') off.push([entry.name, entry.value]);
+  }
+  // A hook the config names is off, or, one of the user's own by that name, theirs again: its
+  // command, its events alone (an empty one clears those before), and whether it is on.
+  for (const name of hooks) {
+    const command = own.get(`hook.${name}.command`);
+    if (command === undefined) {
+      off.push([`hook.${name}.enabled`, 'false']);
+      continue;
+    }
+    off.push([`hook.${name}.command`, command], [`hook.${name}.event`, '']);
+    for (const entry of mine) if (canonical(entry.name) === `hook.${name}.event`) off.push([entry.name, entry.value]);
+    off.push([`hook.${name}.enabled`, own.get(`hook.${name}.enabled`) ?? 'true']);
   }
   // After any the environment already holds, which git reads first.
   const start = Number(process.env.GIT_CONFIG_COUNT) || 0;
@@ -1053,6 +1171,8 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
     env[`GIT_CONFIG_KEY_${start + i}`] = key;
     env[`GIT_CONFIG_VALUE_${start + i}`] = value;
   });
+  // git reads the folder's proxy before any given after it: none at all, unless the environment has one already.
+  if (proxy && process.env.GIT_PROXY_COMMAND === undefined) env.GIT_PROXY_COMMAND = '';
   return env;
 }
 

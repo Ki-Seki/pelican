@@ -65,15 +65,17 @@ settings; and updates from Settings.
   together and run as they read: a `!` in it is not taken from your shell's history, as bash and zsh
   take one in what is typed at their prompt. Under the line that reads the file, the new tab shows
   the command itself, dimmed, as a terminal shows what was typed, then what it prints (in sh's
-  family, bash and zsh among them, and fish). The question shows the whole command, wrapped, its
-  lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
-  the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
-  command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
-  sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider than 500
-  columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above
-  the message box as a quote from the terminal, as Claude Desktop attaches one, naming its tab, with
-  a note if you add one; of a long one, its first 1,500 characters, as Desktop cuts any quote.
-  Claude sees a terminal only that way. `!` commands go into the conversation as before.
+  family, bash and zsh among them, and fish). Your shell's history keeps the command itself, for Up
+  and Enter to run it again, rather than the line that read its file (bash, zsh and fish 4). The
+  question shows the whole command, wrapped, its lines numbered and counted, and the blanks a line
+  is padded with drawn, so nothing of it sits past the block's edge. Only Claude's replies offer it,
+  not a file or a tool's output, and only for a command with nothing hidden in it, as an approval
+  reads one, nor laid out to put part of it out of sight: a run of more than 16 blanks, more than 2
+  blank lines in a row, a line wider than 500 columns, or more than 50 lines. Quote puts what you
+  selected in the terminal, or its screen, above the message box as a quote from the terminal, as
+  Claude Desktop attaches one, naming its tab, with a note if you add one; of a long one, its first
+  1,500 characters, as Desktop cuts any quote. Claude sees a terminal only that way. `!` commands go
+  into the conversation as before.
 - **Quotes with notes, as in Claude Desktop.** Select text in a reply, your prompt or a step's
   output for Desktop's two, in its order and words: Start a side chat (Send to side chat once one is
   open), which opens the side chat with the passage attached, and Quote. On a computer they sit
@@ -168,11 +170,14 @@ settings; and updates from Settings.
   are) until you send your next message; it takes the words back out of the box while they are as
   the rewind put them. Code and conversation is all or nothing: code that cannot go back leaves the
   conversation as it was, an earlier rewind's cut and all. Not while Claude works, which it says
-  until Claude stops, and, while another app has the session open, the code alone, as Desktop
-  does; the conversation's first message (also after a SessionStart hook's context), and one
-  before a compaction, can go back in code only. A rewind, Undo rewind and a message go one at a
-  time: one sent from another page while a rewind starts Claude again goes after the cut, and a
-  second rewind meanwhile says Claude is working. A rewind leaves the session's name as it was.
+  until Claude stops, and, while another app has the session open, the code alone, as Desktop does;
+  the conversation's first message (also after a SessionStart hook's context), and one before a
+  compaction, can go back in code only. A rewind, Undo rewind and a message go one at a time: one
+  sent from another page while a rewind starts Claude again goes after the cut, and a second rewind
+  meanwhile says Claude is working. A message waits at most a minute for Claude Code to take the
+  settings it goes with: where Claude does not answer, stuck or stopped, it does not go, and says
+  so, rather than hold up every message from another page until that Claude ends. A rewind leaves
+  the session's name as it was.
 - **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
   message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
   A turn in Changes ends with its prompt's Rewind to here.
@@ -458,14 +463,15 @@ settings; and updates from Settings.
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
-  none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
+  none of the repository's programs, or, where git cannot be told to leave one out, no terminal
+  starts. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
   (`npm_*`, `INIT_CWD`, `NODE`), Claude Code's own (`CLAUDECODE` and `CLAUDE_CODE_*`, such as how it
   was started, or the id, messaging socket and token of a Claude Code session Pelican was started
   from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
   most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk but a
-  command Run in terminal runs, for its shell to read, readable by you alone and removed with its
-  terminal. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
-  starts Pelican without them.
+  command Run in terminal runs, for its shell to read, in Pelican's state folder, readable by you
+  alone and removed with its terminal. The demo has none, and `pelican --no-terminal` (also for
+  `pelican service install`) starts Pelican without them.
 - Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
   tells the program in front of the shell, found with `ps` as End's question finds it, that the
   window changed (SIGWINCH, as a resize does), and where that program is not this account's to
@@ -500,17 +506,26 @@ settings; and updates from Settings.
   programs: a folder's settings count only once it is trusted, as in Claude Code. Before, they
   applied with no question where the folder brought nothing else, so a cloned repository could turn
   on Ultracode and fast mode.
-- More of what a folder's git config makes git run is asked about, and turned off with your
-  settings only: an external diff, a diff driver's command and text converter, a pager, the program
-  SSH runs as, a password prompt, credential helpers, a signing program and aliases (a `!` one is
-  a shell command, and any can give git a setting with `-c`), and hooks that came in the folder's
-  own hooks folder, as a tarball's `.git` brings them. With your settings only, each gets your own setting, from your
-  system and global git config, or one that runs nothing of the folder's: `git diff` there stops
-  rather than run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the
-  file as it is, and credential helpers are yours alone. Changes' own git runs none of them either,
+- More of what a folder's git config makes git run is asked about, and turned off with your settings
+  only: an external diff, a diff driver's command and text converter, a pager, an editor and a
+  rebase's, a merge driver, the program SSH runs as, a password prompt, credential helpers, a proxy
+  for git://, an ext:: remote's command and the setting that lets one run, a command for an
+  alternate's refs, `add -p`'s diff filter, a trailer's command, a submodule's update command, a
+  signing program, aliases (a `!` one is a shell command, and any can give git a setting with `-c`),
+  the programs of git mergetool, difftool, help, send-email, imap-send, instaweb, git gui and git
+  svn, hooks its config names, and hooks that came in the folder's own hooks folder, as a tarball's
+  `.git` brings them. With your settings only, each gets your own setting, from your system and
+  global git config, or one that runs nothing of the folder's: `git diff` there stops rather than
+  run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the file as it
+  is, `git log` in a terminal pages with your pager (git kept the folder's `pager.log` when told
+  only to page), a commit's message opens in your editor, a merge merges as git's own does, an ext::
+  remote and a git:// proxy run nothing, and credential helpers are yours alone. A folder whose
+  config names what git cannot be told to leave out, a remote's upload-pack or receive-pack (git
+  takes the first it reads, the folder's) or a recent objects hook (git runs them all), is asked
+  about too, and does not start with your settings only. Changes' own git runs none of them either,
   and fetches nothing, not even a partial clone's missing files, whose fetch ran a program the
-  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath`
-  were listed and turned off.
+  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath` were
+  listed and turned off.
 - A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
   reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
   Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed
@@ -529,7 +544,11 @@ settings; and updates from Settings.
   line wider than 500 columns, or more than 50 lines. The command is not typed at the shell's
   prompt, where bash, zsh and csh expand a `!` from the history, double quotes and all, so
   `echo "!?SECRET?"` printed a secret from the history file: the shell reads it from a file of its
-  own, readable by you alone and removed with the terminal. A step's Run in terminal, and a `!`
+  own, in a folder of Pelican's state folder readable by you alone, made again if it has gone and
+  checked before each command goes in it (a link, or another account's folder, gets none, and Run
+  in terminal says why), and the file goes with the terminal; csh and tcsh, which expand a `!` in a
+  file they read too, are told to expand none while they read it, and have it back as it was after,
+  also after an error or Ctrl+C. A step's Run in terminal, and a `!`
   command's, asks the same question, the command itself shown rather than the step's description of
   it, and is never offered on a step you denied, on a subagent's or a workflow's step, or for a
   PowerShell step where the terminal's shell is not PowerShell.

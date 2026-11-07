@@ -33,7 +33,7 @@ import { exactBytes } from './open.js';
 import { pullRequestStatus } from './pull-requests.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
+import { ClaudeNotAnswering, getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
 import { checkRewind, promptBack, RewindRefusal, rewindTo, undoRewind } from './rewind.js';
 import { liveCut } from './rewound.js';
 import { savedOutputPage } from './shell.js';
@@ -43,7 +43,7 @@ import { shownRun } from './stream.js';
 import { usageLimits } from './usage.js';
 import { EXISTS_MAX, existingFiles, gitDiff, gitStatus, listTree, openProjectFile, PICTURE_TYPES, readProjectFile, typeOf } from './workspace.js';
 import { searchText } from './search.js';
-import { closeTerminal, listTerminals, openTerminal, terminalAvailability, terminalRunning, terminalsReady, terminalsRefused, TooManyTerminals } from './terminals.js';
+import { closeTerminal, CommandNotWritten, listTerminals, openTerminal, terminalAvailability, terminalRunning, terminalsReady, terminalsRefused, TooManyTerminals } from './terminals.js';
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
@@ -167,6 +167,8 @@ app.route('/api/update', updateRoutes);
 app.onError((error, c) => {
   // Starting Claude Code in a folder nobody trusted: the page asks, then sends again with the answer.
   if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings, commands: error.commands, more: error.more }, 409);
+  // Claude Code did not answer in time as it was given a message's settings: the message did not go, which is said as it is.
+  if (error instanceof ClaudeNotAnswering) return c.json({ error: error.message }, 504);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });
@@ -766,7 +768,8 @@ app.get('/api/terminals', async (c) => {
  * A new terminal: the user's shell in the folder, at the page's size. It runs as Claude Code would
  * there, as a `!` command does: a folder nobody trusted is asked about first (409, needsTrust),
  * and in one kept to the user's settings only, git runs none of the repository's own programs.
- * Not in the demo, nor with --no-terminal (403); 429 when as many run as may.
+ * Not in the demo, nor with --no-terminal (403); 429 when as many run as may; 503, saying why, when
+ * Run in terminal's command cannot be written where the shell reads it (terminals.ts, commandFile).
  */
 app.post('/api/terminals', async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
@@ -797,6 +800,8 @@ app.post('/api/terminals', async (c) => {
     return c.json({ terminal }, 201);
   } catch (error) {
     if (error instanceof TooManyTerminals) return c.json({ error: error.message }, 429);
+    // Run in terminal's command could not be written where its shell reads it: why, rather than a failure of Pelican's own.
+    if (error instanceof CommandNotWritten) return c.json({ error: error.message }, 503);
     throw error;
   }
 });
