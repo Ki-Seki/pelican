@@ -1,4 +1,4 @@
-import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession, forkSession, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 
 import { revealHidden } from '../shared/hidden.js';
 import { hasQuotes, readPrompt } from '../shared/quoted.js';
@@ -9,22 +9,41 @@ import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNot
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
 import { sessionInfo, shownMessages } from './sessions.js';
+import { isSideChat, SIDE_CHAT_TITLE } from './side-chat.js';
 import { refreshTranscriptIndex } from './transcripts.js';
 
 /**
  * A copy of the session to carry on separately (Fork). With `upTo`, the copy ends at that entry
  * of the transcript: Fork from here, from a reply (its end) or a prompt (the entry just before it).
+ * A copy of a side chat is a side chat itself, marked as one (markSideChat): it stays read-only
+ * whatever becomes of the side chat it copies, deleted, cleaned up by Claude Code after
+ * cleanupPeriodDays, or one of a long line of copies.
  */
 export async function fork(sessionId: string, upTo?: string, title?: string): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing changes.');
   const info = await sessionInfo(sessionId);
+  const where = info?.cwd ? { dir: info.cwd } : {};
+  const side = await isSideChat(sessionId);
   const result = await forkSession(sessionId, {
-    ...(info?.cwd ? { dir: info.cwd } : {}),
+    ...where,
     ...(upTo ? { upToMessageId: upTo } : {}),
     ...(title ? { title } : {}),
   });
+  if (side) await markSideChat(result.sessionId, where);
   await refreshTranscriptIndex();
   return result.sessionId;
+}
+
+/**
+ * Marks a copy of a side chat as a side chat of its own: Claude Desktop's title for one, under the
+ * copy's own id, which tells a side chat apart wherever it is in the file (side-chat.ts), then the
+ * name the copy was given ("Side chat (fork)"), which stays its name.
+ */
+async function markSideChat(copy: string, where: { dir?: string }): Promise<void> {
+  const named = (await getSessionInfo(copy, where))?.customTitle;
+  if (named === SIDE_CHAT_TITLE) return;
+  await renameSession(copy, SIDE_CHAT_TITLE, where);
+  if (named) await renameSession(copy, named, where);
 }
 
 export async function remove(sessionId: string): Promise<void> {

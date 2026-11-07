@@ -398,6 +398,10 @@ settings; and updates from Settings.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
+- A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
+  reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
+  Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed
+  as a session with every tool, its MCP servers and its mode, and could be rewound.
 - Signing out signs that browser out on the computer too: its cookie, and every renewal of it, is
   refused until it would have expired, also after Pelican restarts, and its terminals and live
   updates close at once, in every tab. Before, only the browser forgot the cookie: a terminal open

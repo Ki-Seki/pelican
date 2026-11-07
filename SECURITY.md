@@ -255,7 +255,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   Code.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
-  Pelican resumes it or a branch of it.
+  Pelican resumes it or a branch of it. Each branch Pelican makes of a side chat is marked as a side
+  chat of its own (Claude Desktop's "Side chat" title under its own id, its name kept after it), so
+  it stays one when the side chat it came from is deleted, cleaned up by Claude Code, or many
+  branches back.
 - **What gets installed is what was tested.** The packages Pelican's server uses are built into
   it, as CI tested them, and npm installs two: the Agent SDK, pinned to one version, with the
   Claude Code it bundles for your computer, and the terminal's optional PTY, `@lydell/node-pty`,

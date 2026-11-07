@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { fork, remove } from '../src/server/actions';
 import { config } from '../src/server/config';
 import { closeAll, getRun, sendMessage, startSideChat } from '../src/server/runner';
 import { listSummaries } from '../src/server/sessions';
@@ -21,6 +22,8 @@ const home = vi.hoisted(() => {
 });
 
 const QUESTION = 'Why CSS variables?';
+/** Asked in a copy of the side chat, once the side chat itself is gone. */
+const AGAIN = 'And why not a class on html?';
 /** The id the page gives the side chat's first question, which its own conversation starts at. */
 const ASKED = '5a5a5a5a-0000-4000-8000-000000000001';
 let api: StandIn;
@@ -31,12 +34,13 @@ let side: string;
 /** The turns Claude was asked to take (not titles or suggestions, which come without tools). */
 const turns = () => api.requests.filter((request) => (request.tools?.length ?? 0) > 0);
 const sideTurns = () => turns().filter((request) => JSON.stringify(request.messages ?? []).includes(QUESTION));
-/** The results of the tools Claude called after the side question, in order. */
-const resultsAfterQuestion = (request: MessagesRequest): ContentBlock[] => {
+/** The results of the tools Claude called after the side question (or another), in order. */
+const resultsAfterQuestion = (request: MessagesRequest, question = QUESTION): ContentBlock[] => {
   const messages = request.messages ?? [];
-  const at = messages.findIndex((message) => textOf(message.content).includes(QUESTION));
+  const at = messages.findIndex((message) => textOf(message.content).includes(question));
   return at < 0 ? [] : messages.slice(at).flatMap((message) => (Array.isArray(message.content) ? message.content.filter((block) => block.type === 'tool_result') : []));
 };
+const againTurns = () => turns().filter((request) => JSON.stringify(request.messages ?? []).includes(AGAIN));
 const systemOf = (request: MessagesRequest) => JSON.stringify(request.system);
 
 beforeAll(async () => {
@@ -48,6 +52,10 @@ beforeAll(async () => {
   mkdirSync(config.claudeHome, { recursive: true });
   writeFileSync(path.join(config.claudeHome, 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(touch:*)', 'Write'] } }));
   api = await standInApi((request) => {
+    // In the copy, Claude tries to run a command, then answers.
+    if (againTurns().includes(request)) {
+      return resultsAfterQuestion(request, AGAIN).length === 0 ? { tool: 'Bash', input: { command: `touch ${folder}/made-by-copy`, description: 'Make a file' } } : 'A class would do too.';
+    }
     if (!sideTurns().includes(request)) return 'OK.';
     // In the side chat, Claude tries to run a command and write a file, then reads one.
     const done = resultsAfterQuestion(request).length;
@@ -112,4 +120,18 @@ describe('a side chat, in the Claude Code the Agent SDK bundles', () => {
     expect(listed.find((s) => s.id === side)).toMatchObject({ title: QUESTION, sideChatOf: parent, sideQuestion: QUESTION, sideStart: ASKED });
     expect(rows.filter((row) => row.type === 'user' && (row as { uuid?: string }).uuid === ASKED)).toHaveLength(1);
   }, 30_000);
+
+  it('copied, and the side chat deleted, goes on as a side chat when resumed: told so, and Bash refused', async () => {
+    getRun(side)?.close();
+    await until(() => getRun(side) === undefined, 20_000, 'its Claude to exit');
+    const copy = await fork(side);
+    await remove(side);
+    await sendMessage({ sessionId: copy }, { text: AGAIN, attachments: [], settings: {} });
+    await until(() => getRun(copy)?.busy === false && againTurns().some((request) => resultsAfterQuestion(request, AGAIN).length >= 1), 90_000, 'the copy’s turn');
+    const asked = againTurns()[0]!.messages!.findLast((message) => textOf(message.content).includes(AGAIN))!;
+    expect(textOf(asked.content)).toMatch(/^<system-reminder>\nThis is a side chat about the conversation above\./);
+    const [bash] = resultsAfterQuestion(againTurns().at(-1)!, AGAIN);
+    expect(bash!.is_error).toBe(true);
+    expect(existsSync(path.join(folder, 'made-by-copy'))).toBe(false);
+  }, 120_000);
 });

@@ -5,8 +5,9 @@ import path from 'node:path';
 import { getSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { fork } from '../src/server/actions';
+import { fork, remove } from '../src/server/actions';
 import { config } from '../src/server/config';
+import { checkRewind } from '../src/server/rewind';
 import { listSummaries } from '../src/server/sessions';
 import { isSideChat, SIDE_CHAT_TITLE, sideChatOf, sideChatOptions, sideChatPrompt, sideChatSettings } from '../src/server/side-chat';
 import { refreshTranscriptIndex, transcriptPath } from '../src/server/transcripts';
@@ -99,6 +100,28 @@ describe('a side chat', () => {
     expect((await getSessionInfo(branch, { dir: folder }))?.customTitle).toBe('Side chat (fork)');
     expect(await sideChatOf(branch)).toBe(id(1));
   });
+});
+
+describe('a copy of a side chat', () => {
+  it('is a side chat of its own, whatever becomes of the one it copies: deleted, or more copies back than are followed', async () => {
+    const side = await fork(id(1), undefined, SIDE_CHAT_TITLE);
+    const branch = await fork(side);
+    // It keeps the name Claude Code gives a branch.
+    expect((await getSessionInfo(branch, { dir: folder }))?.customTitle).toBe('Side chat (fork)');
+    // The side chat it came from is deleted (or Claude Code cleans it up after cleanupPeriodDays).
+    await remove(side);
+    expect(await transcriptPath(side)).toBeUndefined();
+    expect(await isSideChat(branch)).toBe(true);
+    // Rewind is refused on it, as on any side chat; a branch of it is a side chat too.
+    await expect(checkRewind(branch, row(id(1), 1))).rejects.toMatchObject({ status: 409, message: 'A side chat changes nothing; rewind the session itself.' });
+    // A line of copies, each of the one before, longer than the copies followed back.
+    let last = branch;
+    for (let i = 0; i < 10; i += 1) last = await fork(last);
+    expect(await isSideChat(last)).toBe(true);
+    await expect(checkRewind(last, row(id(1), 1))).rejects.toMatchObject({ status: 409 });
+    // A fork of a session that is no side chat is none.
+    expect(await isSideChat(await fork(id(1)))).toBe(false);
+  }, 30_000);
 });
 
 describe('Claude Desktop’s side chats, as they are left on disk', () => {
