@@ -1332,7 +1332,7 @@ export function Chat({
     <PathLinksContext.Provider value={links}>
     <RunInTerminal.Provider value={runInTerminal}>
     <CommentsChat.Provider value={viewId}>
-    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
+    <div ref={root} className={`relative flex h-full min-h-0 flex-col [@media(max-height:380px)]:scroll-pt-12 [@media(max-height:380px)]:scroll-pb-[calc(var(--composer-h,0px)+5rem)] [@media(max-height:380px)]:overflow-y-auto ${workspace.docked || side.docked ? 'pr-(--pane-w)' : ''}`} {...(sideChat ? {} : dropHandlers)}>
       <header className="flex shrink-0 items-center gap-0.5 border-b border-line bg-bg/95 px-2 py-1.5 backdrop-blur">
         {!wide && (
           <button type="button" aria-label="Back to sessions" onClick={onBack} className="relative grid size-10 shrink-0 place-items-center rounded-full after:absolute after:-inset-0.5 hover:bg-hover">
@@ -1419,7 +1419,8 @@ export function Chat({
           answer, which then takes the room it needs. It gives way before the message box does, and
           scrolls, Claude's card keeping its head and its buttons in view (PermissionCard). On a phone
           on its side the whole chat scrolls instead, the message box at its foot. */}
-      <div data-dock className={`max-h-[55%] min-h-0 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
+      {/* A field of the card that takes the keys (a question's Other…) scrolls into view clear of its head and foot. */}
+      <div data-dock className={`max-h-[55%] min-h-0 scroll-pt-12 scroll-pb-20 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
           <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
             {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
