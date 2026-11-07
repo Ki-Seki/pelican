@@ -1102,7 +1102,7 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
         },
       } : {})}
       ref={root}
-      className={`group/step relative scroll-mt-3 ${hasMenu ? press.className : ''}`}
+      className={`relative scroll-mt-3 ${hasMenu ? press.className : ''}`}
     >
       {hasMenu && (
         // With a pointer, ⋯ beside the chevron on hover, or reached with the keyboard.
@@ -1112,7 +1112,8 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
           aria-haspopup="menu"
           aria-expanded={Boolean(menu)}
           onClick={(e) => setMenu({ at: e.currentTarget, ...(e.detail === 0 ? { keys: true } : {}) })}
-          className={`absolute top-0.5 right-5 z-[2] hidden size-7 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover/step:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
+          // Its own step's: an agent's steps, opened inside its step, keep theirs until pointed at.
+          className={`absolute top-0.5 right-5 z-[2] hidden size-7 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 [[data-step]:hover>&]:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
         >
           <MoreHorizontal className="size-3.5" />
         </button>
