@@ -257,7 +257,9 @@ async function findInstall(): Promise<Install> {
   if (path.basename(above) !== 'lib') {
     return managed(`This Pelican is a package of ${tilde(above)}, whose package.json says which version it gets.`, (v) => `cd ${shellWord(tilde(above))} && ${command('npm', 'install', `${PACKAGE_NAME}@${v}`)}`);
   }
-  const prefix = path.dirname(above);
+  // Named as Pelican was started, when that was through the prefix's bin (/tmp, not /private/tmp, on a Mac).
+  const through = path.dirname(path.dirname(started));
+  const prefix = path.basename(path.dirname(started)) === 'bin' && (await sameFolder(through, path.dirname(above))) ? through : path.dirname(above);
   const withPrefix = (v: string) => command('npm', 'install', '--global', '--prefix', tilde(prefix), `${PACKAGE_NAME}@${v}`);
   if (!ctx().npm) return managed(`npm is not beside the Node that runs Pelican (${tilde(ctx().execPath)}).`, withPrefix, prefix);
   const global = await npmSays(['prefix', '--global']);

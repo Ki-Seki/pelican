@@ -429,6 +429,12 @@ describe('how Pelican was installed, and what Settings offers', () => {
     const install = await offered(await globalInstall(prefix), { global: path.join(dir, 'global') });
     expect(install).toMatchObject({ kind: 'managed', prefix, self: false, command: `npm install --global --prefix ~/.local pelican-cc@${NEXT}` });
     expect(install.why).toMatch(/installed in ~\/\.local, not in npm’s global folder \(.*global\)/);
+    // Started through a link to its folder (as /tmp is one to /private/tmp on a Mac): named so.
+    await rm(path.join(dir, 'linked'), { force: true });
+    await symlink(path.join(dir, 'home'), path.join(dir, 'linked'));
+    await forget();
+    const linked = await offered(path.join(dir, 'linked', '.local', 'bin', 'pelican'), { global: path.join(dir, 'global') });
+    expect(linked).toMatchObject({ prefix: path.join(dir, 'linked', '.local'), command: `npm install --global --prefix ${path.join(dir, 'linked', '.local')} pelican-cc@${NEXT}` });
   }, 30_000);
 
   it('shows the command with sudo where the global folder belongs to another account', async () => {
