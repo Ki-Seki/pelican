@@ -79,7 +79,19 @@ export type ToolResultBlock = {
   workflow?: WorkflowLaunch;
   /** What a SendUserFile call delivered, as Claude Code records it next to the result. */
   delivered?: Delivery;
+  /** An Agent call that did not wait for its agent: how Claude Code records it began it, next to the result. */
+  agent?: AgentLaunch;
 };
+
+/**
+ * How an Agent call that does not wait for its agent began it: in the background on this computer
+ * (`agentId`: its transcript, and its task while it runs), in a cloud session (`sessionUrl`), or
+ * as a teammate (`name`). Claude Code's result for it is for the model alone.
+ */
+export type AgentLaunch = { mode: 'background' | 'cloud' | 'teammate'; agentId?: string; sessionUrl?: string; name?: string };
+
+/** A subagent's final report, which Claude Code hands back to its session as a message of its own: which agent, and its words. */
+export type Handback = { from: string; report: string };
 
 /**
  * A file Claude sent you, as Claude Code recorded it delivered: its absolute path on the computer,
@@ -214,6 +226,8 @@ export type ChatMessage = {
   apiError?: boolean;
   /** Claude Code's code for that failure, when it gave one (`authentication_failed`, `overloaded`…). */
   error?: string;
+  /** A subagent's report Claude Code handed back (meta: its card shows it, as the agent's result). */
+  handback?: Handback;
 };
 
 export type MessagesPage = {
@@ -389,8 +403,11 @@ export type TaskProgress = {
 
 export type ScheduledCheck = { id: string; what: string; next?: number; repeats: boolean };
 
-/** `output`: a command or watcher whose output can be read while it runs; `summary`: what an agent says it is doing. */
-export type BackgroundTask = { id: string; description: string; type: string; output?: boolean; summary?: string };
+/**
+ * `output`: a command or watcher whose output can be read while it runs; `summary`: what an agent
+ * says it is doing; `toolUseId`: the call that started it, whose card follows it.
+ */
+export type BackgroundTask = { id: string; description: string; type: string; output?: boolean; summary?: string; toolUseId?: string };
 
 export type TaskOutput = { output: string; truncated: boolean };
 

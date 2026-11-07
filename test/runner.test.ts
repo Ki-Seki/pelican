@@ -717,8 +717,9 @@ describe('work that runs on its own', () => {
       { task_id: 'b1', task_type: 'local_bash', description: 'npm run dev' },
     ] }));
     await vi.waitFor(() => expect(state().progress).toEqual({ toolu_1: { summary: 'Reading auth.ts', lastTool: 'Read', toolUses: 12, durationMs: 100_000 } }));
+    // The agent's says which call started it: that call's card follows it.
     expect(state().tasks).toEqual([
-      { id: 'a1', description: 'Find the flaky test', type: 'Explore', summary: 'Reading auth.ts' },
+      { id: 'a1', description: 'Find the flaky test', type: 'Explore', summary: 'Reading auth.ts', toolUseId: 'toolu_1' },
       { id: 'b1', description: 'npm run dev', type: 'local_bash', output: true },
     ]);
     expect(await run.taskOutput('b1')).toEqual({ output: 'listening on :3000\n', truncated: false });

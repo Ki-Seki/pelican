@@ -612,7 +612,9 @@ export class SessionRun {
           }
           const report = this.progress.get(task.id);
           const summary = report?.summary ?? report?.lastTool;
-          return summary ? { ...task, summary } : task;
+          // The call that started it, whose card follows it: a background agent's says how it goes.
+          const tool = this.taskTools.get(task.id);
+          return summary || tool ? { ...task, ...(summary ? { summary } : {}), ...(tool ? { toolUseId: tool } : {}) } : task;
         }),
       } : {}),
       ...(this.queued.length > 0 ? { queued: this.queued.map(queuedPrompt) } : {}),
