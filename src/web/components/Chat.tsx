@@ -577,7 +577,7 @@ export function Chat({
    * the whole message already), which waits again if it does not go; or the chat itself (Retry,
    * Compact, Cancel on a check-in), which leaves the box and what waits as they are.
    */
-  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat' | { reply: WaitingItem }, trust?: TrustChoice) => {
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat' | 'request' | { reply: WaitingItem }, trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
@@ -610,7 +610,9 @@ export function Chat({
       // A new session's Default effort, picked where Claude Code's settings give another, is said as
       // Claude Code says it: its own for the model, as /effort auto gives it.
       const sent = fit(!sessionId && Object.hasOwn(settings, 'effort') && settings.effort === undefined ? { ...settings, effort: OWN_EFFORT } : settings);
-      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
+      // A request from Changes says it waits for a turn the server may have under way that this
+      // page has not heard of yet: never steered into it.
+      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy || from === 'request' ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
@@ -1472,10 +1474,10 @@ export function Chat({
             // box first; on a phone the conversation comes back to show it. While Claude works a
             // request waits for the end of the turn, as a queued message, whatever Settings says for
             // what is typed: never steered into the work at hand. Its button says so, with Take back.
-            onRequest: (text: string, how: 'send' | 'box') => {
+            onRequest: async (text: string, how: 'send' | 'box') => {
               if (!workspace.docked) workspace.setOpen(false);
               if (how === 'box') setDraftText({ text, key: Date.now(), append: true, block: true });
-              else void send(text, [], 'queue', 'chat');
+              else await send(text, [], 'queue', 'request');
             },
             queued: view.run?.queued ?? [],
             onUnqueue: (uuid: string) => void api.unqueue(sessionId, uuid).catch(() => undefined),

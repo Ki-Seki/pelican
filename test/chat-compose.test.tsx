@@ -711,6 +711,65 @@ describe('Commit changes and Create PR', () => {
     expect(await screen.findByRole('button', { name: 'Commit changes' })).toBeTruthy();
   });
 
+  it('send once on a double tap, while Claude works and while it is idle', async () => {
+    // On a computer, where Changes stays beside the conversation after a tap.
+    media['(min-width: 1024px)'] = true;
+    media['(hover: hover) and (pointer: fine)'] = true;
+    setPrefs({ workspacePane: true });
+    server.git = repository;
+    session();
+    await loaded();
+    const commit = await screen.findByRole('button', { name: 'Commit changes' }, LAZY);
+    // The second tap lands while the first is on its way.
+    server.hold = new Promise((resolve) => setTimeout(resolve, 50));
+    fireEvent.click(commit);
+    fireEvent.click(commit);
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    // And a moment after it landed, before its button can say it is queued.
+    fireEvent.click(commit);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.sent).toHaveLength(1);
+    cleanup();
+    server.sent = [];
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [] };
+    session();
+    await loaded();
+    const pr = await screen.findByRole('button', { name: 'Create PR' }, LAZY);
+    fireEvent.click(pr);
+    fireEvent.click(pr);
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(server.sent).toHaveLength(1);
+  });
+
+  it('say they wait for a turn under way also when this page saw Claude idle, and leave the conversation once queued', async () => {
+    server.git = repository;
+    session();
+    await loaded();
+    fireEvent.click(await paneButton());
+    fireEvent.click(await screen.findByRole('button', { name: 'Commit changes' }, LAZY));
+    await waitFor(() => expect(server.sent).toHaveLength(1));
+    // Claude had started a turn the page had not heard of: the server queues it, never steers it in.
+    expect(server.sent[0]).toMatchObject({ text: COMMIT_REQUEST, mode: 'queue' });
+    const uuid = (server.sent[0] as { uuid?: string }).uuid!;
+    expect(getView(SESSION).messages.some((m) => m.uuid === uuid)).toBe(true);
+    act(() => setRun(SESSION, { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [], queued: [{ uuid, text: COMMIT_REQUEST }] }));
+    expect(getView(SESSION).messages.some((m) => m.uuid === uuid)).toBe(false);
+  });
+
+  it('take a queued Create PR back as they take back Commit changes', async () => {
+    server.git = repository;
+    const pr = createPrRequest({ repo: 'acme/app', branch: 'feat/x', baseBranch: 'main', cwd: CWD, draft: false });
+    server.run = { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [], queued: [{ uuid: 'q-pr', text: pr }] };
+    session();
+    await loaded();
+    fireEvent.click(await paneButton());
+    const queued = await screen.findByRole('group', { name: 'Create PR, queued' }, LAZY);
+    expect(screen.queryByRole('button', { name: 'Create PR' })).toBeNull();
+    fireEvent.click(within(queued).getByRole('button', { name: 'Take back' }));
+    expect(server.unqueued).toEqual(['q-pr']);
+  });
+
   it('put the request in the message box first on ⌘-click, after what is typed: nothing is sent', async () => {
     server.git = repository;
     session();

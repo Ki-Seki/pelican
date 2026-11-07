@@ -198,7 +198,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   /** Commit changes and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
   requests?: boolean;
   /** A request to Claude from Changes' foot: sent now (queued while Claude works), or put in the message box first (⌘-click, a long press). */
-  onRequest?: (text: string, how: 'send' | 'box') => void;
+  onRequest?: (text: string, how: 'send' | 'box') => Promise<void> | void;
   /** What waits for the end of Claude's turn, and taking one back: a request queued says so on its button. */
   queued?: QueuedPrompt[];
   onUnqueue?: (uuid: string) => void;
