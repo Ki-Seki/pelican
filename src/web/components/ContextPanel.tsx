@@ -12,8 +12,6 @@ import { Sheet } from './Sheet';
 
 type Context = NonNullable<RunState['context']>;
 
-const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
-
 /** How full the context window is, as Claude Code's /context says it: a ring that warns as it fills. */
 export function ContextRing({ context, quiet, onClick, ref }: {
   context: Context;
@@ -34,7 +32,7 @@ export function ContextRing({ context, quiet, onClick, ref }: {
       data-context-ring
       aria-label={`Context ${full}% full`}
       aria-haspopup="dialog"
-      title={`Context: ${kTokens(context.tokens)} of ${kTokens(context.max)} tokens`}
+      title={`Context: ${compactNumber(context.tokens)} of ${compactNumber(context.max)} tokens`}
       className={`relative flex h-9 shrink-0 items-center gap-1 rounded-full px-1.5 text-[12px] tabular-nums after:absolute after:-inset-y-1 after:inset-x-0 hover:bg-hover ${tone} ${quiet ? 'opacity-70' : ''}`}
     >
       <svg viewBox="0 0 18 18" className="size-[18px] -rotate-90">
@@ -82,8 +80,8 @@ function ContextBody({ sessionId, context, onCompact, onUsage, open, sheet }: {
     parts.push(
       <div key="window" className="px-3 pt-1.5 pb-1">
         <div className="flex items-baseline justify-between gap-3 text-[13.5px]">
-          {sheet ? <span>{kTokens(context.tokens)} of {kTokens(context.max)} tokens</span> : <span className="font-medium">Context</span>}
-          <span className="shrink-0 text-[12.5px] text-faint tabular-nums">{sheet ? `${full}% full` : `${full}% · ${kTokens(context.tokens)} of ${kTokens(context.max)} tokens`}</span>
+          {sheet ? <span>{compactNumber(context.tokens)} of {compactNumber(context.max)} tokens</span> : <span className="font-medium">Context</span>}
+          <span className="shrink-0 text-[12.5px] text-faint tabular-nums">{sheet ? `${full}% full` : `${full}% · ${compactNumber(context.tokens)} of ${compactNumber(context.max)} tokens`}</span>
         </div>
         <Meter value={full} />
         {onCompact && (

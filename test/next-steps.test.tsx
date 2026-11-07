@@ -122,7 +122,7 @@ describe('Context, and the MCP servers sheet', async () => {
 
   it('says how full the window is, and what the whole session has cost, as an estimate, where Claude Code counts it', async () => {
     context();
-    expect(screen.getByText('128k of 200k tokens')).toBeTruthy();
+    expect(screen.getByText('128K of 200K tokens')).toBeTruthy();
     expect(screen.getByText('64% full')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Compact' })).toBeTruthy();
     expect(await screen.findByText('459K tokens · 91% from cache · $1.84, estimated at API prices')).toBeTruthy();
