@@ -93,7 +93,8 @@ function packument() {
     name: 'pelican-cc',
     'dist-tags': { latest: registry.latest },
     versions: Object.fromEntries([...registry.tarballs].map(([version, data]) => [version, {
-      name: 'pelican-cc', version,
+      // As npm's registry has it from the package.json: what npm links in the prefix's bin.
+      name: 'pelican-cc', version, bin: { pelican: 'dist/server/index.js', 'pelican-cc': 'dist/server/index.js' },
       ...(registry.engines ? { engines: { node: registry.engines } } : {}),
       dist: { tarball: `${registry.url}pelican-cc/-/pelican-cc-${version}.tgz`, integrity: registry.answer === 'wrong-integrity' ? integrity(Buffer.from('other')) : integrity(data) },
     }])),
@@ -134,7 +135,7 @@ appendFileSync(process.env.STANDIN_NPM_LOG, JSON.stringify(args) + '\\n');
 const flag = (name) => args[args.indexOf(name) + 1];
 if (args[0] === 'prefix' && args[1] === '--global') {
   console.log(process.env.STANDIN_NPM_GLOBAL);
-} else if (args.join(' ') === 'config get registry') {
+} else if (args.join(' ') === 'config get registry --global') {
   console.log(process.env.STANDIN_NPM_REGISTRY);
 } else if (args[0] === 'install' && args.includes('--global')) {
   const prefix = flag('--prefix');
@@ -217,7 +218,7 @@ const services = {
 };
 
 /** Runs programs for real (node: npm and Pelican, standing in); launchctl, systemctl and ps stand in. */
-const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal } = {}) => {
+const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal, cwd } = {}) => {
   if (file === 'launchctl' || file === 'systemctl' || file === 'ps') {
     services.calls.push([file, ...args]);
     const said = (stdout: string, code = 0): Ran => ({ code, stdout, stderr: code ? `${file}: failed` : '' });
@@ -227,7 +228,7 @@ const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal }
     return Promise.resolve(said('', services.restartCode));
   }
   return new Promise((resolve) => {
-    execFile(file, args, { timeout, env: env ?? process.env, ...(signal ? { signal } : {}) }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout, env: env ?? process.env, ...(signal ? { signal } : {}), ...(cwd ? { cwd } : {}) }, (error, stdout, stderr) => {
       const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -1) : 0;
       resolve({ code, stdout: String(stdout), stderr: String(stderr) });
     });
@@ -446,7 +447,7 @@ describe('how Pelican was installed, and what Settings offers', () => {
     const prefix = path.join(dir, 'global');
     const install = await offered(await globalInstall(prefix), { global: prefix });
     expect(install).toEqual({ kind: 'npm', folder: path.join(prefix, 'lib', 'node_modules', 'pelican-cc'), prefix, self: true, restart: 'in-place' });
-    expect(await npmRuns()).toEqual([['config', 'get', 'registry'], ['prefix', '--global']]);
+    expect(await npmRuns()).toEqual([['config', 'get', 'registry', '--global'], ['prefix', '--global']]);
   }, 30_000);
 
   it('shows the command, and why, where npm’s global folder is not this one: another tool’s, such as a script of your own', async () => {
@@ -596,6 +597,64 @@ describe('how Pelican was installed, and what Settings offers', () => {
     expect(install).toMatchObject({ kind: 'npm', self: false, command: `npm install --global --prefix ${prefix} pelican-cc@${NEXT}` });
     expect(install.why).toMatch(/needs Node 99 or newer/);
   }, 30_000);
+});
+
+describe('the registry, as a global install has it', () => {
+  // npm itself: the npm of the Node running the tests, with a home folder, a global folder and a cache of the tests' own.
+  const realNpm = npmBeside(process.execPath);
+
+  it.skipIf(!realNpm)('is the user’s, never one a project’s .npmrc names in the folder Pelican was started in, for the check and the update alike', async () => {
+    // A registry a cloned project's .npmrc names: it hears nothing.
+    const heard: string[] = [];
+    const other = http.createServer((request, response) => {
+      heard.push(request.url ?? '');
+      response.writeHead(404).end('{}');
+    });
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
+    try {
+      const project = path.join(dir, 'cloned-project');
+      await mkdir(project, { recursive: true });
+      await writeFile(path.join(project, 'package.json'), JSON.stringify({ name: 'cloned', version: '1.0.0', private: true }));
+      await writeFile(path.join(project, '.npmrc'), `registry=http://127.0.0.1:${(other.address() as AddressInfo).port}/\n`);
+      // The user's own settings name the stand-in registry.
+      const home = path.join(dir, 'npm-user');
+      await mkdir(home, { recursive: true });
+      await writeFile(path.join(home, '.npmrc'), `registry=${registry.url}\n`);
+      const prefix = path.join(dir, 'npm-prefix');
+      await rm(prefix, { recursive: true, force: true });
+      const script = await globalInstall(prefix);
+      const npmRanIn: Array<string | undefined> = [];
+      useUpdateContext(context(script, {
+        home,
+        npm: realNpm,
+        env: {
+          PATH: process.env.PATH, HOME: home, npm_config_prefix: prefix, npm_config_cache: path.join(home, '.npm'), npm_config_update_notifier: 'false',
+          // Nothing but 127.0.0.1 is reached, whatever npm would ask.
+          npm_config_proxy: 'http://127.0.0.1:9', npm_config_https_proxy: 'http://127.0.0.1:9', npm_config_noproxy: '127.0.0.1',
+        },
+        // Pelican was started in the project: what it runs runs there, unless it says where.
+        run: (file, args, options = {}) => {
+          if (file === realNpm!.file && args[0] === realNpm!.args[0]) npmRanIn.push(options.cwd);
+          return run(file, args, { ...options, cwd: options.cwd ?? project });
+        },
+      }));
+      const info = (await api('GET', '/api/update?check=1')).body as UpdateInfo;
+      expect(info).toMatchObject({ latest: NEXT, changes: expect.stringContaining(`What ${NEXT} brings`), install: { kind: 'npm', prefix, self: true } });
+      expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+      // npm installed it into the prefix, from the user's registry; the stand-in for process.execve said so.
+      const failed = await until('failed', 100_000);
+      expect(failed.state).toMatchObject({ error: expect.stringMatching(/could not start it in its place \(stand-in/) });
+      expect(await installedVersion(prefix)).toBe(NEXT);
+      expect(await realpath(path.join(prefix, 'bin', 'pelican'))).toBe(path.join(prefix, 'lib', 'node_modules', 'pelican-cc', 'dist', 'server', 'index.js'));
+      expect(started).toHaveLength(1);
+      expect(heard).toEqual([]);
+      // Each npm ran from the home folder: config get registry --global, prefix --global, and both installs.
+      expect(npmRanIn.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(npmRanIn)).toEqual(new Set([home]));
+    } finally {
+      await new Promise((resolve) => other.close(resolve));
+    }
+  }, 120_000);
 });
 
 describe('the check', () => {

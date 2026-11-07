@@ -21,8 +21,9 @@ import { runningShellList } from './shell-runs.js';
 import { listTerminals, terminalRunning } from './terminals.js';
 
 /**
- * Updating Pelican from its Settings. Pelican asks npm's registry which version of pelican-cc is
- * newest (`dist-tags.latest`), at most once a day and when Settings opens, and reads what changed
+ * Updating Pelican from its Settings. Pelican asks npm's registry (the one a global install uses,
+ * as the user's and the global npm settings name it, never a project's) which version of pelican-cc
+ * is newest (`dist-tags.latest`), at most once a day and when Settings opens, and reads what changed
  * from that version's CHANGELOG.md. Where Pelican can update itself (an `npm install -g` into npm's
  * global folder, which this account can write to), the owner can start the update there: npm
  * installs that exact version, first into a folder of its own, where Pelican checks it starts
@@ -52,16 +53,16 @@ export type UpdateContext = {
   ipc: boolean;
   /** npm, as the Node running Pelican has it: the program, and the arguments before npm's own. */
   npm?: { file: string; args: string[] };
-  /** Runs a program, never through a shell. */
-  run: (file: string, args: string[], options?: { timeout?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal }) => Promise<Ran>;
+  /** Runs a program, never through a shell: in `cwd`, else in the folder Pelican was started in. */
+  run: (file: string, args: string[], options?: { timeout?: number; env?: NodeJS.ProcessEnv; signal?: AbortSignal; cwd?: string }) => Promise<Ran>;
   fetch: typeof fetch;
   /** process.execve, where this Node has it. */
   execve?: (file: string, args: string[], env: NodeJS.ProcessEnv) => never;
   now: () => number;
 };
 
-const runProgram: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal } = {}) => new Promise((resolve) => {
-  execFile(file, args, { timeout, env: env ?? process.env, maxBuffer: 32 * 1024 * 1024, ...(signal ? { signal } : {}), windowsHide: true }, (error, stdout, stderr) => {
+const runProgram: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal, cwd } = {}) => new Promise((resolve) => {
+  execFile(file, args, { timeout, env: env ?? process.env, maxBuffer: 32 * 1024 * 1024, ...(signal ? { signal } : {}), ...(cwd ? { cwd } : {}), windowsHide: true }, (error, stdout, stderr) => {
     const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -1) : 0;
     resolve({ code, stdout: String(stdout), stderr: String(stderr || (error && code === -1 ? error.message : '')) });
   });
@@ -185,10 +186,20 @@ function npmEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return kept;
 }
 
+/**
+ * Runs npm as `npm install -g` typed in a terminal at home would: from the home folder, never from
+ * the folder Pelican was started in, where a cloned project's .npmrc would name the registry (and
+ * the rest of npm's settings) for Pelican's own code.
+ */
+function runNpm(args: string[], options: { timeout: number; signal?: AbortSignal }): Promise<Ran> {
+  const { npm, env, home, run } = ctx();
+  if (!npm) return Promise.resolve({ code: -1, stdout: '', stderr: 'npm is not beside this Node' });
+  return run(npm.file, [...npm.args, ...args], { ...options, env: npmEnvironment(env), cwd: home });
+}
+
 const npmSays = async (args: string[]): Promise<string | undefined> => {
-  const { npm, env } = ctx();
-  if (!npm) return undefined;
-  const ran = await ctx().run(npm.file, [...npm.args, ...args], { timeout: 30_000, env: npmEnvironment(env) });
+  if (!ctx().npm) return undefined;
+  const ran = await runNpm(args, { timeout: 30_000 });
   return ran.code === 0 ? ran.stdout.trim().split('\n').at(-1)?.trim() || undefined : undefined;
 };
 
@@ -302,17 +313,26 @@ async function findInstall(): Promise<Install> {
 
 const install = (): Promise<Install> => (found ??= findInstall());
 
-/** The registry npm installs from, as it says (or its setting in the environment, without npm); npm's own when neither says. */
-async function registry(): Promise<string> {
-  const { env } = ctx();
-  const said = (await npmSays(['config', 'get', 'registry']).catch(() => undefined)) ?? env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY;
+/** A registry's address as npm would use it: http(s), with no user name or password, ending in a slash. */
+function registryAddress(said: string | undefined): string | undefined {
   try {
-    const url = new URL(said ?? 'https://registry.npmjs.org/');
+    const url = new URL(said ?? '');
     if ((url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password) return url.href.endsWith('/') ? url.href : `${url.href}/`;
   } catch {
     // Not an address.
   }
-  return 'https://registry.npmjs.org/';
+  return undefined;
+}
+
+/**
+ * The registry a global install comes from, as npm says (`npm config get registry --global`, from
+ * the home folder: the user's and the global settings, never a project's), or its setting in the
+ * environment, without npm; npm's own when neither says.
+ */
+async function registry(): Promise<string> {
+  const { env } = ctx();
+  const said = (await npmSays(['config', 'get', 'registry', '--global']).catch(() => undefined)) ?? env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY;
+  return registryAddress(said) ?? 'https://registry.npmjs.org/';
 }
 
 /** A version on the registry: where its tarball is, the integrity npm checks it against, and the Node it needs. */
@@ -621,19 +641,17 @@ export function npmSaid(ran: Ran): string {
  * after the same version was installed apart), so new work waits no longer than it must.
  */
 function npmInstall(prefix: string, version: string, base: string, { signal, cached = false }: { signal?: AbortSignal; cached?: boolean } = {}): Promise<Ran> {
-  const { npm, env, run } = ctx();
-  if (!npm) return Promise.resolve({ code: -1, stdout: '', stderr: 'npm is not beside this Node' });
-  return run(npm.file, [
-    ...npm.args, 'install', '--global', '--prefix', prefix, '--registry', base,
+  return runNpm([
+    'install', '--global', '--prefix', prefix, '--registry', base,
     '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--loglevel=error', ...(cached ? ['--prefer-offline'] : []),
     `${PACKAGE_NAME}@${version}`,
-  ], { timeout: 15 * 60_000, env: npmEnvironment(env), ...(signal ? { signal } : {}) });
+  ], { timeout: 15 * 60_000, ...(signal ? { signal } : {}) });
 }
 
 /** Why the Pelican at `script` does not start as `version` (`pelican --version`); undefined when it does. */
 async function startsAs(script: string, version: string, signal?: AbortSignal): Promise<string | undefined> {
-  const { execPath, env, run } = ctx();
-  const ran = await run(execPath, [script, '--version'], { timeout: 60_000, env, ...(signal ? { signal } : {}) });
+  const { execPath, env, home, run } = ctx();
+  const ran = await run(execPath, [script, '--version'], { timeout: 60_000, env, cwd: home, ...(signal ? { signal } : {}) });
   if (ran.code !== 0) return `pelican --version failed: ${tail(ran)}`;
   const line = ran.stdout.trim().split('\n').at(-1) ?? '';
   if (!line.startsWith(`${version} (Pelican)`)) return `pelican --version said ${clipped(line, 200) || 'nothing'}`;
