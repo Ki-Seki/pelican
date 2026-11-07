@@ -212,6 +212,8 @@ const services = {
   ours: true,
   /** Asked to restart, they answer with this code (and never stop the tests' process). */
   restartCode: 0,
+  /** What ps lists: nothing, so Pelican kills nothing of the computer's. */
+  ps: '',
 };
 
 /** Runs programs for real (node: npm and Pelican, standing in); launchctl, systemctl and ps stand in. */
@@ -219,7 +221,7 @@ const run: UpdateContext['run'] = (file, args, { timeout = 60_000, env, signal }
   if (file === 'launchctl' || file === 'systemctl' || file === 'ps') {
     services.calls.push([file, ...args]);
     const said = (stdout: string, code = 0): Ran => ({ code, stdout, stderr: code ? `${file}: failed` : '' });
-    if (file === 'ps') return Promise.resolve(said(''));
+    if (file === 'ps') return Promise.resolve(said(services.ps));
     if (args[0] === 'print') return Promise.resolve(said(services.ours ? `\tstate = running\n\tpid = 4242\n` : '\tpid = 1\n'));
     if (args.includes('show')) return Promise.resolve(said(`MainPID=${services.ours ? 4242 : 1}\n`));
     return Promise.resolve(said('', services.restartCode));
@@ -316,7 +318,7 @@ beforeEach(async () => {
   registry.answer = 'ok';
   registry.engines = undefined;
   registry.requests = [];
-  Object.assign(services, { calls: [], ours: true, restartCode: 0 });
+  Object.assign(services, { calls: [], ours: true, restartCode: 0, ps: '' });
   started = [];
   serving = { stops: 0, agains: 0 };
   // What the server does to start in place, standing in: nothing of the tests' server stops.
@@ -719,6 +721,19 @@ describe('updating', () => {
     expect(started).toEqual([{ file: process.execPath, args: [process.execPath, path.join(prefix(), 'bin', 'pelican'), '--port', '7860'] }]);
     expect(serving.agains).toBe(1);
     expect(failed.state).toMatchObject({ error: expect.stringMatching(/could not start it in its place \(stand-in/), running: CURRENT });
+  }, 30_000);
+
+  it('starts in place once what it started has ended, not waiting on the ps it asks, which is one of its own while it runs', async () => {
+    await ready();
+    // ps lists itself, as the tests' process's child; given time, Pelican would wait it all out.
+    services.ps = '5001 4242 R    ps\n';
+    Object.assign(updateTiming, { childrenMs: 20_000 });
+    const start = Date.now();
+    expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+    await until('failed', 25_000);
+    expect(Date.now() - start).toBeLessThan(10_000);
+    expect(started).toHaveLength(1);
+    expect(services.calls.filter(([file]) => file === 'ps').length).toBeGreaterThan(0);
   }, 30_000);
 
   it('starts again through launchd, or systemd, as Pelican’s service; one that does not is said', async () => {

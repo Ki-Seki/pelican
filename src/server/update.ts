@@ -657,13 +657,13 @@ export function servedBy(hooks: typeof serving): void {
   serving = hooks;
 }
 
-/** The processes Pelican started that are still there, from ps. */
+/** The processes Pelican started that are still there, from ps: not the ps asked, which is one of them as it runs. */
 async function children(): Promise<number[]> {
-  const ran = await ctx().run('ps', ['-A', '-o', 'pid=,ppid=,stat='], { timeout: 10_000 });
+  const ran = await ctx().run('ps', ['-A', '-o', 'pid=,ppid=,stat=,comm='], { timeout: 10_000 });
   if (ran.code !== 0) return [];
   return ran.stdout.split('\n').flatMap((line) => {
-    const [pid, ppid, stat] = line.trim().split(/\s+/);
-    return Number(ppid) === ctx().pid && !stat?.startsWith('Z') ? [Number(pid)] : [];
+    const [pid, ppid, stat, ...comm] = line.trim().split(/\s+/);
+    return Number(ppid) === ctx().pid && !stat?.startsWith('Z') && path.basename(comm.join(' ')) !== 'ps' ? [Number(pid)] : [];
   });
 }
 
