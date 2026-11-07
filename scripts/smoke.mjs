@@ -1,8 +1,9 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
 // sheets and the files Claude sent there, on a phone and wide, light and dark; and the ways in to
-// every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone). Runs
-// in CI after the build, and before the site is published.
+// every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone), and
+// Rewind to here, Undo rewind and Fork from here as the demo acts them out. Runs in CI after the
+// build, and before the site is published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
 // CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken.
@@ -756,6 +757,110 @@ async function checkSideChat(browser, base, sessions) {
   await context.close();
 }
 
+/**
+ * Rewind to here, Undo rewind, /rewind and Fork from here, as the demo acts them out in the page:
+ * on a computer from the prompt's icons beside it, on a phone from the row a tap on the prompt
+ * shows; Desktop's dialog where files changed after it (its three choices, a finger's height),
+ * none where nothing did; the marker at the cut and the words back in the box; Undo rewind
+ * bringing the prompt back and taking the words out of the box; ⌘K's Rewind to an earlier message
+ * listing the prompts; and Fork from here opening a copy with the words in its box.
+ */
+async function checkRewind(browser, base, sessions, where) {
+  const finder = await browser.newContext({ ...SIZES.wide });
+  const look = await finder.newPage();
+  let session;
+  for (const candidate of sessions.filter((s) => !s.sideChatOf && s.status === 'idle')) {
+    await look.goto(`${base}?s=${encodeURIComponent(candidate.id)}`, { waitUntil: 'networkidle' });
+    await look.waitForTimeout(300);
+    if ((await look.locator('[data-quote-what="prompt"]').count()) >= 2) {
+      session = candidate;
+      break;
+    }
+  }
+  await finder.close();
+  if (!session) {
+    notes.push(`${where}, rewind: no idle session with two prompts to rewind`);
+    return;
+  }
+  const url = `${base}?s=${encodeURIComponent(session.id)}`;
+  for (const size of ['wide', 'phone']) {
+    const context = await browser.newContext({ ...SIZES[size] });
+    const page = await context.newPage();
+    let at = 'Rewind to here';
+    watch(page, () => `${where}, rewind, ${size}, ${at}`);
+    const missing = (what) => problems.push(`${where}, rewind, ${size}, ${at}: ${what}`);
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    // The last prompt, the actions beside it or under it its own.
+    const bubble = page.locator('.group\\/user').filter({ has: page.locator('[data-quote-what="prompt"]') }).last();
+    const prompt = bubble.locator('[data-quote-what="prompt"]');
+    const words = (await prompt.innerText()).trim();
+    await prompt.scrollIntoViewIfNeeded();
+    if (size === 'wide') {
+      await prompt.hover();
+      await bubble.getByRole('button', { name: 'Rewind to here', exact: true }).click();
+    } else {
+      await prompt.tap();
+      await bubble.getByRole('button', { name: 'Rewind to here', exact: true }).tap();
+    }
+    const dialog = page.getByRole('dialog', { name: 'Rewind to this message?' });
+    const marker = page.locator('[data-rewound]');
+    await Promise.race([dialog.waitFor({ timeout: 5000 }), marker.waitFor({ timeout: 5000 })]).catch(() => {});
+    if (await dialog.isVisible()) {
+      at = 'its dialog';
+      const choices = await dialog.getByRole('radio').allTextContents();
+      if (choices.length > 0 && choices.join('|') !== 'Code and conversation|Conversation only|Code only') missing(`it offers ${choices.join(', ')}`);
+      if (size === 'phone') {
+        for (const button of await dialog.getByRole('button').all()) {
+          const box = await button.boundingBox();
+          if (box && box.height < 44) missing(`"${(await button.textContent()).trim()}" is ${Math.round(box.height)}px tall`);
+        }
+      }
+      await dialog.getByRole('button', { name: 'Rewind', exact: true }).click();
+    }
+    at = 'the conversation rewound';
+    if (!(await shows(marker, 5000))) {
+      missing('no "Rewound here" marker shows at the cut');
+      await context.close();
+      continue;
+    }
+    const box = page.getByLabel('Message Claude');
+    if ((await box.inputValue()).trim() !== words) missing(`the box holds "${await box.inputValue()}", not the prompt's words`);
+    if (await page.locator('[data-quote-what="prompt"]').filter({ hasText: words }).count()) missing('the prompt is still in the conversation');
+    at = 'Undo rewind';
+    await marker.getByRole('button', { name: 'Undo rewind' }).click();
+    if (!(await shows(page.locator('[data-quote-what="prompt"]').filter({ hasText: words }).first(), 5000))) missing('the prompt does not come back');
+    if (await marker.count()) missing('the marker stays');
+    if ((await box.inputValue()).trim()) missing(`the words stay in the box: "${await box.inputValue()}"`);
+    if (size === 'wide') {
+      at = '⌘K’s Rewind to an earlier message';
+      await page.keyboard.press('ControlOrMeta+k');
+      await page.keyboard.type('rewind');
+      const item = page.getByRole('option').filter({ hasText: 'Rewind to an earlier message' });
+      if (!(await shows(item.first()))) missing('⌘K does not find it');
+      else {
+        await page.keyboard.press('Enter');
+        const list = page.getByRole('dialog', { name: 'Rewind', exact: true });
+        if (!(await shows(list))) missing('it opens no list of messages');
+        else if (!(await list.getByRole('button').filter({ hasText: words.split('\n')[0].slice(0, 40) }).count())) missing('its list lacks the last prompt');
+        await page.keyboard.press('Escape');
+        await allClosed(page);
+      }
+      at = 'Fork from here';
+      await prompt.hover();
+      await bubble.getByRole('button', { name: 'Fork from here', exact: true }).click();
+      const copied = await page.waitForURL((address) => Boolean(address.searchParams.get('s')) && address.searchParams.get('s') !== session.id, { timeout: 5000 }).then(() => true, () => false);
+      if (!copied) missing('opens no new session');
+      else {
+        await page.waitForTimeout(400);
+        if ((await box.inputValue()).trim() !== words) missing(`the new session's box holds "${await box.inputValue()}", not the prompt's words`);
+        if (await page.locator('[data-quote-what="prompt"]').filter({ hasText: words }).count()) missing('the copy holds the prompt itself');
+      }
+    }
+    await context.close();
+  }
+}
+
 /** What a session's menu lists from a row, and from the title (which has Transcript view and when it started too). */
 const ROW_MENU = ['Rename', /^(Pin|Unpin)/, 'Fork', 'Export', /^(Archive|Unarchive)/];
 const TITLE_MENU = ['Rename', 'Side chat', 'Fork', 'Export', /^(Archive|Unarchive)/];
@@ -1466,6 +1571,7 @@ try {
     await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
     await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
+    await checkRewind(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
@@ -1478,6 +1584,7 @@ try {
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
     await checkWaysIn(browser, demo.base, sessions ?? [], 'app');
+    await checkRewind(browser, demo.base, sessions ?? [], 'app');
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkExport(browser, demo.base, sessions ?? [], 'app');
     await checkUsage(browser, demo.base);
