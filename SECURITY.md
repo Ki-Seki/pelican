@@ -235,8 +235,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   second file read on the same line, which tcsh goes on to also when the command stops on an error
   or Ctrl+C. The shell's history gets the command itself, for Up and Enter, rather than the line
   that read its file: bash, zsh and fish 4 are told to add it, quoted so that nothing in it is
-  expanded as it goes in; bash takes out the line that read the file, and fish, and zsh set to
-  HIST_IGNORE_SPACE, keep it out, as it is typed with a space before it.
+  expanded as it goes in; bash takes out the line that read the file, found by the file's name, and
+  nothing else, and fish, and zsh set to HIST_IGNORE_SPACE, keep it out, as it is typed with a space
+  before it.
   Claude sees nothing of a terminal unless you put it in a message (Quote, at most its first 1,500
   characters). A link in a terminal says where it goes before it opens, as the browser would ask for
   it (an international name in its `xn--` form): pointed at, at the foot of the screen, and tapped

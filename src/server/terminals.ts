@@ -1057,18 +1057,43 @@ const CSH_BACK = 'if ($?_pelican_off) then\nif ($?_pelican_histchars) then\nset 
  * Ctrl+C:
  * - bash, zsh and fish (4 and later) put the command itself in the shell's history, quoted so that
  *   nothing in it is expanded, for Up and Enter to run it again rather than the line that read the
- *   file. bash takes that line out as it does (`history -s`); fish, and zsh with HIST_IGNORE_SPACE,
+ *   file. bash's file takes that line out (bashHistory); fish, and zsh with HIST_IGNORE_SPACE,
  *   leave it out, typed with a space before it (typedLine).
  * - csh and tcsh take a `!` from the history in a file they read too: histchars, kept, is emptied
  *   while they read the command, so they take none, and put back as it was after.
  */
-function aroundCommand(command: string, shell: string): { before: string; after?: string } {
-  if (shell === 'bash') return { before: `if [[ -o history ]]; then builtin history -s -- ${shQuoted(command)}; fi\n` };
+function aroundCommand(command: string, shell: string, file: string): { before: string; after?: string } {
+  if (shell === 'bash') return { before: bashHistory(command, file) };
   if (shell === 'zsh') return { before: `builtin print -rs -- ${shQuoted(command)}\n` };
   // fish 3 has no `history append`, and would search its history for these words instead.
   if (shell === 'fish') return { before: command.startsWith('-') ? '' : `if string match -qr '^([4-9]|[1-9][0-9])' $FISH_VERSION\n    builtin history append ${fishQuoted(command)}\nend\n` };
   if (shell === 'csh' || shell === 'tcsh') return { before: CSH_OFF, after: CSH_BACK };
   return { before: '' };
+}
+
+/**
+ * bash's part: the command put in its history, and the line that read `file` taken out. bash 3.2,
+ * a Mac's /bin/bash, takes that line out itself as `history -s` adds the command; bash 4.3 and
+ * later (every Linux's, and Homebrew's) do that only while the history is on, which it is not while
+ * bash reads a file, so the line stayed, before the command, and Up and Enter twice read a file
+ * gone with its terminal. Where the line is still there (HISTCONTROL with ignorespace keeps it
+ * out), it is one of the history's last two, the command after it (unless HISTIGNORE kept that
+ * out), which `history 2` lists, each as its number, a space or a *, a space, its time as
+ * HISTTIMEFORMAT has it, and the line: the one with the file's name, in no other line, goes by its
+ * number, and nothing else. The file's path is plain (PLAIN_PATH): only its dots are read
+ * otherwise in a pattern.
+ */
+function bashHistory(command: string, file: string): string {
+  const listed = `([0-9]+)[* ] [^\\n]*[.] ${file.replaceAll('.', '[.]')}`;
+  return [
+    'if [[ -o history ]]; then',
+    `  builtin history -s -- ${shQuoted(command)}`,
+    `  _pelican_line=$'${listed}'`,
+    '  [[ $(builtin history 2) =~ $_pelican_line ]] && builtin history -d "${BASH_REMATCH[1]}"',
+    '  builtin unset _pelican_line',
+    'fi',
+    '',
+  ].join('\n');
 }
 
 /** The line typed for `shell` to read `file`, and `after` (csh's) once it has. */
@@ -1098,7 +1123,7 @@ export async function commandFile(command: string, shell: string): Promise<{ fil
   const { dir, own } = await commandFolder();
   // PowerShell reads in only a file whose name ends .ps1.
   const file = path.join(dir, `${randomUUID()}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
-  const { before, after } = aroundCommand(command, shell);
+  const { before, after } = aroundCommand(command, shell, file);
   const then = after === undefined ? undefined : `${file}.after`;
   const remove = own ? [dir] : [file, ...(then ? [then] : [])];
   try {

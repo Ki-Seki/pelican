@@ -313,16 +313,27 @@ describe('a terminal', () => {
   }
 
   // The shell's history gets the command itself, for Up and Enter to run it again, rather than the
-  // line that read its file, which is gone with its terminal. zsh leaves that line out where it is
-  // told to (HIST_IGNORE_SPACE, as oh-my-zsh does), and bash takes it out by itself.
-  for (const [name, file, args, rc] of [['bash', '/bin/bash', ['--noprofile', '--norc', '-i'], ''], ['zsh', '/bin/zsh', ['-d', '-i'], 'setopt hist_ignore_space\n']] as const) {
-    it.skipIf(!existsSync(file))(`puts the command itself in ${name}’s history, for Up and Enter to run again, and not the line that read it`, async () => {
+  // line that read its file, which is gone with its terminal, and keeps all it had. zsh leaves that
+  // line out where it is told to (HIST_IGNORE_SPACE, as oh-my-zsh does); bash where HISTCONTROL
+  // says to (ignoreboth, as Debian's and Ubuntu's .bashrc have it), and else the file takes it out,
+  // which bash 3.2 (a Mac's) does by itself, and bash 4.3 and later (Linux's, Homebrew's) do not.
+  for (const [name, file, args, rc, histcontrol] of [
+    ['bash', '/bin/bash', ['--noprofile', '--norc', '-i'], '', undefined],
+    ['bash', '/bin/bash', ['--noprofile', '--norc', '-i'], '', 'ignoreboth'],
+    ['zsh', '/bin/zsh', ['-d', '-i'], 'setopt hist_ignore_space\n', undefined],
+  ] as const) {
+    it.skipIf(!existsSync(file))(`puts the command itself in ${name}’s history${histcontrol ? ` (HISTCONTROL=${histcontrol})` : ''}, for Up and Enter to run again, and not the line that read it`, async () => {
       const zdotdir = path.join(dir, `zdotdir-history-${name}`);
       await mkdir(zdotdir, { recursive: true });
       await writeFile(path.join(zdotdir, '.zshrc'), rc);
-      const before = { HISTFILE: process.env.HISTFILE, ZDOTDIR: process.env.ZDOTDIR };
+      // A history of its own, with a line from before.
+      const history = path.join(dir, `history-run-${name}-${histcontrol ?? 'unset'}`);
+      await writeFile(history, 'echo from-before\n');
+      const before = { HISTFILE: process.env.HISTFILE, ZDOTDIR: process.env.ZDOTDIR, HISTCONTROL: process.env.HISTCONTROL };
       Object.assign(testShell, { file, args: [...args] });
-      Object.assign(process.env, { HISTFILE: path.join(dir, `history-run-${name}`), ZDOTDIR: zdotdir });
+      Object.assign(process.env, { HISTFILE: history, ZDOTDIR: zdotdir });
+      if (histcontrol) process.env.HISTCONTROL = histcontrol;
+      else delete process.env.HISTCONTROL;
       try {
         const command = 'echo "it\'s again-$((6 * 7))" \\\n  && echo "and $((1 + 1))"';
         const shown = page((await open(work(), { command })).id);
@@ -336,13 +347,15 @@ describe('a terminal', () => {
         shown.type('\r');
         await shown.sees(/it's again-42\r\nand 2\r\n/, 10_000, from);
         await pause(300);
-        // What the history holds now: the command, twice, and not the line that read its file.
+        // What the history holds now: the command, twice, and not the line that read its file, but
+        // the line from before: nothing else was taken out.
         from = shown.output.length;
         shown.type('fc -ln 1; echo LIST\'\'ED\r');
         await shown.sees(/LISTED\r\n/, 10_000, from);
         const listed = shown.output.slice(from);
         expect(listed.split('it\'s again-$((6 * 7))').length - 1).toBeGreaterThanOrEqual(2);
         expect(listed).not.toContain(path.join(config.stateDir, 'run'));
+        expect(listed).toContain('echo from-before');
       } finally {
         for (const [variable, value] of Object.entries(before)) {
           if (value === undefined) delete process.env[variable];
@@ -544,8 +557,18 @@ describe('Run in terminal’s command files', () => {
         `if string match -qr '^([4-9]|[1-9][0-9])' $FISH_VERSION\n    builtin history append 'echo "it\\'s" \\\\ done'\nend\n${shownFirst('echo "it\'s" \\ done', 'fish')}echo "it's" \\ done\n`,
       );
       // bash and zsh, quoted as they read it; csh and tcsh, read with what puts `!` back after.
+      // bash's takes the line that read it out of the history, by the number of the line with its name.
       const bash = await commandFile('echo \'a\'', 'bash');
-      expect(readFileSync(bash!.file, 'utf8')).toBe(`if [[ -o history ]]; then builtin history -s -- 'echo '\\''a'\\'''; fi\n${shownFirst("echo 'a'", 'bash')}echo 'a'\n`);
+      expect(readFileSync(bash!.file, 'utf8')).toBe([
+        'if [[ -o history ]]; then',
+        '  builtin history -s -- \'echo \'\\\'\'a\'\\\'\'\'',
+        `  _pelican_line=$'([0-9]+)[* ] [^\\n]*[.] ${bash!.file.replaceAll('.', '[.]')}'`,
+        '  [[ $(builtin history 2) =~ $_pelican_line ]] && builtin history -d "${BASH_REMATCH[1]}"',
+        '  builtin unset _pelican_line',
+        'fi',
+        `${shownFirst("echo 'a'", 'bash')}echo 'a'`,
+        '',
+      ].join('\n'));
       expect(bash!.line).toBe(` . ${bash!.file}`);
       const tcsh = await commandFile('echo a', 'tcsh');
       expect(tcsh!.line).toBe(`source ${tcsh!.file}; source ${tcsh!.file}.after`);
