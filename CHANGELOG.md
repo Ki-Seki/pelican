@@ -41,7 +41,8 @@ settings; and updates from Settings.
 - **A terminal keeps going.** It runs on when you close the page or your phone sleeps, and when you
   come back the page connects again by itself and shows the screen as it was, scrollback and a
   program such as vim, with its mouse, its cursor and the colors it set, included, without changing
-  the size the shell has on another page. A shell that ends keeps its last screen, with Start again;
+  the size the shell has on another page, as showing its tab again after Changes or Files does not
+  either, unless no other page shows it. A shell that ends keeps its last screen, with Start again;
   so does one Pelican ended when it stopped, as all terminals end with Pelican. One unused for 12
   hours with nothing running in it closes on its own, and one nobody typed into that no page shows
   makes room when 10 run; with 10 in use, the Terminal tab lists those in other folders, to end one,

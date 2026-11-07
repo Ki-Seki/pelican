@@ -115,9 +115,13 @@ export class TerminalConnection {
     return true;
   }
 
-  /** This page's size, for the shell; a connection made later says it too. */
-  resize(cols: number, rows: number): void {
-    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  /**
+   * This page's size, for the shell; a connection made later says it too. `shown`: said as the page
+   * showed the terminal again, by nobody's doing, which the shell takes only where this page is
+   * alone or its size is the shell's (the server says it back then, with `size`).
+   */
+  resize(cols: number, rows: number, shown = false): void {
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify({ type: 'resize', cols, rows, ...(shown ? { shown: true } : {}) }));
   }
 
   /**

@@ -263,6 +263,8 @@ class Term {
   private colors?: TerminalColors;
   private saidColors = 0;
   private typist?: Viewer;
+  /** The page whose size the shell has: the last typed in or resized, or the one that came alone. */
+  private sizer?: Viewer;
   private readonly setColors = new Map<number, [number, number, number]>();
   /**
    * Where in the output a page's Clear terminal falls (in bytes received), until the copy has
@@ -557,6 +559,7 @@ class Term {
   private leave(viewer: Viewer): void {
     if (!this.viewers.delete(viewer)) return;
     if (this.typist === viewer) this.typist = undefined;
+    if (this.sizer === viewer) this.sizer = undefined;
     if (viewer.joining) clearTimeout(viewer.joining.timer);
     viewer.stopBeating();
     this.lastActive = Date.now();
@@ -598,7 +601,9 @@ class Term {
       viewer.unacked = Math.max(0, viewer.unacked - message.bytes);
       this.pressure();
     } else if (message?.type === 'resize' && !this.exit) {
-      this.resize(message.cols, message.rows, viewer);
+      // Shown again, nobody typing or resizing: the size another page has the shell at stays.
+      if (message.shown && this.viewers.size > 1 && this.sizer && this.sizer !== viewer) return;
+      this.resize(message.cols, message.rows, viewer, Boolean(message.shown));
     } else if (message?.type === 'colors') {
       this.saidColors += 1;
       viewer.colors = { said: message.colors, turn: this.saidColors };
@@ -669,8 +674,12 @@ class Term {
     }, REDRAW_MS).unref();
   }
 
-  /** The shell takes the size of the page that last said one; the others are told. */
-  private resize(cols: number, rows: number, from: Viewer): void {
+  /**
+   * The shell takes the size of the page that last said one; the others are told, and with
+   * `toItToo`, that page as well (it asked as it showed again, and draws at the size once told).
+   */
+  private resize(cols: number, rows: number, from: Viewer, toItToo = false): void {
+    this.sizer = from;
     if (cols === this.cols && rows === this.rows) return;
     this.cols = cols;
     this.rows = rows;
@@ -681,7 +690,7 @@ class Term {
     }
     // The copy takes the size where it comes in the output, as the pages do.
     this.screen.write('', () => this.screen.resize(cols, rows));
-    this.tell({ type: 'size', cols, rows }, from);
+    this.tell({ type: 'size', cols, rows }, toItToo ? undefined : from);
   }
 
   private ended(code: number, signal: number | undefined): void {

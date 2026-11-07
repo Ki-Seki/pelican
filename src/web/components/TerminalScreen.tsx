@@ -149,13 +149,23 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   /** The shell was sized for another page since this one last fitted it. */
   const sizedElsewhere = useRef(false);
 
-  /** Fits the screen to its box and tells the shell, unless the box is not on screen. */
-  const fit = () => {
+  /**
+   * Fits the screen to its box and tells the shell, unless the box is not on screen. `shown`: it
+   * shows again (its tab picked again), its box as it was, with nobody typing or resizing here: a
+   * size another page gave the shell since stays, as the shell keeps the size of the page last
+   * typed in or resized, unless this page is alone, which the server knows: it is asked, and says
+   * the size back when it takes it.
+   */
+  const fit = (shown = false) => {
     const t = term.current;
     const dims = fitter.current?.proposeDimensions();
     if (!t || !dims || hiddenNow.current || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
-    sizedElsewhere.current = false;
     const { cols, rows } = clampSize(dims.cols, dims.rows);
+    if (shown && sizedElsewhere.current) {
+      if (cols !== t.cols || rows !== t.rows) connection.current?.resize(cols, rows, true);
+      return;
+    }
+    sizedElsewhere.current = false;
     if (cols === t.cols && rows === t.rows) return;
     t.resize(cols, rows);
     connection.current?.resize(cols, rows);
@@ -314,13 +324,22 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     const themed = new MutationObserver(recolor);
     themed.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
+    // The box's size changed: resized on screen, which takes the shell's size, or only shown again
+    // after another tab, where it had none, which does not (fit's `shown`).
     let sizing = 0;
+    fit();
+    const area = () => (el.clientWidth || el.clientHeight ? { width: el.clientWidth, height: el.clientHeight } : undefined);
+    let fitted = area();
     const resized = new ResizeObserver(() => {
       cancelAnimationFrame(sizing);
-      sizing = requestAnimationFrame(fit);
+      sizing = requestAnimationFrame(() => {
+        const now = area();
+        const resizedHere = Boolean(fitted && now && (now.width !== fitted.width || now.height !== fitted.height));
+        fitted = now;
+        if (now) fit(!resizedHere);
+      });
     });
     resized.observe(el);
-    fit();
 
     const gestures = touch ? touchGestures(el, t, fit, () => events.current.onMenu(null)) : undefined;
     // A right-click with a pointer: the terminal's own menu, Desktop's, at the pointer.
@@ -410,9 +429,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
         output: (data, written) => t.write(data, written),
         // Cleared here or on another page: once what came before it is on the screen.
         clear: () => t.write('', () => t.clear()),
+        // Another page's size, or this one's said back as the shell took it on showing again.
         size: (cols, rows) => t.write('', () => {
           const size = clampSize(cols, rows);
-          sizedElsewhere.current = true;
+          const own = fitter.current?.proposeDimensions();
+          const mine = own && Number.isFinite(own.cols) && Number.isFinite(own.rows) ? clampSize(own.cols, own.rows) : undefined;
+          sizedElsewhere.current = !mine || mine.cols !== size.cols || mine.rows !== size.rows;
           t.resize(size.cols, size.rows);
         }),
         program: (program) => events.current.onProgram(id, program),
@@ -462,9 +484,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // Shown again after another tab: fitted to the box it has now.
+  // Shown again after another tab: fitted to the box it has now, without taking the shell's size
+  // from another page (fit's `shown`).
   useEffect(() => {
-    if (!hidden) fit();
+    if (!hidden) fit(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden]);
 

@@ -108,8 +108,14 @@ export type TerminalServerMessage =
 
 /** What a page sends as text frames; keystrokes and pastes go as binary frames. */
 export type TerminalClientMessage =
-  /** This page's size (columns, rows): the shell takes the size of the page that last said one. */
-  | { type: 'resize'; cols: number; rows: number }
+  /**
+   * This page's size (columns, rows): the shell takes the size of the page that last said one,
+   * its user having typed in it or resized it. `shown`: said as the page showed the terminal again
+   * (its tab picked again, its box as it was), by nobody's doing: the shell takes it only where no
+   * other page shows the terminal, or this page's size is the one it has (nobody else's since),
+   * and then says it back (`size`); otherwise it keeps the size it has, and says nothing.
+   */
+  | { type: 'resize'; cols: number; rows: number; shown?: true }
   /**
    * Output this page has written to its screen since its last ack, in bytes of the binary frames
    * (`ready` counts for nothing): one ack for each TERMINAL_LIMITS.ackBytes or more. The shell waits
@@ -225,7 +231,9 @@ export function terminalColors(value: unknown): TerminalColors | undefined {
 /** A page's text frame, or undefined for anything else. */
 export function terminalClientMessage(text: string): TerminalClientMessage | undefined {
   const value = parsed(text);
-  if (value?.type === 'resize' && sizeAllowed(value.cols, value.rows)) return { type: 'resize', cols: value.cols as number, rows: value.rows as number };
+  if (value?.type === 'resize' && sizeAllowed(value.cols, value.rows)) {
+    return { type: 'resize', cols: value.cols as number, rows: value.rows as number, ...(value.shown === true ? { shown: true as const } : {}) };
+  }
   if (value?.type === 'ack' && Number.isSafeInteger(value.bytes) && (value.bytes as number) > 0) return { type: 'ack', bytes: value.bytes as number };
   if (value?.type === 'colors') {
     const colors = terminalColors(value.colors);

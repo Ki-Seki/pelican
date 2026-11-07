@@ -246,6 +246,30 @@ describe('a terminal', () => {
   }, 20_000);
 });
 
+describe('the size a terminal is drawn at', () => {
+  it('stays the page’s last typed in when another page shows it again with nobody typing there, unless that one is alone', async () => {
+    const terminal = await open();
+    const phone = await atPrompt(terminal.id, { cols: 40, rows: 20 });
+    const computer = await atPrompt(terminal.id, { cols: 120, rows: 40 });
+    expect(computer.ready).toMatchObject({ cols: 40, rows: 20 });
+    // The computer's Terminal tab is picked again after Files: it says its size as it shows, which
+    // the shell does not take from the phone, and the computer is told nothing new.
+    computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
+    let from = computer.output.length;
+    computer.type('stty size\r');
+    await computer.sees(/\r\n20 40\r\n/, 10_000, from);
+    expect(phone.messages.filter((m) => m.type === 'size')).toEqual([]);
+    expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
+    // Alone, as the phone has gone, it takes its own size, and is told it so it draws at it.
+    await phone.close();
+    computer.send({ type: 'resize', cols: 120, rows: 40, shown: true });
+    await until(() => computer.messages.some((m) => m.type === 'size' && m.cols === 120 && m.rows === 40), 5000, 'its size said back');
+    from = computer.output.length;
+    computer.type('stty size\r');
+    await computer.sees(/\r\n40 120\r\n/, 10_000, from);
+  }, 30_000);
+});
+
 describe('Clear terminal', () => {
   /** The lines that hold anything, on a page's screen and in what scrolled off it. */
   const written = (shown: Page) => shown.lines().map((line) => line.trimEnd()).filter(Boolean);
