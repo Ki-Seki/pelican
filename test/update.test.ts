@@ -989,6 +989,68 @@ describe('updating', () => {
   }, 30_000);
 });
 
+describe('what waits while the install is replaced', () => {
+  const prefix = () => path.join(dir, 'global');
+
+  it('starts nothing: the reads that would start Claude Code, git, gh, a terminal, a search or Tailscale wait, and reading goes on', async () => {
+    // Claude Code, standing in: it writes down each start.
+    const launched = path.join(dir, 'claude-launched');
+    const fake = path.join(dir, 'claude-fake');
+    await rm(launched, { force: true });
+    await writeFile(fake, `#!/bin/sh\necho "$@" >> '${launched}'\nexit 1\n`, { mode: 0o755 });
+    const before = config.claudeExecutable;
+    config.claudeExecutable = fake;
+    const work = path.join(dir, 'work-folder');
+    await mkdir(work, { recursive: true });
+    await writeFile(path.join(work, 'a.txt'), 'a\n');
+    // Starting again waits, as for what runs to end, until the reads are tried.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    servedBy({
+      stop: async () => {
+        serving.stops += 1;
+        await held;
+      },
+      again: async () => void (serving.agains += 1),
+    });
+    try {
+      useUpdateContext(context(await globalInstall(prefix()), { global: prefix() }));
+      expect((await api('GET', '/api/update?check=1')).body.install.self).toBe(true);
+      expect((await api('POST', '/api/update', { version: NEXT, when: 'now' })).status).toBe(202);
+      await until('restarting');
+      const q = `cwd=${encodeURIComponent(work)}`;
+      for (const read of [
+        '/api/models', `/api/commands?${q}`, '/api/usage/plan', '/api/sessions/s1/mcp', `/api/git?${q}`, `/api/git/diff?${q}&path=a.txt`, '/api/pr?url=x',
+        '/api/terminals', `/api/terminals?${q}`, '/api/terminals/t1', `/api/search?${q}&q=a`, `/api/files?${q}&q=a`, `/api/defaults?${q}`, '/api/access/phone',
+      ]) {
+        const answer = await api('GET', read);
+        expect(answer.status, read).toBe(503);
+        expect(answer.body.error, read).toBe(`Pelican is updating to ${NEXT} and starts again in a moment.`);
+      }
+      // Changes wait as before; reading what is there goes on, the update's own looks too, which ask neither npm nor the registry.
+      expect((await api('POST', '/api/sessions', {})).status).toBe(503);
+      for (const read of ['/api/sessions', '/api/defaults', `/api/tree?${q}`, `/api/file?${q}&path=a.txt`]) expect((await api('GET', read)).status, read).toBe(200);
+      await npmRuns();
+      const asked = registry.requests.length;
+      Object.assign(updateTiming, { settingsMs: 0 });
+      expect((await api('GET', '/api/update?check=1')).body).toMatchObject({ latest: NEXT, state: { phase: 'restarting' } });
+      expect(registry.requests.length).toBe(asked);
+      expect(await npmRuns()).toEqual([]);
+      release();
+      await until('failed');
+      expect(existsSync(launched)).toBe(false);
+      // Once over, the reads are answered again.
+      expect((await api('GET', `/api/tree?${q}`)).status).toBe(200);
+      expect((await api('GET', '/api/pr?url=x')).status).toBe(200);
+    } finally {
+      release();
+      config.claudeExecutable = before;
+    }
+  }, 30_000);
+});
+
 describe('who may update, and to what', () => {
   const prefix = () => path.join(dir, 'global');
 

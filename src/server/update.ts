@@ -839,7 +839,8 @@ export async function updateInfo(fresh = false): Promise<UpdateInfo> {
   const info: UpdateInfo = { current: pkg.version };
   if (config.demo) return info;
   if (state) info.state = state;
-  const found = await checkForUpdate({ settings: fresh });
+  // While the install is replaced, the registry is not asked: what it said is what is being installed.
+  const found = updating() ? checked : await checkForUpdate({ settings: fresh });
   const latest = found?.latest && isNewerVersion(found.latest.version, pkg.version) ? found.latest : undefined;
   if (!latest) return info;
   info.latest = latest.version;
@@ -903,9 +904,23 @@ export function cancelUpdate(): boolean {
   return true;
 }
 
-/** While the install is replaced and Pelican starts again, nothing new starts: a request to start something waits for the new version. */
+/**
+ * The reads that start a program, as app.ts serves them: Claude Code (models, commands, the plan's
+ * usage, MCP servers), git (Changes, the files of a folder, a folder's own settings), gh (a pull
+ * request's card), the terminal's PTY and ps, ripgrep (search: Claude Code's own, in the very
+ * install being replaced) and Tailscale's command line (the phone's address).
+ */
+const STARTS_SOMETHING = /^\/api\/(models|commands|usage\/plan|sessions\/[^/]+\/mcp|git(\/diff)?|pr|terminals(\/[^/]+)?|search|files|access\/phone)$/;
+
+/**
+ * While the install is replaced and Pelican starts again, nothing new starts: a change, or a read
+ * that starts a program, waits for the new version (503). Reading what is there goes on, the
+ * update's own requests and signing in too.
+ */
 export async function whileUpdating(c: Context, next: Next): Promise<Response | void> {
-  if (updating() && c.req.method !== 'GET' && c.req.method !== 'HEAD' && !c.req.path.startsWith('/api/update') && !c.req.path.startsWith('/api/auth')) {
+  if (!updating() || c.req.path.startsWith('/api/update') || c.req.path.startsWith('/api/auth')) return next();
+  const reads = c.req.method === 'GET' || c.req.method === 'HEAD';
+  if (!reads || STARTS_SOMETHING.test(c.req.path) || (c.req.path === '/api/defaults' && c.req.query('cwd'))) {
     return c.json({ error: `Pelican is updating to ${state!.version} and starts again in a moment.` }, 503);
   }
   return next();
