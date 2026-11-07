@@ -316,9 +316,13 @@ export const api = {
   defaults: (cwd?: string) => request<StartDefaults>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   /** Saves one change in Claude Code's user settings, as its /model, /effort, /fast or /config would; answers with the defaults for `cwd` now. */
   saveDefault: (change: DefaultChange, cwd?: string) => send<StartDefaults>('POST', 'defaults', { ...change, ...(cwd ? { cwd } : {}) }),
-  /** The last messages of an Agent call's subagent's transcript, or those before message `before`. */
-  subagent: (id: string, agent: string, before?: number) =>
-    request<MessagesPage>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}${before !== undefined ? `?before=${before}` : ''}`),
+  /**
+   * The last messages of an Agent call's subagent's transcript, or those before message `before`,
+   * or those from message `after` on (what is new, for a page that has the rest).
+   */
+  subagent: (id: string, agent: string, before?: number, after?: number) =>
+    request<MessagesPage>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}${
+      before !== undefined ? `?before=${before}` : after !== undefined ? `?after=${after}` : ''}`),
   /** A Workflow call's run, from the run's own files (or this Pelican's Claude, while it runs it). */
   workflow: (id: string, call: string) =>
     request<{ workflow: Workflow }>(`sessions/${encodeURIComponent(id)}/workflows/${encodeURIComponent(call)}`).then((r) => r.workflow),

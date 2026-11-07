@@ -1,5 +1,5 @@
 import { errorLine, nextStep } from '../../shared/errors';
-import type { ChatMessage, ImageBlock, ToolResultBlock, TurnChanges } from '../../shared/protocol';
+import type { AgentLaunch, ChatMessage, ImageBlock, ToolResultBlock, TurnChanges } from '../../shared/protocol';
 import { todosOf } from '../../shared/tasks';
 import { launchOf, parseTaskNotice, type TaskNotice, workflowOf } from '../../shared/workflows';
 
@@ -10,14 +10,71 @@ export type ToolCall = {
   result?: ToolResultBlock;
   /** A TodoWrite that only moves the same tasks along, which a line says better than the whole list again. */
   sameTasks?: true;
-  /** A Workflow call: how Claude Code said its run ended, in the conversation. */
+  /** A Workflow call, or an Agent call whose agent ran in the background: how Claude Code said it ended, in the conversation. */
   ended?: TaskNotice;
   /** A Workflow call whose run a later call resumed (its id): that call's card shows the run. */
   resumedBy?: string;
+  /** An Agent call: the report its agent handed back, which Claude Code gives Claude as a message of its own. */
+  report?: string;
 };
 
 /** Where a notice about a workflow's end leads: its card, and what the line says of it. */
 export type WorkflowNotice = { toolUseId: string; name?: string; status?: TaskNotice['status']; durationMs?: number };
+
+/**
+ * Where a notice about a background agent's end leads: its card, and what the line says of it, in
+ * Claude Code's words after the agent's name ("finished", "failed", "was stopped by user").
+ */
+export type AgentNotice = { toolUseId: string; description?: string; status?: TaskNotice['status']; words: string; durationMs?: number };
+
+/**
+ * How an Agent call ran its agent: waiting for it (`background` false), or not (in the background
+ * here, in a cloud session, as a teammate), as Claude Code recorded it or, from a transcript that
+ * kept no record, as its words to Claude say. `agentId`: the agent's own transcript and task.
+ */
+export type AgentRun = { background: boolean; mode?: AgentLaunch['mode']; agentId?: string; sessionUrl?: string; name?: string };
+
+/** Claude Code's first words to Claude for an Agent call that does not wait for its agent: the rest is for the model alone. */
+const LAUNCHED = /^\s*(Async agent launched successfully\.|Cloud agent launched\.|Spawned successfully\.)/;
+const LAUNCH_MODE: Record<string, AgentLaunch['mode']> = { 'Async agent launched successfully.': 'background', 'Cloud agent launched.': 'cloud', 'Spawned successfully.': 'teammate' };
+
+export function agentOf(call: ToolCall): AgentRun {
+  if (call.name !== 'Agent' && call.name !== 'Task') return { background: false };
+  const result = call.result;
+  const text = resultText(result);
+  const said = result && !result.is_error ? LAUNCHED.exec(text)?.[1] : undefined;
+  const launch = result?.agent;
+  const mode = launch?.mode ?? (said ? LAUNCH_MODE[said] : undefined);
+  // The launch's own line, or the trailer of a finished agent's result, after its report: "agentId: a1b2… (…)".
+  const agentId = launch?.agentId ?? [...text.matchAll(/(?:^|\n)agent_?[iI]d: ([\w-]{1,80})/g)].at(-1)?.[1];
+  const sessionUrl = launch?.sessionUrl ?? (mode === 'cloud' ? /(?:^|\n)session_url: (https:\/\/\S+)/.exec(text)?.[1] : undefined);
+  return {
+    background: Boolean(mode),
+    ...(mode ? { mode } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(sessionUrl ? { sessionUrl } : {}),
+    ...(launch?.name ? { name: launch.name } : {}),
+  };
+}
+
+/** An Agent call that runs, or will run, its agent in the background: its card is a block of its own. */
+export const runsInBackground = (call: ToolCall): boolean => (call.name === 'Agent' || call.name === 'Task') && (call.input.run_in_background === true || agentOf(call).background);
+
+/**
+ * What Claude Code gives Claude in place of an agent's report it handed back as a message of its
+ * own: a pointer to that message, for the model. The report shows instead, where it is known.
+ */
+export const HANDED_BACK = /^\s*This agent's report was delivered to you as a message from "[\w-]+"/;
+
+/** What Claude Code says after an agent's name, in a notice of its end ("Agent "Review" finished"): its words alone. */
+function agentWords(task: TaskNotice, description: string | undefined): string {
+  const summary = task.summary.trim();
+  const named = description ? `Agent "${description}" ` : undefined;
+  if (named && summary.startsWith(named)) return summary.slice(named.length);
+  const said = /^(?:Agent|Remote task) "[\s\S]*" ((?:finished|completed|failed|was stopped|is waiting|stopped at|is blocked)[\s\S]*)$/.exec(summary)?.[1];
+  if (said) return said;
+  return task.status === 'completed' ? 'finished' : task.status === 'failed' ? 'failed' : 'was stopped';
+}
 
 export type Part =
   | { kind: 'text'; key: string; text: string }
@@ -48,6 +105,8 @@ export type Item =
     next?: 'compact' | 'retry';
     /** A workflow's end, shown in its card: the line leads there. */
     workflow?: WorkflowNotice;
+    /** A background agent's end, shown in its card: the line leads there. */
+    agent?: AgentNotice;
   }
   | { kind: 'compact'; key: string; summary: string }
   /**
@@ -219,6 +278,9 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   /** Workflow calls so far, by id, for their ends to join them; and each run's calls, in order. */
   const workflows = new Map<string, ToolCall>();
   const runs = new Map<string, ToolCall[]>();
+  /** Agent calls so far, by id and by their agent's, for their ends and their reports to join them. */
+  const agents = new Map<string, ToolCall>();
+  const agentIds = new Map<string, ToolCall>();
 
   // The day goes above the conversation's first message and above each prompt on a new day, as
   // Claude Desktop shows it.
@@ -240,7 +302,12 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
       turn = undefined;
       continue;
     }
-    if (message.meta) continue;
+    if (message.meta) {
+      // A subagent's report handed back, for the model: its Agent call's card shows it.
+      const call = message.handback ? agentIds.get(message.handback.from) : undefined;
+      if (call && call.report === undefined) call.report = message.handback!.report;
+      continue;
+    }
     // Lines Claude Code adds itself (a local command and its output, hook feedback): notes, never prompts.
     if (message.role === 'system') {
       const classified = classifyUserText(message.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
@@ -305,6 +372,23 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
             key: message.uuid,
             workflow: { toolUseId: call.id, ...(name ? { name } : {}), ...(task.status ? { status: task.status } : {}), ...(task.usage?.durationMs !== undefined ? { durationMs: task.usage.durationMs } : {}) },
           });
+        } else if (task && (task.toolUseId ? agents.get(task.toolUseId) : task.taskId ? agentIds.get(task.taskId) : undefined)) {
+          // So does a background agent's: its result and how it ended go into its card, and the line names it.
+          const agent = (task.toolUseId ? agents.get(task.toolUseId) : agentIds.get(task.taskId!))!;
+          if (!agent.ended || agent.ended.orphan || !task.orphan) agent.ended = task;
+          const description = typeof agent.input.description === 'string' && agent.input.description.trim() ? agent.input.description.trim() : undefined;
+          const { detail: _shownInTheCard, ...line } = notice;
+          push({
+            ...line,
+            key: message.uuid,
+            agent: {
+              toolUseId: agent.id,
+              ...(description ? { description } : {}),
+              ...(task.status ? { status: task.status } : {}),
+              words: agentWords(task, description),
+              ...(task.usage?.durationMs !== undefined ? { durationMs: task.usage.durationMs } : {}),
+            },
+          });
         } else {
           push({ ...notice, key: message.uuid });
         }
@@ -345,6 +429,10 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
           workflows.set(block.id, call);
           const runId = launchOf(result)?.runId;
           if (runId) runs.set(runId, [...(runs.get(runId) ?? []), call]);
+        } else if (block.name === 'Agent' || block.name === 'Task') {
+          agents.set(block.id, call);
+          const agentId = agentOf(call).agentId;
+          if (agentId) agentIds.set(agentId, call);
         }
         turn!.parts.push({ kind: 'tool', key, call });
       }
