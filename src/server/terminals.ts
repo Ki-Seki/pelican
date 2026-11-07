@@ -944,9 +944,29 @@ function readsFile(shell: string): '.' | 'source' | undefined {
   return undefined;
 }
 
+/** `text` in a POSIX shell's single quotes, where nothing is read: each quote in it ends them, is escaped, and starts them again. */
+const posixQuoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+/** `text` in fish's single quotes, where only `\'` and `\\` are read. */
+const fishQuoted = (text: string) => `'${text.replace(/[\\']/g, (c) => `\\${c}`)}'`;
+
 /**
- * Writes `command` for Run in terminal into a file of its own (readable by this account alone) and
- * says the line that has `shell` read it in; undefined for a shell that reads no such file.
+ * What the file runs before the command: the command, printed dimmed, as a terminal shows what was
+ * typed at its prompt, since the prompt shows only the line that reads the file. By printf, in
+ * sh's family and in fish, from a word in single quotes, of which nothing is read or run; `command`,
+ * so a function or an alias of that name is not what prints it. None for a shell whose quoting is
+ * not as plain (csh's, nu, xonsh, PowerShell): there the prompt's line alone shows, as before.
+ */
+export function shownFirst(command: string, shell: string): string {
+  const printed = (quoted: string) => `command printf '\\033[2m%s\\033[0m\\n' ${quoted}\n`;
+  if (/^(sh|bash|rbash|zsh|dash|ash|ksh|ksh93|mksh|lksh|oksh|pdksh|yash|posh|osh)$/i.test(shell)) return printed(posixQuoted(command));
+  if (shell === 'fish') return printed(fishQuoted(command));
+  return '';
+}
+
+/**
+ * Writes `command` for Run in terminal into a file of its own (readable by this account alone),
+ * after what prints it first (shownFirst), and says the line that has `shell` read it in; undefined
+ * for a shell that reads no such file.
  */
 export async function commandFile(command: string, shell: string): Promise<{ file: string; line: string } | undefined> {
   const reads = readsFile(shell);
@@ -954,7 +974,7 @@ export async function commandFile(command: string, shell: string): Promise<{ fil
   runCount += 1;
   // PowerShell reads in only a file whose name ends .ps1.
   const file = path.join(await runFolderNow(), `${runCount}${/^(pwsh|powershell)$/i.test(shell) ? '.ps1' : ''}`);
-  await writeFile(file, `${command}\n`, { mode: 0o600, flag: 'wx' });
+  await writeFile(file, `${shownFirst(command, shell)}${command}\n`, { mode: 0o600, flag: 'wx' });
   return { file, line: `${reads} ${file}` };
 }
 

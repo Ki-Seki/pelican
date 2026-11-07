@@ -63,7 +63,9 @@ settings; and updates from Settings.
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
   session's folder, which reads it from a file of its own (`.` or `source`), so its lines go in
   together and run as they read: a `!` in it is not taken from your shell's history, as bash and zsh
-  take one in what is typed at their prompt. The question shows the whole command, wrapped, its
+  take one in what is typed at their prompt. Under the line that reads the file, the new tab shows
+  the command itself, dimmed, as a terminal shows what was typed, then what it prints (in sh's
+  family, bash and zsh among them, and fish). The question shows the whole command, wrapped, its
   lines numbered and counted, and the blanks a line is padded with drawn, so nothing of it sits past
   the block's edge. Only Claude's replies offer it, not a file or a tool's output, and only for a
   command with nothing hidden in it, as an approval reads one, nor laid out to put part of it out of
