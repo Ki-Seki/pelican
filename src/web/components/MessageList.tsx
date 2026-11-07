@@ -2,7 +2,7 @@ import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizont
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
-import { requestShown } from '../../shared/requests';
+import { partsShown, requestShown } from '../../shared/requests';
 import { api, apiUrl } from '../lib/api';
 import { modelName } from '../../shared/usage';
 import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIONS, type ReplyTarget, STEP_ACTIONS } from '../lib/actions';
@@ -427,8 +427,10 @@ const UserBubble = memo(function UserBubble({
   const target = useContext(QuoteTargetContext);
   const touch = useMedia('(hover: none)');
   const text = item.command ? `${item.command.name} ${item.command.args}`.trim() : item.text;
-  // Desktop's Create PR request reads as the command it shows: /create-pr, /create-pr --draft.
+  // Desktop's Create PR request reads as the command it shows: /create-pr, /create-pr --draft; one
+  // that Claude Code took together with other prompts, as such among them.
   const request = item.command ? undefined : requestShown(item.text);
+  const parts = item.command || request ? undefined : partsShown(item.text);
   const ready = !item.pending;
   const press = useLongPress<HTMLDivElement>((p) => ready && setMenu(menuAt(p)), { enabled: ready && !selectable, nativeMenu: browsersOwn, selectable });
   // Gone (a tap elsewhere took the selection), its words are a prompt's again, a long press its list.
@@ -500,7 +502,7 @@ const UserBubble = memo(function UserBubble({
               <IconRow list={row} />
             </div>
           )}
-          <PromptText text={request ?? text} command={Boolean(item.command || request)} onTap={() => ready && setActions((v) => !v)} source={from} press={press} bubble={bubble} />
+          <PromptText text={request ?? parts ?? text} command={Boolean(item.command || request)} onTap={() => ready && setActions((v) => !v)} source={from} press={press} bubble={bubble} />
         </SwipeQuote>
       )}
       {item.pending ? (

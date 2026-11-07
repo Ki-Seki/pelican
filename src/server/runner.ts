@@ -41,6 +41,7 @@ import type {
   WorkflowPhase,
   WorkflowStatus,
 } from '../shared/protocol.js';
+import { isRequest } from '../shared/requests.js';
 import { REWIND_BUSY } from '../shared/rewind.js';
 import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
@@ -864,6 +865,12 @@ export class SessionRun {
     this.input.push(message);
   }
 
+  /** What goes when a turn ends: the prompts that waited, up to a request of Desktop's, which goes alone. */
+  private nextWaiting(): Prompt[] {
+    const alone = this.queued.findIndex((prompt) => isRequest(prompt.text));
+    return this.queued.splice(0, alone === 0 ? 1 : alone > 0 ? alone : this.queued.length);
+  }
+
   /** Takes a queued prompt back before Claude gets it; false when it is not waiting any more. */
   unqueue(uuid: string): boolean {
     const before = this.queued.length;
@@ -1472,8 +1479,10 @@ export class SessionRun {
             if (this.unanswered.size === before) this.unanswered.clear();
             // What waited for this turn goes out now, each prompt as it was typed, as Claude Code takes
             // what is typed while it works: plain prompts together, a command as a command. Joined
-            // into one text, a command would take the prompts after it as its arguments.
-            const waiting = this.queued.splice(0);
+            // into one text, a command would take the prompts after it as its arguments. A request
+            // of Desktop's (Commit changes, Create PR) goes as a message of its own, as Desktop sends
+            // each, never read together with another: what waits after it goes when its turn ends.
+            const waiting = this.nextWaiting();
             if (waiting.length > 0) {
               this.continuing = true;
               // A turn of its own: its time counts from now, not from the turn that just ended.

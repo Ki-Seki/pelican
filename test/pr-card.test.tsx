@@ -53,6 +53,19 @@ describe('a request sent from Changes, in the conversation', () => {
   });
 });
 
+describe('requests Claude Code took in together, queued while Claude worked', () => {
+  it('show as Desktop shows each part: Commit changes as its words, Create PR as /create-pr, never the request itself', () => {
+    vi.spyOn(api, 'pr').mockResolvedValue({ live: false });
+    // Claude Code read the two as one message, each its own block.
+    const both: ChatMessage = { uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: `${COMMIT_REQUEST}\n` }, { type: 'text', text: createPrRequest({ ...target, draft: true }) }], timestamp: at };
+    conversation([both, reply('a1', 'Committed, and the draft is open.', at + 1000)]);
+    const bubble = document.querySelector('[data-quote-from="u1"]') as HTMLElement;
+    expect(bubble.textContent).toBe(`${COMMIT_REQUEST}\n\n/create-pr --draft`);
+    expect(screen.queryByText(/## Overview/)).toBeNull();
+    expect(screen.queryByText('Show all')).toBeNull();
+  });
+});
+
 describe('the pull request Claude made', () => {
   const made = 'The pull request is open.\n<pr-created>https://github.com/acme/web/pull/128</pr-created>';
 
