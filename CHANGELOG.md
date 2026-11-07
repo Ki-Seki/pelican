@@ -455,7 +455,9 @@ settings; and updates from Settings.
   the theme's choice is kept, to answer with a tap, or 1 to 9 on a computer.
 - The browser smoke test walks Changes' Show, Commit changes and Create PR, a `!` command's list,
   picked lines with Copy, Quote and Add comment, the quote in place on a phone and Desktop's comment
-  box, on a computer and a phone, in the app and the site's live demo.
+  box, on a computer and a phone, in the app and the site's live demo; and while Claude works,
+  Send's other way, a finger's size on a phone, with Stop beside Send, Claude's question once the
+  waiting edit is allowed, picked and answered, and "1 in background" with ⌃B.
 - CONTRIBUTING.md maps where 0.5.0's parts are: actions and menus, keys, commands, presses, quotes
   and comments, requests, Rewind, what new sessions start with, a pull request's card and updates.
 - THIRD_PARTY_NOTICES names the terminal's xterm.js packages, built into the web app and the
