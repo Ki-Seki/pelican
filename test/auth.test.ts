@@ -288,19 +288,21 @@ describe('signing out', () => {
   });
 
   it('keeps at most 256 sign-ins, and past that refuses every cookie as old as those it lets go of', async () => {
+    // A Pelican of its own state folder, so that what it refuses for age stays its own.
+    const own = await freshAuth(await mkdtemp(path.join(dir, 'state-')));
     const now = Date.now();
     // Signed in 20 days ago, and not used since: older than every sign-in signed out below.
-    const idle = newSessionCookie(now - 20 * 86_400_000);
-    const first = newSessionCookie(now - 1000);
-    await signOut(header(first), now - 1000);
-    for (let i = 0; i < 256; i += 1) await signOut(header(newSessionCookie(now)), now);
-    const kept = JSON.parse(await readFile(signedOutFile(), 'utf8')) as { floor: number; signedOut: Record<string, number> };
-    expect(Object.keys(kept.signedOut).length).toBeLessThanOrEqual(256);
-    expect(signedIn(header(first))).toBe(false);
-    expect(signedIn(header(idle))).toBe(false);
+    const idle = own.newSessionCookie(now - 20 * 86_400_000);
+    const first = own.newSessionCookie(now - 1000);
+    await own.signOut(header(first), now - 1000);
+    for (let i = 0; i < 256; i += 1) await own.signOut(header(own.newSessionCookie(now)), now);
+    const kept = JSON.parse(await readFile(path.join(own.stateDir, 'signed-out.json'), 'utf8')) as { floor: number; signedOut: Record<string, number> };
+    expect(Object.keys(kept.signedOut)).toHaveLength(256);
+    expect(own.signedIn(header(first))).toBe(false);
+    expect(own.signedIn(header(idle))).toBe(false);
     // A browser in use has a newer cookie, and one signing in now gets one.
-    expect(signedIn(header(newSessionCookie(now)))).toBe(true);
-    expect(signedIn(header(newSessionCookie()))).toBe(true);
+    expect(own.signedIn(header(own.newSessionCookie(now)))).toBe(true);
+    expect(own.signedIn(header(own.newSessionCookie()))).toBe(true);
   });
 
   it('lets go of sign-ins whose cookies have all expired', async () => {
@@ -314,11 +316,11 @@ describe('signing out', () => {
   });
 });
 
-/** auth.ts as a Pelican started now loads it, with this test's folders. */
-async function freshAuth(): Promise<typeof import('../src/server/auth')> {
+/** auth.ts as a Pelican started now loads it, with this test's folders (or a state folder of its own). */
+async function freshAuth(stateDir = config.stateDir): Promise<typeof import('../src/server/auth') & { stateDir: string }> {
   vi.resetModules();
   const [fresh, { config: freshConfig }] = await Promise.all([import('../src/server/auth'), import('../src/server/config')]);
-  Object.assign(freshConfig, { configDir: config.configDir, stateDir: config.stateDir, auth: 'auto' });
+  Object.assign(freshConfig, { configDir: config.configDir, stateDir, auth: 'auto' });
   await fresh.loadAuth();
-  return fresh;
+  return { ...fresh, stateDir };
 }

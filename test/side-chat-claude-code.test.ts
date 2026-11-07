@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { fork, remove } from '../src/server/actions';
+import { SIDE_CHAT_TITLE } from '../src/server/side-chat';
 import { config } from '../src/server/config';
 import { closeAll, getRun, sendMessage, startSideChat } from '../src/server/runner';
 import { listSummaries } from '../src/server/sessions';
@@ -122,10 +123,10 @@ describe('a side chat, in the Claude Code the Agent SDK bundles', () => {
   }, 30_000);
 
   it('copied, and the side chat deleted, goes on as a side chat when resumed: told so, and Bash refused', async () => {
-    getRun(side)?.close();
-    await until(() => getRun(side) === undefined, 20_000, 'its Claude to exit');
-    const copy = await fork(side);
-    await remove(side);
+    // A side chat of the session's own for this, as another app may leave one: the one above stays as it is.
+    const second = await fork(parent, undefined, SIDE_CHAT_TITLE);
+    const copy = await fork(second);
+    await remove(second);
     await sendMessage({ sessionId: copy }, { text: AGAIN, attachments: [], settings: {} });
     await until(() => getRun(copy)?.busy === false && againTurns().some((request) => resultsAfterQuestion(request, AGAIN).length >= 1), 90_000, 'the copy’s turn');
     const asked = againTurns()[0]!.messages!.findLast((message) => textOf(message.content).includes(AGAIN))!;

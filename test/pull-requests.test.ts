@@ -97,12 +97,17 @@ describe('a pull request’s live status', () => {
 });
 
 describe('asking gh, however many cards a page shows', () => {
-  /** pull-requests.ts as at start, its answers kept none, and a gh that takes `ms` to answer and notes when it ran. */
+  /**
+   * pull-requests.ts as at start, its answers kept none, and a gh of its own folder (PATH: `own`)
+   * that takes `ms` to answer and notes when it ran.
+   */
   async function fresh(ms: number) {
-    const log = path.join(bin, `runs-${ms}.txt`);
+    const own = await mkdtemp(path.join(bin, 'slow-'));
+    const log = path.join(own, 'runs.txt');
     const answer = JSON.stringify({ number: 1, title: 'T', state: 'OPEN', isDraft: false });
-    await writeFile(path.join(bin, 'gh'), `#!/bin/sh\necho "start $3" >> '${log}'\nsleep ${ms / 1000}\necho "end $3" >> '${log}'\nprintf '%s' '${answer}'\n`);
-    await chmod(path.join(bin, 'gh'), 0o755);
+    await writeFile(path.join(own, 'gh'), `#!/bin/sh\necho "start $3" >> '${log}'\nsleep ${ms / 1000}\necho "end $3" >> '${log}'\nprintf '%s' '${answer}'\n`);
+    await chmod(path.join(own, 'gh'), 0o755);
+    process.env.PATH = `${own}:${savedPath}`;
     vi.resetModules();
     const module = await import('../src/server/pull-requests');
     const { readFile } = await import('node:fs/promises');
@@ -110,7 +115,6 @@ describe('asking gh, however many cards a page shows', () => {
   }
 
   it('runs at most four at once, the others in turn', async () => {
-    process.env.PATH = `${bin}:${savedPath}`;
     try {
       const { pullRequestStatus, runs } = await fresh(300);
       const answers = await Promise.all(Array.from({ length: 10 }, (_, i) => pullRequestStatus(`https://github.com/acme/web/pull/${i + 1}`)));
@@ -129,7 +133,6 @@ describe('asking gh, however many cards a page shows', () => {
   }, 20_000);
 
   it('asks about a pull request at most once in half a minute, however many others are asked about meanwhile', async () => {
-    process.env.PATH = `${bin}:${savedPath}`;
     try {
       const { pullRequestStatus, runs } = await fresh(0);
       const watched = 'https://github.com/acme/web/pull/9999';
