@@ -11,6 +11,8 @@ import {
   copyText,
   type Device,
   entries,
+  LINES_ACTIONS,
+  type LinesTarget,
   type MenuEntry,
   PATH_ACTIONS,
   type PathTarget,
@@ -77,8 +79,9 @@ const path = (extra: Partial<PathTarget> = {}): PathTarget => ({
 });
 const selection = (extra: Partial<SelectionTarget> = {}): SelectionTarget => ({ text: 'one more set of values', sideChat: noop, quote: noop, ...extra });
 const terminal = (extra: Partial<TerminalTarget> = {}): TerminalTarget => ({
-  selection: 'Test Files  2 passed (2)', quote: noop, paste: noop, selectAll: noop, clear: noop, ...extra,
+  selection: 'Test Files  2 passed (2)', quote: noop, paste: noop, selectAll: noop, selectText: noop, clear: noop, ...extra,
 });
+const lines = (extra: Partial<LinesTarget> = {}): LinesTarget => ({ from: 10, to: 12, text: ':root.dark {', quote: noop, comment: noop, ...extra });
 
 /** Each thing with everything it can have, for the rules every list keeps. */
 const FULL = {
@@ -89,6 +92,7 @@ const FULL = {
   path: [PATH_ACTIONS, [path({ changed: true, openInChanges: noop }), path({ path: 'src/styles', folder: true, openInTerminal: noop })]],
   selection: [SELECTION_ACTIONS, [selection()]],
   terminal: [TERMINAL_ACTIONS, [terminal()]],
+  lines: [LINES_ACTIONS, [lines()]],
   add: [ADD_ACTIONS, [add()]],
 } as unknown as Record<keyof typeof ACTIONS, [readonly Action<unknown>[], unknown[]]>;
 const DEVICES: Device[] = ['pointer', 'touch'];
@@ -318,6 +322,20 @@ describe('the terminal’s list', () => {
     expect(menu(list)).toEqual(['Quote', 'Copy', 'Paste', 'Select all', '— Clear terminal']);
     expect(list.map((e) => e.key ?? '')).toEqual([keyWorks('quoteSelection') ? 'quoteSelection' : '', 'copy', 'paste', 'selectAll', '']);
     expect(names(entries(TERMINAL_ACTIONS, terminal({ selection: undefined }), 'menu', 'pointer'))).toEqual(['Paste', 'Select all', 'Clear terminal']);
+  });
+
+  it('held under a finger: the same, with Select text, where a finger selects the screen as text', () => {
+    expect(menu(entries(TERMINAL_ACTIONS, terminal({ selection: undefined }), 'menu', 'touch'))).toEqual(['Paste', 'Select all', 'Select text', '— Clear terminal']);
+  });
+});
+
+describe('lines of a file or a diff', () => {
+  it('picked or right-clicked: Copy · Quote ⇧⌘L · Add comment, the same in the bar and the menu; a diff’s have no Quote', () => {
+    expect(names(entries(LINES_ACTIONS, lines(), 'row', 'touch'))).toEqual(['Copy', 'Quote', 'Add comment']);
+    const list = entries(LINES_ACTIONS, lines(), 'menu', 'pointer');
+    expect(names(list)).toEqual(['Copy', 'Quote', 'Add comment']);
+    expect(list.map((e) => e.key ?? '')).toEqual(['', 'quoteSelection', '']);
+    expect(names(entries(LINES_ACTIONS, lines({ quote: undefined }), 'menu', 'pointer'))).toEqual(['Copy', 'Add comment']);
   });
 });
 

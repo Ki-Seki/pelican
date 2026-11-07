@@ -6,12 +6,15 @@ import type { TerminalExit, TerminalInfo, TerminalList } from '../../shared/term
 import { announce } from '../lib/announce';
 import { api, ApiError, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { baseName } from '../lib/format';
+import { entries, type MenuEntry, TERMINAL_ACTIONS, type TerminalTarget } from '../lib/actions';
 import { composing, hasKeyboard } from '../lib/keyboard';
 import { quoteItem, type WaitingItem } from '../lib/quote';
+import { whenSettled } from '../lib/sheet-history';
 import { INSTALL_URL, STATIC_DEMO } from '../lib/static-demo';
 import { cleanPaste, controlCharacter, keySequence, type RowKey, takenOut } from '../lib/terminal-input';
 import type { Connection } from '../lib/terminal-socket';
 import { isShell, takeTerminalAsks, takeTerminalFocus, useTerminalAsks, useTerminalFocusWanted, within } from '../lib/terminals';
+import { ActionMenu } from './ActionMenu';
 import { Sheet } from './Sheet';
 import { type ScreenHandle, type ScreenMode, type ScreenText as ScreenTextParts, TerminalScreen } from './TerminalScreen';
 
@@ -279,7 +282,31 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
     onQuote(item);
     announce('Quoted in your message');
   }, [onQuote, cwd]);
-  const longPress = useCallback(() => setAsText(screen.current?.text()), []);
+  const showText = useCallback(() => setAsText(screen.current?.text()), []);
+  // The terminal's menu (lib/actions), Desktop's, on a right-click or a long press: what it offers is
+  // read as it opens, what is selected included.
+  const [menu, setMenu] = useState<{ at: { x: number; y: number } | null; entries: MenuEntry[] }>();
+  const openMenu = useCallback((at: { x: number; y: number } | null) => {
+    const handle = screen.current;
+    if (!handle || !latest.current.shown) return;
+    const selection = handle.selection();
+    const target: TerminalTarget = {
+      ...(selection.trim() ? { selection } : {}),
+      quote: (passage) => {
+        quote(passage);
+        handle.clearSelection();
+      },
+      ...(clipboardReads() ? {
+        paste: () => void navigator.clipboard.readText().then((text) => {
+          if (text) handle.paste(text);
+        }, () => announce('The browser did not let Pelican read the clipboard')),
+      } : {}),
+      selectAll: () => handle.selectAll(),
+      ...(touch ? { selectText: showText } : {}),
+      clear: () => handle.clear(),
+    };
+    setMenu({ at, entries: entries(TERMINAL_ACTIONS, target, 'menu', touch ? 'touch' : 'pointer') });
+  }, [quote, showText, touch]);
 
   /** Takes a terminal away: its shell hung up, unless it has ended already. */
   const forget = async (terminal: TerminalInfo) => {
@@ -382,7 +409,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
           <button type="button" onClick={() => setConfirmEnd(false)} className="relative h-8 shrink-0 rounded-full bg-chip px-3.5 after:absolute after:-inset-0.5 pointer-coarse:h-10 pointer-coarse:px-4">Cancel</button>
         </div>
       ) : (
-        <div data-makes-room="short" className="flex h-10 shrink-0 items-center gap-0.5 pr-2 pl-3">
+        <div data-makes-room="short" className="flex h-10 shrink-0 items-center gap-0.5 pr-2 pl-3 pointer-coarse:h-12">
           <div role="tablist" aria-label="Terminals" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {tabs.map((t) => {
               const selected = t.id === shown?.id;
@@ -400,7 +427,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
                     // the Terminal tab and + do (a key on the tab keeps them on the tabs).
                     if (e.detail > 0 && hasKeyboard()) requestAnimationFrame(() => screen.current?.focus());
                   }}
-                  className={`h-8 max-w-[11rem] shrink-0 truncate rounded-full px-3 font-mono text-[12.5px] pointer-coarse:h-9 ${selected ? 'bg-chip' : 'hover:bg-hover'} ${over ? 'text-faint' : selected ? 'text-fg' : 'text-muted hover:text-fg'}`}
+                  className={`h-8 max-w-[11rem] shrink-0 truncate rounded-full px-3 font-mono text-[12.5px] pointer-coarse:h-11 pointer-coarse:px-4 pointer-coarse:text-[14px] ${selected ? 'bg-chip' : 'hover:bg-hover'} ${over ? 'text-faint' : selected ? 'text-fg' : 'text-muted hover:text-fg'}`}
                 >
                   {label(t)}
                 </button>
@@ -414,7 +441,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
             title="New terminal"
             disabled={starting}
             onClick={() => void open(cwd, undefined, true)}
-            className="grid size-8 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg disabled:opacity-40 pointer-coarse:size-10"
+            className="grid size-8 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-fg disabled:opacity-40 pointer-coarse:size-11"
           >
             <Plus className="size-4" />
           </button>
@@ -423,7 +450,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
               type="button"
               title="Hang up this terminal’s shell, as closing a window does"
               onClick={() => void askEnd(shown)}
-              className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-10"
+              className="h-8 shrink-0 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-11"
             >
               End
             </button>
@@ -432,7 +459,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
           {shown && (
             <button
               type="button"
-              onClick={longPress}
+              onClick={showText}
               className="pointer-events-none absolute h-8 shrink-0 rounded-full px-3 text-[13px] whitespace-nowrap text-muted opacity-0 hover:bg-hover hover:text-fg focus-visible:pointer-events-auto focus-visible:static focus-visible:opacity-100"
             >
               Screen as text
@@ -483,7 +510,7 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
           onExit={onExit}
           onConnection={onConnection}
           onMode={setMode}
-          onLongPress={longPress}
+          onMenu={openMenu}
           onQuote={quote}
         />
         {!shown && !starting && (byHand || problem) && (
@@ -515,9 +542,20 @@ export function WorkspaceTerminal({ cwd, hidden, lowest, askTrust, onQuote }: {
         onClose={() => setAsText(undefined)}
         onQuote={quote}
       />
+      <ActionMenu
+        open={Boolean(menu)}
+        onClose={() => setMenu(undefined)}
+        label="Terminal"
+        title={shown ? <span className="font-mono">{label(shown)}</span> : 'Terminal'}
+        entries={menu?.entries ?? []}
+        at={menu?.at ?? null}
+      />
     </div>
   );
 }
+
+/** Whether this browser lets a page read the clipboard when asked (Paste). */
+const clipboardReads = () => typeof navigator !== 'undefined' && Boolean(navigator.clipboard?.readText);
 
 /** The key row: keys a phone's keyboard lacks, and paste. Ctrl holds for the next key. */
 const ROW: Array<{ key: RowKey | 'ctrl' | 'paste' | string; label: ReactNode; name: string; wide?: boolean }> = [
@@ -551,7 +589,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
   const modeNow = useRef(mode);
   modeNow.current = mode;
   const composingNow = useRef(false);
-  const canPaste = typeof navigator !== 'undefined' && Boolean(navigator.clipboard?.readText);
+  const canPaste = clipboardReads();
   /** The browser did not let the last Paste read the clipboard: said for a few seconds. */
   const [refused, setRefused] = useState(false);
   useEffect(() => {
@@ -710,7 +748,7 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
             // where a tap moves the focus; a touch's pointerdown held back, WebKit gives no click.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => tap(k.key)}
-            className={`grid h-9 shrink-0 place-items-center rounded-lg font-mono text-[12.5px] ${k.wide ? 'min-w-11 flex-[1.45]' : 'min-w-9 flex-1'} ${k.key === 'ctrl' && ctrl ? 'bg-fg text-bg' : 'bg-chip text-muted active:bg-hover'}`}
+            className={`grid h-11 shrink-0 place-items-center rounded-xl font-mono text-[13.5px] ${k.wide ? 'min-w-12 flex-[1.45]' : 'min-w-11 flex-1'} ${k.key === 'ctrl' && ctrl ? 'bg-fg text-bg' : 'bg-chip text-muted active:bg-hover'}`}
           >
             {k.label}
           </button>
@@ -747,14 +785,14 @@ function PhoneKeys({ screen, mode, program, safe }: { screen: RefObject<ScreenHa
             composingNow.current = false;
             take(e.currentTarget);
           }}
-          className="h-10 min-w-0 flex-1 appearance-none rounded-full bg-chip px-4 font-mono text-[16px] outline-none placeholder:font-sans placeholder:text-faint [&::-webkit-search-cancel-button]:hidden"
+          className="h-11 min-w-0 flex-1 appearance-none rounded-full bg-chip px-4 font-mono text-[16px] outline-none placeholder:font-sans placeholder:text-faint [&::-webkit-search-cancel-button]:hidden"
         />
         <button
           type="button"
           aria-label="Enter"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => (mode.direct ? key('\r') : enter())}
-          className={`grid size-10 shrink-0 place-items-center rounded-full ${typed ? 'bg-fg text-bg' : 'bg-chip text-muted'}`}
+          className={`grid size-11 shrink-0 place-items-center rounded-full ${typed ? 'bg-fg text-bg' : 'bg-chip text-muted'}`}
         >
           <CornerDownLeft className="size-4" />
         </button>
@@ -808,8 +846,8 @@ function ScreenText({ text, title, onClose, onQuote }: { text?: ScreenTextParts;
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
-              onQuote(target);
               onClose();
+              whenSettled(() => onQuote(target));
             }}
             className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] hover:bg-hover"
           >

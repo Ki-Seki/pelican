@@ -4,7 +4,7 @@
 // phone's key row and line field. The screen itself (xterm.js) is stood in for: it reports what
 // a real one would, and records what is typed into it.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { forwardRef, type Ref, useImperativeHandle } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,9 @@ const pasted: string[] = [];
 let offline = false;
 /** How often the screen was given the keys. */
 let focused = 0;
+/** What is selected on the screen, and what its menu did to it. */
+let selected = '';
+const did: string[] = [];
 let screenProps: Record<string, any> = {};
 
 vi.mock('../src/web/components/TerminalScreen', () => ({
@@ -33,6 +36,16 @@ vi.mock('../src/web/components/TerminalScreen', () => ({
       text: () => ({ before: 'line one', screen: 'line two', after: '' }),
       colors: () => undefined,
       readNext: () => undefined,
+      selection: () => selected,
+      selectAll: () => {
+        did.push('select all');
+      },
+      clearSelection: () => {
+        selected = '';
+      },
+      clear: () => {
+        did.push('clear');
+      },
     }));
     return <div data-terminal data-shows={props.id ?? ''} />;
   }),
@@ -452,6 +465,25 @@ describe('the Terminal tab', () => {
     expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: '% npm test\nFAIL', from: { what: 'terminal' }, tab: '2', label: 'vim' }));
     expect(messageWith([onQuote.mock.calls[0]![0]], 'Why?')).toBe('<!-- attach: vim | tab:2 -->\n> % npm test\n> FAIL\n\nWhy?');
   });
+  it('opens Desktop’s terminal menu on a right-click: Quote and Copy what is selected, Select all, Clear terminal', async () => {
+    list.terminals = [terminal('t1')];
+    const { onQuote } = tab();
+    await waitFor(() => expect(shows()).toBe('t1'));
+    selected = 'Tests 14 passed';
+    act(() => screenProps.onMenu({ x: 40, y: 40 }));
+    const menu = await screen.findByRole('menu', { name: 'Terminal' });
+    // Desktop's keys, faintly beside them.
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([expect.stringMatching(/^Quote(⇧⌘L|Ctrl\+Shift\+L)$/), expect.stringMatching(/^Copy(⌘C|Ctrl\+C)$/), expect.stringMatching(/^Select all/), 'Clear terminal']);
+    fireEvent.click(within(menu).getByText('Quote'));
+    expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: 'Tests 14 passed', from: { what: 'terminal' } }));
+    expect(selected).toBe('');
+    act(() => screenProps.onMenu({ x: 40, y: 40 }));
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Terminal' })).getByText('Clear terminal'));
+    act(() => screenProps.onMenu({ x: 40, y: 40 }));
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Terminal' })).getByText('Select all'));
+    expect(did).toEqual(['clear', 'select all']);
+    did.length = 0;
+  });
 });
 
 describe('the Terminal tab on a phone', () => {
@@ -620,16 +652,21 @@ describe('the Terminal tab on a phone', () => {
     }
   });
 
-  it('opens the screen as text from a long press, to quote or copy', async () => {
+  it('opens its menu on a long press under a finger, whose Select text opens the screen as text, to quote or copy', async () => {
     coarse = true;
     list.terminals = [terminal('t1')];
     const { onQuote } = tab();
     await waitFor(() => expect(shows()).toBe('t1'));
-    act(() => screenProps.onLongPress());
-    const sheet = await screen.findByRole('dialog');
-    expect(sheet.textContent).toContain('line one');
+    act(() => screenProps.onMenu(null));
+    const menu = await screen.findByRole('dialog', { name: 'zsh' });
+    // Nothing selected (a finger selects in the screen as text): no Quote or Copy yet.
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Select all', 'Select text', 'Clear terminal']);
+    fireEvent.click(within(menu).getByText('Select text'));
+    const sheet = await screen.findByRole('dialog', { name: 'zsh' });
+    await waitFor(() => expect(sheet.textContent).toContain('line one'));
     expect(sheet.textContent).toContain('The screen');
-    fireEvent.click(screen.getByRole('button', { name: 'Quote' }));
-    expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: 'line two', from: { what: 'terminal' }, tab: '1', label: 'zsh' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Quote' }));
+    await waitFor(() => expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ kind: 'quote', text: 'line two', from: { what: 'terminal' }, tab: '1', label: 'zsh' })));
   });
+
 });

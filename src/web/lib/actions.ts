@@ -520,21 +520,27 @@ export const SELECTION_ACTIONS: readonly Action<SelectionTarget>[] = [
 
 /* ---------- terminal output ---------- */
 
-/** The terminal, right-clicked, with what is selected in it. */
+/** The terminal, right-clicked or held, with what is selected in it. */
 export type TerminalTarget = {
   selection?: string;
   quote?: (passage: string) => void;
   paste?: () => void;
   selectAll?: () => void;
+  /** Under a finger, the screen as text, to select with the system's handles. */
+  selectText?: () => void;
   clear?: () => void;
 };
 
-/** Desktop's terminal menu, its "Attach selection as context" called Quote: Quote · Copy · Paste · Select all · Clear terminal. */
+/**
+ * Desktop's terminal menu, its "Attach selection as context" called Quote: Quote · Copy · Paste ·
+ * Select all · Clear terminal; on a phone also Select text, where a finger selects.
+ */
 export const TERMINAL_ACTIONS: readonly Action<TerminalTarget>[] = [
   { id: 'quote', group: 'edit', label: 'Quote', icon: TextQuote, key: 'quoteSelection', when: (t) => Boolean(t.selection && t.quote), run: (t) => t.quote?.(t.selection!) },
   { id: 'copy', group: 'edit', label: 'Copy', icon: Copy, key: 'copy', when: (t) => Boolean(t.selection), run: (t) => copy(t.selection) },
   { id: 'paste', group: 'edit', label: 'Paste', icon: Clipboard, key: 'paste', when: (t) => Boolean(t.paste), run: (t) => t.paste?.() },
   { id: 'select-all', group: 'edit', label: 'Select all', icon: TextSelect, key: 'selectAll', when: (t) => Boolean(t.selectAll), run: (t) => t.selectAll?.() },
+  { id: 'select-text', group: 'edit', label: 'Select text', icon: TextCursor, only: 'touch', when: (t) => Boolean(t.selectText), run: (t) => t.selectText?.() },
   { id: 'clear', group: 'clear', label: 'Clear terminal', icon: Eraser, when: (t) => Boolean(t.clear), run: (t) => t.clear?.() },
 ];
 

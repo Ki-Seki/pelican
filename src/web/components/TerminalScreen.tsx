@@ -12,7 +12,7 @@ import { guardOutput } from '../../shared/terminal-guards';
 import { loadWidths } from '../../shared/terminal-widths';
 import { announce } from '../lib/announce';
 import { api, checkSignedIn } from '../lib/api';
-import { isApple, isKey } from '../lib/keyboard';
+import { ariaKeys, isApple, isKey, keyText } from '../lib/keyboard';
 import { getPrefs, setPrefs } from '../lib/prefs';
 import { showCursor } from '../lib/terminal-cursor';
 import {
@@ -40,6 +40,12 @@ export type ScreenHandle = {
   colors: () => TerminalColors | undefined;
   /** What the shell prints next, once it goes quiet, is read out to a screen reader (a line sent from the phone's field). */
   readNext: () => void;
+  /** What is selected on the screen now, if anything. */
+  selection: () => string;
+  selectAll: () => void;
+  clearSelection: () => void;
+  /** Clears the screen and what scrolled off it, here, as Desktop's Clear terminal does; the shell is not told. */
+  clear: () => void;
 };
 
 /** What a screen reader hears of the output after a line: its first lines, and how many more there are. */
@@ -98,8 +104,8 @@ const clampSize = (cols: number, rows: number) => ({
  * (where the cursor is, what it can do): the server's copy does, once, whatever pages show it.
  *
  * On a touch screen a tap never raises the keyboard (the line field below is where a phone types),
- * a swipe scrolls back, a long press opens the screen as text, and a pinch sets the size. Text
- * selected with a mouse can be quoted or copied.
+ * a swipe scrolls back, a long press opens its menu, and a pinch sets the size. Text selected with
+ * a mouse can be quoted (⇧⌘L) or copied; a right-click opens its menu.
  */
 export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   /** The terminal shown; none: an empty screen, sized for one about to start. */
@@ -113,9 +119,10 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   onExit: (id: string, exit: TerminalExit) => void;
   onConnection: (id: string, state: Connection) => void;
   onMode: (mode: ScreenMode) => void;
-  onLongPress: () => void;
+  /** Its menu, asked for: at the pointer (a right-click), or under a finger (a long press). */
+  onMenu: (at: { x: number; y: number } | null) => void;
   onQuote: (text: string) => void;
-}>(function TerminalScreen({ id, hidden, touch, label, onProgram, onExit, onConnection, onMode, onLongPress, onQuote }, ref) {
+}>(function TerminalScreen({ id, hidden, touch, label, onProgram, onExit, onConnection, onMode, onMenu, onQuote }, ref) {
   const box = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | undefined>(undefined);
   const fitter = useRef<FitAddon | undefined>(undefined);
@@ -132,8 +139,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
   const stateNow = useRef<Connection>(undefined);
   const slow = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The latest callbacks, for xterm's listeners, made once.
-  const events = useRef({ onProgram, onExit, onConnection, onMode, onLongPress });
-  events.current = { onProgram, onExit, onConnection, onMode, onLongPress };
+  const events = useRef({ onProgram, onExit, onConnection, onMode, onMenu, onQuote });
+  events.current = { onProgram, onExit, onConnection, onMode, onMenu, onQuote };
   const hiddenNow = useRef(hidden);
   hiddenNow.current = hidden;
   /** The shell was sized for another page since this one last fitted it. */
@@ -225,6 +232,15 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     t.attachCustomKeyEventHandler((e) => {
       // Ctrl+` is the page's: it hides the terminal; and so is Ctrl+Shift+`, a new terminal.
       if (isKey(e, 'terminal') || isKey(e, 'newTerminal')) return false;
+      // ⇧⌘L quotes what is selected, as Desktop's Attach selection as context does.
+      if (isKey(e, 'quoteSelection') && t.hasSelection()) {
+        e.preventDefault();
+        if (e.type === 'keydown') {
+          events.current.onQuote(t.getSelection());
+          t.clearSelection();
+        }
+        return false;
+      }
       // Off Apple keyboards, Ctrl+C copies what is selected, as in VS Code (the browser's own copy,
       // which xterm answers with the selection); with nothing selected it is ^C.
       if (!isApple && e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'KeyC' && t.hasSelection()) return false;
@@ -303,7 +319,14 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     resized.observe(el);
     fit();
 
-    const gestures = touch ? touchGestures(el, t, fit, () => events.current.onLongPress()) : undefined;
+    const gestures = touch ? touchGestures(el, t, fit, () => events.current.onMenu(null)) : undefined;
+    // A right-click with a pointer: the terminal's own menu, Desktop's, at the pointer.
+    const menu = (e: MouseEvent) => {
+      if (touch) return;
+      e.preventDefault();
+      events.current.onMenu({ x: e.clientX, y: e.clientY });
+    };
+    el.addEventListener('contextmenu', menu);
     stopGlide.current = () => gestures?.stop();
     // Ctrl and the wheel, which a trackpad's pinch is too, sets the size on a computer: a step a
     // notch, or a little way of pinching.
@@ -321,6 +344,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
 
     return () => {
       gestures?.detach();
+      el.removeEventListener('contextmenu', menu);
       stopCleaning();
       stopInserting();
       stopRows();
@@ -482,8 +506,13 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       const from = t?.registerMarker(0);
       if (from) reading.current = { from, latest: setTimeout(readOut, 5000) };
     },
+    selection: () => (term.current?.hasSelection() ? term.current.getSelection() : ''),
+    selectAll: () => term.current?.selectAll(),
+    clearSelection: () => term.current?.clearSelection(),
+    clear: () => term.current?.clear(),
   }), []);
 
+  const quoteKey = keyText('quoteSelection');
   return (
     <div className="relative min-h-0 flex-1">
       {/* The keys' hidden field is as large as Safari needs, or it zooms the page in when a tap gives it the keys. */}
@@ -525,9 +554,11 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
               onQuote(selection);
               term.current?.clearSelection();
             }}
+            aria-keyshortcuts={ariaKeys('quoteSelection')}
             className="flex h-8 items-center gap-1.5 rounded-full px-3 hover:bg-hover"
           >
             <TextQuote className="size-3.5 text-muted" /> Quote
+            {quoteKey && <span aria-hidden className="text-[11.5px] text-faint">{quoteKey}</span>}
           </button>
           <button
             type="button"
@@ -604,7 +635,7 @@ const saveFontSize = (t: Terminal) => setPrefs({ terminalFontSize: t.options.fon
 /**
  * A finger on the screen: a swipe scrolls back through the output (in a full-screen program, it
  * sends the arrows, as a wheel does there), with a little glide after it; a long press opens the
- * screen as text; two fingers set the size. A tap is left to xterm: it gives the screen the keys
+ * terminal's menu; two fingers set the size. A tap is left to xterm: it gives the screen the keys
  * (never the phone's keyboard), and a program that asked for the mouse gets it. `stop` ends a
  * glide, as ↓ does on its way to the newest output.
  */
@@ -699,7 +730,7 @@ export function touchGestures(el: HTMLElement, t: Terminal, fit: () => void, lon
     };
     glide = requestAnimationFrame(step);
   };
-  // A long press is the screen as text, not the system's menu.
+  // A long press is the terminal's menu, not the system's.
   const menu = (e: Event) => e.preventDefault();
   // A finger moving on the screen is the screen's alone. Chrome on Android otherwise takes a flick
   // for a fling of its own, and the next tap anywhere on the page, for a second, for stopping it:
