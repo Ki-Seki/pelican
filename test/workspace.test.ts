@@ -256,6 +256,47 @@ describe('workspace', () => {
     }
   });
 
+  it('splits where the branch meets the local default branch when that one is ahead of origin’s', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-local-ahead-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work }).toString().trim();
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'a.txt'), 'one\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      // origin's main stays at the first commit; the local main gets one more, and the branch starts from it.
+      git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+      await writeFile(path.join(work, 'local.txt'), 'l\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'local only');
+      git('switch', '-q', '-c', 'feat/local');
+      await writeFile(path.join(work, 'mine.txt'), 'm\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'mine');
+      const status = await gitStatus(work, 'base');
+      expect(status).toMatchObject({ base: 'main', split: true });
+      expect(status.repo && status.files.map((f) => f.path)).toEqual(['mine.txt']);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  it('counts the lines of a file with a tab in its name', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-tab-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: work }).toString().trim();
+    try {
+      git('init', '-q', '-b', 'main');
+      await writeFile(path.join(work, 'a\tb.txt'), 'x\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'first');
+      await writeFile(path.join(work, 'a\tb.txt'), 'x\ny\nz\n');
+      const status = await gitStatus(work);
+      expect(status.repo && status.files).toEqual([expect.objectContaining({ path: 'a\tb.txt', status: 'modified', added: 2 })]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
   it('names the GitHub repository origin points at, as Claude Desktop reads its address', async () => {
     expect(githubRepo('git@github.com:acme/web.git')).toBe('acme/web');
     expect(githubRepo('https://github.com/acme/web.git')).toBe('acme/web');
