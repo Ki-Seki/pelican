@@ -691,6 +691,14 @@ function adjust(path: string, data: unknown): unknown {
     return { sessions: [...started, ...sessions].map(summarize).sort((a, b) => b.lastActivity - a.lastActivity) };
   }
   const match = sessionPath.exec(path);
+  // A session opened straight from its address, before the list was read: its name and folder, for a fork of it.
+  if (match && !match[2]) {
+    const opened = (data as { session?: SessionSummary | null }).session;
+    if (opened) {
+      if (!titles.has(opened.id)) titles.set(opened.id, opened.title);
+      if (!folders.has(opened.id)) folders.set(opened.id, opened.cwd);
+    }
+  }
   // Its agent at work finishes a while after the session is first opened.
   if (match && decodeURIComponent(match[1]!) === AGENTS_SESSION && !match[2]) finishAgentLater();
   const story = match ? stories.get(decodeURIComponent(match[1]!)) : undefined;

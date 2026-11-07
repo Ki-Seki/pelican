@@ -189,6 +189,20 @@ describe('the demo', () => {
     expect(await api.changes(sessionId)).toEqual({ turns: [], lines: {} });
   });
 
+  it('names a fork after its session, also one opened by its address before the list was read', async () => {
+    const OPENED = 'c9d3b8e2-3333-4c3d-ae5f-0000000000ff';
+    const summary = { id: OPENED, title: 'Fix the flaky login test', cwd: CWD, project: 'acme-web', lastActivity: 1, status: 'idle' };
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ session: summary, run: null, tasks: [], settings: {} }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    try {
+      await api.session(OPENED);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    addLocalMessage(OPENED, message('o1', 'user', [{ type: 'text', text: 'The login test fails' }]));
+    const copy = await api.fork(OPENED);
+    expect((await api.session(copy!)).session).toMatchObject({ title: 'Fix the flaky login test (fork)', cwd: CWD });
+  });
+
   it('starts a new session in the page, which the list and the chat then show', async () => {
     const { sessionId } = await api.create({ cwd: CWD, text: 'Add a footer', attachments: [], settings: {}, uuid: 'first' });
     vi.runAllTimers();
