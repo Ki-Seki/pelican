@@ -835,6 +835,14 @@ export function Chat({
       failed(error);
     }
   };
+  // Rewound here or in another page, or no longer: the turns Changes lists end at the cut, or do not.
+  const cutAt = view.rewound?.prompt;
+  const lastCut = useRef(cutAt);
+  useEffect(() => {
+    if (lastCut.current === cutAt) return;
+    lastCut.current = cutAt;
+    if (sessionId) void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
+  }, [cutAt, sessionId, queryClient]);
   // /rewind's list: the prompts that began turns, oldest first.
   const rewindPoints = useMemo<RewindPoint[]>(() => (picking ? buildItems(view.messages, machine).flatMap((item) => (
     item.kind === 'user' && !item.command && !item.steered && !item.pending
