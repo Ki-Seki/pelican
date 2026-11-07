@@ -1,16 +1,17 @@
 import { ArrowUpRight, Check, Copy, Image as ImageIcon, Play } from 'lucide-react';
-import { memo, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
+import { memo, type ReactNode, useContext, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import { commandRunnable, TERMINAL_LIMITS } from '../../shared/terminal';
+import { commandRunnable } from '../../shared/terminal';
 import { rehypePathRefs } from '../lib/path-refs';
 import { InReply, RunInTerminal, runsInShell } from '../lib/terminals';
 import { openImage } from './Lightbox';
 import { PathRef } from './PathLink';
 import { PreviewCard } from './Preview';
+import { RunQuestion } from './RunCommand';
 
 function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
@@ -74,17 +75,16 @@ export function RemoteImage({ src, alt }: { src: string; alt?: string }) {
 /**
  * A code block, with Copy in a bar of its own, as in Claude's apps: over the code, it hid the first
  * line of every block that scrolls sideways. A shell's commands in Claude's reply can also run in a
- * new terminal in the session's folder, once asked whether to: the bar asks, in place. Only a
- * command that shows all it holds: no control character a shell takes as a key, nothing hidden.
+ * new terminal in the session's folder, once asked whether to: the block asks, in place, showing
+ * the whole command wrapped, as the block scrolls sideways (RunCommand). Only a command that shows
+ * all it holds: no control character a shell takes as a key, nothing hidden, nothing laid out out
+ * of sight (shared/terminal.ts commandRefusal).
  */
 function CodeBlock({ children }: { children?: ReactNode }) {
   const inReply = useContext(InReply);
   const run = useContext(RunInTerminal);
   const [asking, setAsking] = useState(false);
-  const confirm = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (asking) confirm.current?.focus({ preventScroll: true });
-  }, [asking]);
+  const play = useRef<HTMLButtonElement>(null);
   const language = /language-(\w+)/.exec(String((children as { props?: { className?: string } } | undefined)?.props?.className ?? ''))?.[1];
   // HTML and SVG in a reply can be seen rendered too; it starts as code, the way it was written.
   if (language === 'html' || language === 'svg') {
@@ -92,55 +92,40 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   }
   const code = textOf(children);
   const command = code.replace(/\r\n/g, '\n').replace(/\s+$/, '');
-  const runnable = inReply && run && runsInShell(language) && command.trim() !== '' && command.length <= TERMINAL_LIMITS.command && commandRunnable(command);
+  const runnable = inReply && run && runsInShell(language) && commandRunnable(command);
+  if (asking && runnable) {
+    return (
+      <RunQuestion
+        command={command}
+        onRun={() => {
+          setAsking(false);
+          run(command);
+        }}
+        onCancel={() => {
+          setAsking(false);
+          // The keys go back where they were, on Run in terminal.
+          requestAnimationFrame(() => play.current?.focus({ preventScroll: true }));
+        }}
+      />
+    );
+  }
   return (
     <div className="my-[0.6em] overflow-hidden rounded-[10px] border border-line bg-panel">
-      <div
-        className="flex h-8 items-center gap-1 border-b border-line pr-1 pl-3 text-[11.5px] text-faint select-none"
-        onKeyDown={(e) => {
-          // Esc takes the question back, and does not stop Claude.
-          if (asking && e.key === 'Escape') {
-            e.preventDefault();
-            setAsking(false);
-          }
-        }}
-      >
-        {asking && runnable ? (
-          <>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">Run in a new terminal?</span>
-            <button
-              ref={confirm}
-              type="button"
-              onClick={() => {
-                setAsking(false);
-                run(command);
-              }}
-              // Looks 28px on a touch screen, takes a finger's 44px: up to the bar's edge, which the
-              // block's rounded corners clip, and the rest down over the code; beside each other,
-              // the two share the gap.
-              className="relative h-6 shrink-0 rounded-full bg-fg px-2.5 text-[12px] font-medium text-bg after:absolute after:-inset-x-0.5 after:-top-0.5 after:-bottom-3.5 pointer-coarse:h-7 pointer-coarse:px-3.5"
-            >
-              Run
-            </button>
-            <button type="button" onClick={() => setAsking(false)} className="relative h-6 shrink-0 rounded-full px-2 text-[12px] text-muted after:absolute after:-inset-x-0.5 after:-top-0.5 after:-bottom-3.5 hover:bg-hover hover:text-fg pointer-coarse:h-7 pointer-coarse:px-3">Cancel</button>
-          </>
-        ) : (
-          <>
-            <span className="min-w-0 flex-1 truncate">{language}</span>
-            {runnable && (
-              <button
-                type="button"
-                aria-label="Run in terminal"
-                title="Run in terminal"
-                onClick={() => setAsking(true)}
-                className="relative grid size-7 place-items-center rounded-md text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg"
-              >
-                <Play className="size-3.5" />
-              </button>
-            )}
-            <CopyButton text={code} />
-          </>
+      <div className="flex h-8 items-center gap-1 border-b border-line pr-1 pl-3 text-[11.5px] text-faint select-none">
+        <span className="min-w-0 flex-1 truncate">{language}</span>
+        {runnable && (
+          <button
+            ref={play}
+            type="button"
+            aria-label="Run in terminal"
+            title="Run in terminal"
+            onClick={() => setAsking(true)}
+            className="relative grid size-7 place-items-center rounded-md text-faint after:absolute after:-inset-2 hover:bg-hover hover:text-fg"
+          >
+            <Play className="size-3.5" />
+          </button>
         )}
+        <CopyButton text={code} />
       </div>
       <pre className="m-0! rounded-none! border-0!">{children}</pre>
     </div>

@@ -53,9 +53,12 @@ settings; and updates from Settings.
   Ctrl+C gets through at once.
 - **Run in terminal and Quote.** A shell command in Claude's reply (a `bash`, `sh`, `zsh` or `fish`
   block) has Run in terminal, which asks, in place, before it runs it in a new terminal in the
-  session's folder, pasted there, so its lines go in together. Only Claude's replies offer it, not a
-  file or a tool's output, and only for a command with nothing hidden in it, as an approval reads
-  one. Quote puts what you selected in the terminal, or its screen, above the message box as a quote
+  session's folder, pasted there, so its lines go in together. The question shows the whole command,
+  wrapped, its lines numbered and counted, and the blanks a line is padded with drawn, so nothing of
+  it sits past the block's edge. Only Claude's replies offer it, not a file or a tool's output, and
+  only for a command with nothing hidden in it, as an approval reads one, nor laid out to put part
+  of it out of sight: a run of more than 16 blanks, more than 2 blank lines in a row, a line wider
+  than 500 columns, or more than 50 lines. Quote puts what you selected in the terminal, or its screen, above the message box as a quote
   from the terminal, as Claude Desktop attaches one, naming its tab, with a note if you add one; of
   a long one, its first 1,500 characters, as Desktop cuts any quote. Claude sees a terminal only
   that way. `!` commands go into the conversation as before.
@@ -408,7 +411,11 @@ settings; and updates from Settings.
 - Run in terminal reads a command as an approval does: it is offered, and the server runs it, only
   for one with no control character a shell takes as a key and nothing an approval would write out,
   such as a character that hides or turns text around, or a space other than a plain one where a
-  shell reads it as part of a word.
+  shell reads it as part of a word. Its question shows the whole command, wrapped, never only what
+  fits a block that scrolls sideways, and a command laid out to put part of it out of sight is
+  neither offered nor run, by the page's reading and the server's alike: a run of more than 16
+  blanks (300 spaces after `ls -la` hid a `; touch …` that ran), more than 2 blank lines in a row, a
+  line wider than 500 columns, or more than 50 lines.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
   the few lines of @lydell's own against those read for this version, that this version pins each

@@ -176,14 +176,66 @@ export const TERMINAL_CLOSE = {
 } as const;
 
 /**
- * Whether Run in terminal may type `command` into a shell. Not one with a control character other
+ * How Run in terminal's command may be laid out, for its question to show all of it at once,
+ * wrapped, its lines numbered and its blanks drawn (components/RunCommand): at most `lines` lines,
+ * each at most `columns` wide (a tab reaching the next of every 8), with no run of more than
+ * `blanks` columns of blanks (spaces, tabs, any other space), and at most `blankLines` blank lines
+ * in a row. Past them, a run of blanks or of empty lines pushes what follows out of sight, as 300
+ * spaces after `ls -la` hid a `; touch …` that ran, and a command too long to take in at a glance
+ * is one whose question nobody reads to its end; such a command is not offered, and the server
+ * refuses it too.
+ */
+export const COMMAND_LAYOUT = { lines: 50, columns: 500, blanks: 16, blankLines: 2 } as const;
+
+/** A blank: a space, a tab, or a space of another width; never a newline (a command's lines are split at it). */
+const BLANK = /[^\S\n]/;
+export const isBlank = (char: string): boolean => BLANK.test(char);
+
+/** Columns a character takes on a line at `column`: a tab reaches the next of every 8, anything else one. */
+export const columnsOf = (char: string, column: number): number => (char === '\t' ? 8 - (column % 8) : 1);
+
+/**
+ * Why `command`'s layout would hide some of it from its question, as a sentence; undefined when its
+ * question shows all of it (COMMAND_LAYOUT).
+ */
+export function layoutHides(command: string): string | undefined {
+  const lines = command.split('\n');
+  if (lines.length > COMMAND_LAYOUT.lines) return `It is ${lines.length} lines long, more than the ${COMMAND_LAYOUT.lines} a question about it shows`;
+  let emptyRun = 0;
+  for (const line of lines) {
+    emptyRun = line.trim() === '' ? emptyRun + 1 : 0;
+    if (emptyRun > COMMAND_LAYOUT.blankLines) return `It has more than ${COMMAND_LAYOUT.blankLines} blank lines in a row, which push what follows out of sight`;
+    let column = 0;
+    let blanks = 0;
+    for (const char of line) {
+      const width = columnsOf(char, column);
+      column += width;
+      blanks = BLANK.test(char) ? blanks + width : 0;
+      if (blanks > COMMAND_LAYOUT.blanks) return `It has a run of more than ${COMMAND_LAYOUT.blanks} blanks, which push what follows out of sight`;
+    }
+    if (column > COMMAND_LAYOUT.columns) return `A line of it is ${column} columns wide, more than the ${COMMAND_LAYOUT.columns} a question about it shows`;
+  }
+  return undefined;
+}
+
+/**
+ * Why Run in terminal may not type `command` into a shell, as a sentence; undefined when it may.
+ * Not an empty one, or one longer than a terminal takes; not one with a control character other
  * than tab and newline (C0, DEL or C1), which a shell's line editor takes as a key: Ctrl+U clears
  * the line, Esc starts a sequence, a carriage return runs what is there, so an `echo` could run
  * something else. Nor one with a character that may make it read otherwise than it runs, as an
- * approval writes it out (hidden.ts, read as a shell reads it): what the code block shows is what
- * runs.
+ * approval writes it out (hidden.ts, read as a shell reads it), or laid out so that its question
+ * cannot show all of it (layoutHides): what the question shows is what runs.
  */
-export const commandRunnable = (command: string): boolean => !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(command) && !revealHidden(command, { runs: 'shell' }).hidden;
+export function commandRefusal(command: string): string | undefined {
+  if (command.trim() === '' || command.length > TERMINAL_LIMITS.command) return `The command must be some text, up to ${TERMINAL_LIMITS.command} characters`;
+  if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(command)) return 'The command holds characters a shell would take as keys';
+  if (revealHidden(command, { runs: 'shell' }).hidden) return 'The command holds characters that cannot be seen, or that read otherwise than they run';
+  return layoutHides(command);
+}
+
+/** Whether Run in terminal may type `command` into a shell (commandRefusal). */
+export const commandRunnable = (command: string): boolean => commandRefusal(command) === undefined;
 
 /**
  * `data` (UTF-8) in pieces of at most `size` bytes, each cut between two characters: xterm 6.0.0

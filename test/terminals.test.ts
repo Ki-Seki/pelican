@@ -14,7 +14,7 @@ import WebSocket from 'ws';
 
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
-import { TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
+import { commandRunnable, TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
 import { MARKS_PER_CHARACTER } from '../src/shared/terminal-widths';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
@@ -217,7 +217,26 @@ describe('a terminal', () => {
       const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command });
       expect(refused.status, JSON.stringify(command)).toBe(400);
     }
+    // Laid out so that its question would leave a tail out of sight: padded with spaces or tabs,
+    // pushed down by blank lines, a line or a command too long to take in. As the page reads it.
+    const marker = path.join(dir, 'HIDDEN_TAIL_RAN');
+    const padded = [
+      `ls -la${' '.repeat(300)}; touch ${marker}`, `ls${'\t'.repeat(60)}; touch ${marker}`, `ls${'\n'.repeat(200)}touch ${marker}`,
+      `ls\n\n\n\ntouch ${marker}`, `echo ${'x'.repeat(500)}; touch ${marker}`,
+      [...Array.from({ length: 50 }, (_, i) => `echo ${i}`), `touch ${marker}`].join('\n'),
+    ];
+    for (const command of padded) {
+      expect(commandRunnable(command)).toBe(false);
+      const refused = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command });
+      expect(refused.status, command.slice(0, 40)).toBe(400);
+      expect(refused.body.error).toMatch(/out of sight|shows/);
+    }
     expect((await api('GET', '/api/terminals')).body.terminals).toEqual([]);
+    await pause(300);
+    expect(existsSync(marker)).toBe(false);
+    // What the page offers, the server runs.
+    const offered = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command: `ls${' '.repeat(16)}# aligned\n\n\necho done` });
+    expect(offered.status).toBe(201);
   });
 
   it('shows on several pages at once, each in step, at the size of the page last typed in or resized', async () => {
