@@ -663,18 +663,25 @@ describe('output xterm throws on', () => {
 });
 
 describe('the shell’s environment', () => {
-  it('leaves out what is Pelican’s, npm’s, Claude Code’s mark and the outer terminal’s, and adds the folder’s launch settings', () => {
+  it('leaves out what is Pelican’s, npm’s, Claude Code’s own and the outer terminal’s, and adds the folder’s launch settings', () => {
+    // Made-up values: a Claude Code session's id, its messaging socket and token, as Pelican started
+    // from one has them, and the entrypoint the Agent SDK sets in Pelican's own process.
     const outer = {
       PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock', HTTPS_PROXY: 'http://proxy.example:3128', ANTHROPIC_MODEL: 'claude-opus-5-5',
       PELICAN_AUTH: 'none', PELICAN_STATE_DIR: '/state', npm_config_cache: '/cache', npm_lifecycle_event: 'dev', CLAUDECODE: '1',
+      INIT_CWD: '/home/someone/project', NODE: '/usr/local/bin/node',
       CLAUDE_AGENT_SDK_VERSION: '0.3.318', NoDefaultCurrentDirectoryInExePath: '1', CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_SESSION_ID: 'made-up-session', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/made-up.sock',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-token',
       TERM: 'dumb', TERM_PROGRAM: 'vscode', VSCODE_GIT_ASKPASS_MAIN: '/vscode/askpass-main.js', GIT_ASKPASS: '/vscode/askpass.sh',
       CLAUDE_CODE_SSE_PORT: '51234', ITERM_SESSION_ID: 'w0t0p0', TMUX: '/tmp/tmux-501/default,1,0', SHLVL: '2',
       XPC_SERVICE_NAME: 'io.github.ki-seki.pelican', INVOCATION_ID: 'abc', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c',
     };
     const launch = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false' };
     expect(shellEnvironment(outer, launch, '/bin/zsh')).toEqual({
-      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example', CLAUDE_CODE_USE_BEDROCK: '1',
+      PATH: '/usr/bin:/bin', HOME: '/home/someone', LANG: 'fr_FR.UTF-8', NPM_CONFIG_REGISTRY: 'https://registry.example',
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock', HTTPS_PROXY: 'http://proxy.example:3128', ANTHROPIC_MODEL: 'claude-opus-5-5',
       GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false',
       TERM: 'xterm-256color', COLORTERM: 'truecolor', SHELL: '/bin/zsh',
     });
@@ -683,10 +690,13 @@ describe('the shell’s environment', () => {
     expect(shellEnvironment({ LC_ALL: 'C' }, undefined, '/bin/bash')).not.toHaveProperty('LANG');
   });
 
-  it('is Pelican’s, without Pelican’s settings, npm’s, Claude Code’s mark and the outer terminal’s', async () => {
+  it('is Pelican’s, without Pelican’s settings, npm’s, Claude Code’s own and the outer terminal’s', async () => {
     const before = { ...process.env };
+    // Made-up values only, for what a Claude Code session Pelican was started from would hand down.
     Object.assign(process.env, {
       PELICAN_TERMINAL_TEST: 'secret', npm_config_terminal_test: 'npm', npm_lifecycle_event: 'dev', CLAUDECODE: '1', CLAUDE_AGENT_SDK_VERSION: '0.3.318',
+      CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_SESSION_ID: 'made-up-session', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/made-up.sock',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-token', INIT_CWD: '/made/up', NODE: '/made/up/node',
       TERM_PROGRAM: 'Elsewhere', ITERM_SESSION_ID: 'w0t0p0', XPC_SERVICE_NAME: 'com.example.pelican', KEPT_FOR_THE_SHELL: 'kept',
     });
     try {
@@ -696,7 +706,12 @@ describe('the shell’s environment', () => {
       await shown.sees(/END-42\r\n/);
       const names = shown.output.split('\r\n').map((line) => line.split('=')[0]);
       expect(names).toContain('KEPT_FOR_THE_SHELL');
-      for (const gone of ['PELICAN_TERMINAL_TEST', 'npm_config_terminal_test', 'npm_lifecycle_event', 'CLAUDECODE', 'CLAUDE_AGENT_SDK_VERSION', 'TERM_PROGRAM', 'ITERM_SESSION_ID', 'XPC_SERVICE_NAME']) {
+      expect(names.filter((name) => name?.startsWith('CLAUDE_CODE_'))).toEqual([]);
+      expect(shown.output).not.toMatch(/made-up/);
+      for (const gone of [
+        'PELICAN_TERMINAL_TEST', 'npm_config_terminal_test', 'npm_lifecycle_event', 'CLAUDECODE', 'CLAUDE_AGENT_SDK_VERSION', 'INIT_CWD', 'NODE',
+        'TERM_PROGRAM', 'ITERM_SESSION_ID', 'XPC_SERVICE_NAME',
+      ]) {
         expect(names).not.toContain(gone);
       }
       expect(shown.output).toMatch(/\r\nTERM=xterm-256color\r\n/);

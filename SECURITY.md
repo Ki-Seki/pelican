@@ -135,11 +135,14 @@ can read your sessions and have Claude run commands as you, so treat access to i
   folder as Claude Code does, so a folder nobody trusted that brings programs is asked about first,
   and in one kept to your settings only, git runs none of the repository's filters, file-system
   monitor or hooks folder (the settings Claude Code and `!` commands get there). The shell's
-  environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude Code's mark
-  (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the terminal or
-  service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
-  page sends at most 64 KB at a time; a page that stops reading is let go rather than kept in
-  memory, and the shell waits for a slow one instead. What the server keeps of a terminal's screen,
+  environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`, `INIT_CWD`, `NODE`),
+  Claude Code's own (`CLAUDECODE` and every `CLAUDE_CODE_*`: how it was started and, for a Pelican
+  started from a Claude Code session, that session's id, its messaging socket and the token for it)
+  or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the terminal or service Pelican runs
+  in; your login shell then reads your own profile, as any terminal's does. At most 10 terminals run
+  at once, each shown on at most 8 pages, and a page sends at most 64 KB at a time; a page that
+  stops reading is let go rather than kept in memory, and the shell waits for a slow one instead.
+  What the server keeps of a terminal's screen,
   and what a page draws of it, is bounded too: 2,000 lines, at most 11 combining marks on a
   character and 14 UTF-16 code units in a cell (so six of the marks past U+FFFF, two units each),
   which keeps each cell one string of about 40 bytes (a 500x300 terminal full of Zalgo text takes

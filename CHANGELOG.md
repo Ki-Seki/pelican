@@ -371,10 +371,12 @@ settings; and updates from Settings.
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
   none of the repository's programs. The shell gets none of Pelican's settings (`PELICAN_*`), npm's
-  (`npm_*`), Claude Code's mark (`CLAUDECODE`) or the Agent SDK's, so `claude` starts there as in
-  any terminal. At most 10 terminals run at once, each on up to 8 pages; nothing of them is written
-  to disk. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
-  starts Pelican without them.
+  (`npm_*`, `INIT_CWD`, `NODE`), Claude Code's own (`CLAUDECODE` and `CLAUDE_CODE_*`, such as how it
+  was started, or the id, messaging socket and token of a Claude Code session Pelican was started
+  from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
+  most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk. The demo
+  has none, and `pelican --no-terminal` (also for `pelican service install`) starts Pelican without
+  them.
 - Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
   tells the program in front of the shell, found with `ps` as End's question finds it, that the
   window changed (SIGWINCH, as a resize does), and where that program is not this account's to

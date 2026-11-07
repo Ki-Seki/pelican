@@ -89,23 +89,28 @@ const OUTER = new Set([
   'COLUMNS', 'LINES', 'TERMCAP', 'WINDOWID', 'TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'VTE_VERSION', 'WT_SESSION',
   'WT_PROFILE_ID', 'TERMINAL_EMULATOR', '__CFBundleIdentifier', 'XPC_SERVICE_NAME', 'XPC_FLAGS', 'INVOCATION_ID',
   'JOURNAL_STREAM', 'NOTIFY_SOCKET', 'LISTEN_PID', 'LISTEN_FDS', 'LISTEN_FDNAMES', 'MANAGERPID', 'SYSTEMD_EXEC_PID',
-  'SHLVL', 'OLDPWD', '_', 'CLAUDE_CODE_SSE_PORT',
+  'SHLVL', 'OLDPWD', '_',
 ]);
 const OUTER_PREFIX = /^(ITERM_|KITTY_|WEZTERM_|ALACRITTY_|GHOSTTY_|VSCODE_|KONSOLE_|GNOME_TERMINAL_)/;
 /**
- * Pelican's own settings, npm's when npm started Pelican, the mark Claude Code leaves on what it
- * runs, and what the Agent SDK sets in Pelican's own process: its version, with each query (which
- * `claude` would take to say it is an Agent SDK client), and a setting for Windows' cmd.
+ * Pelican's own settings; npm's when npm started Pelican (npm_*, and the folder it started in and
+ * the node it ran); Claude Code's own: the mark it leaves on what it runs, how it was started (the
+ * Agent SDK sets that in Pelican's own process), and when Pelican itself was started from a Claude
+ * Code session, that session's (its id, its messaging socket and the token for it, its IDE's
+ * port), none of which is this shell's to use; and what the Agent SDK sets in Pelican's own
+ * process: its version, with each query (which `claude` would take to say it is an Agent SDK
+ * client), and a setting for Windows' cmd.
  */
-const PELICANS = /^(PELICAN_|npm_|CLAUDE_AGENT_SDK_)|^(CLAUDECODE|NoDefaultCurrentDirectoryInExePath)$/;
+const PELICANS = /^(PELICAN_|npm_|CLAUDE_CODE_|CLAUDE_AGENT_SDK_)|^(CLAUDECODE|INIT_CWD|NODE|NoDefaultCurrentDirectoryInExePath)$/;
 
 /**
- * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*),
- * Claude Code's mark (CLAUDECODE, which would stop `claude` from starting there), the Agent SDK's
- * (CLAUDE_AGENT_SDK_*) and what describes the terminal or service Pelican runs in; with
- * `launch`, what launchFor gives Claude
- * Code and `!` commands in the folder (in one kept to the user's settings only, git settings that
- * turn the repository's own programs off), so the shell runs as Claude does there.
+ * The shell's environment: Pelican's, without its own settings (PELICAN_*), npm's (npm_*,
+ * INIT_CWD, NODE), Claude Code's own (CLAUDECODE, which would stop `claude` from starting there,
+ * and CLAUDE_CODE_*), the Agent SDK's (CLAUDE_AGENT_SDK_*) and what describes the terminal or
+ * service Pelican runs in; with `launch`, what launchFor gives Claude Code and `!` commands in the
+ * folder (in one kept to the user's settings only, git settings that turn the repository's own
+ * programs off), so the shell runs as Claude does there. What a shell needs (PATH, HOME, the
+ * locale, SSH's agent, a proxy) stays, and a login shell reads the user's own profile on top.
  */
 export function shellEnvironment(base: NodeJS.ProcessEnv, launch: Record<string, string> | undefined, shell: string): Record<string, string> {
   const env: Record<string, string> = {};
