@@ -280,15 +280,36 @@ async function patchFor(change: DefaultChange, models: () => Promise<ModelOption
 }
 
 /**
+ * Where a write of `file` lands: its real path, every link on the way followed, so that each link
+ * stays a link (a dotfiles manager may link a link). Claude Code 2.1.318's own writer reads one
+ * link, and would put a file in place of a second one. A link to a file not there yet leads to
+ * where the file is to be, following the links as far as they go.
+ */
+async function writeTarget(file: string): Promise<string> {
+  try {
+    return await realpath(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let target = file;
+  // As far as the system follows links; one that leads in a circle realpath has refused already.
+  for (let hops = 0; hops < 40; hops += 1) {
+    const link = await lstat(target).catch(() => undefined);
+    if (!link?.isSymbolicLink()) break;
+    const from = await realpath(path.dirname(target)).catch(() => path.dirname(target));
+    target = path.resolve(from, await readlink(target));
+  }
+  return target;
+}
+
+/**
  * Writes `text` in place of `file` as Claude Code writes its settings: to a temporary file beside
- * the file (through a symlinked file, beside its target), with the old file's permissions, synced,
- * then renamed over it. `before` is what the change was made from: when the file holds anything
- * else by then, someone changed it meanwhile, and nothing is written.
+ * the file (through a symlinked file, beside its real path: writeTarget), with the old file's
+ * permissions, synced, then renamed over it. `before` is what the change was made from: when the
+ * file holds anything else by then, someone changed it meanwhile, and nothing is written.
  */
 async function writeOver(file: string, text: string, before: string | null): Promise<boolean> {
-  let target = file;
-  const link = await lstat(file).catch(() => undefined);
-  if (link?.isSymbolicLink()) target = path.resolve(path.dirname(file), await readlink(file));
+  const target = await writeTarget(file);
   await mkdir(path.dirname(target), { recursive: true });
   const old = await stat(target).catch(() => undefined);
   const temp = `${target}.tmp.${process.pid}.${randomBytes(6).toString('hex')}`;

@@ -249,7 +249,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   neither reads nor writes the file. The file is read, the change merged in with every other key
   kept as it was, and the whole written as Claude Code writes it (two-space JSON and a newline): to
   a temporary file beside it with its permissions, synced, then renamed over it, so no program
-  ever reads half a file; a symlinked file is written at its target, the link kept. Just before
+  ever reads half a file; a symlinked file is written at its real path, every link on the way
+  kept, also a link to a link (Claude Code's own writer follows one link, and would put a file in
+  place of the second). Just before
   the rename the file is read again: if it changed meanwhile (Claude Code saving `/model`), the
   change is made again on top of what is there, never over it, and after five tries Pelican gives
   up and says so. A file that is not valid JSON, holds no object or is larger than 2 MB is left as

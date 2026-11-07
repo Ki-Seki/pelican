@@ -282,6 +282,31 @@ describe('writing Claude Code’s user settings, as its commands do', () => {
     await rm(userFile());
   });
 
+  it('writes a file reached through links to links at its real path, every link kept', async () => {
+    // settings.json -> link1.json -> real.json, the middle link relative, as a dotfiles manager may make them.
+    const real = path.join(project, 'real.json');
+    const middle = path.join(path.dirname(userFile()), 'link1.json');
+    await writeFile(real, '{"theme":"dark"}');
+    await symlink(real, middle);
+    await symlink('link1.json', userFile());
+    try {
+      await saveDefault({ model: 'opus' }, models);
+      expect((await lstat(userFile())).isSymbolicLink()).toBe(true);
+      expect((await lstat(middle)).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(await readFile(real, 'utf8'))).toEqual({ theme: 'dark', model: 'opus' });
+      // A chain to a file not there yet makes it where the links lead.
+      await rm(real);
+      await saveDefault({ fast: true }, models);
+      expect((await lstat(middle)).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(await readFile(real, 'utf8'))).toEqual({ fastMode: true });
+      expect((await readdir(path.dirname(userFile()))).filter((name) => name.includes('.tmp.'))).toEqual([]);
+    } finally {
+      await rm(userFile(), { force: true });
+      await rm(middle, { force: true });
+      await rm(real, { force: true });
+    }
+  });
+
   it('merges as Claude Code does: objects key by key, anything else replaced, undefined taken out', () => {
     expect(mergeSettings({ a: 1, permissions: { allow: ['x'], defaultMode: 'plan' }, list: [1] }, { permissions: { defaultMode: 'auto' }, list: [2], a: undefined }))
       .toEqual({ permissions: { allow: ['x'], defaultMode: 'auto' }, list: [2] });

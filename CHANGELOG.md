@@ -253,8 +253,9 @@ settings; and updates from Settings.
   Ultracode are not offered there, as Claude Code keeps neither as a default, and Bypass never is.
   A model, an effort or fast mode picked in a session's model sheet is saved too, as `/model`,
   `/effort` and `/fast` save it in the terminal; Max effort, Ultracode and the mode stay with the
-  session. A settings file that is not valid JSON is left as it is, and Settings says so. A running
-  session keeps the model, effort and mode it started with, as in Claude Code.
+  session. A settings file that is not valid JSON is left as it is, and Settings says so; one
+  reached through links, also a link to a link, is written where they lead, every link kept. A
+  running session keeps the model, effort and mode it started with, as in Claude Code.
 - A session's effort shows as Claude Code applies it, its own default for the model included.
 - Keys are Claude Desktop's, as it takes them in a browser: ⌘K (Ctrl+K) opens the command menu and
   ⇧⌘K (Ctrl+Shift+K) searches sessions, which ⌘K did before; ⇧⌘O starts a session, ⇧⌘, opens
