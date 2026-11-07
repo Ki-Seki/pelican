@@ -3,13 +3,13 @@
 // any profile, so nothing of the computer's own shell setup runs.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import xtermHeadless from '@xterm/headless';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
@@ -323,6 +323,108 @@ describe('a terminal', () => {
     await computer.sees(/40 120\r\n/, 10_000, from);
     expect(computer.messages.filter((m) => m.type === 'size')).toEqual([]);
   }, 20_000);
+});
+
+describe('Run in terminal’s command files', () => {
+  /** A shell that says it takes pastes, as zsh does, and writes down all it is sent, in `typed`. */
+  const recording = (typed: string) => Object.assign(testShell, { file: '/bin/sh', args: ['-c', `stty raw -echo; printf '\\033[?2004h$ '; cat > ${typed}`] });
+  const asBefore = () => Object.assign(testShell, { file: '/bin/bash', args: ['--noprofile', '--norc', '-i'] });
+  /** Runs `command` in a new terminal of the recording shell: the file its shell was told to read. */
+  async function run(command: string, typed: string): Promise<string> {
+    recording(typed);
+    await open(work(), { command });
+    await until(() => existsSync(typed) && readFileSync(typed, 'utf8').endsWith('\r'), 10_000, 'the command');
+    const [, file] = /^\. (\/\S+)\r$/.exec(readFileSync(typed, 'utf8')) ?? [];
+    expect(file).toBeDefined();
+    return file!;
+  }
+  const runFolder = () => path.join(config.stateDir, 'run');
+  const modeOf = async (name: string) => (await stat(name)).mode & 0o777;
+
+  afterEach(() => {
+    asBefore();
+    config.stateDir = path.join(dir, 'state');
+  });
+
+  it('are in Pelican’s state folder, in a folder of this account’s alone made again whenever it has gone, each under a name nobody can guess', async () => {
+    const first = await run('echo one', path.join(dir, 'typed-1'));
+    // The folder goes, as macOS's cleaner took the one in /tmp once empty for 3 days: the next
+    // command makes it again, rather than failing until Pelican starts again.
+    await rm(path.dirname(first), { recursive: true, force: true });
+    const second = await run('echo two', path.join(dir, 'typed-2'));
+    expect(readFileSync(second, 'utf8')).toBe('echo two\n');
+    expect(second).not.toBe(first);
+    for (const file of [first, second]) {
+      expect(path.dirname(file)).toBe(runFolder());
+      expect(path.basename(file)).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    expect(await modeOf(runFolder())).toBe(0o700);
+    expect(await modeOf(second)).toBe(0o600);
+    // Opened to others, it is made this account's alone again before a command goes in.
+    closeAllTerminals();
+    await chmod(runFolder(), 0o777);
+    const third = await run('echo three', path.join(dir, 'typed-3'));
+    expect(path.dirname(third)).toBe(runFolder());
+    expect(await modeOf(runFolder())).toBe(0o700);
+  }, 30_000);
+
+  it('are never written through a link, into what is not a folder or into another account’s: the page is told why, not a failure of Pelican’s own', async () => {
+    const elsewhere = path.join(dir, 'elsewhere');
+    await mkdir(elsewhere, { recursive: true });
+    await rm(runFolder(), { recursive: true, force: true });
+    await mkdir(config.stateDir, { recursive: true });
+    const refused = async (pattern: RegExp) => {
+      const response = await api('POST', '/api/terminals', { cwd: work(), cols: 80, rows: 24, command: 'echo hi' });
+      expect(response.status, JSON.stringify(response.body)).toBe(503);
+      expect(response.body.error).toMatch(pattern);
+    };
+    // A link, to a folder anyone could have made: nothing goes through it.
+    await symlink(elsewhere, runFolder());
+    await refused(/run is a link, so Run in terminal writes no command there/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+    await rm(runFolder());
+    // A file where the folder goes.
+    await writeFile(runFolder(), '');
+    await refused(/run is not a folder/);
+    await rm(runFolder());
+    // A folder another account owns (as it seems to Pelican here).
+    await mkdir(runFolder(), { mode: 0o700 });
+    const uid = process.getuid!();
+    const spied = vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
+    try {
+      await refused(/run belongs to another account/);
+    } finally {
+      spied.mockRestore();
+    }
+    expect(readdirSync(runFolder())).toEqual([]);
+    // No terminal was started for any of them.
+    expect((await api('GET', '/api/terminals')).body.terminals).toEqual([]);
+  }, 30_000);
+
+  it('left behind a day by a Pelican that was stopped are taken away; and with a space in the state folder’s path, one goes in a folder of its own, gone with its terminal', async () => {
+    await mkdir(runFolder(), { recursive: true, mode: 0o700 });
+    const old = path.join(runFolder(), 'left-behind');
+    const recent = path.join(runFolder(), 'still-in-use');
+    await writeFile(old, 'echo old\n');
+    await writeFile(recent, 'echo recent\n');
+    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+    await utimes(old, twoDaysAgo, twoDaysAgo);
+    await run('echo now', path.join(dir, 'typed-4'));
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(recent)).toBe(true);
+    closeAllTerminals();
+    // A path the shell would read differently, a space in it: a folder made for the command alone,
+    // in the system's temporary folder, this account's alone too.
+    config.stateDir = path.join(dir, 'state with space');
+    const file = await run('echo spaced', path.join(dir, 'typed-5'));
+    expect(path.dirname(path.dirname(file))).toBe(path.resolve(os.tmpdir()));
+    expect(await modeOf(path.dirname(file))).toBe(0o700);
+    expect(readFileSync(file, 'utf8')).toBe('echo spaced\n');
+    expect(existsSync(path.join(dir, 'state with space', 'run'))).toBe(false);
+    const [terminal] = (await api('GET', '/api/terminals')).body.terminals as TerminalInfo[];
+    await api('DELETE', `/api/terminals/${terminal!.id}`);
+    await until(() => !existsSync(path.dirname(file)), 5000, 'its folder to go');
+  }, 30_000);
 });
 
 describe('the size a terminal is drawn at', () => {

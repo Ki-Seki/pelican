@@ -443,9 +443,9 @@ settings; and updates from Settings.
   was started, or the id, messaging socket and token of a Claude Code session Pelican was started
   from) or the Agent SDK's, so `claude` starts there as in any terminal, from your own profile. At
   most 10 terminals run at once, each on up to 8 pages; nothing of them is written to disk but a
-  command Run in terminal runs, for its shell to read, readable by you alone and removed with its
-  terminal. The demo has none, and `pelican --no-terminal` (also for `pelican service install`)
-  starts Pelican without them.
+  command Run in terminal runs, for its shell to read, in Pelican's state folder, readable by you
+  alone and removed with its terminal. The demo has none, and `pelican --no-terminal` (also for
+  `pelican service install`) starts Pelican without them.
 - Clear terminal sends the shell nothing: Pelican clears its copy of the screen and the pages, then
   tells the program in front of the shell, found with `ps` as End's question finds it, that the
   window changed (SIGWINCH, as a resize does), and where that program is not this account's to
@@ -509,7 +509,9 @@ settings; and updates from Settings.
   line wider than 500 columns, or more than 50 lines. The command is not typed at the shell's
   prompt, where bash, zsh and csh expand a `!` from the history, double quotes and all, so
   `echo "!?SECRET?"` printed a secret from the history file: the shell reads it from a file of its
-  own, readable by you alone and removed with the terminal. A step's Run in terminal, and a `!`
+  own, in a folder of Pelican's state folder readable by you alone, made again if it has gone and
+  checked before each command goes in it (a link, or another account's folder, gets none, and Run
+  in terminal says why), and the file goes with the terminal. A step's Run in terminal, and a `!`
   command's, asks the same question, the command itself shown rather than the step's description of
   it, and is never offered on a step you denied, on a subagent's or a workflow's step, or for a
   PowerShell step where the terminal's shell is not PowerShell.

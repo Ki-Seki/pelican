@@ -206,7 +206,13 @@ can read your sessions and have Claude run commands as you, so treat access to i
   same reading. The command is not typed at the shell's prompt, where bash, zsh and csh expand a `!`
   from the history first, double quotes and all, so `echo "!?SECRET?"` would print a secret from
   your history file, or a `curl` send it off: the shell reads it from a file of its own (`. file`,
-  `source file`), in a folder only you can read, removed with the terminal, and it runs as it reads.
+  `source file`), named so that nobody can guess it, in a folder of Pelican's state folder that only
+  you can read. The folder is made again if it has gone, and checked before each command goes in
+  it: a folder of yours, not a link, or no command is written and Run in terminal says why. The file
+  is made new, never through a link, and goes with its terminal (one left behind when Pelican was
+  stopped goes a day later); where the state folder's path has a space, or others may write in it,
+  it goes in a folder made for it alone in the system's temporary folder. The command runs as it
+  reads.
   Claude sees nothing of a terminal unless you put it in a message (Quote, at most its first 1,500
   characters). A link in a terminal says where it goes before it opens, as the browser would ask for
   it (an international name in its `xn--` form): pointed at, at the foot of the screen, and tapped
