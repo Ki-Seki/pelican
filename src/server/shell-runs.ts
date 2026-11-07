@@ -176,6 +176,11 @@ const running = () => [...bySession.values()].flatMap((entries) => [...entries.v
 /** How many `!` commands are running now, in every session. */
 export const runningShells = () => running().length;
 
+/** The `!` commands running now, in every session, for what an update would end (update.ts). */
+export const runningShellList = () => [...bySession].flatMap(([sessionId, entries]) => [...entries.values()]
+  .filter((entry) => !entry.shell.done)
+  .map((entry) => ({ sessionId, command: entry.shell.command, startedAt: entry.shell.startedAt })));
+
 /** Ends at once what stopAllShells still gives time to: Pelican was told to stop again. */
 export function hurryShells(): void {
   hurried = true;

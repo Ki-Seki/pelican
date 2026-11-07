@@ -51,6 +51,7 @@ import { transcriptImage } from './history.js';
 import { instance } from './running.js';
 import { rawEntry, transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
+import { updateRoutes, whileUpdating } from './update.js';
 import { AGENT_ID, CALL_ID, subagentPage, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
 
 export const app = new Hono();
@@ -141,6 +142,10 @@ app.use('/api/*', async (c, next) => {
   }
   await next();
 });
+
+// While an update replaces Pelican's install and starts it again, nothing new starts (update.ts).
+app.use('/api/*', whileUpdating);
+app.route('/api/update', updateRoutes);
 
 // Bodies are small, except an upload; nothing is buffered past these sizes. Only signed-in
 // requests get this far, apart from signing in itself, whose limit is 4 KB.

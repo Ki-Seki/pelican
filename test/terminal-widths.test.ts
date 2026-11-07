@@ -1,6 +1,7 @@
 // The widths every terminal of Pelican draws with (src/shared/terminal-widths.ts): Unicode 11's,
-// with at most 16 marks joined to a cell, whatever a program puts between them; and ordinary text,
-// in any script, drawn as a plain xterm draws it.
+// with at most 11 marks joined to a cell and 14 UTF-16 code units in it, whatever a program puts
+// between them, so a cell stays a small string; and ordinary text, in any script, emoji and flags
+// of seven code points included, drawn as a plain xterm draws it.
 import v8 from 'node:v8';
 import vm from 'node:vm';
 
@@ -9,7 +10,7 @@ import unicode11Addon from '@xterm/addon-unicode11';
 import xtermHeadless, { type Terminal } from '@xterm/headless';
 import { describe, expect, it } from 'vitest';
 
-import { boundedWidths, loadWidths, MARKS_PER_CHARACTER, type Widths } from '../src/shared/terminal-widths';
+import { boundedWidths, loadWidths, MARKS_PER_CHARACTER, UNITS_PER_CELL, type Widths } from '../src/shared/terminal-widths';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
 const { SerializeAddon } = serializeAddon;
@@ -65,6 +66,10 @@ function heaviest(t: Terminal): number {
 
 const marks = (n: number, mark = '\u0301') => mark.repeat(n);
 
+/** The most marks a cell takes, and the most it holds with its letter. */
+const MARKS = MARKS_PER_CHARACTER;
+const FULL = MARKS + 1;
+
 /** What a program can put between marks: every control, and every kind of sequence, also one cut in two. */
 const BETWEEN: Record<string, string> = {
   ...Object.fromEntries(Array.from({ length: 32 }, (_, code) => [`C0 ${code.toString(16)}`, String.fromCharCode(code)]).filter(([, c]) => c !== '\u001b' && c !== '\u0018' && c !== '\u001a')),
@@ -91,31 +96,44 @@ const BETWEEN: Record<string, string> = {
 };
 
 describe('the widths', () => {
-  it('give a cell at most 16 marks, whatever a program puts between them', async () => {
+  it('give a cell at most 11 marks, whatever a program puts between them', async () => {
     for (const [name, between] of Object.entries(BETWEEN)) {
       const { t } = screen();
-      await feed(t, `a${`${marks(16)}${between}`.repeat(200)}`);
-      expect(heaviest(t), name).toBeLessThanOrEqual(1 + MARKS_PER_CHARACTER);
+      await feed(t, `a${`${marks(MARKS)}${between}`.repeat(200)}`);
+      expect(heaviest(t), name).toBeLessThanOrEqual(FULL);
     }
   });
 
-  it('give a cell at most 16 marks across a sequence cut in two between pieces of output', async () => {
+  it('give a cell at most 11 marks across a sequence cut in two between pieces of output', async () => {
     const { t } = screen();
     for (let n = 0; n < 200; n += 1) {
-      await write(t, `${n === 0 ? 'a' : ''}${marks(16)}\u001b[`);
+      await write(t, `${n === 0 ? 'a' : ''}${marks(MARKS)}\u001b[`);
       await write(t, '1<m');
     }
-    expect(heaviest(t)).toBe(17);
+    expect(heaviest(t)).toBe(FULL);
+  });
+
+  it('give a cell at most 14 code units: six marks past U+FFFF, two units each, on a letter', async () => {
+    // Variation selectors of the supplement (U+E0100…), which a program can print without end.
+    const astral = (n: number) => '\u{e0100}'.repeat(n);
+    const { t } = screen();
+    await write(t, `a${astral(20)}b\r\n\u{1f600}${astral(7)}c`);
+    const rows = cells(t).rows;
+    // 1 + 2 * 6 = 13 units; a seventh would make 15: it starts a cell of its own, which takes six more.
+    expect(rows[0]!.slice(0, 5)).toEqual([`a${astral(6)}/1`, `${astral(7)}/1`, `${astral(7)}/1`, 'b/1', '/1']);
+    // A character of two units takes six too: 2 + 12 = 14.
+    expect(rows[1]!.slice(0, 4)).toEqual([`\u{1f600}${astral(6)}/2`, '/0', `${astral(1)}/1`, 'c/1']);
+    expect(Math.max(...rows.flat().map((cell) => cell.slice(0, cell.lastIndexOf('/')).length))).toBeLessThanOrEqual(UNITS_PER_CELL);
   });
 
   it('keep the screen, and the screen a page gets, as large as its cells, however many marks come', async () => {
-    // Two million marks in runs of 16, a DEL after each; and one run of two million.
-    for (const output of [`a${`${marks(16)}\u007f`.repeat(125_000)}`, `a${marks(2_000_000)}`]) {
+    // Two million marks in runs of 11, a DEL after each; and one run of two million.
+    for (const output of [`a${`${marks(MARKS)}\u007f`.repeat(Math.ceil(2_000_000 / MARKS))}`, `a${marks(2_000_000)}`]) {
       const { t, serializer } = screen({ cols: 20, rows: 5 });
       await feed(t, output, 64 * 1024);
-      expect(heaviest(t)).toBe(17);
-      // The lines it keeps, each of 20 cells of at most 17 code points: no more, however much came.
-      expect(serializer.serialize({ scrollback: 2000 }).length).toBeLessThanOrEqual((2000 + 5) * (20 * 17 + 20));
+      expect(heaviest(t)).toBe(FULL);
+      // The lines it keeps, each of 20 cells of at most 12 code points: no more, however much came.
+      expect(serializer.serialize({ scrollback: 2000 }).length).toBeLessThanOrEqual((2000 + 5) * (20 * FULL + 20));
       // A plain xterm puts all of them on the letter.
       const plain = screen({ plain: true, cols: 20, rows: 5 });
       await feed(plain.t, output.slice(0, 200_000), 64 * 1024);
@@ -142,22 +160,51 @@ describe('the widths', () => {
     expect(await grows(screen({ plain: true, cols: 20, rows: 5 }).t, `${marks(16)}\u007f`, 15_000, 45_000)).toBeGreaterThan(16 * MB);
   }, 120_000);
 
-  it('start a cell of its own with the 17th mark, one column wide, which takes the next 16', async () => {
+  it('keep each cell one small string, of marks or of what lies past U+FFFF, where 16 marks made each a rope', async () => {
+    v8.setFlagsFromString('--expose-gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    const cols = 100;
+    const rows = 50;
+    /** The heap a screen takes, by the cell, once every line it keeps is full of `cell`, column after column. */
+    const perCell = async (plain: boolean, cell: (x: number) => string) => {
+      gc();
+      const before = process.memoryUsage().heapUsed;
+      const { t } = screen({ plain, cols, rows });
+      const line = `${Array.from({ length: cols }, (_, x) => cell(x)).join('')}\r\n`;
+      for (let y = 0; y < rows + 2000; y += 1) await write(t, line);
+      gc();
+      const used = process.memoryUsage().heapUsed - before;
+      expect(t.buffer.active.length).toBe(rows + 2000);
+      return used / ((rows + 2000) * cols);
+    };
+    const letter = (x: number) => String.fromCharCode(0x61 + (x % 26));
+    // Zalgo: each letter with as many marks as a cell takes, each mark another.
+    const zalgo = (n: number) => (x: number) => letter(x) + Array.from({ length: n }, (_, k) => String.fromCharCode(0x300 + ((x + k) % 0x70))).join('');
+    const astral = (x: number) => letter(x) + Array.from({ length: 6 }, (_, k) => String.fromCodePoint(0xe0100 + ((x + k) % 0xf0))).join('');
+    // About 60 bytes a cell, the string and xterm's own: a 500x300 screen of Zalgo, 50 MB.
+    expect(await perCell(false, zalgo(MARKS))).toBeLessThan(90);
+    expect(await perCell(false, astral)).toBeLessThan(90);
+    // 16 marks a cell, as before: hundreds of bytes each, 362 MB at 500x300.
+    expect(await perCell(true, zalgo(16))).toBeGreaterThan(150);
+  }, 120_000);
+
+  it('start a cell of its own with the 12th mark, one column wide, which takes the next 11', async () => {
     const { t } = screen();
-    await write(t, `a${marks(40)}b\r\n\u4e2d${marks(17, '\u0300')}c\r\na${marks(16)}\u007f${marks(3)}\u009c${marks(15)}d`);
+    await write(t, `a${marks(30)}b\r\n\u4e2d${marks(12, '\u0300')}c\r\na${marks(11)}\u007f${marks(3)}\u009c${marks(10)}d`);
     const rows = cells(t).rows;
-    expect(rows[0]!.slice(0, 4)).toEqual([`a${marks(16)}/1`, `${marks(17)}/1`, `${marks(7)}/1`, 'b/1']);
+    expect(rows[0]!.slice(0, 4)).toEqual([`a${marks(11)}/1`, `${marks(12)}/1`, `${marks(7)}/1`, 'b/1']);
     // A wide character keeps its two cells, then the one too many starts one.
-    expect(rows[1]!.slice(0, 4)).toEqual([`\u4e2d${marks(16, '\u0300')}/2`, '/0', '\u0300/1', 'c/1']);
-    expect(rows[2]!.slice(0, 4)).toEqual([`a${marks(16)}/1`, `${marks(17)}/1`, `${marks(1)}/1`, 'd/1']);
+    expect(rows[1]!.slice(0, 4)).toEqual([`\u4e2d${marks(11, '\u0300')}/2`, '/0', '\u0300/1', 'c/1']);
+    expect(rows[2]!.slice(0, 4)).toEqual([`a${marks(11)}/1`, `${marks(12)}/1`, `${marks(1)}/1`, 'd/1']);
   });
 
-  it('are Unicode 11’s for every character, and join as they do up to 16, after any character', () => {
+  it('are Unicode 11’s for every character, and join as they do up to 11, after any character', () => {
     let unicode11: Widths | undefined;
     new Unicode11Addon().activate({ unicode: { register: (widths: Widths) => (unicode11 = widths) } } as never);
     const bounded = boundedWidths(unicode11!);
-    // What xterm hands back of the character before: none, one 1 or 2 wide, alone or with 1 or 15 marks.
-    const before = [0, 1 << 1, 2 << 1, (1 << 1) | 1 | (1 << 3), (2 << 1) | 1 | (15 << 3)];
+    // What xterm hands back of the character before: none, one 1 or 2 wide, alone or with 1 or 10
+    // marks, and the code units of its cell (bits 8 and up).
+    const before = [0, (1 << 1) | (1 << 8), (2 << 1) | (2 << 8), (1 << 1) | 1 | (1 << 3) | (2 << 8), (2 << 1) | 1 | (10 << 3) | (11 << 8)];
     const differ: string[] = [];
     for (let codepoint = 0; codepoint <= 0x10ffff; codepoint += 1) {
       if (codepoint >= 0xd800 && codepoint <= 0xdfff) continue;
@@ -171,16 +218,21 @@ describe('the widths', () => {
       }
     }
     expect(differ).toEqual([]);
-    expect(bounded.charProperties(0x301, 0)).toBe(1 << 1);
+    expect(bounded.charProperties(0x301, 0) & 7).toBe(1 << 1);
     expect(unicode11!.charProperties(0x301, 0)).toBe(0);
-    // With 16 on the cell, the next that would join starts a cell, one column wide; one that would not, as ever.
-    const full = (1 << 1) | 1 | (16 << 3);
-    expect(bounded.charProperties(0x301, full)).toBe(1 << 1);
-    expect(bounded.charProperties(0x61, full)).toBe(unicode11!.charProperties(0x61, full));
-    expect(bounded.charProperties(0x301, bounded.charProperties(0x301, full))).toBe((1 << 1) | 1 | (1 << 3));
+    // With 11 on the cell, the next that would join starts a cell, one column wide; one that would not, as ever.
+    const full = (1 << 1) | 1 | (11 << 3) | (12 << 8);
+    expect(bounded.charProperties(0x301, full) & 0xff).toBe(1 << 1);
+    expect(bounded.charProperties(0x61, full) & 7).toBe(unicode11!.charProperties(0x61, full) & 7);
+    expect(bounded.charProperties(0x301, bounded.charProperties(0x301, full)) & 0xff).toBe((1 << 1) | 1 | (1 << 3));
+    // So does one that would make the cell longer than 14 code units, with room for marks left.
+    const long = (1 << 1) | 1 | (6 << 3) | (13 << 8);
+    expect(bounded.charProperties(0xe0100, long) & 0xff).toBe(1 << 1);
+    expect(bounded.charProperties(0x301, long) & 0xff).toBe((1 << 1) | 1 | (7 << 3));
+    expect(bounded.charProperties(0xe0100, (1 << 1) | 1 | (5 << 3) | (12 << 8)) & 0xff).toBe((1 << 1) | 1 | (6 << 3));
   }, 30_000);
 
-  it('draw text as a plain xterm does: accents, Indic, Thai, Hangul, Arabic, Hebrew, emoji with joiners, flags, Zalgo of 16', async () => {
+  it('draw text as a plain xterm does: accents, Indic, Thai, Hangul, Arabic, Hebrew, emoji with joiners, flags, Zalgo of 11', async () => {
     const text = [
       'cafe\u0301 Vie\u0323\u0302t',
       // Devanagari, Bengali, Tamil
@@ -193,8 +245,12 @@ describe('the widths', () => {
       '\u0628\u0650\u0633\u0652\u0645\u0650 \u05e9\u05b8\u05c1\u05dc\u05d5\u05b9\u05dd',
       // A family, a rainbow flag, a skin tone, a country's flag, a keycap, a text-style heart
       '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466} \u{1f3f3}\ufe0f\u200d\u{1f308} \u{1f44d}\u{1f3fd} \u{1f1ef}\u{1f1f5} 1\ufe0f\u20e3 \u2764\ufe0e',
-      // Zalgo, 16 marks on each letter, above, through and below
-      [...'zalgo'].map((letter) => `${letter}\u0300\u0301\u0302\u0303\u0334\u0335\u0336\u0316\u0317\u0318\u0319\u031c\u031d\u031e\u031f\u0320`).join(''),
+      // The flags of England, Scotland and Wales: a black flag and six tags, seven code points in one cell
+      '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f} \u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f} \u{1f3f4}\u{e0067}\u{e0062}\u{e0077}\u{e006c}\u{e0073}\u{e007f}',
+      // A family with skin tones, people holding hands, a transgender flag
+      '\u{1f468}\u{1f3fb}\u200d\u{1f469}\u{1f3fd}\u200d\u{1f467}\u{1f3ff}\u200d\u{1f466}\u{1f3fe} \u{1f9d1}\u{1f3fd}\u200d\u{1f91d}\u200d\u{1f9d1}\u{1f3ff} \u{1f3f3}\ufe0f\u200d\u26a7\ufe0f',
+      // Zalgo, 11 marks on each letter, above, through and below
+      [...'zalgo'].map((letter) => `${letter}\u0300\u0301\u0302\u0303\u0334\u0335\u0336\u0316\u0317\u0318\u0319`).join(''),
       '\u4e2d\u6587 \u65e5\u672c\u8a9e \u{20000}',
     ].join('\r\n');
     const bounded = screen();
@@ -202,9 +258,11 @@ describe('the widths', () => {
     await write(bounded.t, text);
     await write(plain.t, text);
     expect(cells(bounded.t)).toEqual(cells(plain.t));
+    // The flags are each one cell of seven code points, as a plain xterm draws them.
+    expect(cells(bounded.t).rows[6]![0]).toBe('\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}/2');
   });
 
-  it('draw as a plain xterm does whatever joins no more than 16 to a cell', async () => {
+  it('draw as a plain xterm does whatever joins no more than 11 to a cell, of at most 14 code units', async () => {
     // Random text of every kind of character: letters, wide ones, marks and joiners, controls.
     let seed = 7;
     const random = () => {
@@ -225,7 +283,16 @@ describe('the widths', () => {
     for (let n = 0; n < 20_000; n += 1) {
       const r = random();
       if (r < 0.05) text += ['\r\n', '\t', '\u001b[m', '\u001b[1;31m', '\b'][Math.floor(random() * 5)];
-      else text += pick(r < 0.2 ? 2 : 1) + Array.from({ length: Math.floor(random() * random() * 17) }, () => pick(0)).join('');
+      else {
+        // A character and up to 11 that join it, as long as the cell stays within 14 code units.
+        let cell = pick(r < 0.2 ? 2 : 1);
+        for (let n = Math.floor(random() * random() * (MARKS + 1)); n > 0; n -= 1) {
+          const mark = pick(0);
+          if (cell.length + mark.length > UNITS_PER_CELL) break;
+          cell += mark;
+        }
+        text += cell;
+      }
     }
     const bounded = screen({ cols: 50 });
     const plain = screen({ plain: true, cols: 50 });

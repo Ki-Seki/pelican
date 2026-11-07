@@ -203,7 +203,7 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
     const fitAddon = new FitAddon();
     t.loadAddon(fitAddon);
     t.loadAddon(new WebLinksAddon((event, uri) => openLink(event, uri, touch)));
-    // The widths the server's copy counts cells with: an emoji takes two, and a cell at most 16
+    // The widths the server's copy counts cells with: an emoji takes two, and a cell at most 11
     // combining marks, so output reaching the page as it is printed grows no cell without bound.
     loadWidths(t, Unicode11Addon);
     // Output xterm throws on leaves the screen drawing what comes after it, not stopped there.

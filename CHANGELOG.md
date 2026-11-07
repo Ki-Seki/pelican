@@ -3,8 +3,8 @@
 ## 0.5.0
 
 A terminal beside the conversation, quotes with notes, and every action where it is used, as in
-Claude Desktop, with its keys; and new sessions that start as Claude Code starts them, from its own
-settings.
+Claude Desktop, with its keys; new sessions that start as Claude Code starts them, from its own
+settings; and updates from Settings.
 
 ### Highlights
 
@@ -14,11 +14,12 @@ settings.
   in Desktop, and hides it again from inside it; Ctrl+Shift+\` opens a new one. Each terminal is a
   tab named after the program in front (zsh, npm, vim); + opens another, Open in terminal at the top
   of a folder in Files opens one there, and End hangs the shown one up, as closing a window does,
-  asking first while a program runs in it, also one left in the background. On a computer you type
-  straight into it, with input methods, the emoji picker and dictation too, select to Quote or Copy,
-  and Ctrl and the wheel sets the text size. Its colors and font are Pelican's, light or dark, and a
-  program that asks for its colors, as delta or vim does to pick a theme, gets them. A screen reader
-  reads it.
+  asking first while a program runs in it, also a job left in the background, but not for what your
+  prompt keeps running for itself (powerlevel10k's gitstatusd, pure's worker). On a computer you
+  type straight into it, with input methods, the emoji picker and dictation too, select to Quote or
+  Copy, and Ctrl and the wheel sets the text size. Its colors and font are Pelican's, light or dark,
+  and a program that asks for its colors, as delta or vim does to pick a theme, gets them. A screen
+  reader reads it.
 - **The terminal on a phone.** A tap never raises the keyboard. You type in a line under the screen
   with your phone's own keyboard, so dictation and input methods such as Chinese pinyin work, two
   spaces stay two spaces (not the period a phone's keyboard makes of them), and Enter sends it;
@@ -139,6 +140,21 @@ settings.
 - **Back on a phone closes what is open.** Android's Back, and the browser's, closes the sheet or
   menu that is open, and goes no further.
 
+- **Update from Settings.** Pelican asks npm's registry for a newer version once a day, and when
+  Settings opens, and says so there, quietly, with what changed, from the new version's
+  CHANGELOG.md; offline it says nothing. Where npm installed Pelican into its global folder, Update
+  installs that very version: first into a folder of its own, where Pelican checks that it starts,
+  then over your install, with the same prefix and npm's integrity checks, and Pelican starts again,
+  through launchd or systemd when it runs as a service, in its own place when it runs in a terminal;
+  pages reconnect by themselves on the new version. While anything runs that the restart would end
+  (Claude working or waiting for you, background agents, workflows and commands, a terminal's
+  program, a `!` command), Settings lists it first, with Update now and Update when idle, which
+  waits until nothing has run for a minute, and can be cancelled. Transcripts, files, pins, settings
+  and drafts stay. Run by npx, from a clone, from another prefix than npm's (as a script of your own
+  may keep it), by pnpm, Yarn, Bun or Volta, or from a folder root owns, Settings shows the command
+  to run instead, and why. If anything fails, the running version goes on, and Settings says what
+  failed.
+
 ### Changes in behavior
 
 - **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
@@ -221,6 +237,11 @@ settings.
 
 ### Security
 
+- Updating from Settings takes a request from Pelican's own page, signed in, as every change does,
+  and never in either demo; it installs nothing but pelican-cc, at the newest version npm's registry
+  names, which the request must name exactly, with npm's integrity checks and no package scripts,
+  and only where npm itself installed Pelican in its global folder, which this account can write to.
+  Pelican never runs sudo. SECURITY.md says what it runs, and when.
 - A terminal opens only for a signed-in browser on Pelican's own page, under a host name Pelican
   answers to, as everything else does, and runs in a folder as Claude Code does: a folder nobody
   trusted that brings programs is asked about first, and in one kept to your settings only, git runs
@@ -233,14 +254,17 @@ settings.
   and Windows Terminal do: text a web page put on the clipboard as you copied from it cannot end
   the shell's paste early and run without Enter.
 - What a terminal keeps of its screen is bounded, on the computer and on a page: 2,000 lines, at
-  most 16 combining marks on a character, whatever a program prints between them, the latest 2,048
-  links (the computer keeps none), no title, and at most 20 lines' worth of output for a screen
-  reader to read out, also of output with no line feed in it; a sequence that repeats a character,
-  scrolls, inserts or deletes lines or moves by tab stops does so at most a screen's worth of times
-  (REP a line's), however large a count it gives, and the computer's copy takes output in a little
-  at a time; so no output grows Pelican's memory, or a page's, without bound, or holds the rest of
-  Pelican up for more than a moment; and output xterm throws on stops neither Pelican nor a page's
-  screen.
+  most 11 combining marks on a character and 14 UTF-16 code units in a cell (six of the marks past
+  U+FFFF, which take two each), whatever a program prints between them, so a cell stays one string
+  of about 40 bytes and a 500x300 terminal full of Zalgo text takes about 50 MB (with 16 marks a
+  cell it took 362 MB), while a flag of England, Scotland or Wales, seven code points in one cell,
+  still draws whole; the latest 2,048 links (the computer keeps none), no title, and at most 20
+  lines' worth of output for a screen reader to read out, also of output with no line feed in it; a
+  sequence that repeats a character, scrolls, inserts or deletes lines or moves by tab stops does so
+  at most a screen's worth of times (REP a line's), however large a count it gives, and the
+  computer's copy takes output in a little at a time; so no output grows Pelican's memory, or a
+  page's, without bound, or holds the rest of Pelican up for more than a moment; and output xterm
+  throws on stops neither Pelican nor a page's screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
@@ -258,6 +282,9 @@ settings.
 
 ### Site, docs and project
 
+- The docs say how to update from Settings: what Pelican asks npm's registry and when, which
+  installs update themselves, the command for the others, what an update ends, and how Pelican
+  starts again.
 - The docs describe where every action is: each thing's list and its ways in, the session menu,
   the header's buttons, Context, the message box's +, the command menu, the keys, the session list
   hiding and floating, and Back on a phone.

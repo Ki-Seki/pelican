@@ -1753,6 +1753,11 @@ export function closeAll(): void {
   for (const run of runs.values()) run.close();
 }
 
+/** The Claude processes this app has open, for what an update would end (update.ts). */
+export function openRuns(): SessionRun[] {
+  return [...runs.values()].filter((run) => !run.closed);
+}
+
 /** Whether Claude is in a turn in any session this app runs (working, or waiting for an answer). */
 export function anyRunBusy(): boolean {
   for (const run of runs.values()) if (!run.closed && run.busy) return true;

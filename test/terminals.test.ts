@@ -15,12 +15,13 @@ import WebSocket from 'ws';
 import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import type { TerminalColors, TerminalInfo, TerminalList } from '../src/shared/terminal';
 import { TERMINAL_CLOSE, TERMINAL_LIMITS } from '../src/shared/terminal';
+import { MARKS_PER_CHARACTER } from '../src/shared/terminal-widths';
 import { accessToken, cookieName } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { usePtyLoader } from '../src/server/pty';
 import { startServer } from '../src/server/server';
 import {
-  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, shellEnvironment, terminalState,
+  closeAllTerminals, closeIdleTerminals, type ColorRequest, colorReport, onColorRequests, parseProcessTable, runsIn, shellEnvironment, terminalState,
   terminalTiming, testShell,
 } from '../src/server/terminals';
 import { modesBeyondSnapshot } from '../src/server/terminal-snapshot';
@@ -520,6 +521,9 @@ describe('flow control', () => {
 
 describe('marks on a character', () => {
   const marks = (n: number) => '\u0301'.repeat(n);
+  /** The most marks a cell takes, and the most code points it holds with its letter. */
+  const MARKS = MARKS_PER_CHARACTER;
+  const FULL = MARKS + 1;
 
   /** The most code points a cell of the page's screen holds. */
   const heaviest = (shown: Page) => {
@@ -535,10 +539,10 @@ describe('marks on a character', () => {
   // What xterm passes over between marks, going on joining them to the letter before: a DEL, the
   // C1 string terminator, a sequence it does not take.
   for (const [name, between] of [['a DEL', '\u007f'], ['U+009C', '\u009c'], ['ESC [ 1 < m', '\u001b[1<m']]) {
-    it(`are at most 16 on a cell of the copy and of the pages, with ${name} after every 16`, async () => {
+    it(`are at most 11 on a cell of the copy and of the pages, with ${name} after every 11`, async () => {
       const file = path.join(dir, 'marks.txt');
       // One letter, then two million marks.
-      await writeFile(file, `a${`${marks(16)}${between}`.repeat(125_000)}b\n`);
+      await writeFile(file, `a${`${marks(MARKS)}${between}`.repeat(Math.ceil(2_000_000 / MARKS))}b\n`);
       // A narrow screen, whose scrollback the marks overflow: what it keeps is all a page gets.
       const size = { cols: 20, rows: 5 };
       const terminal = await open(work(), size);
@@ -549,20 +553,20 @@ describe('marks on a character', () => {
       const ready = await late.readied();
       // xterm takes in what it is given a moment later, the screen a page is sent too.
       for (const seen of [shown, late]) await until(() => seen.lines().some((line) => line.endsWith('DONE')), 10_000, 'the screen');
-      // A mark that started a cell of its own, and 16 more on it, where the page saw it all and
+      // A mark that started a cell of its own, and 11 more on it, where the page saw it all and
       // where the copy's screen came.
-      expect(heaviest(shown)).toBe(17);
-      expect(heaviest(late)).toBe(17);
+      expect(heaviest(shown)).toBe(FULL);
+      expect(heaviest(late)).toBe(FULL);
       expect(late.lines()).toEqual(shown.lines());
       // The lines the copy keeps, each of 20 such cells (and a NUL before each that begins with a
       // mark, so it joins nothing before it), and no more however many came.
-      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * 18 + 10_000);
+      expect(ready.snapshot.length).toBeLessThan((TERMINAL_LIMITS.scrollback + size.rows) * size.cols * (FULL + 1) + 10_000);
     }, 90_000);
   }
 
-  it('are at most 16 on a cell, and a letter keeps its first 16, in one run however long', async () => {
+  it('are at most 11 on a cell, and a letter keeps its first 11, in one run however long', async () => {
     const file = path.join(dir, 'marks-run.txt');
-    await writeFile(file, `a${marks(40)}b\n`);
+    await writeFile(file, `a${marks(30)}b\n`);
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
     shown.type(`cat ${file}; echo DO''NE\r`);
@@ -573,8 +577,8 @@ describe('marks on a character', () => {
     for (const seen of [shown, late]) {
       const y = seen.lines().findIndex((line) => line.startsWith('a\u0301'));
       const line = seen.screen.buffer.active.getLine(y)!;
-      // The letter and 16; then a mark, a cell of its own, and the 16 after it; then the last 7, and b.
-      expect([0, 1, 2, 3].map((x) => line.getCell(x)?.getChars())).toEqual([`a${marks(16)}`, marks(17), marks(7), 'b']);
+      // The letter and 11; then a mark, a cell of its own, and the 11 after it; then the last 7, and b.
+      expect([0, 1, 2, 3].map((x) => line.getCell(x)?.getChars())).toEqual([`a${marks(MARKS)}`, marks(FULL), marks(7), 'b']);
     }
   }, 30_000);
 });
@@ -680,12 +684,140 @@ describe('the shell’s environment', () => {
   });
 });
 
+/** ps's line for a process, as `ps -A -o pid=,ppid=,pgid=,tpgid=,stat=,tty=` prints it. */
+const psLine = (pid: number, ppid: number, pgid: number, tpgid: number, stat: string, tty: string) => `${pid} ${ppid} ${pgid} ${tpgid} ${stat} ${tty}`;
+
+/** Whether the terminal says something runs in it, as End asks. */
+const runningIn = async (id: string) => ((await api('GET', `/api/terminals/${id}`)).body as { running: boolean }).running;
+
+/** Until the terminal says so; End's answer may lag a job's end by the moment the shell takes to reap it. */
+async function saysRunning(id: string, expected: boolean): Promise<void> {
+  for (const start = Date.now(); (await runningIn(id)) !== expected;) {
+    if (Date.now() - start > 10_000) throw new Error(`the terminal never said running: ${expected}`);
+    await pause(100);
+  }
+}
+
+/** Ends what a test left running, by its process group, as only the test started it. */
+function endGroup(pgid: number | undefined): void {
+  if (!pgid) return;
+  try {
+    process.kill(-pgid, 'SIGKILL');
+  } catch {
+    // Gone already.
+  }
+}
+
+/** The processes of the computer, as Pelican reads them. */
+const table = () => parseProcessTable(execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid=,tpgid=,stat=,tty=']).toString())!;
+
+/**
+ * How gitstatus.plugin.zsh (github.com/romkatv/gitstatus, which powerlevel10k brings) starts
+ * gitstatusd, kept to the steps that make its processes what they are: from the interactive shell,
+ * with job control on, a process substitution whose subshell (a group of its own) starts the daemon
+ * and a lock watcher in the background, disowned, and ends, so they are left to the system, in that
+ * group, on the terminal. `sleep` stands in for gitstatusd.
+ */
+const GITSTATUS_STAND_IN = `
+zmodload zsh/system zsh/files || return
+_standin_daemon() {
+  local -i pipe_fd
+  exec 0<&- {pipe_fd}>&1 1>>/dev/null 2>&1 || return
+  local pgid=$sysparams[pid]
+  [[ $pgid == <1-> ]] || return
+  builtin cd -q / || return
+  {
+    {
+      trap '' PIPE
+      command mkfifo -- $file_prefix.fifo || return
+      print -rnu $pipe_fd -- \${(l:20:)pgid} || return
+      exec <$file_prefix.fifo || return
+      zf_rm -- $file_prefix.fifo || return
+      command sleep 300 >&$pipe_fd
+    } always {
+      zf_rm -f -- $file_prefix.lock $file_prefix.fifo
+      kill -- -$pgid
+    }
+  } &!
+  (( lock_fd == -1 )) && return
+  {
+    if zsystem flock -- $file_prefix.lock && command sleep 5 && [[ -e $file_prefix.lock ]]; then
+      zf_rm -f -- $file_prefix.lock $file_prefix.fifo
+      kill -- -$pgid
+    fi
+  } &!
+}
+standin_start() {
+  emulate -L zsh -o no_aliases -o no_bg_nice -o extended_glob -o typeset_silent || return
+  local -i lock_fd resp_fd req_fd
+  local file_prefix=\${TMPDIR:-/tmp}/standin.$sysparams[pid]
+  () {
+    setopt monitor || return
+    print -rn >$file_prefix.lock || return
+    zsystem flock -f lock_fd $file_prefix.lock || return
+    sysopen -r -o cloexec -u resp_fd <(_standin_daemon) || return
+    local pgid
+    while (( $#pgid < 20 )); do
+      sysread -s $((20 - $#pgid)) -t 5 -i $resp_fd 'pgid[$#pgid+1]' || return
+    done
+    typeset -gi STANDIN_DAEMON_PGID=pgid
+    sysopen -w -o cloexec -u req_fd -- $file_prefix.fifo || return
+    typeset -gi STANDIN_REQ_FD=req_fd STANDIN_RESP_FD=resp_fd STANDIN_LOCK_FD=lock_fd
+  }
+}
+`;
+
+const zsh = ['/bin/zsh', '/usr/bin/zsh'].find((file) => existsSync(file));
+
 describe('what runs in a terminal', () => {
+  it('is a program in front, or a job of the shell’s own on its terminal, running or stopped; not a helper the shell left there, or one it started on another', () => {
+    const shell = 500;
+    const at = (...rows: string[]) => parseProcessTable([psLine(1, 0, 1, 0, 'Ss', '??'), ...rows].join('\n'));
+    // On a Mac (ttys001) and on Linux (pts/3): the shell at its prompt, the terminal's foreground group its own.
+    for (const [tty, none] of [['ttys001', '??'], ['pts/3', '?']] as const) {
+      const prompt = psLine(shell, 400, shell, shell, 'Ss+', tty);
+      expect(runsIn(shell, at(prompt)), tty).toBe(false);
+      // gitstatusd as powerlevel10k starts it: its subshell ended, so it and its watcher are the system's,
+      // in the subshell's group, on the terminal.
+      expect(runsIn(shell, at(prompt, psLine(611, 1, 610, shell, 'S', tty), psLine(612, 1, 610, shell, 'S', tty), psLine(613, 611, 610, shell, 'S', tty)))).toBe(false);
+      // A worker on a terminal of its own (zsh-async's zpty), or none (a daemon that left its terminal).
+      expect(runsIn(shell, at(prompt, psLine(620, shell, 620, 620, 'Ss+', 'ttys009'), psLine(621, shell, 621, 0, 'Ss', none)))).toBe(false);
+      // A job that ended, until the shell reaps it.
+      expect(runsIn(shell, at(prompt, psLine(630, shell, 630, shell, 'Z', tty)))).toBe(false);
+      // A job in the background, running or stopped, and one started with job control off.
+      for (const job of [psLine(640, shell, 640, shell, 'S', tty), psLine(641, shell, 641, shell, 'T', tty), psLine(642, shell, shell, shell, 'S', tty)]) {
+        expect(runsIn(shell, at(prompt, job)), job).toBe(true);
+      }
+      // A program in front: the terminal's foreground group is not the shell's.
+      expect(runsIn(shell, at(psLine(shell, 400, shell, 650, 'Ss', tty), psLine(650, shell, 650, 650, 'S+', tty)))).toBe(true);
+    }
+    // ps could not say, or did not list the shell: it cannot be told.
+    expect(runsIn(shell, undefined)).toBeUndefined();
+    expect(runsIn(shell, at(psLine(700, 1, 700, 0, 'S', '??')))).toBeUndefined();
+    expect(parseProcessTable('')).toBeUndefined();
+    expect(parseProcessTable('ps: illegal option')).toBeUndefined();
+  });
+
   it('is said for End to ask first: a program in front, or a job in the background, but not the shell at its prompt', async () => {
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
     const running = async () => (await api('GET', `/api/terminals/${terminal.id}`)).body as { terminal: TerminalInfo; running: boolean };
     expect(await running()).toEqual({ terminal: expect.objectContaining({ id: terminal.id, program: 'bash' }), running: false });
+    // A helper left on the terminal, as gitstatusd is: started from a subshell that ended at once,
+    // the system's now, in that subshell's group.
+    shown.type('echo "shell $$"; ( sleep 300 & echo "helper $(jobs -p)" )\r');
+    await shown.sees(/helper \d+/);
+    const shell = Number(/shell (\d+)/.exec(shown.output)![1]);
+    const helper = Number(/helper (\d+)/.exec(shown.output)![1]);
+    try {
+      await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
+      const processes = table();
+      expect(processes.get(helper)).toMatchObject({ tty: processes.get(shell)!.tty });
+      expect(processes.get(helper)!.ppid).not.toBe(shell);
+      expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'bash' }), running: false });
+    } finally {
+      endGroup(table().get(helper)?.pgid);
+    }
     // A job in the background: the shell is in front, and a process of its own runs.
     shown.type('sleep 300 &\r');
     await shown.sees(/\[1\] \d+/);
@@ -693,8 +825,17 @@ describe('what runs in a terminal', () => {
     expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'bash' }), running: true });
     shown.type('kill %1; wait\r');
     await shown.sees(/Terminated/);
-    for (const start = Date.now(); (await running()).running && Date.now() - start < 10_000;) await pause(100);
-    expect((await running()).running).toBe(false);
+    await saysRunning(terminal.id, false);
+    // A job stopped (Ctrl+Z), in the background.
+    shown.type('sleep 300\r');
+    await pause(600);
+    shown.type('\u001a');
+    await shown.sees(/Stopped/);
+    await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
+    expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'bash' }), running: true });
+    shown.type("kill -9 %1; echo KI''LLED\r");
+    await shown.sees(/KILLED/);
+    await saysRunning(terminal.id, false);
     // A program in front.
     shown.type('sleep 300\r');
     await pause(600);
@@ -706,6 +847,50 @@ describe('what runs in a terminal', () => {
     expect((await running()).running).toBe(false);
     await api('DELETE', `/api/terminals/${terminal.id}`);
     expect((await api('GET', `/api/terminals/${terminal.id}`)).status).toBe(404);
+  }, 30_000);
+
+  it.skipIf(!zsh)('is not gitstatusd, started as powerlevel10k starts it, nor a zpty worker, as zsh-async starts one: End asks only for a job', async () => {
+    const saved = { ...testShell };
+    Object.assign(testShell, { file: zsh, args: ['-f', '-i'] });
+    let daemon: number | undefined;
+    try {
+      const terminal = await open();
+      const shown = await atPrompt(terminal.id);
+      const script = path.join(dir, 'gitstatus-stand-in.zsh');
+      await writeFile(script, GITSTATUS_STAND_IN);
+      shown.type(`echo "shell $$"; source ${script} && standin_start && echo "STARTED $STANDIN_DAEMON_PGID"\r`);
+      await shown.sees(/STARTED \d+/);
+      const shell = Number(/shell (\d+)/.exec(shown.output)![1]);
+      daemon = Number(/STARTED (\d+)/.exec(shown.output)![1]);
+      await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
+      // What it left: the daemon and its watcher in the group of the subshell that started them,
+      // on the terminal, the system's once that subshell ended; none of them the shell's.
+      await until(() => [...table().values()].filter((row) => row.pgid === daemon).length >= 3, 10_000, 'the daemon and its watcher');
+      const processes = table();
+      const tty = processes.get(shell)!.tty;
+      for (const [pid, row] of processes) {
+        if (row.pgid !== daemon) continue;
+        expect(row.tty, String(pid)).toBe(tty);
+        expect(row.ppid, String(pid)).not.toBe(shell);
+      }
+      expect(await runningIn(terminal.id)).toBe(false);
+      // A worker on a terminal of its own, as zsh-async starts one: the shell's own, but not on its terminal.
+      shown.type('zmodload zsh/zpty && zpty standin_worker sleep 300 && echo WORKER\r');
+      await shown.sees(/WORKER/);
+      await until(() => [...table().values()].some((row) => row.ppid === shell && row.tty !== tty), 10_000, 'the worker');
+      expect(await runningIn(terminal.id)).toBe(false);
+      // A job: End asks; once it ends, it does not.
+      shown.type('sleep 300 &\r');
+      await shown.sees(/\[1\] \d+/);
+      expect(await runningIn(terminal.id)).toBe(true);
+      shown.type('kill %1\r');
+      await saysRunning(terminal.id, false);
+      shown.type('zpty -d standin_worker; echo GONE\r');
+      await shown.sees(/GONE/);
+    } finally {
+      endGroup(daemon);
+      Object.assign(testShell, saved);
+    }
   }, 30_000);
 });
 

@@ -140,32 +140,35 @@ can read your sessions and have Claude run commands as you, so treat access to i
   service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
   page sends at most 64 KB at a time; a page that stops reading is let go rather than kept in
   memory, and the shell waits for a slow one instead. What the server keeps of a terminal's screen,
-  and what a page draws of it, is bounded too: 2,000 lines, at most 16 combining marks on a
-  character, however many a program prints and whatever it puts between them, the latest 2,048 links
-  (OSC 8) on a page, each to an address of at most 2,083 characters, none on the server, no title,
-  and at most 20 lines' worth of output for a screen reader to read out, also of output with no line
-  feed in it. A sequence that repeats a character (REP), scrolls, inserts or deletes lines, or moves
-  by tab stops does so at most a screen's worth of times (REP a line's), whatever count it gives, as
-  more changes nothing; and the server's copy takes output in a piece at a time, so the rest of
-  Pelican is answered in between, also while a program floods the screen. Output xterm throws on
-  stops neither Pelican nor a page's screen. A terminal lives in memory only: one unused for 12
-  hours with nothing running in it is closed, closing one hangs up its shell (SIGHUP, as closing a
-  window does), and all end with Pelican. Nothing runs in a terminal without you: the page sends its
-  shell only what you type, paste or click, a paste without its control characters, so text copied
-  from a web page cannot end the shell's paste early and run (the server's copy answers what a
-  program asks of the terminal, once, a color too, from the colors the page says it draws in), and
-  Run in terminal, on a shell command in Claude's reply (never in a file, or a tool's or a
-  subagent's output), asks before it runs it, and is there only for a command that shows all it
-  holds: none with a control character a shell takes as a key, or anything an approval would write
-  out (a character that hides or turns text around, or a space other than a plain one where a shell
-  reads it as part of a word, read as above), which the server refuses too. Claude sees nothing of
-  a terminal unless you put it in a message (Quote, at most its first 1,500 characters). A link in a terminal opens only with Cmd or Ctrl held, or a
-  tap on a phone, and only an `http` or `https` one, in a new tab with no way back to Pelican. The
-  demo has no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is
-  pinned to one version, and CI checks that its files, for every platform, are those of Microsoft's
-  node-pty of that version, against the integrity the npm registry publishes for it; that the few
-  lines of its own, which pick the platform's files, are those read for that version; and that none
-  of its packages runs anything as npm installs it.
+  and what a page draws of it, is bounded too: 2,000 lines, at most 11 combining marks on a
+  character and 14 UTF-16 code units in a cell (so six of the marks past U+FFFF, two units each),
+  which keeps each cell one string of about 40 bytes (a 500x300 terminal full of Zalgo text takes
+  about 50 MB; at 16 marks it took 362 MB), however many a program prints and whatever it puts
+  between them, the latest 2,048 links (OSC 8) on a page, each to an address of at most 2,083
+  characters, none on the server, no title, and at most 20 lines' worth of output for a screen
+  reader to read out, also of output with no line feed in it. A sequence that repeats a character
+  (REP), scrolls, inserts or deletes lines, or moves by tab stops does so at most a screen's worth
+  of times (REP a line's), whatever count it gives, as more changes nothing; and the server's copy
+  takes output in a piece at a time, so the rest of Pelican is answered in between, also while a
+  program floods the screen. Output xterm throws on stops neither Pelican nor a page's screen. A
+  terminal lives in memory only: one unused for 12 hours with nothing running in it is closed,
+  closing one hangs up its shell (SIGHUP, as closing a window does), and all end with Pelican.
+  Nothing runs in a terminal without you: the page sends its shell only what you type, paste or
+  click, a paste without its control characters, so text copied from a web page cannot end the
+  shell's paste early and run (the server's copy answers what a program asks of the terminal, once,
+  a color too, from the colors the page says it draws in), and Run in terminal, on a shell command
+  in Claude's reply (never in a file, or a tool's or a subagent's output), asks before it runs it,
+  and is there only for a command that shows all it holds: none with a control character a shell
+  takes as a key, or anything an approval would write out (a character that hides or turns text
+  around, or a space other than a plain one where a shell reads it as part of a word, read as
+  above), which the server refuses too. Claude sees nothing of a terminal unless you put it in a
+  message (Quote, at most its first 1,500 characters). A link in a terminal opens only with Cmd or
+  Ctrl held, or a tap on a phone, and only an `http` or `https` one, in a new tab with no way back
+  to Pelican. The demo has no terminal, and `--no-terminal` turns them off. The native part,
+  `@lydell/node-pty`, is pinned to one version, and CI checks that its files, for every platform,
+  are those of Microsoft's node-pty of that version, against the integrity the npm registry
+  publishes for it; that the few lines of its own, which pick the platform's files, are those read
+  for that version; and that none of its packages runs anything as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'
@@ -242,6 +245,33 @@ can read your sessions and have Claude run commands as you, so treat access to i
   the SDK lists as its peers, which Pelican never loads. The package ships no
   `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
   `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
+- **An update installs only pelican-cc, from npm's registry, and only when you ask.** Once a day,
+  and when Settings opens (at most every five minutes), Pelican asks the registry npm uses
+  (`npm config get registry`, run by the npm beside the Node running Pelican, as all npm commands
+  here are) for pelican-cc's document, and nothing else; when it names a newer version as `latest`,
+  Pelican downloads that version's tarball from the registry, checks it against the integrity the
+  registry gives, and reads its `CHANGELOG.md`, which Settings shows as text (no HTML; a link opens
+  in a new tab). Offline, or when the registry fails, it says nothing. With an update to show,
+  Pelican finds how it was installed, once: from the real path of its own script and
+  `npm prefix --global`. It updates itself only where npm installed it into npm's global folder, and
+  this account can write there; anywhere else (npx, a source checkout, another prefix, a project,
+  pnpm, Yarn, Bun, Volta, a folder root owns) it shows the command to run instead, and why, and
+  never installs over a version something else keeps. Nothing is installed until the signed-in owner
+  presses Update on Pelican's own page: the same checks as every change (Pelican's header, its
+  origin, signed in), refused in the demo, and the site's demo has no server at all. The request
+  must name the very version the registry named newest, and Pelican writes the command itself, run
+  directly, never through a shell,
+  `npm install -g --prefix <folder> --registry <registry> --ignore-scripts pelican-cc@<version>`
+  (with its audit, funding and update notices off): first into a new folder in the system's
+  temporary folder, where `node <its pelican> --version` must say that version (the folder then
+  goes), then into this install's prefix; npm checks every tarball against the registry's integrity,
+  and runs no package's scripts. Then `node <pelican> --version` again; if it fails, npm installs
+  the running version back. Then, as Pelican's service,
+  `launchctl kickstart -k gui/<uid>/io.github.ki-seki.pelican` or
+  `systemctl --user --no-block restart pelican.service`; in a terminal, Pelican ends what it runs,
+  as a stop does, and starts its own script again in its own process (`process.execve`), with the
+  arguments and environment it was started with; on a Node without it, it says to restart it. While
+  the install is replaced, Pelican starts nothing new. Pelican never runs `sudo`.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
@@ -254,9 +284,9 @@ one, in the session's `tool-results` folder, readable only by you. It stores upl
 notification keys and subscriptions, the folders you trusted or kept to your settings, which
 sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
-long they waited for you, and a note of the running server in `~/.local/state/pelican`. Its pins
-and archive are its own: Claude Desktop's are neither read nor written. Terminals, and what they
-show, are kept in memory only.
+long they waited for you, a note of the running server, and what the last look for an update found,
+in `~/.local/state/pelican`. Its pins and archive are its own: Claude Desktop's are neither read nor
+written. Terminals, and what they show, are kept in memory only.
 
 ## Reporting a vulnerability
 

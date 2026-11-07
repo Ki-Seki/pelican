@@ -485,6 +485,8 @@ async function main(): Promise<void> {
   // Where it really listens (`localhost` may be ::1), so the commands that talk to it reach it.
   const { recordRunning } = await import('./running.js');
   await recordRunning({ port: config.port, host: config.host, url: reachable(url), version: pkg.version }).catch(() => undefined);
+  // Whether a newer Pelican is out, asked of npm's registry once a day; Settings says so, quietly.
+  if (!config.demo) (await import('./update.js')).watchForUpdates();
 
   const shown = url.replace('://127.0.0.1:', '://localhost:');
   const token = accessToken();
