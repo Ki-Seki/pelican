@@ -1,4 +1,4 @@
-import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizontal, Paperclip, RotateCcw, SquareTerminal, TriangleAlert, X } from 'lucide-react';
+import { ArrowDown, Brain, ChevronRight, FileDiff, Layers, Loader2, MoreHorizontal, Paperclip, RotateCcw, SquareTerminal, TriangleAlert } from 'lucide-react';
 import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ImageBlock, LiveShell, PartialBlock, RunState, SavedOutputPage, TurnChanges } from '../../shared/protocol';
@@ -8,11 +8,9 @@ import { entries, type MenuEntry, PROMPT_ACTIONS, type PromptTarget, REPLY_ACTIO
 import { addWaiting } from '../lib/drafts';
 import { announce } from '../lib/announce';
 import { clockTime, dayLabel, duration } from '../lib/format';
-import { newId } from '../lib/ids';
-import { composing, hasKeyboard } from '../lib/keyboard';
 import { useMedia } from '../lib/media';
 import { type Press, useLongPress, useRightClick } from '../lib/press';
-import { quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
+import { promptGist, quoteItem, TOO_MANY_REPLIES } from '../lib/quote';
 import { promptBefore } from '../lib/next-steps';
 import { usePathLinks } from '../lib/path-links';
 import type { ViewMode } from '../lib/prefs';
@@ -21,11 +19,12 @@ import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { InReply } from '../lib/terminals';
 import { describeTool } from '../lib/tools';
-import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile, withFiles } from '../lib/turns';
+import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { loadsInPlace, Markdown, RemoteImage } from './Markdown';
 import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
+import { type RewindPoint, RewoundMarker } from './Rewind';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { sentFilesOf, ToolCallView, ToolTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
@@ -374,25 +373,27 @@ function PromptText({ text, command, onTap, source, press, bubble }: {
   );
 }
 
+/** A prompt as Rewind to here names it: its id, and its words in a few, as a title says them. */
+const rewindPoint = (item: Extract<Item, { kind: 'user' }>): RewindPoint => ({
+  uuid: item.key,
+  text: promptGist(item.text).trim() || item.files.map((file) => file.name).join(', ') || (item.images.length > 0 ? 'A picture' : ''),
+  ...(item.timestamp ? { timestamp: item.timestamp } : {}),
+});
+
 // The prompt's actions under a finger: labelled pills, laid out only once the prompt is tapped, so a
 // prompt sits as close to its answer as any other item.
 const PILL = 'relative flex h-9 items-center gap-1.5 rounded-full px-3 text-[12.5px] text-muted after:absolute after:-inset-y-1 after:inset-x-0 active:bg-hover';
 
 const UserBubble = memo(function UserBubble({
-  item, last, onEdit, onRewind, onFork,
+  item, onRewind, onFork,
 }: {
   item: Extract<Item, { kind: 'user' }>;
-  /** The newest prompt: an edit replaces it here instead of branching. */
-  last: boolean;
-  onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
-  onRewind?: (uuid: string) => void;
+  /** Rewind to here: back to before it, its words back in the box (Chat asks first, as Desktop does). */
+  onRewind?: (point: RewindPoint) => void;
   /** Fork from here: a new session up to just before it, its words in that session's box. */
   onFork?: (prompt: Extract<Item, { kind: 'user' }>) => void;
 }) {
   const [actions, setActions] = useState(false);
-  // The id of an edit in progress, made once when the editor opens: sending twice (a retry after
-  // a lost answer) gets the same branch, not a second one.
-  const [editing, setEditing] = useState<string>();
   const [menu, setMenu] = useState<MenuAt>();
   // Select text, picked under a finger: its words take the system's own long press again.
   const [selectable, setSelectable] = useState(false);
@@ -415,20 +416,6 @@ const UserBubble = memo(function UserBubble({
       document.removeEventListener('selectionchange', onChange);
     };
   }, [selectable]);
-  if (editing && onEdit) {
-    return (
-      <EditPrompt
-        text={item.text}
-        images={item.images}
-        files={item.files}
-        last={last}
-        onCancel={() => setEditing(undefined)}
-        onSend={(next, keep) => onEdit(item.key, withFiles(next, item.files), editing, keep).then((sent) => {
-          if (sent) setEditing(undefined);
-        })}
-      />
-    );
-  }
   const from = { what: 'prompt' as const, key: item.key, ...(item.timestamp ? { at: item.timestamp } : {}) };
   const prompt: PromptTarget = {
     text,
@@ -439,13 +426,8 @@ const UserBubble = memo(function UserBubble({
         else if (quoted) announce(TOO_MANY_REPLIES);
       },
     } : {}),
-    ...(onEdit && !item.command ? {
-      edit: () => {
-        setActions(false);
-        setEditing(newId());
-      },
-    } : {}),
-    ...(onRewind && !item.command ? { rewind: () => onRewind(item.key) } : {}),
+    // A prompt that started its turn: one sent while Claude worked is part of another's.
+    ...(onRewind && !item.command && !item.steered ? { rewind: () => onRewind(rewindPoint(item)) } : {}),
     ...(onFork && !item.command ? { fork: () => onFork(item) } : {}),
     selectText: () => {
       setSelectable(true);
@@ -521,104 +503,6 @@ const UserBubble = memo(function UserBubble({
     </div>
   );
 });
-
-/**
- * Editing a prompt in place. Nothing changes until Send: then the conversation branches just
- * before this prompt and the new text, with the images kept, goes there; this session stays as
- * it was. While it sends there is nothing to cancel: the branch is being made.
- */
-function EditPrompt({ text, images, files, last, onCancel, onSend }: {
-  text: string;
-  images: ImageBlock[];
-  /** Files sent with the prompt; they go along with the edit. */
-  files: SentFile[];
-  last: boolean;
-  onCancel: () => void;
-  onSend: (text: string, keepImages: number[]) => Promise<void>;
-}) {
-  const [value, setValue] = useState(text);
-  // Positions among all the prompt's images, as the server counts them; only those held in the
-  // transcript (not a link to one elsewhere) can go along.
-  const carried = images.flatMap((image, i) => (image.source.type === 'base64' || image.source.url.startsWith('api/sessions/') ? [i] : []));
-  const [kept, setKept] = useState(carried);
-  const [busy, setBusy] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
-  }, [value]);
-  useEffect(() => {
-    const el = field.current;
-    el?.focus();
-    el?.setSelectionRange(el.value.length, el.value.length);
-  }, []);
-  const send = () => {
-    if (!value.trim() || busy) return;
-    setBusy(true);
-    void onSend(value.trim(), kept).finally(() => setBusy(false));
-  };
-  return (
-    <div className="ml-auto w-full max-w-[85%] rounded-2xl border border-line bg-panel p-2">
-      {carried.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5 px-1 pt-1">
-          {carried.map((i) => {
-            const image = images[i]!;
-            const keep = kept.includes(i);
-            return (
-              <button
-                key={i}
-                type="button"
-                disabled={busy}
-                aria-label={keep ? 'Leave this image out' : 'Keep this image'}
-                title={keep ? 'Leave this image out' : 'Keep this image'}
-                onClick={() => setKept((all) => (keep ? all.filter((k) => k !== i) : [...all, i].sort((a, b) => a - b)))}
-                className="relative"
-              >
-                {image.omitted ? (
-                  <span className={`grid size-14 place-items-center rounded-lg border border-line text-[11px] text-faint ${keep ? '' : 'opacity-30'}`}>Image</span>
-                ) : (
-                  <img alt="" src={imageSrc(image)} className={`size-14 rounded-lg border border-line object-cover ${keep ? '' : 'opacity-30'}`} />
-                )}
-                <span className="absolute -top-1 -right-1 grid size-4.5 place-items-center rounded-full bg-fg text-bg"><X className="size-3" /></span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {files.some((file) => file.path) && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5 px-1 pt-1">
-          {files.filter((file) => file.path).map((file, i) => <FileChip key={i} file={{ name: file.name }} />)}
-        </div>
-      )}
-      {/* 16px: a smaller field makes Safari on iOS zoom the page when it gets focus. */}
-      <textarea
-        ref={field}
-        value={value}
-        readOnly={busy}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          // Keys an input method takes are its own: Esc there cancels a conversion, not the edit.
-          if (composing(e.nativeEvent)) return;
-          if (e.key === 'Escape' && !busy) onCancel();
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
-        }}
-        aria-label="Edit the prompt"
-        className="block w-full resize-none bg-transparent px-1.5 py-1 text-[16px] leading-relaxed outline-none"
-      />
-      <div className="mt-1 flex items-center gap-1.5">
-        <span className="mr-auto px-1.5 text-[11.5px] leading-snug text-faint">
-          {busy ? 'Sending…' : last ? 'Replaces this prompt and Claude’s answer to it.' : 'Sends as a new branch; this one stays as it is.'}
-        </span>
-        <button type="button" onClick={onCancel} disabled={busy} className="h-8 rounded-full px-3 text-[13px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">Cancel</button>
-        <button type="button" onClick={send} disabled={busy || !value.trim()} className="flex h-8 items-center rounded-full bg-fg px-3.5 text-[13px] font-medium text-bg disabled:opacity-40">
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Send'}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 /** `onNext`: the next step an error line offers, where it ends the conversation (Retry, or Compact). */
 function Notice({ item, onNext }: { item: Extract<Item, { kind: 'notice' }>; onNext?: () => void }) {
@@ -923,7 +807,7 @@ function LiveOutput({ run, cwd, since, view }: { run: RunState; cwd?: string; si
 }
 
 export function MessageList({
-  sessionId, view, cwd, machine, mode, onEdit, onRewind, onFork, onForkReply, onRetry, onCompact,
+  sessionId, view, cwd, machine, mode, onRewind, onUndoRewind, onFork, onForkReply, onRetry, onCompact,
 }: {
   sessionId: string;
   view: SessionView;
@@ -931,8 +815,10 @@ export function MessageList({
   /** The computer Claude Code runs on, for error lines that say what to do there. */
   machine?: string;
   mode: ViewMode;
-  onEdit?: (uuid: string, text: string, key: string, keepImages: number[]) => Promise<boolean>;
-  onRewind?: (uuid: string) => void;
+  /** Rewind to here, on a prompt or a reply (which acts on its turn's prompt). */
+  onRewind?: (point: RewindPoint) => void;
+  /** Undo rewind, at the marker where the conversation was rewound. */
+  onUndoRewind?: () => Promise<void>;
   /** Fork from a prompt: a new session up to just before it, its words in that session's box. */
   onFork?: (prompt: Extract<Item, { kind: 'user' }>) => void;
   /** Fork from a reply: a new session up to the end of it (`upTo`, its last message). */
@@ -965,7 +851,9 @@ export function MessageList({
   const [showJump, setShowJump] = useState(false);
   const busy = Boolean(view.run?.busy);
   const lastAssistant = [...items].reverse().find((i) => i.kind === 'assistant')?.key;
-  const lastPrompt = [...items].reverse().find((i) => i.kind === 'user' && !i.command)?.key;
+  // Where the conversation was rewound: the marker sits at the end of what it kept, before anything sent since.
+  const cutAt = view.rewound ? items.findIndex((i) => i.kind === 'user' && i.pending) : -1;
+  const marker = view.rewound ? <RewoundMarker key="rewound" {...(onUndoRewind && cutAt < 0 ? { onUndo: onUndoRewind } : {})} /> : null;
   // A failed turn's error, said once: the conversation may already end on Claude Code's note of it.
   const lastItem = items.at(-1);
   const endsOnError = lastItem?.kind === 'notice' && lastItem.tone === 'error';
@@ -1125,9 +1013,10 @@ export function MessageList({
           )}
           <div className="space-y-4">
             {items.map((item, at) => {
-              switch (item.kind) {
+              const here = at === cutAt ? marker : null;
+              const shown = (() => { switch (item.kind) {
                 case 'user':
-                  return <UserBubble key={item.key} item={item} last={item.key === lastPrompt} {...(onEdit ? { onEdit } : {})} {...(onRewind ? { onRewind } : {})} {...(onFork ? { onFork } : {})} />;
+                  return <UserBubble key={item.key} item={item} {...(onRewind ? { onRewind } : {})} {...(onFork ? { onFork } : {})} />;
                 case 'shell':
                   return live.has(item.key) ? null : <ShellItem key={item.key} item={item} sessionId={sessionId} />;
                 case 'assistant': {
@@ -1144,7 +1033,7 @@ export function MessageList({
                         view={mode}
                         running={running}
                         {...(changed ? { changed } : {})}
-                        {...(prompt && !prompt.command && onRewind ? { onRewind: () => onRewind(prompt.key) } : {})}
+                        {...(prompt && !prompt.command && !prompt.steered && onRewind ? { onRewind: () => onRewind(rewindPoint(prompt)) } : {})}
                         {...(end && onForkReply && !running ? { onFork: () => onForkReply(end) } : {})}
                         {...(item.key === lastAssistant && view.run?.lastTurn ? { stats: view.run.lastTurn } : {})}
                       />
@@ -1165,8 +1054,10 @@ export function MessageList({
                   return <div key={item.key} className="pt-2 text-center text-[11px] font-medium tracking-wide text-faint uppercase">{dayLabel(item.timestamp)}</div>;
                 default:
                   return null;
-              }
+              } })();
+              return here ? <Fragment key={item.key}>{here}{shown}</Fragment> : shown;
             })}
+            {cutAt < 0 && marker}
             {busy && view.run && <LiveOutput run={view.run} cwd={cwd} view={mode} {...(promptAt ? { since: promptAt } : {})} />}
             {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">

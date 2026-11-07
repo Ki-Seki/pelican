@@ -317,8 +317,7 @@ export type PromptTarget = {
   /** Its words, as they were sent. */
   text: string;
   quote?: () => void;
-  /** Edit and send again, until Rewind to here puts the words back in the box. */
-  edit?: () => void;
+  /** Back to before it, its words back in the box: how a prompt is edited, as in Claude Code and Desktop. */
   rewind?: () => void;
   fork?: () => void;
   /** Lets a finger select its words, which a long press takes otherwise. */
@@ -326,14 +325,13 @@ export type PromptTarget = {
 };
 
 /**
- * Copy · Quote · Rewind to here · Fork from here, and Select text on a phone. Edit stays in the
- * list until Rewind to here gives a prompt's words back to the box, as in Desktop (the next part
- * of 0.5.0), and goes then.
+ * Copy · Quote · Rewind to here · Fork from here, and Select text on a phone. Editing a prompt is
+ * Rewind to here, which puts its words back in the box, or Fork from here, which puts them in a
+ * new session's, as in Claude Desktop and the CLI.
  */
 export const PROMPT_ACTIONS: readonly Action<PromptTarget>[] = [
   { id: 'copy', group: 'text', label: 'Copy', icon: Copy, row: true, run: (p) => copy(p.text) },
   { id: 'quote', group: 'text', label: 'Quote', icon: TextQuote, swipe: true, when: (p) => Boolean(p.quote), run: (p) => p.quote?.() },
-  { id: 'edit', group: 'turn', label: 'Edit', icon: Pencil, when: (p) => Boolean(p.edit), run: (p) => p.edit?.() },
   { id: 'rewind', group: 'turn', label: 'Rewind to here', icon: History, row: true, when: (p) => Boolean(p.rewind), run: (p) => p.rewind?.() },
   { id: 'fork', group: 'turn', label: 'Fork from here', icon: GitFork, row: true, when: (p) => Boolean(p.fork), run: (p) => p.fork?.() },
   // A computer selects with the pointer as ever; a long press on a phone takes the words' own.

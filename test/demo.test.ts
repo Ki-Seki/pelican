@@ -8,6 +8,7 @@ const { advance, DEMO_REPLY, DEMO_SIDE_REPLY, rewindPreview, startDemo } = await
 const { api, isDemoNote } = await import('../src/web/lib/api');
 const { addLocalMessage, getView, setRun } = await import('../src/web/lib/store');
 const { DEMO_NOTE } = await import('../src/web/lib/static-demo');
+const { FIRST_MESSAGE, NOTHING_TO_UNDO } = await import('../src/shared/rewind');
 
 const CWD = '/demo/code/acme-web';
 const todo = (content: string, status: 'pending' | 'in_progress' | 'completed') => ({ content, status, activeForm: `${content}ing` });
@@ -89,11 +90,39 @@ describe('the demo', () => {
     vi.runAllTimers();
     await api.send(SESSION, { text: 'Use the system setting', attachments: [], settings: {}, uuid: 'mine' });
     vi.runAllTimers();
-    expect(rewindPreview(getView(SESSION).messages, 'm1')).toMatchObject({ canRewind: true, files: [`${CWD}/theme.css`, `${CWD}/src/settings/Settings.tsx`] });
-    expect(rewindPreview(getView(SESSION).messages, 'mine')).toEqual({ canRewind: false });
+    // The first message: only its code can go back, as nothing comes before it to start again from.
+    expect(rewindPreview(getView(SESSION).messages, 'm1')).toMatchObject({ files: [`${CWD}/theme.css`, `${CWD}/src/settings/Settings.tsx`], conversationStays: FIRST_MESSAGE });
+    expect(rewindPreview(getView(SESSION).messages, 'mine')).toEqual({ files: [], insertions: 0, deletions: 0 });
     // An edit's lines count as they change back: the lines its old and new text share stay.
     const edit: ChatMessage = { uuid: 'e1', role: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: `${CWD}/tests/login.spec.ts`, old_string: "  await page.click('text=Sign in');\n  await page.waitForTimeout(500);", new_string: "  await page.click('text=Sign in');\n  await expect(page).toHaveURL('/home');" } }] };
     expect(rewindPreview([{ uuid: 'p1', role: 'user', blocks: [{ type: 'text', text: 'Fix it' }] }, edit], 'p1')).toMatchObject({ insertions: 1, deletions: 1 });
+  });
+
+  it('rewinds the conversation in the page: back to before the prompt, its words for the box, until Undo rewind or the next message', async () => {
+    const { sessionId } = await api.create({ cwd: CWD, text: 'Add a footer', attachments: [], settings: {}, uuid: 'first' });
+    vi.runAllTimers();
+    await api.send(sessionId, { text: 'Make it dark', attachments: [], settings: {}, uuid: 'second' });
+    vi.runAllTimers();
+    expect(await api.rewindCheck(sessionId, 'second')).toEqual({ files: [], insertions: 0, deletions: 0 });
+    await expect(api.rewind(sessionId, 'second', 'conversation')).resolves.toEqual({ prompt: { text: 'Make it dark', attachments: [] } });
+    const rewound = await api.messages(sessionId);
+    expect(rewound.messages.map((m) => m.uuid)).not.toContain('second');
+    expect(rewound.rewound).toEqual({ prompt: 'second', at: expect.any(Number) });
+    await expect(api.undoRewind(sessionId)).resolves.toEqual({ ok: true });
+    expect((await api.messages(sessionId)).messages.map((m) => m.uuid)).toContain('second');
+    // Rewound again, then a message: it goes after the cut, and Undo is over.
+    await api.rewind(sessionId, 'second', 'conversation');
+    await api.send(sessionId, { text: 'Make it blue', attachments: [], settings: {}, uuid: 'third' });
+    vi.runAllTimers();
+    const after = await api.messages(sessionId);
+    expect(after.messages.map((m) => m.uuid)).toEqual(expect.arrayContaining(['first', 'third']));
+    expect(after.messages.map((m) => m.uuid)).not.toContain('second');
+    expect(after.rewound).toBeUndefined();
+    const undo = await api.undoRewind(sessionId).catch((error: unknown) => error);
+    expect((undo as Error).message).toBe(NOTHING_TO_UNDO);
+    // The first message has nothing before it to start again from.
+    const first = await api.rewind(sessionId, 'first', 'conversation').catch((error: unknown) => error);
+    expect((first as Error).message).toBe(FIRST_MESSAGE);
   });
 
   it('starts a new session in the page, which the list and the chat then show', async () => {

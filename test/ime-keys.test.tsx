@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ChatMessage, GitStatus, SessionSummary } from '../src/shared/protocol';
-import type { SessionView } from '../src/web/lib/store';
+import type { GitStatus, SessionSummary } from '../src/shared/protocol';
 
 // Chinese, Japanese and Korean are typed through an input method, and its Esc cancels the word
 // being put together. Browsers send that Esc to the page too, marked as the input method's
@@ -37,7 +36,6 @@ beforeAll(() => {
 });
 
 const { Composer } = await import('../src/web/components/Composer');
-const { MessageList } = await import('../src/web/components/MessageList');
 const { SessionList } = await import('../src/web/components/SessionList');
 const { Workspace } = await import('../src/web/components/Workspace');
 
@@ -64,25 +62,6 @@ describe('the Esc of an input method', () => {
     expect((screen.getByLabelText('Comment for Claude') as HTMLTextAreaElement).value).toBe('変数を使って');
     fireEvent.keyDown(box, { key: 'Escape' });
     expect(screen.queryByLabelText('Comment for Claude')).toBeNull();
-  });
-
-  it('leaves a prompt being edited open', () => {
-    const messages: ChatMessage[] = [
-      { uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Add a dark theme' }], timestamp: Date.now() - 60_000 },
-      { uuid: 'a1', role: 'assistant', blocks: [{ type: 'text', text: 'Done.' }], timestamp: Date.now() - 50_000 },
-    ];
-    const view: SessionView = { messages, offset: 0, total: 2, loaded: true, loadingOlder: false };
-    render(<MessageList sessionId="s1" view={view} mode="normal" onEdit={async () => true} />);
-    // Edit is in the prompt's menu, until Rewind to here gives its words back to the box.
-    HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) { this.setAttribute('open', ''); };
-    HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) { this.removeAttribute('open'); };
-    fireEvent.contextMenu(screen.getByText('Add a dark theme'));
-    fireEvent.click(within(screen.getByRole('menu', { name: 'Your message' })).getByRole('menuitem', { name: 'Edit' }));
-    const editor = screen.getByLabelText('Edit the prompt');
-    imeEscapes(editor);
-    expect(screen.getByLabelText('Edit the prompt')).toBe(editor);
-    fireEvent.keyDown(editor, { key: 'Escape' });
-    expect(screen.queryByLabelText('Edit the prompt')).toBeNull();
   });
 
   it('leaves the session search as it is', async () => {

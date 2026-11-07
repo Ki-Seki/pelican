@@ -221,6 +221,48 @@ export type MessagesPage = {
   /** Messages in the whole conversation; `offset` is the index of the first returned one. */
   total: number;
   offset: number;
+  /** On the newest page: the conversation was rewound here and ends before that prompt, until the next message. */
+  rewound?: Rewound;
+};
+
+/**
+ * Where a session's conversation was rewound (Rewind to here), until the next message: the prompt
+ * it went back to before (out of the conversation, with all after it), and when. Undo rewind
+ * brings them back until then.
+ */
+export type Rewound = { prompt: string; at: number };
+
+/**
+ * What Rewind to here puts back, Claude Desktop's three choices (the CLI's Restore code and
+ * conversation, Restore conversation, Restore code): Code and conversation, Conversation only,
+ * Code only.
+ */
+export type RewindRestore = 'both' | 'conversation' | 'code';
+
+/** What Rewind to here can put back, asked before it does (its dialog's choices). */
+export type RewindCheck = {
+  /** The files putting the code back would change, by Claude Code's own check: none when none changed after the message. */
+  files: string[];
+  insertions: number;
+  deletions: number;
+  /**
+   * Why the conversation cannot go back to before the message here, when it cannot (then only the
+   * code can): the session is open in another app, it is the conversation's first message, or the
+   * conversation was compacted after it.
+   */
+  conversationStays?: string;
+};
+
+/** What Rewind to here did. */
+export type RewindDone = {
+  /** The files that went back, and the lines that changed. */
+  files?: string[];
+  insertions?: number;
+  deletions?: number;
+  /** Files Claude Code left as they were: links, or files whose copy it could not read back safely. */
+  skipped?: number;
+  /** The conversation went back to before the message: its words and its files, for the message box. */
+  prompt?: { text: string; attachments: Attachment[] };
 };
 
 export type ModelOption = {
@@ -417,7 +459,7 @@ export type TurnFile = { path: string; added: number; removed: number; created?:
  * One prompt that led Claude to edit files, as Claude Code's /diff offers it: `n` its place among
  * the conversation's prompts, so a prompt that changed nothing leaves a gap (T1, T3…). `uuid` is
  * the prompt's own; `checkpoint`: Claude Code kept the files as they were before it, so Rewind
- * code can put them back.
+ * to here can put them back.
  */
 export type TurnChanges = { uuid: string; n: number; text: string; at?: number; files: TurnFile[]; checkpoint: boolean };
 
@@ -432,7 +474,6 @@ export type GitStatus = { repo: false; untrusted?: boolean } | { repo: true; bra
 export type TreeEntry = { name: string; path: string; dir: boolean; size?: number };
 export type FileContent = { path: string; size: number; text?: string; binary?: boolean; truncated?: boolean; image?: string };
 export type McpServer = { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'; error?: string; tools: number; scope?: string };
-export type RewindResult = { canRewind: boolean; error?: string; files?: string[]; insertions?: number; deletions?: number };
 export type Agent = { name: string; description: string };
 
 /** Text streamed into a run's partial block `index` since the last update: `text` goes at `from`. */
@@ -453,6 +494,8 @@ export type ServerEvent =
   /** A session's status, or how much background work it has (`tasks`), changed; sent to every client, for session lists. */
   | { type: 'status'; sessionId: string; status: SessionStatus; tasks?: number }
   | { type: 'reload'; sessionId: string }
+  /** The conversation was rewound (Rewind to here), or no longer is (Undo rewind, the next message): what pages show of it now. */
+  | { type: 'rewound'; sessionId: string; rewound: Rewound | null }
   /** The session's `!` commands still running, all of them: when one starts, stops or ends, and in answer to a subscribe. */
   | { type: 'shells'; sessionId: string; shells: LiveShell[] }
   /**

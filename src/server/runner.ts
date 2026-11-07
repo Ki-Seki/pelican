@@ -11,6 +11,7 @@ import type {
   PermissionResult,
   PermissionUpdate,
   Query,
+  RewindFilesResult,
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -27,7 +28,6 @@ import type {
   PermissionDecision,
   PermissionRequest,
   QueuedPrompt,
-  RewindResult,
   RunSettings,
   RunState,
   ScheduledCheck,
@@ -40,6 +40,7 @@ import type {
   WorkflowPhase,
   WorkflowStatus,
 } from '../shared/protocol.js';
+import { REWIND_BUSY } from '../shared/rewind.js';
 import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
@@ -53,6 +54,7 @@ import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { deliveryOf, toChatMessage } from './normalize.js';
 import { answerable, notify, oneLine } from './push.js';
+import { liveCut, spendCut } from './rewound.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
 import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
@@ -170,10 +172,16 @@ export function claudeEnv(launch: Launch): Record<string, string | undefined> {
 const CLEARS = /^\/(clear|reset|new)(\s|$)/;
 const AFRESH = 'To start afresh, open a new session in this folder.';
 
-/** Claude Code's error, or what it means for someone who edited their last prompt, in plain words. */
+/**
+ * How Claude Code refuses a resume that would drop more than the turn it was told to drop
+ * (resumeDropsTurn): something else came after that prompt, such as a message another app added.
+ */
+export const RESUME_REFUSED = 'Resume rejected by --resume-drops-turn';
+
+/** Claude Code's error, in plain words. */
 export function readableError(text: string): string {
-  if (text.includes('Resume rejected by --resume-drops-turn')) {
-    return 'The conversation changed after that prompt (another app added to it), so the prompt was not replaced. Reload, then edit it again or send a new message.';
+  if (text.includes(RESUME_REFUSED)) {
+    return 'The conversation changed after that message (another app added to it), so it was not rewound.';
   }
   return startError(text) ?? plainError(text, config.machine) ?? text;
 }
@@ -404,14 +412,23 @@ export class SessionRun {
   /** Claude Code said something: it started, and the session is there to resume. */
   private began = false;
   private suggestion?: string;
+  /** Resumed where the conversation was rewound, and nothing sent to it yet: its first message ends Undo rewind. */
+  private atCut: boolean;
+  /** Claude Code refused to resume as asked: more than the turn it was told to drop would go. */
+  private refusedResume = false;
+  /** A message went after the cut; its turn has not ended yet. */
+  private leftCut = false;
 
   constructor(
     readonly sessionId: string,
     readonly cwd: string,
     private settings: RunSettings,
     private readonly resume: boolean,
-    /** Resume only up to this entry, dropping the turn after it (an edited last prompt). */
-    private readonly resumeAt?: { entry: string; dropsTurn: string },
+    /**
+     * Where the conversation was rewound (rewound.ts): resume only up to this entry, leaving out
+     * what follows it. `dropsTurn`: all that follows is that prompt's turn, which Claude Code checks.
+     */
+    private readonly resumeAt?: { entry: string; dropsTurn?: string },
     /** Which settings Claude Code loads: a folder nobody trusted runs none of its own (trust.ts). */
     private readonly launch: Launch = FULL_SETTINGS,
     /** A side chat (side-chat.ts): it reads, changes nothing, and runs in its own mode whatever is picked. */
@@ -419,6 +436,36 @@ export class SessionRun {
   ) {
     if (!resume) this.costSoFar = 0;
     if (sideChat) this.settings = sideChatSettings(settings);
+    this.atCut = Boolean(resume && resumeAt);
+  }
+
+  /** What goes to Claude now goes after the cut: Undo rewind is over. */
+  private leaveCut(): void {
+    if (!this.atCut) return;
+    this.atCut = false;
+    this.leftCut = true;
+    void spendCut(this.sessionId).catch((error: Error) => console.warn('[pelican] could not note the message after a rewind:', error.message));
+  }
+
+  /** The turn after the cut has ended: its prompt is in the transcript, and the cut is over (rewound.ts). */
+  private pastCut(): void {
+    if (!this.leftCut) return;
+    this.leftCut = false;
+    void liveCut(this.sessionId).catch(() => undefined);
+  }
+
+  /**
+   * Whether Claude Code resumed the session as asked: false when its check refused to leave out
+   * more than the turn it was told to (resumeDropsTurn). Other failures to start throw.
+   */
+  async resumed(): Promise<boolean> {
+    try {
+      await this.q?.initializationResult();
+      return !this.refusedResume;
+    } catch (error) {
+      if (this.refusedResume || (error as Error).message.includes(RESUME_REFUSED)) return false;
+      throw error;
+    }
   }
 
   /**
@@ -487,9 +534,13 @@ export class SessionRun {
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
-      // Claude Code checks that everything past the entry belongs to the dropped turn, so a
-      // message another app added meanwhile is never thrown away unseen.
-      ...(this.resume && this.resumeAt ? { resumeSessionAt: this.resumeAt.entry, resumeDropsTurn: this.resumeAt.dropsTurn } : {}),
+      // Rewound: the conversation up to the entry before the prompt. Dropping one turn, Claude
+      // Code checks that everything past the entry belongs to it, so a message another app added
+      // meanwhile is never thrown away unseen.
+      ...(this.resume && this.resumeAt ? {
+        resumeSessionAt: this.resumeAt.entry,
+        ...(this.resumeAt.dropsTurn ? { resumeDropsTurn: this.resumeAt.dropsTurn } : {}),
+      } : {}),
       ...(sdkModel(settings.model) ? { model: sdkModel(settings.model) } : {}),
       ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
@@ -503,7 +554,7 @@ export class SessionRun {
         },
       } : {}),
       includePartialMessages: true,
-      // Lets "Rewind code" put files back the way they were before a prompt.
+      // Lets Rewind to here put files back the way they were before a prompt.
       enableFileCheckpointing: true,
       promptSuggestions: true,
       // Running subagents say what they are doing, for the line under their step.
@@ -696,7 +747,7 @@ export class SessionRun {
   private finished = false;
 
   /**
-   * A newer run has taken the session (an edited last prompt, a restart): what this one, closed,
+   * A newer run has taken the session (a rewind, a restart): what this one, closed,
    * still says while its process exits would undo the newer one's state on every page.
    */
   private replaced(): boolean {
@@ -777,6 +828,7 @@ export class SessionRun {
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     // Shown already: the Claude it goes to instead publishes it under the same id, which the feed has.
     if (this.closed) throw new RunClosed();
+    this.leaveCut();
     this.input.push(message);
   }
 
@@ -829,20 +881,17 @@ export class SessionRun {
       }
       this.setBusy(true);
     }
+    this.leaveCut();
     for (const message of messages) this.input.push(message);
   }
 
-  /** Puts files back the way they were before the prompt `uuid`; `dryRun` only says what would change. */
-  async rewind(uuid: string, dryRun: boolean): Promise<RewindResult> {
+  /**
+   * Puts files back the way they were before the prompt `uuid`, from Claude Code's own copies of
+   * them (file checkpointing); `dryRun` only says what that would change.
+   */
+  async rewindFiles(uuid: string, dryRun: boolean): Promise<RewindFilesResult> {
     if (!this.q) throw new Error('Claude is not running in this session');
-    const result = await this.q.rewindFiles(uuid, { dryRun });
-    return {
-      canRewind: result.canRewind,
-      ...(result.error ? { error: result.error } : {}),
-      ...(result.filesChanged ? { files: result.filesChanged } : {}),
-      ...(typeof result.insertions === 'number' ? { insertions: result.insertions } : {}),
-      ...(typeof result.deletions === 'number' ? { deletions: result.deletions } : {}),
-    };
+    return this.q.rewindFiles(uuid, { dryRun });
   }
 
   async mcpServers(): Promise<McpServer[]> {
@@ -1358,6 +1407,13 @@ export class SessionRun {
             this.emit();
             break;
           case 'result': {
+            // Claude Code would not resume where the conversation was rewound: nothing ran, so there
+            // is no turn to tell anyone about. The rewind resumes the session whole instead.
+            if (this.atCut && message.is_error && 'errors' in message && message.errors.some((e) => e.includes(RESUME_REFUSED))) {
+              this.refusedResume = true;
+              break;
+            }
+            this.pastCut();
             const stopped = this.interrupted;
             this.interrupted = false;
             this.continuing = false;
@@ -1416,8 +1472,9 @@ export class SessionRun {
         }
       }
     } catch (error) {
-      // Closed here while what was queued went out: no error of Claude's.
-      if (!(error instanceof RunClosed)) {
+      // Closed here while what was queued went out, or a resume Claude Code refused (the rewind
+      // resumes the session whole instead): no error of Claude's.
+      if (!(error instanceof RunClosed) && !this.refusedResume) {
         this.error = readableError((error as Error).message);
         console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
       }
@@ -1445,7 +1502,7 @@ export class SessionRun {
       this.completedBlocks = 0;
       clearTimeout(this.emitTimer);
       this.emitTimer = undefined;
-      // A newer run may have taken the session's place already (an edited last prompt, a restart):
+      // A newer run may have taken the session's place already (a rewind, a restart):
       // it speaks for the session, and this one says nothing more.
       if (!this.replaced()) {
         runs.delete(this.sessionId);
@@ -1570,10 +1627,12 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
     const launch = await launchFor(cwd);
     // A side chat goes on as one, whichever app made it and wherever it is continued from.
     const side = target.sideChat === true || (await isSideChat(target.sessionId));
+    // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
+    const at = await resumePoint(target.sessionId);
     // Another request may have started one while this one looked the folder up.
     const started = getRun(target.sessionId);
     if (started && (await sentTo(started, input))) return started.sessionId;
-    const run = new SessionRun(target.sessionId, cwd, input.settings, true, undefined, launch, side);
+    const run = new SessionRun(target.sessionId, cwd, input.settings, true, at, launch, side);
     runs.set(run.sessionId, run);
     run.start();
     await run.send(input);
@@ -1592,36 +1651,44 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
   return run.sessionId;
 }
 
+/** Where a Claude started for the session resumes: up to the cut, while its conversation is rewound (rewound.ts). */
+async function resumePoint(sessionId: string): Promise<{ entry: string } | undefined> {
+  const cut = await liveCut(sessionId);
+  return cut ? { entry: cut.entry } : undefined;
+}
+
 /**
- * Replaces the session's last turn: Claude resumes it up to `entry` (the row just before the
- * prompt being replaced) and gets `input` instead, in the same session, as rewinding does in
- * Claude Code. The old turn stays in the transcript, off the conversation's line.
+ * Starts the session's Claude again, to wait for the next message: resumed up to `at.entry`,
+ * leaving out all that follows (rewind.ts), or, without `at`, whole (Undo rewind). Leaving out one
+ * prompt's turn (`at.dropsTurn`), Claude Code first checks that nothing else would go with it; if
+ * it refuses, the Claude started is the session's whole, as the Agent SDK asks, and this gives
+ * none. Not while Claude is at work in the session.
  */
-export async function replaceLastTurn(sessionId: string, cwd: string, entry: string, prompt: string, input: SendInput): Promise<string> {
+export async function restartAt(sessionId: string, at?: { entry: string; dropsTurn?: string }): Promise<SessionRun | undefined> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
-  // Turned away before anything changes: the running Claude stays as it is.
-  if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
-  const launch = await launchFor(cwd);
-  const side = await isSideChat(sessionId);
   const existing = getRun(sessionId);
-  if (existing?.busy) throw new Error('Stop Claude before editing a prompt.');
-  if (existing) {
-    existing.close();
-    runs.delete(sessionId);
-  }
-  const run = new SessionRun(sessionId, cwd, input.settings, true, { entry, dropsTurn: prompt }, launch, side);
-  runs.set(sessionId, run);
-  run.start();
-  try {
-    await run.send(input);
-  } catch (error) {
-    // This Claude resumed from before the last turn: left running, it would take the next message
-    // and the last turn would drop out of the conversation. Without it, that message resumes it whole.
-    run.close();
-    if (runs.get(sessionId) === run) runs.delete(sessionId);
-    throw error;
-  }
-  return sessionId;
+  if (existing?.busy) throw new Error(REWIND_BUSY);
+  const cwd = existing?.cwd ?? (await sessionInfo(sessionId))?.cwd;
+  if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const launch = await launchFor(cwd);
+  const side = existing?.sideChat ?? (await isSideChat(sessionId));
+  // It goes on with what the one it replaces ran with; the next message brings the page's own.
+  const settings = existing?.state().settings ?? {};
+  const begin = (from?: { entry: string; dropsTurn?: string }) => {
+    const before = runs.get(sessionId);
+    if (before) {
+      before.close();
+      runs.delete(sessionId);
+    }
+    const run = new SessionRun(sessionId, cwd, settings, true, from, launch, side);
+    runs.set(sessionId, run);
+    run.start();
+    return run;
+  };
+  const run = begin(at);
+  if (await run.resumed()) return run;
+  await begin().resumed();
+  return undefined;
 }
 
 /**
@@ -1637,9 +1704,10 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
   const launch = await launchFor(cwd);
   const side = await isSideChat(sessionId);
+  const at = await resumePoint(sessionId);
   const started = getRun(sessionId);
   if (started) return started;
-  const run = new SessionRun(sessionId, cwd, settings, true, undefined, launch, side);
+  const run = new SessionRun(sessionId, cwd, settings, true, at, launch, side);
   runs.set(sessionId, run);
   run.start();
   return run;
@@ -1656,7 +1724,8 @@ export async function startSideChat(sessionId: string, input: Omit<SendInput, 'a
   if (config.demo) throw new Error('This is the demo: nothing runs.');
   if (!input.text.trim()) throw new Error('Ask a question');
   if (SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
-  const side = await fork(sessionId, undefined, SIDE_CHAT_TITLE);
+  // The conversation as it reads: up to the cut, while it is rewound.
+  const side = await fork(sessionId, (await liveCut(sessionId))?.entry, SIDE_CHAT_TITLE);
   try {
     await sendMessage({ sessionId: side, sideChat: true }, { ...input, attachments: [] });
   } catch (error) {

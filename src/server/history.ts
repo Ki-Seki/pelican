@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isPermissionMode } from '../shared/modes.js';
+import { parseTaskNotice } from '../shared/workflows.js';
 import type { ChatMessage, RecordedSettings } from '../shared/protocol.js';
 import { config } from './config.js';
 import { type ImageAddress, storedImages, toChatMessage } from './normalize.js';
@@ -358,6 +359,59 @@ export function readHistory(file: string, { sidechain = false }: { sidechain?: b
     if (locks.get(file) === next) locks.delete(file);
   }).catch(() => undefined);
   return next;
+}
+
+/** The conversation's newest message in a transcript file, by its id: where the conversation ends now. */
+export async function conversationEnd(file: string): Promise<string | undefined> {
+  await readHistory(file);
+  return transcripts.get(file)?.leaf?.uuid;
+}
+
+/** Claude Code's line for a turn stopped part way, which belongs to the turn, not to the user. */
+const INTERRUPTED = /^\[Request interrupted by user/;
+
+/**
+ * A message the user sent: a prompt, one sent while Claude worked, a `!` command; not a tool's
+ * result, Claude Code's marker of a stopped turn or its notice of a background task's end.
+ */
+function fromUser(message: ChatMessage | undefined): boolean {
+  if (!message || message.role !== 'user' || message.meta || message.compactSummary || message.apiError) return false;
+  if (message.steered) return true;
+  const typed = message.blocks.filter((b) => b.type === 'text' || b.type === 'image');
+  return typed.length > 0 && !typed.every((b) => b.type === 'text' && (INTERRUPTED.test(b.text.trim()) || parseTaskNotice(b.text)));
+}
+
+/** Where a prompt is in the conversation a transcript holds now, for going back to before it (rewind.ts). */
+export type PromptPlace = {
+  /** The entry just before it, where Claude Code resumes to leave it out; none for the conversation's first. */
+  before?: string;
+  /** A compaction came after it: the conversation Claude Code carries on no longer holds it. */
+  compacted: boolean;
+  /** Messages of the user's after it: later prompts, ones sent while Claude worked, `!` commands. */
+  later: number;
+  /** The conversation's newest message. */
+  end: string;
+};
+
+/**
+ * Where the prompt `uuid` is in the conversation the transcript holds now; none when it is not
+ * in it, or is no prompt the user typed (a tool's result, a message sent while Claude worked).
+ */
+export async function promptPlace(file: string, uuid: string): Promise<PromptPlace | undefined> {
+  await readHistory(file);
+  const t = transcripts.get(file);
+  if (!t?.leaf) return undefined;
+  conversation(t);
+  const at = t.chainIndex.get(uuid);
+  const node = at === undefined ? undefined : t.chain[at];
+  if (at === undefined || !node || !fromUser(node.message) || node.message?.steered) return undefined;
+  let later = 0;
+  let compacted = false;
+  for (const after of t.chain.slice(at + 1)) {
+    if (after.logicalParent !== undefined || after.message?.compactSummary) compacted = true;
+    if (fromUser(after.message)) later += 1;
+  }
+  return { ...(node.parent ? { before: node.parent } : {}), compacted, later, end: t.leaf.uuid };
 }
 
 /**

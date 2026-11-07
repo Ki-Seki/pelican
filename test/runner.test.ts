@@ -102,7 +102,14 @@ class FakeClaude {
   async supportedCommands() { return [{ name: 'compact', description: '', argumentHint: '' }, { name: 'statusline', description: '', argumentHint: '' }]; }
   async supportedAgents() { return []; }
   async stopTask(taskId: string) { this.record('stopTask', taskId); }
-  async initializationResult() { return { models: this.models, account: this.account, commands: [], agents: [], claude_code_version: '2.1.318' }; }
+  async initializationResult() {
+    if (this.refusal) throw this.refusal;
+    return { models: this.models, account: this.account, commands: [], agents: [], claude_code_version: '2.1.318' };
+  }
+  /** Claude Code's check refused the resume it was asked for (resumeDropsTurn), as it does at start. */
+  refusal?: Error;
+  /** The next Claude refuses to resume where it is asked to, the way Claude Code does. */
+  static refuseResume = false;
   close() {
     this.calls.push({ name: 'close', args: [] });
     if (FakeClaude.closeDelay > 0) setTimeout(() => this.end(), FakeClaude.closeDelay);
@@ -120,6 +127,12 @@ vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
     const claude = new FakeClaude(prompt, options);
     claude.models = nextModels;
     claude.account = nextAccount;
+    if (FakeClaude.refuseResume && options.resumeDropsTurn) {
+      const words = `Resume rejected by --resume-drops-turn: resuming at ${options.resumeSessionAt} would discard entries not attributable to turn ${options.resumeDropsTurn}`;
+      claude.refusal = new Error(`Claude Code returned an error result: ${words}`);
+      claude.say({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [words], duration_ms: 0, duration_api_ms: 0, num_turns: 0, stop_reason: null, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], uuid: crypto.randomUUID(), session_id: 's' });
+      setTimeout(() => claude.fail(claude.refusal), 1);
+    }
     claudes.push(claude);
     return claude;
   },
@@ -133,7 +146,8 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { claudeEnv, closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { claudeEnv, closeAll, closeIdle, getRun, sendMessage, restartAt, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { cutOf, endCut, keepCut } = await import('../src/server/rewound');
 const { oneLine } = await import('../src/server/push');
 const { sideChatPrompt } = await import('../src/server/side-chat');
 const { fork } = await import('../src/server/actions');
@@ -216,6 +230,7 @@ beforeEach(async () => {
   nextAccount = {};
   FakeClaude.closeDelay = 0;
   FakeClaude.controlDelay = 0;
+  FakeClaude.refuseResume = false;
   // No model known yet and no plan, whichever test ran before.
   await readModels();
 });
@@ -797,20 +812,50 @@ describe('a message sent while its Claude closes', () => {
   });
 });
 
-describe('the last prompt edited in place', () => {
-  it('into /clear is turned away before the running Claude is touched, and the next message carries on the whole conversation', async () => {
+describe('a rewind', () => {
+  it('starts Claude again from the entry before the prompt, with Claude Code’s check when only that turn goes; its first message ends Undo rewind', async () => {
     const { sessionId, claude, run } = await start();
     claude.say(result());
     await vi.waitFor(() => expect(run.busy).toBe(false));
-    const before = claudes.length;
-    await expect(replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: '/clear', attachments: [], settings: {} })).rejects.toThrow(/new session/);
-    // No Claude resumed from before the last turn is left to take the next message.
-    expect(claudes).toHaveLength(before);
-    expect(claude.called('close')).toHaveLength(0);
-    expect(getRun(sessionId)).toBe(run);
-    await sendMessage({ sessionId }, { text: 'Carry on', attachments: [], settings: {} });
+    const fresh = await restartAt(sessionId, { entry: 'entry-before', dropsTurn: 'prompt' });
+    expect(fresh).toBe(getRun(sessionId));
+    expect(claude.called('close')).toHaveLength(1);
+    expect(claudes.at(-1)!.options).toMatchObject({ resume: sessionId, resumeSessionAt: 'entry-before', resumeDropsTurn: 'prompt' });
+    // Several turns going: Claude Code checks none, and is told of none.
+    await restartAt(sessionId, { entry: 'entry-earlier' });
+    expect(claudes.at(-1)!.options.resumeSessionAt).toBe('entry-earlier');
+    expect('resumeDropsTurn' in claudes.at(-1)!.options).toBe(false);
+    await keepCut(sessionId, { prompt: 'prompt', entry: 'entry-earlier', end: 'last', at: Date.now() });
+    await sendMessage({ sessionId }, { text: 'Instead', attachments: [], settings: {} });
+    expect(claudes.at(-1)!.prompts.map(textOf)).toEqual(['Instead']);
+    await vi.waitFor(async () => expect(await cutOf(sessionId)).toMatchObject({ spent: true }));
+    await endCut(sessionId);
+  });
+
+  it('refused by Claude Code’s check, resumes the session whole instead, and says nothing of it: no turn ran', async () => {
+    const { sessionId, claude, run, events } = await start();
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    FakeClaude.refuseResume = true;
+    // The turn that ended said so; nothing more is said after it.
+    notices.length = 0;
+    const from = events.length;
+    expect(await restartAt(sessionId, { entry: 'entry-before', dropsTurn: 'prompt' })).toBeUndefined();
+    const whole = claudes.at(-1)!;
+    expect(whole.options).toMatchObject({ resume: sessionId });
+    expect('resumeSessionAt' in whole.options).toBe(false);
+    expect(getRun(sessionId)).toBeDefined();
     await settle();
-    expect(claude.prompts.map(textOf)).toEqual(['Fix the login test', 'Carry on']);
+    expect(notices).toEqual([]);
+    expect(events.slice(from).filter((e) => e.type === 'run' && e.state?.error)).toEqual([]);
+    // The next message goes to the whole conversation.
+    await sendMessage({ sessionId }, { text: 'Carry on', attachments: [], settings: {} });
+    expect(whole.prompts.map(textOf)).toEqual(['Carry on']);
+  });
+
+  it('is not while Claude works', async () => {
+    const { sessionId } = await start();
+    await expect(restartAt(sessionId, { entry: 'entry-before' })).rejects.toThrow('Rewind is unavailable while Claude is working.');
   });
 });
 
@@ -823,8 +868,9 @@ describe('when Claude Code ends', () => {
     await vi.waitFor(() => expect(run.busy).toBe(false));
     const heard: ServerEvent[] = [];
     const stop = connect((event) => heard.push(event));
-    // The last prompt edited in place: Claude resumed from before it, with the new text.
-    await replaceLastTurn(sessionId, folder, 'entry-before', 'prompt', { text: 'Edited prompt', attachments: [], settings: {} });
+    // Rewound: Claude resumed from before the last prompt, and a new one sent there.
+    await restartAt(sessionId, { entry: 'entry-before', dropsTurn: 'prompt' });
+    await sendMessage({ sessionId }, { text: 'Instead', attachments: [], settings: {} });
     const fresh = getRun(sessionId)!;
     expect(fresh).not.toBe(run);
     const from = events.length;

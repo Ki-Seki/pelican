@@ -81,7 +81,7 @@ const terminal = (extra: Partial<TerminalTarget> = {}): TerminalTarget => ({
 /** Each thing with everything it can have, for the rules every list keeps. */
 const FULL = {
   session: [SESSION_ACTIONS, [session(), session({ from: 'row' }), session({ archived: true }), session({ pinned: true })]],
-  prompt: [PROMPT_ACTIONS, [prompt(), prompt({ edit: noop })]],
+  prompt: [PROMPT_ACTIONS, [prompt()]],
   reply: [REPLY_ACTIONS, [reply(), reply({ selection: 'It follows the system', sideChatOpen: true }), reply({ code: 'npm test' })]],
   step: [STEP_ACTIONS, [step(), step({ kind: 'agent', command: undefined, viewOutput: noop, stop: noop })]],
   path: [PATH_ACTIONS, [path({ changed: true, openInChanges: noop }), path({ path: 'src/styles', folder: true, openInTerminal: noop })]],
@@ -166,9 +166,9 @@ describe('your prompt’s list', () => {
     expect(menu(entries(PROMPT_ACTIONS, prompt(), 'menu', 'pointer'))).toEqual(['Copy', 'Quote', '— Rewind to here', 'Fork from here']);
   });
 
-  it('keeps Edit, until Rewind to here gives a prompt’s words back to the box, in its menus only', () => {
-    expect(menu(entries(PROMPT_ACTIONS, prompt({ edit: noop }), 'menu', 'pointer'))).toEqual(['Copy', 'Quote', '— Edit', 'Rewind to here', 'Fork from here']);
-    for (const device of DEVICES) expect(names(entries(PROMPT_ACTIONS, prompt({ edit: noop }), 'row', device))).not.toContain('Edit');
+  it('has no Edit: Rewind to here puts its words back in the box, and Fork from here in a new session’s, as in Desktop', () => {
+    for (const device of DEVICES) for (const way of WAYS) expect(names(entries(PROMPT_ACTIONS, prompt(), way, device))).not.toContain('Edit');
+    expect(PROMPT_ACTIONS.map((a) => a.id)).not.toContain('edit');
   });
 
   it('in its row (a tap on a phone, the gutter on a computer): Copy · Rewind to here · Fork from here; a swipe quotes it', () => {

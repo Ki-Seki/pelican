@@ -72,7 +72,7 @@ const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new 
 const LAZY = { timeout: 5000 };
 
 describe('what Changes shows', () => {
-  it('offers Uncommitted, since the branch split and each turn, and a turn ends with Rewind code', async () => {
+  it('offers Uncommitted, since the branch split and each turn, and a turn ends with its prompt’s Rewind to here', async () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onRewind = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onRewind={onRewind} onClose={() => {}} onAddToMessage={() => {}} />);
@@ -89,8 +89,8 @@ describe('what Changes shows', () => {
     expect(location.search).toBe('?s=s1&w=changes&p=src%2Ftheme.css&t=p1');
     fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
     await waitFor(() => expect(location.search).toBe('?s=s1&w=changes&t=p1'));
-    fireEvent.click(await screen.findByText('Rewind code'));
-    expect(onRewind).toHaveBeenCalledWith('p1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' }));
+    expect(onRewind).toHaveBeenCalledWith(expect.objectContaining({ uuid: 'p1', text: 'Add a dark theme' }));
   });
 
   it('lets Esc in a sheet opened from it close that sheet only', async () => {

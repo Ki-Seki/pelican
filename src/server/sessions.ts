@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
-import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
+import type { ChatMessage, MessagesPage, RecordedSettings, Rewound, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { promptGist } from '../shared/quoted.js';
 import { shortTitle } from '../shared/titles.js';
 import { config } from './config.js';
@@ -12,6 +12,7 @@ import { folderKind } from './folders.js';
 import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
+import { beforeCut, liveCut, shownCut } from './rewound.js';
 import { sideChatSource } from './side-chat.js';
 import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
@@ -239,10 +240,21 @@ export async function sentFiles(sessionId: string): Promise<Set<string>> {
   return paths;
 }
 
-/** A page of messages ending before index `before` (default: the end). */
+/**
+ * The conversation as it reads now: where it was rewound (Rewind to here), up to the cut, until
+ * the next message (rewound.ts), and where it went back to before, for the pages to show.
+ */
+export async function shownMessages(sessionId: string): Promise<{ messages: ChatMessage[]; rewound?: Rewound }> {
+  const cut = await liveCut(sessionId);
+  const messages = beforeCut(await loadMessages(sessionId), cut);
+  const rewound = shownCut(cut);
+  return { messages, ...(rewound ? { rewound } : {}) };
+}
+
+/** A page of the conversation as it reads now, ending before index `before` (default: the end). */
 export async function loadPage(sessionId: string, before: number | undefined, limit: number): Promise<MessagesPage> {
-  const all = await loadMessages(sessionId);
+  const { messages: all, rewound } = await shownMessages(sessionId);
   const end = Math.min(before ?? all.length, all.length);
   const offset = Math.max(0, end - limit);
-  return { messages: all.slice(offset, end), total: all.length, offset };
+  return { messages: all.slice(offset, end), total: all.length, offset, ...(rewound && before === undefined ? { rewound } : {}) };
 }

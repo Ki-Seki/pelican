@@ -3,9 +3,10 @@ import { useSyncExternalStore } from 'react';
 import { isSavedEffort, modelKey, type StartDefaults } from '../../shared/defaults';
 import { isPermissionMode } from '../../shared/modes';
 import type {
-  Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, RewindResult, RunSettings, RunState, SendMode, ServerInfo, SessionStatus,
-  SessionSummary, Workflow,
+  Block, ChatMessage, MessagesPage, ModelOption, PermissionDecision, PermissionRequest, Rewound, RewindCheck, RewindDone, RunSettings, RunState, SendMode, ServerInfo,
+  SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
+import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
 import { shortTitle } from '../../shared/titles';
@@ -13,14 +14,16 @@ import { answerLocally, ApiError } from './api';
 import { fromDefaults } from './defaults';
 import { newId } from './ids';
 import { DEMO_NOTE, DemoRefusal, INSTALL_URL, STATIC_DEMO } from './static-demo';
-import { addLocalMessage, getView, setRun } from './store';
+import { addLocalMessage, getView, setRewound, setRun } from './store';
+import { splitFiles } from './turns';
 
 /**
- * The demo acts out the two moments it exists to show, and says calmly what it cannot do. Allow
- * on the waiting edit plays out the rest of that step: the edit lands, the next task starts and
- * Claude says what it did. A message gets a reply that says what Claude would do with it. Anything
- * else that would change something gets the one demo note. Both demos run this: the site's, which
- * has no server, and `pelican --demo`, whose server runs nothing; nothing here leaves the page.
+ * The demo acts out the moments it exists to show, and says calmly what it cannot do. Allow on the
+ * waiting edit plays out the rest of that step: the edit lands, the next task starts and Claude
+ * says what it did. A message gets a reply that says what Claude would do with it. Rewind to here
+ * takes the conversation back, with Undo rewind, in the page. Anything else
+ * that would change something gets the one demo note. Both demos run this: the site's, which has no
+ * server, and `pelican --demo`, whose server runs nothing; nothing here leaves the page.
  */
 
 type Story = {
@@ -31,6 +34,11 @@ type Story = {
   timers: ReturnType<typeof setTimeout>[];
   /** A session the demo started itself. */
   summary?: SessionSummary;
+  /**
+   * Where the demo rewound the conversation (Rewind to here): its prompt, when, how many of `added`
+   * came before it, and whether a message has gone since (then Undo rewind is over).
+   */
+  cut?: { prompt: string; at: number; added: number; spent?: boolean };
 };
 
 const stories = new Map<string, Story>();
@@ -210,6 +218,12 @@ type SendBody = { text: string; uuid: string; settings?: RunSettings; mode?: Sen
 function send(sessionId: string, body: SendBody): { sessionId: string } {
   const message = user(body.text ? [{ type: 'text', text: body.text }] : [], { uuid: body.uuid });
   const run = currentRun(sessionId);
+  // Rewound: the message goes after the cut, and Undo rewind is over.
+  const cut = stories.get(sessionId)?.cut;
+  if (cut && !cut.spent) {
+    cut.spent = true;
+    later(sessionId, 0, () => setRewound(sessionId, undefined));
+  }
   if (run?.busy) {
     if (body.mode === 'queue') {
       // Above the composer until the turn ends, as your own Pelican shows it: not in the conversation yet.
@@ -308,8 +322,14 @@ function unqueue(sessionId: string, uuid: string): { ok: boolean } {
   return { ok: true };
 }
 
-/** What Rewind would put back: the files Claude changed after the prompt, as far as the page shows. */
-export function rewindPreview(messages: ChatMessage[], uuid: string): RewindResult {
+/** A message the user typed, as the demo tells one: words or a picture, not a tool's result. */
+const typed = (m: ChatMessage) => m.role === 'user' && !m.meta && m.blocks.some((b) => b.type === 'text' || b.type === 'image');
+
+/**
+ * What Rewind to here would put back: the files Claude changed after the prompt, as far as the page
+ * shows; and, for the conversation's first message, why only its code can go back.
+ */
+export function rewindPreview(messages: ChatMessage[], uuid: string): RewindCheck {
   const at = messages.findIndex((m) => m.uuid === uuid || m.sourceUuid === uuid);
   const files = new Set<string>();
   let insertions = 0;
@@ -330,7 +350,54 @@ export function rewindPreview(messages: ChatMessage[], uuid: string): RewindResu
       }
     }
   }
-  return files.size > 0 ? { canRewind: true, files: [...files], insertions, deletions } : { canRewind: false };
+  const first = at >= 0 && !messages.slice(0, at).some(typed);
+  return { files: [...files], insertions, deletions, ...(first ? { conversationStays: FIRST_MESSAGE } : {}) };
+}
+
+/** A prompt's words, as it was sent: its text, without the block that names the files sent with it. */
+const wordsOf = (message: ChatMessage) => splitFiles(message.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n\n')).text;
+
+/**
+ * The conversation as the demo has it now: up to where it rewound it, and what was sent since. The
+ * cut is the demo's own record, as it is Pelican's, until Undo rewind.
+ */
+function shown(story: Story | undefined, messages: ChatMessage[]): ChatMessage[] {
+  const cut = story?.cut;
+  if (!cut) return messages;
+  const at = messages.findIndex((m) => m.uuid === cut.prompt || m.sourceUuid === cut.prompt);
+  if (at < 0) return messages;
+  const kept = messages.slice(0, at);
+  return [...kept, ...story.added.slice(cut.added).filter((m) => !kept.includes(m))];
+}
+
+const rewoundOf = (story: Story | undefined): Rewound | undefined => (story?.cut && !story.cut.spent ? { prompt: story.cut.prompt, at: story.cut.at } : undefined);
+
+/**
+ * Rewind to here, acted out in the page: the conversation goes back to before the prompt, whose
+ * words come back for the box; the code, as the demo has none to change, goes back in words only.
+ */
+function rewind(sessionId: string, body: Record<string, unknown>): RewindCheck | RewindDone {
+  const messages = getView(sessionId).messages;
+  const uuid = str(body.uuid);
+  if (currentRun(sessionId)?.busy) throw new ApiError(REWIND_BUSY, 409);
+  const prompt = messages.find((m) => m.uuid === uuid && typed(m));
+  if (!prompt) throw new ApiError(NOT_HERE, 404);
+  const check = rewindPreview(messages, uuid);
+  if (body.dryRun === true) return check;
+  const code = body.restore === 'conversation' ? {} : { files: check.files, insertions: check.insertions, deletions: check.deletions };
+  if (body.restore === 'code') return code;
+  if (check.conversationStays) throw new ApiError(check.conversationStays, 409);
+  const story = storyOf(sessionId);
+  story.cut = { prompt: uuid, at: Date.now(), added: story.added.length };
+  return { ...code, prompt: { text: wordsOf(prompt), attachments: [] } };
+}
+
+/** Undo rewind: the messages come back, until the next message. */
+function undoRewind(sessionId: string): { ok: boolean } {
+  const story = stories.get(sessionId);
+  if (!story?.cut || story.cut.spent) throw new ApiError(NOTHING_TO_UNDO, 409);
+  delete story.cut;
+  return { ok: true };
 }
 
 const statusOf = (run: RunState): SessionStatus => (run.permissions.length > 0 ? 'waiting' : run.busy ? 'running' : 'idle');
@@ -395,7 +462,11 @@ function read(path: string): Promise<unknown> | undefined {
   if (!id || !story?.summary) return undefined;
   const rest = match![2] ?? '';
   if (rest === '') return Promise.resolve({ session: summarize(story.summary), run: story.run ?? null, tasks: currentTasks(story.added), settings: {} });
-  if (rest === '/messages') return Promise.resolve({ messages: story.added, total: story.added.length, offset: 0 } satisfies MessagesPage);
+  if (rest === '/messages') {
+    const messages = shown(story, story.added);
+    const rewound = rewoundOf(story);
+    return Promise.resolve({ messages, total: messages.length, offset: 0, ...(rewound ? { rewound } : {}) } satisfies MessagesPage);
+  }
   if (rest === '/mcp') return Promise.resolve({ servers: [], live: false });
   return undefined;
 }
@@ -422,7 +493,10 @@ function adjust(path: string, data: unknown): unknown {
     const page = data as MessagesPage;
     const have = new Set(page.messages.map((m) => m.uuid));
     const added = story.added.filter((m) => !have.has(m.uuid));
-    return { ...page, messages: [...page.messages, ...added], total: page.total + added.length };
+    const all = [...page.messages, ...added];
+    const messages = shown(story, all);
+    const rewound = rewoundOf(story);
+    return { ...page, messages, total: page.total + added.length - (all.length - messages.length), ...(rewound ? { rewound } : {}) };
   }
   return data;
 }
@@ -439,7 +513,8 @@ async function answer(path: string, init: RequestInit): Promise<unknown> {
   if (id && rest.startsWith('/permissions/')) return decide(id, decodeURIComponent(rest.slice('/permissions/'.length)), body as PermissionDecision);
   if (id && rest === '/interrupt') return interrupt(id);
   if (id && rest.startsWith('/queued/')) return unqueue(id, decodeURIComponent(rest.slice('/queued/'.length)));
-  if (id && rest === '/rewind' && body.dryRun === true) return rewindPreview(getView(id).messages, str(body.uuid));
+  if (id && rest === '/rewind') return rewind(id, body);
+  if (id && rest === '/rewind/undo') return undoRewind(id);
   if (id && (rest === '/settings' || rest === '/mode')) {
     const run = currentRun(id);
     const settings = rest === '/mode' ? { ...run?.settings, permissionMode: body.permissionMode as RunSettings['permissionMode'] } : (body.settings as RunSettings);

@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
-import type { ChatMessage, PartialAppend, PartialBlock, RunState, ServerEvent } from '../../shared/protocol';
+import type { ChatMessage, PartialAppend, PartialBlock, Rewound, RunState, ServerEvent } from '../../shared/protocol';
 import { api, onReachable } from './api';
 import { socket } from './socket';
 
@@ -13,6 +13,8 @@ export type SessionView = {
   loadingOlder: boolean;
   run?: RunState;
   error?: string;
+  /** The conversation was rewound here (Rewind to here) and ends before that prompt, until the next message. */
+  rewound?: Rewound;
 };
 
 const EMPTY: SessionView = { messages: [], offset: 0, total: 0, loaded: false, loadingOlder: false };
@@ -91,11 +93,20 @@ export function merge(existing: ChatMessage[], incoming: ChatMessage[]): ChatMes
   return next;
 }
 
+/** The messages before the prompt a rewind went back to before: those from it on are out of the conversation. */
+function beforeCut(messages: ChatMessage[], rewound: Rewound | undefined): ChatMessage[] {
+  if (!rewound) return messages;
+  const at = messages.findIndex((m) => m.uuid === rewound.prompt || m.sourceUuid === rewound.prompt);
+  return at < 0 ? messages : messages.slice(0, at);
+}
+
 /** Loads (or reloads) the newest page; local messages the server has not confirmed yet stay. */
 export async function loadLatest(sessionId: string): Promise<void> {
   try {
     const page = await api.messages(sessionId);
-    update(sessionId, (view) => {
+    update(sessionId, (current) => {
+      // Rewound: what the page held from the prompt on is out of the conversation, not news to keep.
+      const view = page.rewound ? { ...current, messages: beforeCut(current.messages, page.rewound) } : current;
       // Keep what the page cannot know yet: messages that arrived over the socket
       // after the page was read, and local copies the server has not confirmed.
       const inPage = new Set(page.messages.flatMap((m) => (m.sourceUuid ? [m.uuid, m.sourceUuid] : [m.uuid])));
@@ -112,6 +123,7 @@ export async function loadLatest(sessionId: string): Promise<void> {
         total: page.total,
         loaded: true,
         error: undefined,
+        rewound: page.rewound,
       };
     });
   } catch (error) {
@@ -140,15 +152,20 @@ export function addLocalMessage(sessionId: string, message: ChatMessage): void {
   update(sessionId, (view) => ({ ...view, messages: merge(view.messages, [message]), loaded: true }));
 }
 
-/** Drops a local message the server never accepted. */
-/** Drops a message and everything after it from the view: the turn an edit replaced in place. */
-export function truncateFrom(sessionId: string, uuid: string): void {
+/**
+ * The conversation was rewound (Rewind to here), or is not any more (`undefined`: Undo rewind, the
+ * next message): the view shows it up to the prompt it went back to before, at once, and reads it
+ * again; after Undo the messages come back.
+ */
+export function setRewound(sessionId: string, rewound: Rewound | undefined): void {
   update(sessionId, (view) => {
-    const at = view.messages.findIndex((m) => m.uuid === uuid || m.sourceUuid === uuid);
-    return at < 0 ? view : { ...view, messages: view.messages.slice(0, at), total: Math.max(0, view.total - (view.messages.length - at)) };
+    const messages = beforeCut(view.messages, rewound);
+    return { ...view, messages, total: Math.max(0, view.total - (view.messages.length - messages.length)), rewound };
   });
+  void loadLatest(sessionId);
 }
 
+/** Drops a local message the server never accepted. */
 export function removeLocalMessage(sessionId: string, uuid: string): void {
   update(sessionId, (view) => ({ ...view, messages: view.messages.filter((m) => !(m.pending && m.uuid === uuid)) }));
 }
@@ -244,6 +261,9 @@ export function handleEvent(event: ServerEvent): void {
       break;
     case 'reload':
       void loadLatest(event.sessionId);
+      break;
+    case 'rewound':
+      if (views.has(event.sessionId)) setRewound(event.sessionId, event.rewound ?? undefined);
       break;
     default:
       break;

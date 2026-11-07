@@ -9,11 +9,11 @@ import { startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
-import type { Attachment, BackgroundTask, Block, ChatMessage, RewindResult, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
+import type { Attachment, BackgroundTask, Block, ChatMessage, RewindCheck, RewindRestore, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
-import { addWaiting, clearDraft, moveDraft, putBackWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
+import { addWaiting, clearDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
@@ -38,8 +38,8 @@ import {
   getView,
   loadLatest,
   removeLocalMessage,
+  setRewound,
   syncRun,
-  truncateFrom,
   useSessionView,
 } from '../lib/store';
 import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
@@ -56,6 +56,7 @@ import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
+import { RewindDialog, type RewindPoint, type RewindProblem } from './Rewind';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { StatusBadge } from './SessionList';
 import { showCommandMenu } from './CommandMenu';
@@ -89,6 +90,15 @@ function localMessage(uuid: string, text: string, attachments: Attachment[]): Ch
   if (body) blocks.push({ type: 'text', text: body });
   return { uuid, role: 'user', blocks, timestamp: Date.now(), pending: true };
 }
+
+/**
+ * How long Claude Code's check before a rewind may take before its dialog shows, as in Claude
+ * Desktop: one answered sooner, with nothing to put back, rewinds the conversation at once.
+ */
+const REWIND_PAUSE_MS = 400;
+
+/** Rewind to here being asked about: the message, and what its check says can go back. */
+type RewindAsk = RewindPoint & { token: number; preview: RewindCheck | 'pending'; shown: boolean };
 
 // Usage and activity loads when it is first opened, from Context.
 const UsageSheet = lazy(() => retried(() => import('./Usage')).then((m) => ({ default: m.UsageSheet })));
@@ -164,64 +174,6 @@ export function limitNotice(limits: UsageLimit[] | undefined): string | undefine
   if (limit.status === 'rejected') return `You have reached your ${name} limit.${resets}`;
   const used = typeof limit.utilization === 'number' ? `${Math.round(limit.utilization * 100)}% of ` : 'most of ';
   return `You have used ${used}your ${name} limit.${resets}`;
-}
-
-/** Rewind code: what putting files back before a prompt would change, then doing it. */
-function RewindSheet({ sessionId, uuid, cwd, onClose, onDone }: { sessionId: string; uuid?: string; cwd?: string; onClose: () => void; onDone: (result: RewindResult) => void }) {
-  const preview = useQuery({
-    queryKey: ['rewind', sessionId, uuid],
-    queryFn: () => api.rewind(sessionId, uuid!, true),
-    enabled: Boolean(uuid),
-    retry: false,
-    staleTime: 0,
-    gcTime: 0,
-  });
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState<{ text: string; note: boolean }>();
-  const files = preview.data?.files ?? [];
-  const rel = (file: string) => (cwd && file.startsWith(`${cwd}/`) ? file.slice(cwd.length + 1) : file);
-  return (
-    <Sheet open={Boolean(uuid)} onClose={onClose} title="Rewind code">
-      <div className="px-3 pt-1 pb-3 text-[14px] leading-relaxed">
-        {preview.isLoading && <div className="flex items-center gap-2 text-muted"><Loader2 className="size-4 animate-spin" /> Checking what changed since this prompt</div>}
-        {preview.error && <div className={isDemoNote(preview.error) ? 'text-muted' : 'text-danger'}><NoteText text={(preview.error as Error).message} /></div>}
-        {preview.data && !preview.data.canRewind && (
-          <div className="text-muted">{preview.data.error ?? 'Nothing to put back: Claude has not changed any files since this prompt.'}</div>
-        )}
-        {preview.data?.canRewind && files.length === 0 && <div className="text-muted">No files changed since this prompt.</div>}
-        {preview.data?.canRewind && files.length > 0 && (
-          <>
-            <p>{files.length === 1 ? 'Put this file back as it was' : `Put these ${files.length} files back as they were`} before this prompt. The conversation stays as it is.</p>
-            <ul className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-line px-3 py-1.5 font-mono text-[12px] text-muted">
-              {files.map((file) => <li key={file} className="truncate py-0.5">{rel(file)}</li>)}
-            </ul>
-            {(preview.data.insertions || preview.data.deletions) ? (
-              <div className="mt-1.5 font-mono text-[12px]"><span className="text-add">+{preview.data.insertions ?? 0}</span> <span className="text-del">−{preview.data.deletions ?? 0}</span> <span className="font-sans text-faint">lines change back</span></div>
-            ) : null}
-            {error && <div className={`mt-2 text-[13px] ${error.note ? 'text-muted' : 'text-danger'}`}><NoteText text={error.text} /></div>}
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                disabled={working}
-                className="h-9 rounded-full bg-fg px-4 text-[14px] font-medium text-bg disabled:opacity-40"
-                onClick={() => {
-                  setWorking(true);
-                  setError(undefined);
-                  api.rewind(sessionId, uuid!, false)
-                    .then((result) => (result.canRewind ? onDone(result) : setError({ text: result.error ?? 'Could not put the files back', note: false })))
-                    .catch((err: Error) => setError({ text: err.message, note: isDemoNote(err) }))
-                    .finally(() => setWorking(false));
-                }}
-              >
-                {working ? <Loader2 className="size-4 animate-spin" /> : 'Put files back'}
-              </button>
-              <button type="button" className="h-9 rounded-full bg-chip px-4 text-[14px]" onClick={onClose}>Cancel</button>
-            </div>
-          </>
-        )}
-      </div>
-    </Sheet>
-  );
 }
 
 const Pulse = () => (
@@ -462,7 +414,9 @@ export function Chat({
   const failedMcp = useMemo(() => (mcp.data?.live ? mcp.data.servers.filter((server) => server.status === 'failed').map((server) => server.name) : []), [mcp.data]);
   const [mcpSeen, setMcpSeen] = useState<string>();
   const [usageOpen, setUsageOpen] = useState(false);
-  const [rewinding, setRewinding] = useState<string>();
+  // Rewind to here, asked about (its dialog).
+  const [rewind, setRewind] = useState<RewindAsk>();
+  const [rewindWork, setRewindWork] = useState<{ working: boolean; problem?: RewindProblem }>({ working: false });
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -745,43 +699,104 @@ export function Chat({
     void resend(prompt).then(({ text, attachments }) => send(text, attachments, prefs.sendWhileBusy, 'chat'), failed);
   };
 
-  // Edit and send again, in one request: the last prompt is replaced in this session, as rewinding
-  // does in Claude Code; an earlier one gets a branch made just before it (the first prompt: a new
-  // session in the same folder), and this session stays as it was. A failed send leaves nothing
-  // behind, and a retry with the same `key` gets the same result.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-  const edit = async (uuid: string, text: string, key: string, keepImages: number[]): Promise<boolean> => {
-    if (!sessionId) return false;
-    setSendError(undefined);
-    if (busy) {
-      setSendError({ text: 'Stop Claude before editing an earlier prompt.', note: false });
-      return false;
-    }
+  /**
+   * Rewind to here, as in Claude Desktop: Claude Code's check of what the code would get back runs
+   * first. When no file changed after the message and the check answered at once, the conversation
+   * goes back at once: one tap, with Undo rewind at the cut. Otherwise its dialog asks, offering the
+   * three choices where files changed, from the moment the check has taken a while.
+   */
+  const rewindToken = useRef(0);
+  // What a rewind put in the box, for Undo rewind to take back while it is as it was.
+  const backInBox = useRef<{ text: string; files: string[]; items: string[] }>(undefined);
+  const closeRewind = () => {
+    rewindToken.current += 1;
+    setRewind(undefined);
+    setRewindWork({ working: false });
+  };
+  const doRewind = async (target: { token: number; uuid: string }, restore: RewindRestore, asked: boolean) => {
+    if (!sessionId) return;
+    setRewindWork({ working: true });
     try {
-      // The server decides: the last prompt is replaced here; an earlier one branches, and a
-      // branch of a session in Bypass starts in the mode a new session would.
-      const result = await api.edit(sessionId, { before: uuid, text, settings, uuid: key, keepImages });
-      saveSessionChoice(result.sessionId, result.inPlace ? settings : await branchSettings());
-      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      if (result.inPlace) {
-        truncateFrom(viewId, uuid);
-        addLocalMessage(viewId, localMessage(key, text, []));
-      } else if (alive.current) {
-        onOpen(result.sessionId);
+      const done = await api.rewind(sessionId, target.uuid, restore);
+      // Done, whatever happened to the dialog meanwhile.
+      if (rewindToken.current === target.token) closeRewind();
+      if (done.prompt) {
+        // The conversation ends before the message, and its words, quotes and files are back in the box.
+        setRewound(viewId, { prompt: target.uuid, at: Date.now() });
+        const { items, text } = readMessage(done.prompt.text);
+        putBackWaiting(viewId, items);
+        if (text || done.prompt.attachments.length > 0) setDraftText({ text, attachments: done.prompt.attachments, key: Date.now(), back: true });
+        backInBox.current = { text, files: done.prompt.attachments.map((a) => a.id), items: items.map((i) => i.id) };
       }
-      return true;
+      if (done.skipped) {
+        setNote(`Restored the code, but skipped ${done.skipped === 1 ? '1 file' : `${done.skipped} files`} that couldn’t be safely written. Skipped files were left untouched.`);
+      } else if (restore === 'code') {
+        setNote('Code restored');
+      }
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      if (restore !== 'conversation') {
+        void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
+        void queryClient.invalidateQueries({ queryKey: ['changes', sessionId] });
+      }
     } catch (error) {
-      if (alive.current) failed(error);
-      return false;
+      const problem = { text: (error as Error).message, note: isDemoNote(error) };
+      // Said in the dialog when it is up; a rewind that asked nothing says it where the chat says such things.
+      if (asked && rewindToken.current === target.token) setRewindWork({ working: false, problem });
+      else {
+        if (rewindToken.current === target.token) closeRewind();
+        setSendError(problem);
+      }
     }
   };
-
+  const requestRewind = (point: RewindPoint) => {
+    if (!sessionId) return;
+    setSendError(undefined);
+    if (busy) {
+      setSendError({ text: 'Rewind is unavailable while Claude is working.', note: true });
+      return;
+    }
+    rewindToken.current += 1;
+    const token = rewindToken.current;
+    const started = performance.now();
+    setRewindWork({ working: false });
+    setRewind({ token, ...point, preview: 'pending', shown: false });
+    // Desktop's pause: a check that answers within it asks nothing it need not.
+    setTimeout(() => setRewind((now) => (now?.token === token ? { ...now, shown: true } : now)), REWIND_PAUSE_MS);
+    api.rewindCheck(sessionId, point.uuid).then((check) => {
+      if (rewindToken.current !== token) return;
+      if (check.files.length === 0 && check.conversationStays) {
+        closeRewind();
+        setSendError({ text: check.conversationStays, note: true });
+      } else if (check.files.length === 0 && performance.now() - started < REWIND_PAUSE_MS) {
+        setRewind(undefined);
+        void doRewind({ token, uuid: point.uuid }, 'conversation', false);
+      } else {
+        setRewind({ token, ...point, preview: check, shown: true });
+      }
+    }, (error: unknown) => {
+      if (rewindToken.current !== token) return;
+      closeRewind();
+      failed(error);
+    });
+  };
+  // Undo rewind: the messages come back, the files stay as they are, and the words the rewind put in
+  // the box go back out of it, while they are as they were.
+  const undoRewind = async () => {
+    if (!sessionId) return;
+    setSendError(undefined);
+    try {
+      await api.undoRewind(sessionId);
+      setRewound(viewId, undefined);
+      const back = backInBox.current;
+      backInBox.current = undefined;
+      if (back) {
+        composer.current?.takeBack(back.text, back.files);
+        for (const id of back.items) removeWaiting(viewId, id);
+      }
+    } catch (error) {
+      failed(error);
+    }
+  };
   // The pane's tabs load once the conversation is up, ready before they are asked for.
   useEffect(() => {
     if (!cwd) return undefined;
@@ -1214,7 +1229,7 @@ export function Chat({
             cwd={cwd}
             {...(machine ? { machine } : {})}
             mode={viewOf(prefs, sessionId)}
-            {...(sessionId && !sideChat ? { ...(busy ? {} : { onEdit: edit }), onRewind: (uuid: string) => setRewinding(uuid), onFork: forkFrom, onForkReply: forkReply } : {})}
+            {...(sessionId && !sideChat ? { onRewind: requestRewind, onUndoRewind: undoRewind, onFork: forkFrom, onForkReply: forkReply } : {})}
             {...(sessionId ? { onRetry: sendAgain, ...(sideChat ? {} : { onCompact: () => void send('/compact', [], prefs.sendWhileBusy, 'chat') }) } : {})}
           />
           </QuoteTargetContext.Provider>
@@ -1353,7 +1368,7 @@ export function Chat({
           {...(request ? { needsYou: askedFor(request, cwd, true) } : {})}
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
-          {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: (uuid: string) => setRewinding(uuid) }) } : {})}
+          {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: requestRewind }) } : {})}
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
             // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.
@@ -1377,18 +1392,16 @@ export function Chat({
       )}
       {sessionId && <SideChat state={side} sessionId={sessionId} settings={shown} {...(cwd ? { cwd } : {})} {...(machine ? { machine } : {})} {...(demo ? { demo } : {})} />}
       <TrustSheet ask={trustAsk} {...(cwd ? { folder: cwd } : {})} {...(home ? { home } : {})} onDone={() => setTrustAsk(undefined)} />
-      {sessionId && (
-        <RewindSheet
-          sessionId={sessionId}
-          {...(rewinding ? { uuid: rewinding } : {})}
+      {sessionId && !sideChat && (
+        <RewindDialog
+          open={Boolean(rewind?.shown)}
+          text={rewind?.text ?? ''}
+          preview={rewind?.preview ?? 'pending'}
           {...(cwd ? { cwd } : {})}
-          onClose={() => setRewinding(undefined)}
-          onDone={(result) => {
-            setRewinding(undefined);
-            const count = result.files?.length ?? 0;
-            setNote(`Put ${count} file${count === 1 ? '' : 's'} back as they were before that prompt. The conversation stays as it is.`);
-            void queryClient.invalidateQueries({ queryKey: ['git', cwd] });
-          }}
+          working={rewindWork.working}
+          {...(rewindWork.problem ? { problem: rewindWork.problem } : {})}
+          onCancel={closeRewind}
+          onRewind={(restore) => rewind && void doRewind(rewind, restore, true)}
         />
       )}
       {sessionId && (

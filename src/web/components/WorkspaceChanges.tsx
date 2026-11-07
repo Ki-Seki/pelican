@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, GitBranch, History, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
+import { ChevronDown, GitBranch, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 
 import type { GitFile, GitStatus, SessionChanges, TurnChanges } from '../../shared/protocol';
+import { entries, PROMPT_ACTIONS } from '../lib/actions';
 import { api } from '../lib/api';
 import { requestsFor } from '../lib/requests';
 import type { WorkspaceStep } from '../lib/workspace-route';
 import { PathLabel } from './PathLabel';
+import type { RewindPoint } from './Rewind';
 import { Sheet, SheetOption } from './Sheet';
 import { UnifiedDiff } from './UnifiedDiff';
 
@@ -99,8 +101,7 @@ function ShowSheet({ open, onClose, scope, status, base, turns, onPick }: {
 /**
  * The Changes tab: the branch, what Changes shows, and the changed files, each opening its diff.
  * Git only where it may run (the server says so); a turn's edits come from Claude Code's own
- * records and show in any folder. A turn ends with Rewind code when Claude Code kept the files
- * as they were before it.
+ * records and show in any folder. A turn ends with its prompt's Rewind to here.
  */
 export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind, onRequest }: {
   cwd: string;
@@ -113,7 +114,8 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   commentsIn: Map<string, number>;
   go: (step: WorkspaceStep) => void;
   setScope: (step: WorkspaceStep) => void;
-  onRewind?: (uuid: string) => void;
+  /** Rewind to here, on the turn's prompt (Chat asks first). */
+  onRewind?: (point: RewindPoint) => void;
   /** Puts a request to Claude in the message box (Commit, Push, Create PR), to be sent from there. */
   onRequest?: (text: string) => void;
 }) {
@@ -200,12 +202,15 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
       )}
       {scope.kind === 'turn' && !turns.isLoading && !turn && <div className="px-3 py-8 text-center text-[13px] text-faint">That turn changed no files</div>}
       {list?.map((file) => <FileRow key={file.path} file={file} comments={commentsIn.get(file.path)} onOpen={() => open(file.path)} />)}
-      {turn?.checkpoint && onRewind && (
-        <button type="button" onClick={() => onRewind(turn.uuid)} className="mt-1 flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] text-muted hover:bg-hover hover:text-fg pointer-fine:min-h-10">
-          <History className="size-4 shrink-0" />
-          Rewind code
-        </button>
-      )}
+      {/* The turn's prompt's own Rewind to here (lib/actions): its dialog offers the code back where Claude Code kept a copy. */}
+      {turn && onRewind && entries(PROMPT_ACTIONS, { text: turn.text, rewind: () => onRewind({ uuid: turn.uuid, text: turn.text, ...(turn.at ? { timestamp: turn.at } : {}) }) }, 'menu', 'touch')
+        .filter((entry) => entry.id === 'rewind')
+        .map((entry) => 'run' in entry && (
+          <button key={entry.id} type="button" onClick={entry.run} className="mt-1 flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13.5px] text-muted hover:bg-hover hover:text-fg pointer-fine:min-h-10">
+            {entry.icon && <entry.icon className="size-4 shrink-0" />}
+            {entry.label}
+          </button>
+        ))}
       <ShowSheet
         open={picking}
         onClose={() => setPicking(false)}

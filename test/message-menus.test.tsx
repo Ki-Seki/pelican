@@ -59,7 +59,7 @@ const messages: ChatMessage[] = [
 ];
 const view: SessionView = { messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false };
 
-function conversation(handlers: { onRewind?: (uuid: string) => void; onFork?: () => void; onForkReply?: (upTo: string) => void } = {}) {
+function conversation(handlers: { onRewind?: (point: { uuid: string; text: string }) => void; onFork?: () => void; onForkReply?: (upTo: string) => void } = {}) {
   const sideChat = vi.fn();
   const runInTerminal = vi.fn();
   const openFile = vi.fn();
@@ -97,7 +97,7 @@ describe('Claude’s reply', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'More for Claude’s reply' }).at(-1)!);
     expect(menuItems('Claude’s reply')).toEqual(['Copy message', 'Copy message as Markdown', 'Start a side chat', 'Quote message', 'Rewind to here', 'Fork from here']);
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Rewind to here' }));
-    expect(onRewind).toHaveBeenCalledWith('u1');
+    expect(onRewind).toHaveBeenCalledWith({ uuid: 'u1', text: 'Run the theme tests', timestamp: at });
     fireEvent.click(screen.getAllByRole('button', { name: 'More for Claude’s reply' }).at(-1)!);
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Fork from here' }));
     expect(onForkReply).toHaveBeenCalledWith('a2');

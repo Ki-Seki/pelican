@@ -13,7 +13,7 @@ import { type DefaultChange, isSavedEffort } from '../shared/defaults.js';
 import { isPermissionMode } from '../shared/modes.js';
 import { USAGE_RANGES, type UsageRange } from '../shared/usage.js';
 import { PREVIEW_CDNS, PREVIEW_POLICY } from '../shared/preview-policy.js';
-import type { Attachment, ChatMessage, PermissionDecision, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
+import type { Attachment, PermissionDecision, RewindRestore, RunSettings, SendMode, ServerInfo } from '../shared/protocol.js';
 import { revealHidden } from '../shared/hidden.js';
 import { commandRunnable, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
@@ -23,16 +23,18 @@ import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCod
 import { config } from './config.js';
 import { demoRunState, demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
-import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, removeUpload, saveUpload } from './files.js';
+import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
 import { createScratchFolder, isDirectory } from './folders.js';
-import { newSessionSettings, readDefaults, saveDefault, SettingsRefused } from './defaults.js';
+import { readDefaults, saveDefault, SettingsRefused } from './defaults.js';
 import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
 import { exactBytes } from './open.js';
 import { findPhoneAddress } from './phone.js';
 import { addSubscription, pushKey, removeSubscription } from './push.js';
-import { ensureRun, getRun, replaceLastTurn, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
+import { getRun, runIn, runState, runStatus, runTasks, sendMessage, startSideChat } from './runner.js';
+import { checkRewind, RewindRefusal, rewindTo, undoRewind } from './rewind.js';
+import { liveCut } from './rewound.js';
 import { savedOutputPage } from './shell.js';
 import { startShell, stopShell } from './shell-runs.js';
 import { isSideChat } from './side-chat.js';
@@ -44,10 +46,10 @@ import { closeTerminal, listTerminals, openTerminal, terminalAvailability, termi
 import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
-import { listSummaries, loadMessages, loadPage, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary } from './sessions.js';
+import { listSummaries, loadPage, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary, shownMessages } from './sessions.js';
 import { transcriptImage } from './history.js';
 import { instance } from './running.js';
-import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
+import { transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 import { AGENT_ID, CALL_ID, subagentPage, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
 
@@ -228,8 +230,8 @@ app.get('/api/sessions/:id', async (c) => {
   const session = await sessionSummary(id, runStatus, runTasks);
   const run = runState(id);
   if (!session && !run) return c.json({ error: 'No such session' }, 404);
-  // The task list needs the whole conversation; the page may only have loaded its end.
-  const tasks = currentTasks(await loadMessages(id));
+  // The task list needs the whole conversation as it reads (up to a rewind); the page may only have loaded its end.
+  const tasks = currentTasks((await shownMessages(id)).messages);
   return c.json({ session: session ?? null, run: run ? shownRun(run) : null, tasks, settings: await recordedSettings(id) });
 });
 
@@ -323,131 +325,6 @@ app.post('/api/sessions/:id/messages', async (c) => {
   return c.json({ sessionId });
 });
 
-/** Edits made, and being made, by the id the editor gave them: a retry gets the same result, never a second one. */
-type Edited = { sessionId: string; inPlace: boolean };
-const edits = new Map<string, { at: number } & Edited>();
-const editing = new Map<string, Promise<Edited>>();
-
-/** A prompt the user wrote (text or images), not a tool's result or injected context. */
-const isPrompt = (m: ChatMessage) => m.role === 'user' && !m.meta && m.blocks.some((b) => b.type === 'text' || b.type === 'image');
-
-/** The images of a prompt, saved as uploads again so the edited prompt carries the ones kept. */
-async function imagesOf(sessionId: string, uuid: string, keep: unknown): Promise<Attachment[]> {
-  const file = await transcriptPath(sessionId);
-  if (!file) return [];
-  const images = await rawImages(file, uuid);
-  const wanted = Array.isArray(keep) ? new Set(keep.filter((i): i is number => Number.isInteger(i))) : new Set(images.map((_, i) => i));
-  const kept: Attachment[] = [];
-  for (const [i, image] of images.entries()) {
-    if (!wanted.has(i) || image.type !== 'base64' || !image.data) continue;
-    const ext = image.mediaType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
-    kept.push(await saveUpload(new File([Buffer.from(image.data, 'base64')], `image-${i + 1}.${ext}`, { type: image.mediaType })));
-  }
-  return kept;
-}
-
-/**
- * Edit a prompt and send it again, as one request.
- * - The last prompt is replaced in place, as rewinding does in Claude Code: the session goes on
- *   from just before it with the new text (the old turn stays in the transcript, off the line).
- * - An earlier one branches: a copy of the conversation up to just before it gets the new text
- *   (the first prompt: a new session in the same folder), and this session stays as it was.
- *   A branch is new work: it never starts in Bypass, but in the mode a new session would.
- * If the send fails, a branch and the copied images are removed, so nothing is left behind.
- */
-type EditFailure = { error: string; status: 404 | 409 };
-
-/** Waits until the Claude of a session it just started is running; a start that fails throws. */
-async function claudeStarted(sessionId: string): Promise<void> {
-  const run = getRun(sessionId);
-  if (!run) return;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([run.ready, new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, 45_000);
-    })]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function makeEdit(id: string, before: string, body: { text: string; settings?: unknown; keepImages?: unknown }, key: string): Promise<Edited | EditFailure> {
-  const info = await sessionInfo(id);
-  if (!info?.cwd || !(await isDirectory(info.cwd))) return { error: 'The session’s folder is missing', status: 404 };
-  if (getRun(id)?.busy) return { error: 'Stop Claude before editing an earlier prompt.', status: 409 };
-  const messages = await loadMessages(id);
-  const at = messages.findIndex((m) => m.uuid === before);
-  if (at < 0) return { error: 'That message is not in this session', status: 404 };
-  const previous = at === 0 ? null : messages[at - 1]!.uuid;
-  const last = !messages.slice(at + 1).some(isPrompt);
-  const file = await transcriptPath(id);
-  // In place only for the last prompt, after another one (the first has nothing to go on from),
-  // when no background task would be cut off by restarting Claude.
-  const entry = last && previous !== null && file && !getRun(id)?.hasBackgroundTasks ? (await rawEntry(file, before))?.parentUuid : undefined;
-  const settings = cleanSettings(body.settings);
-  if (!entry && settings.permissionMode === 'bypassPermissions') {
-    // The mode a new session there starts in, as Claude Code's settings give it: Bypass only where they do.
-    const { permissionMode: _picked, ...rest } = settings;
-    settings.permissionMode = (await newSessionSettings(info.cwd, rest)).given.permissionMode;
-  }
-  const attachments = await imagesOf(id, before, body.keepImages);
-  const message = { text: body.text, attachments, settings, uuid: key };
-  let branch: string | undefined;
-  let started: string | undefined;
-  try {
-    if (entry) {
-      started = await replaceLastTurn(id, info.cwd, entry, before, message);
-      await claudeStarted(started);
-      return { sessionId: started, inPlace: true };
-    }
-    if (previous !== null) branch = await fork(id, previous);
-    started = await sendMessage(branch ? { sessionId: branch } : { cwd: info.cwd }, message);
-    // Only a Claude that started makes the branch real; one that could not start leaves nothing.
-    await claudeStarted(started);
-    return { sessionId: started, inPlace: false };
-  } catch (error) {
-    if (branch) await remove(branch).catch(() => undefined);
-    else if (started && !entry) await remove(started).catch(() => undefined);
-    await Promise.all(attachments.map((a) => removeUpload(a.id)));
-    throw error;
-  }
-}
-
-/**
- * Edit a prompt and send it again, as one request.
- * - The last prompt is replaced in place, as rewinding does in Claude Code: the session goes on
- *   from just before it with the new text (the old turn stays in the transcript, off the line).
- * - An earlier one branches: a copy of the conversation up to just before it gets the new text
- *   (the first prompt: a new session in the same folder), and this session stays as it was.
- *   A branch is new work: it never starts in Bypass, but in the mode a new session would.
- * If Claude cannot start, a branch and the copied images are removed, so nothing is left behind.
- * Requests with the same `uuid` share one edit, also while it is still being made.
- */
-app.post('/api/sessions/:id/edit', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json<{ before?: unknown; text?: unknown; settings?: unknown; uuid?: unknown; keepImages?: unknown }>()
-    .catch(() => ({}) as Record<string, unknown>);
-  const key = uuidOf(body.uuid);
-  const before = uuidOf(body.before);
-  if (!key || !before || typeof body.text !== 'string' || !body.text.trim()) return c.json({ error: 'Nothing to send' }, 400);
-  for (const [k, v] of edits) if (Date.now() - v.at > 10 * 60_000) edits.delete(k);
-  const done = edits.get(key);
-  if (done) return c.json({ sessionId: done.sessionId, inPlace: done.inPlace });
-  // Registered before anything is awaited, so a second request with this id waits for this one.
-  let work = editing.get(key) as Promise<Edited | EditFailure> | undefined;
-  if (!work) {
-    const made = makeEdit(id, before, { text: body.text, settings: body.settings, keepImages: body.keepImages }, key);
-    work = made;
-    editing.set(key, made as Promise<Edited>);
-    void made.then((result) => {
-      if (!('error' in result)) edits.set(key, { at: Date.now(), ...result });
-    }, () => undefined).finally(() => editing.delete(key));
-  }
-  const result = await work;
-  if ('error' in result) return c.json({ error: result.error }, result.status);
-  return c.json(result);
-});
-
 app.post('/api/sessions/:id/interrupt', async (c) => {
   await getRun(c.req.param('id'))?.interrupt();
   return c.json({ ok: true });
@@ -492,7 +369,8 @@ app.patch('/api/sessions/:id', async (c) => {
 app.post('/api/sessions/:id/fork', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<{ upTo?: string; before?: string; title?: string }>().catch(() => ({} as { upTo?: string; before?: string; title?: string }));
-  let upTo = body.upTo;
+  // The conversation as it reads: up to the cut, while it is rewound.
+  let upTo = body.upTo ?? (await liveCut(id))?.entry;
   if (body.before) {
     const previous = await messageBefore(id, body.before);
     if (previous === undefined) return c.json({ error: 'That message is not in this session' }, 404);
@@ -800,7 +678,7 @@ app.get('/api/sessions/:id/changes', async (c) => {
     if (!turn || !target || target.length > 4096) return c.json({ error: 'Which turn and file?' }, 400);
     return c.json({ diff: await turnDiff(file, cwd, turn, target, ownOnly) });
   }
-  return c.json(await sessionChanges(file, cwd, ownOnly));
+  return c.json(await sessionChanges(file, cwd, ownOnly, (await liveCut(id))?.prompt));
 });
 
 /**
@@ -895,12 +773,37 @@ app.post('/api/sessions/:id/shell/:shell/stop', (c) => (stopShell(c.req.param('i
   ? c.json({ ok: true })
   : c.json({ error: 'That command is not running any more' }, 409)));
 
+const RESTORES: readonly RewindRestore[] = ['both', 'conversation', 'code'];
+
+/**
+ * Rewind to here (rewind.ts): back to before the prompt `uuid`, the code, the conversation or both
+ * (`restore`), as Claude Code's /rewind and Claude Desktop do; `dryRun` says what it can put back
+ * first, for its choices. Not while Claude works (409); while another app has the session open,
+ * only the code.
+ */
 app.post('/api/sessions/:id/rewind', async (c) => {
-  const { uuid, dryRun } = await c.req.json<{ uuid?: string; dryRun?: boolean }>().catch(() => ({ uuid: undefined, dryRun: undefined }));
-  if (!uuid) return c.json({ error: 'Which prompt?' }, 400);
-  const run = await ensureRun(c.req.param('id'));
-  if (run.busy) return c.json({ error: 'Stop Claude before rewinding files.' }, 409);
-  return c.json(await run.rewind(uuid, dryRun !== false));
+  const body = await c.req.json<{ uuid?: unknown; restore?: unknown; dryRun?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+  const uuid = uuidOf(body.uuid);
+  if (!uuid) return c.json({ error: 'Which message?' }, 400);
+  const restore = RESTORES.find((r) => r === body.restore);
+  if (body.dryRun !== true && !restore) return c.json({ error: 'Restore what: both, conversation or code?' }, 400);
+  try {
+    return c.json(body.dryRun === true ? await checkRewind(c.req.param('id'), uuid) : await rewindTo(c.req.param('id'), uuid, restore!));
+  } catch (error) {
+    if (error instanceof RewindRefusal) return c.json({ error: error.message }, error.status);
+    throw error;
+  }
+});
+
+/** Undo rewind: the messages the rewind took out come back, until the next message; the files stay as they are. */
+app.post('/api/sessions/:id/rewind/undo', async (c) => {
+  try {
+    await undoRewind(c.req.param('id'));
+    return c.json({ ok: true });
+  } catch (error) {
+    if (error instanceof RewindRefusal) return c.json({ error: error.message }, error.status);
+    throw error;
+  }
 });
 
 app.get('/api/sessions/:id/mcp', async (c) => {

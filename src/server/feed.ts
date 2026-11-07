@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 
 import type { ChatMessage, ServerEvent } from '../shared/protocol.js';
+import { cutOf, liveCut, whenCutChanges } from './rewound.js';
 import { loadMessages } from './sessions.js';
 import { transcriptPath } from './transcripts.js';
 
@@ -170,6 +171,14 @@ class Feed {
     this.size = info.size;
     this.mtimeMs = info.mtimeMs;
     this.failing = false;
+    // Rewound here, and the conversation went on (the next message, or another app): the cut is
+    // over, and its pages read the conversation again, all of it.
+    if ((await cutOf(this.sessionId)) && !(await liveCut(this.sessionId))) {
+      this.fromFile = new Set(messages.map((m) => m.uuid));
+      this.delivered = new Set([...this.delivered, ...this.fromFile]);
+      this.broadcast({ type: 'reload', sessionId: this.sessionId });
+      return true;
+    }
     const present = new Set(messages.map((m) => m.uuid));
     for (const uuid of this.fromFile) {
       if (!present.has(uuid)) {
@@ -192,6 +201,9 @@ class Feed {
 const feeds = new Map<string, Feed>();
 const everyone = new Set<Listener>();
 let changedTimer: NodeJS.Timeout | undefined;
+
+// A rewind, Undo rewind, the next message or the end of a cut: the session's pages are told what to show.
+whenCutChanges((sessionId, rewound) => feeds.get(sessionId)?.broadcast({ type: 'rewound', sessionId, rewound }));
 
 export function feedFor(sessionId: string): Feed {
   let feed = feeds.get(sessionId);

@@ -152,9 +152,13 @@ describe('what a request may carry', () => {
     expect(response.status).toBe(400);
   });
 
-  it('an edit only with its id, the prompt it edits and some text', async () => {
-    const response = await ask('/api/sessions/abc/edit', { method: 'POST', body: JSON.stringify({ text: 'hi' }), headers: { 'content-type': 'application/json' } });
-    expect(response.status).toBe(400);
+  it('a rewind only with the message and what to restore; editing a prompt is Rewind to here now', async () => {
+    const rewind = (body: unknown) => ask('/api/sessions/abc/rewind', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+    expect((await rewind({})).status).toBe(400);
+    expect((await rewind({ uuid: 'abc', restore: 'both' })).status).toBe(400);
+    expect((await rewind({ uuid: '4e05eb31-6d40-4b57-93dd-bf4aeb9374cf', restore: 'all' })).status).toBe(400);
+    const edit = await ask('/api/sessions/abc/edit', { method: 'POST', body: JSON.stringify({ text: 'hi' }), headers: { 'content-type': 'application/json' } });
+    expect(edit.status).toBe(404);
   });
 
   it('a side question only with a question, about a session there is', async () => {

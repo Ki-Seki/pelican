@@ -14,7 +14,9 @@ import type {
   PlanUsage,
   PermissionDecision,
   RecordedSettings,
-  RewindResult,
+  RewindCheck,
+  RewindDone,
+  RewindRestore,
   RunSettings,
   RunState,
   SavedOutputPage,
@@ -253,14 +255,6 @@ export const api = {
     send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/mode`, { permissionMode }),
   rename: (id: string, title: string) => send<{ ok: boolean }>('PATCH', `sessions/${encodeURIComponent(id)}`, { title }),
   /**
-   * Edit the prompt `before` and send it again: the last prompt in place (`inPlace`), an earlier
-   * one on a branch made just before it (a new session for the first prompt). `uuid` is made once
-   * per edit, so a retry gets the same result. A branch of a session in Bypass starts in the mode
-   * Claude Code's settings start new sessions in.
-   */
-  edit: (id: string, body: { before: string; text: string; settings: RunSettings; uuid: string; keepImages: number[] }) =>
-    send<{ sessionId: string; inPlace: boolean }>('POST', `sessions/${encodeURIComponent(id)}/edit`, body),
-  /**
    * A side question about the session, as Claude Desktop asks one: a side chat is made from the
    * session so far, only reading, and the question goes there. Later ones go to it with `send`.
    */
@@ -284,7 +278,12 @@ export const api = {
   shell: (id: string, command: string, trust?: TrustChoice) =>
     send<{ shell: LiveShell }>('POST', `sessions/${encodeURIComponent(id)}/shell`, { command, ...(trust ? { trust } : {}) }),
   stopShell: (id: string, shell: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/shell/${encodeURIComponent(shell)}/stop`),
-  rewind: (id: string, uuid: string, dryRun: boolean) => send<RewindResult>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun }),
+  /** What Rewind to here can put back for the prompt `uuid`, by Claude Code's own check: its dialog's choices. */
+  rewindCheck: (id: string, uuid: string) => send<RewindCheck>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, dryRun: true }),
+  /** Rewind to here: back to before the prompt `uuid`, the code, the conversation or both. */
+  rewind: (id: string, uuid: string, restore: RewindRestore) => send<RewindDone>('POST', `sessions/${encodeURIComponent(id)}/rewind`, { uuid, restore }),
+  /** Undo rewind: the messages come back, until the next message; the files stay as they are. */
+  undoRewind: (id: string) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/rewind/undo`, {}),
   mcp: (id: string) => request<{ servers: McpServer[]; live: boolean }>(`sessions/${encodeURIComponent(id)}/mcp`),
   setMcp: (id: string, name: string, change: { enabled?: boolean; reconnect?: boolean }) =>
     send<{ servers: McpServer[] }>('POST', `sessions/${encodeURIComponent(id)}/mcp/${encodeURIComponent(name)}`, change),

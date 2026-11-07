@@ -1,7 +1,6 @@
 import { deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
 
 import { revealHidden } from '../shared/hidden.js';
-import type { ChatMessage } from '../shared/protocol.js';
 import { hasQuotes, readPrompt } from '../shared/quoted.js';
 import { durationText } from '../shared/workflows.js';
 // The conversation as the app shows it: the export leaves out what the view leaves out.
@@ -9,13 +8,12 @@ import { baseName, shortPath } from '../web/lib/format.js';
 import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
-import { loadMessages, sessionInfo } from './sessions.js';
+import { sessionInfo, shownMessages } from './sessions.js';
 import { refreshTranscriptIndex } from './transcripts.js';
 
 /**
- * A copy of the session to carry on separately. With `upTo`, the copy ends at
- * that message, which is how "edit and resend" works: the conversation
- * branches before the prompt you change, and the original stays as it was.
+ * A copy of the session to carry on separately (Fork). With `upTo`, the copy ends at that entry
+ * of the transcript: Fork from here, from a reply (its end) or a prompt (the entry just before it).
  */
 export async function fork(sessionId: string, upTo?: string, title?: string): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing changes.');
@@ -35,7 +33,7 @@ export async function fork(sessionId: string, upTo?: string, title?: string): Pr
  * session in the same folder). Undefined when the message is not there.
  */
 export async function messageBefore(sessionId: string, uuid: string): Promise<string | null | undefined> {
-  const messages = await loadMessages(sessionId);
+  const { messages } = await shownMessages(sessionId);
   const at = messages.findIndex((m) => m.uuid === uuid);
   if (at < 0) return undefined;
   return at === 0 ? null : messages[at - 1]!.uuid;
@@ -156,7 +154,8 @@ const workflowEnded = ({ name, status, durationMs }: WorkflowNotice) =>
 export async function exportMarkdown(sessionId: string): Promise<{ title: string; markdown: string }> {
   const info = await sessionInfo(sessionId);
   const title = info?.customTitle || info?.summary || 'Claude Code session';
-  const messages: ChatMessage[] = await loadMessages(sessionId);
+  // As the conversation reads: up to where it was rewound, while it is.
+  const { messages } = await shownMessages(sessionId);
   const out: string[] = [`# ${inlineText(title.replace(/\s+/g, ' ').trim())}`, ''];
   // As the app shows it, `~/code/x` in the home folder (the demo's made-up one too, not where it
   // happens to be kept); on its line, as a title is: a line break in it would end the code, and

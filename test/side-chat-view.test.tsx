@@ -700,7 +700,7 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     setPrefs({ workspacePane: true });
     server.git = { repo: true, branch: 'feat/x', base: 'main', remote: true, files: [{ path: 'src/cache.ts', status: 'modified', added: 2, removed: 1 }] };
     server.after = [tasks];
-    // The session itself, for comparison: its own box, its tasks, Commit and Create PR, Rewind and Edit.
+    // The session itself, for comparison: its own box, its tasks, Commit and Create PR, Rewind to here.
     history.replaceState(null, '', `/?s=${SESSION}&w=changes`);
     open(SESSION);
     await loaded();
@@ -718,7 +718,7 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     for (const name of ['Add', 'Model, effort and speed', 'Permission mode']) expect(screen.queryByRole('button', { name })).toBeNull();
     // The task list it copied is the session's work, not its own.
     expect(pinned()).toBeNull();
-    // The prompt it copied offers no Rewind, nor Fork from here, nor Edit.
+    // The prompt it copied offers no Rewind to here, nor Fork from here.
     expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull();
     fireEvent.contextMenu(screen.getAllByText('Clean up the build').find((el) => el.closest('[data-quote-what="prompt"]'))!);
@@ -726,10 +726,10 @@ describe('a side chat opened as a session of its own (from the list, a search, t
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy', 'Quote']);
     fireEvent.keyDown(menu, { key: 'Escape' });
     document.querySelector('dialog')?.dispatchEvent(new Event('cancel', { cancelable: true }));
-    // Its turn's changes, without Rewind code; the folder's, without Commit, Push or Create PR.
+    // Its turn's changes, without Rewind to here; the folder's, without Commit, Push or Create PR.
     const changes = await screen.findByRole('complementary', { name: 'Changes and files' });
     await within(changes).findByText('cache.ts', {}, LAZY);
-    expect(within(changes).queryByText('Rewind code')).toBeNull();
+    expect(within(changes).queryByRole('button', { name: 'Rewind to here' })).toBeNull();
     fireEvent.click(within(changes).getByRole('button', { name: /^Show:/ }));
     fireEvent.click(within(screen.getAllByRole('dialog').at(-1)!).getByText('Uncommitted'));
     await waitFor(() => expect(location.search).not.toContain('t=u1'));

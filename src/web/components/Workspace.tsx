@@ -16,6 +16,7 @@ import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type
 import { SendComments } from './Comments';
 import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
+import type { RewindPoint } from './Rewind';
 import { Segmented } from './Sheet';
 import { waitingCount } from './WaitingItems';
 import { WorkspaceChanges, WorkspaceFiles, WorkspaceTerminal } from './WorkspaceTabs';
@@ -144,8 +145,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   cwd: string;
   /** The session whose turns Changes can show, one by one (T1, T2…). */
   sessionId?: string;
-  /** Rewind code: puts the files back as they were before a prompt (the chat asks first). */
-  onRewind?: (uuid: string) => void;
+  /** Rewind to here, on a turn's prompt (the chat asks first). */
+  onRewind?: (point: RewindPoint) => void;
   /** Commit, Push and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
   requests?: boolean;
   /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */

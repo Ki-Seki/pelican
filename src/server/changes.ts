@@ -317,11 +317,16 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 
 /**
  * What each turn of the session in `file` changed, oldest first. `cwd`: the session's folder, for
- * relative paths; `ownOnly`: a side chat's, which leaves out the turns it copied of its session.
+ * relative paths; `ownOnly`: a side chat's, which leaves out the turns it copied of its session;
+ * `rewoundTo`: the prompt its conversation was rewound to before (rewound.ts), whose turn and those
+ * after it are left out until the next message.
  */
-export async function sessionChanges(file: string, cwd: string | undefined, ownOnly = false): Promise<SessionChanges> {
+export async function sessionChanges(file: string, cwd: string | undefined, ownOnly = false, rewoundTo?: string): Promise<SessionChanges> {
   const scan = await scanned(file, cwd);
-  const turns: TurnChanges[] = turnsOf(await readHistory(file), scan, ownOnly).map((turn) => ({
+  // Rewound: the turns before the prompt the conversation went back to before, until the next message.
+  const messages = await readHistory(file);
+  const cut = rewoundTo ? messages.findIndex((m) => m.uuid === rewoundTo) : -1;
+  const turns: TurnChanges[] = turnsOf(cut < 0 ? messages : messages.slice(0, cut), scan, ownOnly).map((turn) => ({
     uuid: turn.uuid,
     n: turn.n,
     text: clip(turn.text, 120),
