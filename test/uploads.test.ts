@@ -2,22 +2,25 @@ import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { keepDays, saveUpload, sweepUploads } from '../src/server/files';
+import { findUpload, keepDays, saveUpload, sweepUploads } from '../src/server/files';
 
+// Each test with folders of its own: in any order, one finds no other's uploads or settings.
 let dir: string;
 const saved = { stateDir: config.stateDir, claudeHome: config.claudeHome };
-beforeAll(async () => {
+beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-uploads-'));
   config.stateDir = path.join(dir, 'state');
   config.claudeHome = path.join(dir, 'claude');
   await mkdir(config.claudeHome, { recursive: true });
 });
-afterAll(async () => {
-  Object.assign(config, saved);
+afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+afterAll(() => {
+  Object.assign(config, saved);
 });
 
 const DAY = 24 * 3600_000;
@@ -40,5 +43,14 @@ describe('uploads', () => {
     expect(await keepDays()).toBe(1);
     await writeFile(path.join(config.claudeHome, 'settings.json'), 'not json');
     expect(await keepDays()).toBe(30);
+  });
+
+  it('are typed by their extension, and one named for what every object has is a plain file', async () => {
+    const png = await saveUpload(new File(['x'], 'shot.png', { type: 'image/png' }));
+    expect((await findUpload(png.id))?.mime).toBe('image/png');
+    for (const name of ['notes.constructor', 'notes.__proto__']) {
+      const odd = await saveUpload(new File(['x'], name, { type: '' }));
+      expect((await findUpload(odd.id))?.mime).toBe('application/octet-stream');
+    }
   });
 });

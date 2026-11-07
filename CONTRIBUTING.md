@@ -26,6 +26,11 @@ npm run typecheck
 npm run build
 ```
 
+`npm run build` also writes `THIRD_PARTY_NOTICES`, which npm ships: each package built into the
+server (by esbuild's metafile) and the web app (by the modules Vite puts in it), with its version
+and license in full. It fails if a package built in is not in it, or comes with no license it can
+name; `scripts/notices.mjs` says how each is read.
+
 The tests never see your own Claude Code sessions or Pelican sign-in: `test/setup.ts` points them
 at temporary folders before anything reads the environment, and keeps your git settings out of the
 repositories they make.
@@ -50,6 +55,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/claude-code.ts` | Which Claude Code runs, its version, and whether it is signed in |
 | `src/server/history.ts` | Reads a transcript, across compactions, incrementally |
 | `src/server/feed.ts` | Delivers a session's new messages to the pages watching it |
+| `src/server/kept.ts`, `archive.ts`, `pinned.ts` | Archived and pinned sessions, never both: Pelican's own, in its state folder, apart from Claude Desktop's |
 | `src/server/live.ts`, `waiting.ts` | Sessions other apps are running, from Claude Code's own registry, and when one waits for you |
 | `src/server/trust.ts` | Folder trust: what a folder would run, and whether it is trusted |
 | `src/server/phone.ts` | `pelican phone`: the phone's address and its one-time QR code |
@@ -60,6 +66,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/workspace.ts`, `changes.ts`, `search.ts` | Changes and files: git status and diffs, what each turn changed from the transcript, file search |
 | `src/server/shell.ts`, `shell-runs.ts` | `!` commands: running one, its live output and Stop, and writing it as Claude Code does |
 | `src/server/side-chat.ts` | Side chats: the read-only copy of a session, and telling one apart |
+| `src/server/actions.ts`, `markdown.ts` | Branch, delete and Export as Markdown: prompts written as text, and a reply read as Markdown readers read it, kept to itself in any of them |
 | `src/server/stats.ts` | Usage and activity, read from every transcript, once and then incrementally |
 | `src/server/workflows.ts` | Workflows: a run as Claude Code leaves it in the session's folder (record, journal, agents), and its agents' steps |
 | `src/server/demo.ts` | The made-up sessions of `--demo` |
@@ -67,7 +74,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
-| `scripts/` | Build, development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
+| `scripts/` | Build (with the third-party notices), development, the browser smoke test, the site, screenshots, icons, what changed upstream, and the registry CI installs the package from |
 
 ## Keeping up with Claude Code
 

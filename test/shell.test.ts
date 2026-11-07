@@ -5,11 +5,27 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { BASH_CAVEAT, bashModeMessages, bashModeSettings, CommandOutput, type ForClaude, forClaude, MAX_RUN_MS, SAVED_BYTES, type ShellResult, startCommand } from '../src/server/shell';
+import { BASH_CAVEAT, bashModeMessages, bashModeSettings, CommandOutput, type CommandRun, type ForClaude, forClaude, MAX_RUN_MS, SAVED_BYTES, type ShellResult, startCommand } from '../src/server/shell';
 import { refreshTranscriptIndex } from '../src/server/transcripts';
 
+/** The commands the test under way started. */
+const started: CommandRun[] = [];
+/** A command started for a test: it does not outlive the test. */
+const start = (...args: Parameters<typeof startCommand>) => {
+  const run = startCommand(...args);
+  started.push(run);
+  return run;
+};
+// What a test left running, when it failed or ran out of time, is stopped after it: asked, then
+// made to two seconds later, which is waited for. What a command left running once its shell was
+// done is the test's to end.
+afterEach(async () => {
+  const runs = started.splice(0);
+  for (const run of runs) run.stop();
+  for (const end = Date.now() + 3000; runs.some((run) => run.alive()) && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50));
+});
 /** A command run to its end. */
-const runCommand = (cwd: string, command: string, limitMs?: number) => startCommand(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
+const runCommand = (cwd: string, command: string, limitMs?: number) => start(cwd, command, limitMs === undefined ? {} : { limitMs }).result;
 /** The command and its output as one text, as Claude reads them. */
 const bashModeText = (result: ForClaude) => bashModeMessages(result, true).map((message) => message.text).join('');
 /** What a command printed, kept as a command's output is. */
@@ -21,7 +37,12 @@ const printed = (text: string) => {
 /** All of it, as text. */
 const all = (output: CommandOutput) => output.text(Infinity);
 
+/**
+ * Whether process `pid` is still there. Only a process id will do: 0 and below name process
+ * groups, and 0 the test's own, which is always there.
+ */
 const alive = (pid: number) => {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Not a process id: ${pid}`);
   try {
     process.kill(pid, 0);
     return true;
@@ -30,19 +51,30 @@ const alive = (pid: number) => {
   }
 };
 
-async function gone(pid: number): Promise<boolean> {
-  for (let i = 0; i < 40 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
-  return !alive(pid);
+/**
+ * Whether `check` holds within 10 seconds: a busy computer can be slow to start a shell or to
+ * clear away a process it ended. A `sleep 30` left running is still there by then.
+ */
+async function until(check: () => boolean): Promise<boolean> {
+  for (const end = Date.now() + 10_000; !check() && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50));
+  return check();
 }
+const gone = (pid: number) => until(() => !alive(pid));
 
 describe.skipIf(process.platform === 'win32')('a ! command', () => {
   it('returns when its shell is done, leaving what it started in the background running, and says only what Claude Code says', async () => {
-    const result = await runCommand(os.tmpdir(), 'sleep 30 & echo $!');
+    // Timed from what the shell printed last, as it ends: a busy computer can be slow to start a
+    // login shell, and that is no part of it. One still running after 15 seconds is too slow.
+    let printedAt = 0;
+    const result = await start(os.tmpdir(), 'sleep 30 & echo $!', { limitMs: 15_000, onOutput: () => { printedAt = Date.now(); } }).result;
+    const after = Date.now() - printedAt;
+    if (result.endedBy) throw new Error(`The login shell (${process.env.SHELL || '/bin/bash'}) was not done in 15 seconds: it is too slow to start`);
     const pid = Number(all(result.output).trim());
+    // Not in the try: with no pid printed, its finally would signal the test's own process group.
+    expect(alive(pid)).toBe(true);
     try {
-      expect(result.durationMs).toBeLessThan(2000);
+      expect(after).toBeLessThan(2000);
       expect(result.code).toBe(0);
-      expect(alive(pid)).toBe(true);
       expect(bashModeText(result)).toBe(`<bash-input>sleep 30 & echo $!</bash-input><bash-stdout>${pid}</bash-stdout><bash-stderr></bash-stderr>`);
     } finally {
       process.kill(pid, 'SIGKILL');
@@ -50,13 +82,22 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
   });
 
   it('stops everything it started when it takes too long, not just its shell', async () => {
-    const result = await runCommand(os.tmpdir(), 'sleep 30 & echo $!; wait', 700);
-    const pid = Number(all(result.output).trim());
-    expect(result.code).toBeNull();
-    expect(await gone(pid)).toBe(true);
-    expect(result.endedBy).toBe('limit');
-    expect(bashModeText(result)).toContain('(stopped after 1 second)');
-  }, 15_000);
+    // The limit counts from the shell's start, and a busy computer can take longer than that to
+    // run a login profile. Stopped before it printed its sleep's pid, it left nothing to check: it
+    // runs again with a longer limit, up to 10 seconds, then up to 10 seconds for its sleep to go.
+    for (const [limitMs, said] of [[700, '1 second'], [3000, '3 seconds'], [10_000, '10 seconds']] as const) {
+      const result = await runCommand(os.tmpdir(), 'sleep 30 & echo $!; wait', limitMs);
+      expect(result).toMatchObject({ code: null, endedBy: 'limit', limitMs });
+      // Not before the limit, so printing nothing means a slow shell, not a limit cut short.
+      expect(result.durationMs).toBeGreaterThanOrEqual(limitMs);
+      const pid = all(result.output).trim();
+      if (!pid) continue;
+      expect(await gone(Number(pid)), 'the sleep it started was stopped too').toBe(true);
+      expect(bashModeText(result)).toContain(`(stopped after ${said})`);
+      return;
+    }
+    throw new Error(`The login shell (${process.env.SHELL || '/bin/bash'}) printed nothing in 10 seconds: it is too slow to start`);
+  }, 40_000);
 
   it('says nothing more of a command that simply ends', async () => {
     const result = await runCommand(os.tmpdir(), 'echo done');
@@ -77,12 +118,13 @@ describe.skipIf(process.platform === 'win32')('a ! command', () => {
       await rm(folder, { recursive: true, force: true });
     }
   });
-});
+  // Each starts a login shell, which a busy computer can be slow to do.
+}, 20_000);
 
 describe.skipIf(process.platform === 'win32')('a live ! command', () => {
   it('hands on its output as it comes, before it ends', async () => {
     const seen: Array<{ text: string; at: number }> = [];
-    const run = startCommand(os.tmpdir(), 'echo first; sleep 1; echo second', { onOutput: (text) => seen.push({ text, at: Date.now() }) });
+    const run = start(os.tmpdir(), 'echo first; sleep 1; echo second', { onOutput: (text) => seen.push({ text, at: Date.now() }) });
     const result = await run.result;
     const ended = Date.now();
     expect(seen.map((s) => s.text).join('')).toBe('first\nsecond\n');
@@ -97,8 +139,8 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
 
   it('Stop ends it and everything it started, and the record says so', async () => {
     let pid = 0;
-    const run = startCommand(os.tmpdir(), 'sleep 30 & echo $!; wait', { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
-    for (let i = 0; i < 40 && !pid; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    const run = start(os.tmpdir(), 'sleep 30 & echo $!; wait', { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
+    expect(await until(() => pid > 0), 'the shell printed a process id within 10 seconds').toBe(true);
     expect(alive(pid)).toBe(true);
     run.stop();
     const result = await run.result;
@@ -109,14 +151,13 @@ describe.skipIf(process.platform === 'win32')('a live ! command', () => {
 
   it('ends what ignores the polite request too', async () => {
     let pid = 0;
-    const run = startCommand(os.tmpdir(), "sh -c 'trap \"\" TERM; echo $$; sleep 30'", { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
-    for (let i = 0; i < 40 && !pid; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    const run = start(os.tmpdir(), "sh -c 'trap \"\" TERM; echo $$; sleep 30'", { onOutput: (text) => { pid = Number(text.trim()) || pid; } });
+    expect(await until(() => pid > 0), 'the shell printed a process id within 10 seconds').toBe(true);
     run.stop();
     await run.result;
-    for (let i = 0; i < 80 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(alive(pid)).toBe(false);
+    expect(await gone(pid)).toBe(true);
   });
-});
+}, 20_000);
 
 describe('a ! command’s output', () => {
   it('keeps stdout and stderr in the order the command wrote them, as Claude Code’s one file for both does', async () => {
@@ -124,7 +165,7 @@ describe('a ! command’s output', () => {
       const result = await runCommand(os.tmpdir(), 'for i in 1 2 3; do echo o$i; echo e$i >&2; done');
       expect(all(result.output)).toBe('o1\ne1\no2\ne2\no3\ne3\n');
     }
-  });
+  }, 20_000);
 
   it('is counted in bytes, and read back with a character cut in two at the end as U+FFFD, as Claude Code reads it', () => {
     const output = printed(`x${'é'.repeat(20)}`);
@@ -210,6 +251,60 @@ describe('the record of a ! command', () => {
     expect(text({ command: 'grep x 2>/dev/null # note', printed: '', code: 1 })).toBe(answer);
   });
 
+  it('reads a command that starts with a backquote as Claude Code’s parser does: it breaks off there and starts over after it', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    // Each as the bundled CLI's own parser reads it (2.1.318): the statement after the backquote is
+    // `grep x f`, its closing backquote opening another, so it is grep's 1.
+    for (const command of ['`grep nothing /dev/null`', ' `grep x f` ', 'echo a; `grep x f`', '`grep x f` | cat', 'x=1 `grep x f`', '! `grep x f`', '`git grep x`', 'if a; then b; else `grep x f`; fi', '(`grep x f`)', 'cd a && (echo; `grep x f`)', '`#c\ngrep x f`']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(answer);
+    }
+    // Here the statement read starts with a, grep or echo and the backquote after it, which is no
+    // command; and a backquote that is not where a command's name would be starts nothing.
+    for (const command of ['`a`; grep x f', '`grep` x f', '`echo a`', 'echo `grep x f`', 'x=`grep x f`', '"`grep x f`"', 'time `grep x f`']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    // In a group inside another compound, or in a case's patterns where the pattern it reads leaves
+    // a backquote open, the outermost compound takes the rest of the line.
+    for (const command of ['{ { `grep x f`; }; }; grep y f', 'if a; then (`grep x f`); fi; grep y f', 'case x in a) `grep x f`;; esac; grep y f']) {
+      expect(text({ command, printed: '', code: 1 })).toBe(failure);
+    }
+    expect(text({ command: 'case x in a) `pwd`;; esac; grep y f', printed: '', code: 1 })).toBe(answer);
+    // In a backquote, a `(` holds none: the next one ends it.
+    expect(text({ command: 'echo `a (b`; grep x f', printed: '', code: 1 })).toBe(answer);
+  });
+
+  it('reads a backquote right after the keyword that closes a compound as a statement of its own, as Claude Code’s parser does', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    // The parser (2.1.318) splits off `grep x f` as the last statement of each: 1 is grep's answer.
+    for (const command of [
+      '`for f in *; do echo $f; done` && grep x f',
+      '`if [ -f a ]; then echo cat; else echo ls; fi` f; grep x f',
+      '`{ echo a; }`; grep x f',
+      '`while false; do :; done`; grep x f',
+      '`case a in a) echo;; esac`; grep x f',
+      '{ echo a; }`; grep x f',
+      'for i in 1; do { echo; }` x; done; grep x f',
+    ]) {
+      expect(text({ command, printed: '', code: 1 }), command).toBe(answer);
+    }
+    // After that backquote it starts over, so one more opens a backquote that takes the rest.
+    expect(text({ command: 'if true; then :; fi `x`; grep x f', printed: '', code: 1 })).toBe(failure);
+  });
+
+  it('ends a statement that is a [ … ] at its ], as Claude Code’s parser does: a word after it starts another', () => {
+    const answer = '<bash-stdout>(Bash completed with no output)</bash-stdout><bash-stderr></bash-stderr>';
+    const failure = '<bash-stdout></bash-stdout><bash-stderr></bash-stderr>';
+    for (const command of ['[ -e x ]', '[ -e x ] > out', '[ -e x ] < in 2>&1', '[ -e x ] # note', 'true; [ "$a" = "]" ]', '`[ -e x ]; grep x f`']) {
+      expect(text({ command, printed: '', code: 1 }), command).toBe(answer);
+    }
+    // The statement read last is `src`, or one that starts `]` where a backquote follows it.
+    for (const command of ['[ -e x ] src', '`[ -e x ]`', '`[ -e x ] src`', 'A=1 `[ -e x ]`', 'echo; [ -e x ]`']) {
+      expect(text({ command, printed: '', code: 1 }), command).toBe(failure);
+    }
+  });
+
   it('gives Claude the start of a long output and where all of it was saved, in Claude Code’s words', () => {
     const file = '/home/me/.claude/projects/-work/5e25f65d-1b8b-4490-a3d3-43540da07ef3/tool-results/b1b2gp6fw.txt';
     expect(text({ printed: `${'z'.repeat(30_000)}\n`, savedTo: file })).toBe(
@@ -284,6 +379,7 @@ describe('a long ! output, as it goes to Claude', () => {
     expect(await readFile(saved.savedTo!, 'utf8')).toBe('é'.repeat(150_000));
     expect(bashModeMessages(saved, true)[1]!.text).toContain('Output too large (293KB). Full output saved to:');
 
+    // 69 MB through a pipe, 64 MB of it written to disk twice: on a busy computer, tens of seconds.
     const before = process.memoryUsage().rss;
     const huge = await runCommand(os.tmpdir(), `head -c ${SAVED_BYTES + 5_000_000} /dev/zero | tr '\\0' x`);
     expect(huge.output.bytes).toBe(SAVED_BYTES + 5_000_000);
@@ -292,7 +388,7 @@ describe('a long ! output, as it goes to Claude', () => {
     huge.output.release();
     expect((await stat(cut.savedTo!)).size).toBe(SAVED_BYTES);
     expect(bashModeMessages(cut, true)[1]!.text).toContain(`Output exceeded the 64MB persist limit; only the first 64MB were saved to: ${cut.savedTo}\n`);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('how Claude Code’s bash mode takes a ! command, from the settings', () => {

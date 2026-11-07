@@ -133,7 +133,7 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { claudeEnv, closeAll, closeIdle, getRun, sendMessage, replaceLastTurn, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
 const { oneLine } = await import('../src/server/push');
 const { sideChatPrompt } = await import('../src/server/side-chat');
 const { fork } = await import('../src/server/actions');
@@ -194,12 +194,30 @@ function ask(claude: FakeClaude, toolName: string, input: Record<string, unknown
   return { answer, controller };
 }
 
-beforeEach(() => {
+/**
+ * Reads the model list again, as Claude Code gives it now, whatever a test before left: the list
+ * is kept ten minutes, so it is read at a moment past that, and past any moment it was read at.
+ */
+let modelsReadAt = 0;
+async function readModels() {
+  modelsReadAt = Math.max(modelsReadAt, Date.now()) + 11 * 60_000;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(modelsReadAt);
+  try {
+    await listModels();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+beforeEach(async () => {
   notices.length = 0;
   nextModels = [];
   nextAccount = {};
   FakeClaude.closeDelay = 0;
   FakeClaude.controlDelay = 0;
+  // No model known yet and no plan, whichever test ran before.
+  await readModels();
 });
 afterEach(async () => {
   closeAll();
@@ -227,6 +245,26 @@ describe('starting Claude', () => {
     expect(getRun(sessionId)!.busy).toBe(true);
     // Published once, before the transcript has it, for pages watching from the start.
     expect(messages()).toHaveLength(0);
+  });
+
+  it('tells Claude Code it shows the files Claude sends, in Claude Code’s environment only, new or resumed', async () => {
+    const { claude, sessionId, run } = await start();
+    expect(claude.options.env).toMatchObject({ CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1', PATH: process.env.PATH });
+    // Not Desktop's entrypoint, which would bring Desktop's other ways along.
+    expect(claude.options.env?.CLAUDE_CODE_ENTRYPOINT).toBe(process.env.CLAUDE_CODE_ENTRYPOINT);
+    // Pelican's own environment, which its `!` commands get, stays without it.
+    expect(process.env.CLAUDE_CODE_ATTACHMENTS_BY_PATH).toBeUndefined();
+    run.close();
+    await settle();
+    await sendMessage({ sessionId, cwd: folder }, { text: 'Send me the report', attachments: [], settings: {} });
+    const resumed = claudes.at(-1)!;
+    expect(resumed).not.toBe(claude);
+    expect(resumed.options).toMatchObject({ resume: sessionId, env: { CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1' } });
+  });
+
+  it('keeps a folder’s settings off with the switch on, in a folder kept to the user’s settings', () => {
+    const env = claudeEnv({ settingSources: ['user'], env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: '' } });
+    expect(env).toMatchObject({ CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor' });
   });
 
   it('turns /clear away: in the same process it would carry on under another id', async () => {
@@ -536,7 +574,7 @@ describe('settings', () => {
       { value: 'default', displayName: 'Default', description: '', resolvedModel: 'claude-opus-5-5' },
       { value: 'sonnet', displayName: 'Sonnet', description: '', resolvedModel: 'claude-sonnet-5-5' },
     ];
-    await listModels();
+    await readModels();
     const { claude, state } = await start('Go', { model: 'default', effort: 'high', fast: false });
     claude.say(init({ model: 'claude-opus-5-5', effort: 'high', fast_mode_state: 'off' }));
     await settle();
@@ -567,11 +605,7 @@ describe('a turn’s cost', () => {
     nextAccount = { email: 'me@example.com', subscriptionType: 'max' };
     nextModels = [{ value: 'default', displayName: 'Default', description: '' }];
     config.claudeExecutable = undefined;
-    // The model list is cached; read it afresh with this account.
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 11 * 60_000);
-    await listModels();
-    vi.useRealTimers();
+    await readModels();
     const { run, claude, state } = await start();
     claude.say(result({ total_cost_usd: 0.5 }));
     await vi.waitFor(() => expect(run.busy).toBe(false));
@@ -880,6 +914,9 @@ describe('notifications', () => {
     expect(askedFor({ ...base, toolName: 'WebFetch', input: { url: 'https://docs.example.com/a?b' } }, '/w')).toBe('Fetch docs.example.com');
     expect(askedFor({ ...base, toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which database?' }] } }, '/w')).toBe('Which database?');
     expect(askedFor({ ...base, toolName: 'mcp__github__create_issue', input: {} }, '/w')).toBe('Use github · create_issue');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: ['/w/reports/week-45.pdf'], status: 'normal' } }, '/w')).toBe('Send reports/week-45.pdf');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: '/tmp/notes.txt', status: 'proactive' } }, '/w')).toBe('Send /tmp/notes.txt');
+    expect(askedFor({ ...base, toolName: 'SendUserFile', input: { files: ['a.png', 'b.png'], status: 'normal' } }, '/w')).toBe('Send 2 files');
     expect(oneLine('echo "\u202e\u2066hidden\u2069"\nrm -rf /', 30)).toBe('echo " hidden " rm -rf /');
     expect(oneLine('a\u2028b\u2029c\u061cd\u2060e\u00adf', 30)).toBe('a b c d e f');
     expect(oneLine('x'.repeat(200), 10)).toBe(`${'x'.repeat(9)}…`);
@@ -897,6 +934,12 @@ describe('notifications', () => {
     expect(oneLine('\u{1f469}\u202e\u{1f4bb}')).toBe('\u{1f469} \u{1f4bb}');
     // Tags that spell more than a region's code are hidden text, not a flag.
     expect(oneLine('\u{1f3f4}\u{e0069}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}\u{e0061}\u{e006c}\u{e006c}\u{e007f} ok')).toBe('\u{1f3f4} ok');
+    // Only England, Scotland and Wales have a flag of tags: other tags go, the black flag stays.
+    const england = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}';
+    const wales = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0077}\u{e006c}\u{e0073}\u{e007f}';
+    expect(oneLine(`${england} ${wales} ok`)).toBe(`${england} ${wales} ok`);
+    expect(oneLine('\u{1f3f4}\u{e0075}\u{e0073}\u{e0074}\u{e0078}\u{e007f} ok')).toBe('\u{1f3f4} ok');
+    expect(oneLine('\u{1f3f4}\u{e0067}\u{e0062}\u{e006e}\u{e0069}\u{e0072}\u{e007f} ok')).toBe('\u{1f3f4} ok');
     // Cut between emoji, never inside one.
     const joined = '\u{1f469}\u200d\u{1f4bb}';
     expect(oneLine(`${'x'.repeat(8)}${joined}\u{1f1ef}\u{1f1f5}`, 10)).toBe(`${'x'.repeat(8)}${joined}\u{1f1ef}\u{1f1f5}`);

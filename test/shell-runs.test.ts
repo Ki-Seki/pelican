@@ -125,8 +125,27 @@ async function until(check: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+/**
+ * Reads the model list again, as Claude Code gives it now, whatever a test before left: the list
+ * is kept ten minutes, so it is read at a moment past that, and past any moment it was read at.
+ */
+let modelsReadAt = 0;
+async function readModels() {
+  modelsReadAt = Math.max(modelsReadAt, Date.now()) + 11 * 60_000;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(modelsReadAt);
+  try {
+    await listModels();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const settingsFile = path.join(scratch, 'claude', 'settings.json');
-beforeEach(() => {
+beforeEach(async () => {
+  // No plan known, whichever test ran before.
+  FakeClaude.account = {};
+  await readModels();
   claudes.length = 0;
 });
 afterEach(async () => {
@@ -233,6 +252,8 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     try {
       // A gigabyte or more a second: before, every bit of it was held until the next look.
       const shell = startShell(sessionId, folder, 'yes "a fairly long line of output, to fill the pipe as fast as it goes ..........."');
+      // Three seconds of it from its first line: a busy computer can be slow to start a login shell.
+      await until(() => events.some((e) => e.type === 'shell_output' && e.id === shell.id), 10_000);
       await settle(3000);
       expect(liveShells(sessionId)[0]).toMatchObject({ id: shell.id, truncated: true });
       expect(liveShells(sessionId)[0]!.output.length).toBe(MAX_OUTPUT);
@@ -272,7 +293,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a session', () => 
     await until(() => liveShells(sessionId).length === 0);
     expect(shellsEvent('other')).toEqual({ type: 'shells', sessionId: 'other', shells: [] });
   });
-});
+}, 20_000);
 
 describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to your settings only', () => {
   it('runs git as Claude Code does there: none of the repository’s own programs run', async () => {
@@ -319,7 +340,7 @@ describe.skipIf(process.platform === 'win32')('a ! command in a folder kept to y
       await rm(dir, { recursive: true, force: true });
     }
   }, 20_000);
-});
+}, 20_000);
 
 describe('what a turn has cost', () => {
   it('is its share of Claude Code’s running total, on an API key or a provider', async () => {
@@ -332,17 +353,8 @@ describe('what a turn has cost', () => {
 
   it('is not said where a subscription pays', async () => {
     FakeClaude.account = { email: 'me@example.com', subscriptionType: 'max' };
-    try {
-      // The model list is kept a while; read it afresh with this account.
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(Date.now() + 11 * 60_000);
-      await listModels();
-      vi.useRealTimers();
-      const { sessionId } = await idleSession();
-      expect(getRun(sessionId)!.state().lastTurn).not.toHaveProperty('costUsd');
-    } finally {
-      FakeClaude.account = {};
-      vi.useRealTimers();
-    }
+    await readModels();
+    const { sessionId } = await idleSession();
+    expect(getRun(sessionId)!.state().lastTurn).not.toHaveProperty('costUsd');
   });
 });

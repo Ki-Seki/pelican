@@ -83,14 +83,19 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm pack
-      # As `npm install -g pelican-cc` installs it from npm: with the tree its npm-shrinkwrap.json
-      # pins, which npm takes only from a package the registry says has one, never from a tarball
-      # installed by its path. A registry on the runner hands the package out as npm's does. Its own
-      # npm cache, so the one setup-node keeps for the other jobs stays as it is.
+      # The notices of the packages built in, which the build wrote, go with it.
+      - run: tar -tzf pelican-cc-*.tgz | grep -qx 'package/THIRD_PARTY_NOTICES'
+      # As `npm install -g pelican-cc` installs it from npm, which reads a package's
+      # npm-shrinkwrap.json only when the registry says it has one, never from a tarball installed
+      # by its path: a registry on the runner hands the package out as npm's does. Its own npm
+      # cache, so the one setup-node keeps for the other jobs stays as it is. One Claude Code gets
+      # installed, this computer's: from a package with a shrinkwrap, npm installs every platform's.
       - name: Install the package as people get it, and serve the demo from it
         run: |
           node scripts/registry.mjs pelican-cc-*.tgz npm install -g pelican-cc --cache "$RUNNER_TEMP/npm-cache"
           pelican --version
+          ls "$(npm root -g)/pelican-cc/node_modules/@anthropic-ai"
+          test "$(ls "$(npm root -g)/pelican-cc/node_modules/@anthropic-ai" | grep -c '^claude-agent-sdk-')" = 1
           pelican --demo --port 7861 &
           for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/info && break; sleep 1; done
           curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/sessions | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (d.sessions.length < 3) process.exit(1)'

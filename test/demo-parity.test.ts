@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
+import { sentFiles } from '../src/server/sessions';
 import { readLastTurn } from '../src/server/transcripts';
 import { gitStatus } from '../src/server/workspace';
 import { workflowAgentPage, workflowView } from '../src/server/workflows';
@@ -37,10 +38,33 @@ describe('the demo shows what runs on and what waits', () => {
     expect((await readLastTurn(file))?.stopped).toBe('API overloaded');
   });
 
+  it('a picture Claude sent, as Claude Code records it delivered, at the path where the demo keeps it', async () => {
+    const rows = await rowsOf(transcriptOf('acme-web', DEV));
+    const recorded = rows.find((row) => row.toolUseResult?.attachments)?.toolUseResult;
+    const file = path.join(config.home, 'code', 'acme-web', 'screenshots', 'settings-dark.png');
+    expect(recorded).toMatchObject({ caption: 'The settings page in the dark theme', attachments: [{ path: file, isImage: true, media_type: 'image/png', pathValidated: true }] });
+    expect((await stat(file)).size).toBe(recorded.attachments[0].size);
+    expect((await readFile(file)).subarray(1, 4).toString()).toBe('PNG');
+    expect([...(await sentFiles(DEV))]).toEqual([file]);
+    // Taken after the repository's last commit: a new file there.
+    const status = await gitStatus(path.join(config.home, 'code', 'acme-web'));
+    expect(status.repo && status.files.find((f) => f.path === 'screenshots/settings-dark.png')?.status).toBe('untracked');
+  });
+
   it('a session waiting for an answer in the terminal, beside the one at work in Claude Desktop', () => {
     const live = demoLiveProcesses();
     expect(live.get(WAITING)).toMatchObject({ app: 'the terminal', busy: true, waiting: 'permission prompt' });
     expect([...live.values()].some((p) => p.app === 'Claude Desktop' && p.busy && !p.waiting)).toBe(true);
+  });
+});
+
+describe('the demo’s list', () => {
+  it('has one session pinned, in the demo’s own state folder: the list shows its Pinned group', async () => {
+    const RELEASE_NOTES = 'd1e4c7f3-4444-4d4e-bf60-000000000004';
+    const { pinnedIds } = await import('../src/server/pinned');
+    expect([...await pinnedIds()]).toEqual([RELEASE_NOTES]);
+    expect(path.relative(config.home, config.stateDir)).toBe('state');
+    expect(JSON.parse(await readFile(path.join(config.stateDir, 'pinned.json'), 'utf8'))).toEqual({ ids: [RELEASE_NOTES] });
   });
 });
 
@@ -140,9 +164,9 @@ describe('in the demo’s page', async () => {
   const { startDemo } = await import('../src/web/lib/demo');
   const { api } = await import('../src/web/lib/api');
   const { getView, setRun } = await import('../src/web/lib/store');
+  beforeAll(() => startDemo({ machine: 'laptop', home: '/demo', version: '0', auth: false, demo: true }));
 
   it('Stop on the command Claude left running ends it, and the session has nothing left at work', async () => {
-    startDemo({ machine: 'laptop', home: '/demo', version: '0', auth: false, demo: true });
     setRun(DEV, demoRunState(DEV)!);
     await expect(api.stopTask(DEV, 'bash_1')).resolves.toEqual({ ok: true });
     expect(getView(DEV).run?.tasks).toBeUndefined();

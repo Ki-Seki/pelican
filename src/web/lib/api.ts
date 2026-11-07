@@ -4,6 +4,7 @@ import type {
   Attachment,
   ChatMessage,
   Command,
+  CommandAt,
   FileContent,
   GitStatus,
   LiveShell,
@@ -32,7 +33,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { Todo } from '../../shared/tasks';
 import type { SessionUsage, UsageRange, UsageSummary } from '../../shared/usage';
-import { DemoRefusal, STATIC_DEMO, staticRequest } from './static-demo';
+import { DemoRefusal, requestKey, STATIC_DEMO, staticRequest } from './static-demo';
 
 /**
  * The app does not know the path it is served under (`/` on its own, or a
@@ -43,14 +44,17 @@ export const appBase = new URL('./', location.href);
 
 export const apiUrl = (path: string) => new URL(`api/${path}`, appBase).toString();
 
+/** Whether a file Claude sent can be had: still there, gone from where it was sent, or past what Pelican serves. */
+export type SentState = 'there' | 'gone' | 'large';
+
 /** status 0: the server could not be reached at all. `demo`: the demo's note in place of an action. */
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly signIn = false,
-    /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about. */
-    readonly trust?: { brings: string[] },
+    /** Claude Code would start in a folder nobody trusted: what the folder brings, to ask about, the commands in it, and the files it shows part of. */
+    readonly trust?: { brings: string[]; commands?: CommandAt[][]; more?: string[] },
     /** The demo saying what it does not do, not something going wrong. */
     readonly demo = false,
   ) {
@@ -80,6 +84,13 @@ function setReachable(value: boolean): void {
   if (reachable === value) return;
   reachable = value;
   for (const listener of reachListeners) listener();
+}
+
+/** Calls `listener` each time requests start or stop reaching the server. */
+export function onReachable(listener: (reachable: boolean) => void): () => void {
+  const call = () => listener(reachable);
+  reachListeners.add(call);
+  return () => reachListeners.delete(call);
 }
 
 export function useReachable(): boolean {
@@ -144,6 +155,20 @@ const MAX_UPLOAD = 25 * 1024 * 1024;
 export type AuthMode = 'none' | 'password' | 'token';
 export type AuthState = { required: boolean; mode: AuthMode; signedIn: boolean };
 
+/**
+ * What a folder brings, as the server says it: its items, the commands in each where it says where
+ * they are, and the files of which it shows part.
+ */
+function trustIn(brings: unknown, commands: unknown, more: unknown): { brings: string[]; commands?: CommandAt[][]; more: string[] } {
+  const items = Array.isArray(brings) ? brings.filter((b): b is string => typeof b === 'string') : [];
+  const files = Array.isArray(more) ? more.filter((m): m is string => typeof m === 'string') : [];
+  const at = (item: string, command: unknown) => Array.isArray(command) && command.length === 3 && Number.isInteger(command[0]) && Number.isInteger(command[1])
+    && 0 <= command[0] && command[0] <= command[1] && command[1] <= item.length && (command[2] === 'shell' || command[2] === 'argv' || command[2] === 'powershell');
+  const each = Array.isArray(brings) && items.length === brings.length && Array.isArray(commands) && commands.length === items.length
+    && commands.every((list, i) => Array.isArray(list) && list.every((command) => at(items[i]!, command)));
+  return each ? { brings: items, commands: commands as CommandAt[][], more: files } : { brings: items, more: files };
+}
+
 async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
   if (STATIC_DEMO) return staticRequest(appBase, path, init);
   const response = await reach(apiUrl(path), {
@@ -151,9 +176,9 @@ async function fromServer(path: string, init?: RequestInit): Promise<unknown> {
     headers: { ...MARK, ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean; needsTrust?: boolean; brings?: unknown };
+    const body = (await response.json().catch(() => ({}))) as { error?: string; signIn?: boolean; needsTrust?: boolean; brings?: unknown; commands?: unknown; more?: unknown };
     if (body.signIn) onSignedOut();
-    const trust = body.needsTrust ? { brings: Array.isArray(body.brings) ? body.brings.filter((b): b is string => typeof b === 'string') : [] } : undefined;
+    const trust = body.needsTrust ? trustIn(body.brings, body.commands, body.more) : undefined;
     throw new ApiError(body.error ?? `${response.status} ${response.statusText}`, response.status, Boolean(body.signIn), trust);
   }
   return response.json();
@@ -227,9 +252,14 @@ export const api = {
   fork: (id: string, options: { before?: string; title?: string } = {}) =>
     send<{ sessionId: string | null }>('POST', `sessions/${encodeURIComponent(id)}/fork`, options).then((r) => r.sessionId),
   remove: (id: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}`),
-  /** Put the session away from the list (true) or bring it back (false); nothing else changes. */
+  /** Put the session away from the list (true), unpinned, or bring it back (false); nothing else changes. */
   archive: (id: string, archived: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/archive`, { archived }),
-  exportUrl: (id: string) => apiUrl(`sessions/${encodeURIComponent(id)}/export`),
+  /** Keep the session at the top of the list (true) or let it go back (false); a pin brings an archived session back. */
+  pin: (id: string, pinned: boolean) => send<{ ok: boolean }>('POST', `sessions/${encodeURIComponent(id)}/pin`, { pinned }),
+  /** The session as Markdown, to save; on the site, the file its build saved from the demo. */
+  exportUrl: (id: string) => (STATIC_DEMO
+    ? new URL(`data/${requestKey(`sessions/${encodeURIComponent(id)}/export`)}.md`, appBase).toString()
+    : apiUrl(`sessions/${encodeURIComponent(id)}/export`)),
   models: () => request<{ models: ModelOption[]; signedIn: boolean | null; account?: Account }>('models'),
   completions: (cwd: string) => request<{ commands: Command[]; agents: Agent[] }>(`commands?cwd=${encodeURIComponent(cwd)}`),
   /** Starts a `!` command; its output comes over the socket (lib/shells). `trust`: the answer for a folder nobody trusted. */
@@ -250,8 +280,9 @@ export const api = {
   unqueue: (id: string, uuid: string) => send<{ ok: boolean }>('DELETE', `sessions/${encodeURIComponent(id)}/queued/${encodeURIComponent(uuid)}`),
   /** The mode a new session starts in, from Claude Code's settings (no folder: a scratch session). */
   defaults: (cwd?: string) => request<{ permissionMode: PermissionMode | null }>(`defaults${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
-  subagent: (id: string, agent: string) =>
-    request<{ messages: ChatMessage[] }>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}`).then((r) => r.messages),
+  /** The last messages of an Agent call's subagent's transcript, or those before message `before`. */
+  subagent: (id: string, agent: string, before?: number) =>
+    request<MessagesPage>(`sessions/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}${before !== undefined ? `?before=${before}` : ''}`),
   /** A Workflow call's run, from the run's own files (or this Pelican's Claude, while it runs it). */
   workflow: (id: string, call: string) =>
     request<{ workflow: Workflow }>(`sessions/${encodeURIComponent(id)}/workflows/${encodeURIComponent(call)}`).then((r) => r.workflow),
@@ -269,7 +300,22 @@ export const api = {
   usageStats: (range: UsageRange) => request<{ summary: UsageSummary }>(`usage/stats?range=${range}`).then((r) => r.summary),
   /** One session's usage, for its menu (null: no transcript yet). */
   sessionUsage: (id: string) => request<{ usage: SessionUsage | null }>(`sessions/${encodeURIComponent(id)}/usage`).then((r) => r.usage),
+  /** A file Claude sent in the session, to show: its text, or a picture as data. */
   sent: (id: string, path: string) => request<FileContent>(`sessions/${encodeURIComponent(id)}/sent?path=${encodeURIComponent(path)}`),
+  /** The address of a file Claude sent in the session: a picture or a PDF as itself, or (`download`) to save. */
+  sentUrl: (id: string, path: string, download = false) =>
+    apiUrl(`sessions/${encodeURIComponent(id)}/sent/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`),
+  /**
+   * Whether files Claude sent (one call's, at most 50) are still there to have, asked once for their
+   * cards, before any tap: `gone` once one is not where Claude Code delivered it, `large` past what
+   * Pelican serves. A file Claude did not send in the session is not in the answer. The site's demo
+   * has every file it shows.
+   */
+  sentStates: async (id: string, paths: string[]): Promise<Map<string, SentState>> => {
+    if (STATIC_DEMO) return new Map(paths.map((path) => [path, 'there']));
+    const answer = await request<Record<SentState, string[]>>(`sessions/${encodeURIComponent(id)}/sent/state?${paths.map((path) => `p=${encodeURIComponent(path)}`).join('&')}`);
+    return new Map((['there', 'gone', 'large'] as const).flatMap((state) => (answer[state] ?? []).map((path) => [path, state] as const)));
+  },
   /** The folder's changes since the last commit, or (`base`) since its branch split from the default branch. */
   git: (cwd: string, scope?: 'base') => request<GitStatus>(`git?cwd=${encodeURIComponent(cwd)}${scope ? `&scope=${scope}` : ''}`),
   /** One file's diff; `from`, a renamed file's old path, so it shows what changed rather than a new file. */

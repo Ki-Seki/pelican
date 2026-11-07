@@ -33,45 +33,72 @@ const tidy = () => {
   document.querySelector('[data-demo-banner]')?.remove();
 };
 
-async function phoneShots(scheme) {
-  const context = await browser.newContext({
-    viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: scheme,
-  });
-  const page = await context.newPage();
-  const shots = [];
-  // The demo's own notice says these sessions are made up; the README says so instead.
-  const grab = async () => {
-    await page.evaluate(tidy);
-    shots.push(await page.screenshot());
+/**
+ * In each page of the phone, from its start: whether it has read a mouse instead of a finger. The
+ * app sizes its buttons, and lays out a prompt's actions, by the pointer it reads.
+ */
+const watchPointer = () => {
+  const finger = [matchMedia('(pointer: coarse)'), matchMedia('(hover: none)')];
+  const check = () => {
+    if (finger.some((query) => !query.matches)) window.pelicanReadMouse = true;
   };
-  await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(500);
-  await grab();
-  await page.goto(`${BASE}?s=${WAITING}`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(700);
-  await grab();
-  // A chart Claude drew, rendered in place.
-  await page.goto(`${BASE}?s=${CHART}`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1200);
-  await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
-  await page.waitForTimeout(500);
-  // Scrolled up to the chart, the conversation offers a way back to its end; a picture needs none.
-  await page.evaluate(() => document.querySelector('[aria-label="Jump to latest"]')?.remove());
-  await grab();
-  // The site's phone frames draw a status bar over the top 40px (about 48px of the app at their
-  // scale), so the pictures that go in them are taken that much shorter, to show the whole screen.
-  // Their one-time tips are seen already: the message box says the same.
-  await page.setViewportSize({ width: 390, height: FRAMED_HEIGHT });
-  await page.evaluate(() => localStorage.setItem('pelican:tips-seen', JSON.stringify({ 'open-elsewhere': true, 'working-elsewhere': true, 'waiting-elsewhere': true })));
-  await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(500);
-  await page.evaluate(tidy);
-  const list = await page.screenshot();
-  await page.goto(`${BASE}?s=${ELSEWHERE}`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(700);
-  await page.evaluate(tidy);
-  const live = await page.screenshot();
+  window.pelicanReadMouse = false;
+  check();
+  for (const query of finger) query.addEventListener('change', check);
+};
+/** Whether the page has read a mouse, or reads one now (a change can be told a moment late). */
+const readMouse = () => window.pelicanReadMouse || !matchMedia('(pointer: coarse)').matches || !matchMedia('(hover: none)').matches;
+
+/** A phone that tall, touch and all. */
+async function phone(scheme, height) {
+  const context = await browser.newContext({
+    viewport: { width: 390, height }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: scheme,
+  });
+  await context.addInitScript(watchPointer);
+  return { context, page: await context.newPage() };
+}
+
+/**
+ * The phone's picture of a page: opened, made ready, tidied. Chrome's phone forgets now and then
+ * that it has a touch screen (in the first phone, a few seconds in, until the next page opens),
+ * and a page then draws a computer's buttons and rows: one that read a mouse at any time before
+ * its picture was taken is opened again and pictured again.
+ */
+async function phoneShot(page, url, settle, ready = async () => {}) {
+  for (let tries = 0; tries < 4; tries += 1) {
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(settle);
+    await ready();
+    await page.evaluate(tidy);
+    const shot = await page.screenshot();
+    if (!(await page.evaluate(readMouse))) return shot;
+  }
+  throw new Error(`${url} kept reading a mouse, not a finger: its picture would not be a phone's`);
+}
+
+async function phoneShots(scheme) {
+  const { context, page } = await phone(scheme, 844);
+  const shots = [
+    await phoneShot(page, BASE, 500),
+    await phoneShot(page, `${BASE}?s=${WAITING}`, 700),
+    // A chart Claude drew, rendered in place.
+    await phoneShot(page, `${BASE}?s=${CHART}`, 1200, async () => {
+      await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
+      await page.waitForTimeout(500);
+      // Scrolled up to the chart, the conversation offers a way back to its end; a picture needs none.
+      await page.evaluate(() => document.querySelector('[aria-label="Jump to latest"]')?.remove());
+    }),
+  ];
   await context.close();
+  // The site's phone frames draw a status bar over the top 40px (about 48px of the app at their
+  // scale), so the pictures that go in them are taken that much shorter, to show the whole screen,
+  // on a phone that tall from the start. Their one-time tips are seen already: the message box says
+  // the same.
+  const framed = await phone(scheme, FRAMED_HEIGHT);
+  await framed.context.addInitScript(() => localStorage.setItem('pelican:tips-seen', JSON.stringify({ 'open-elsewhere': true, 'working-elsewhere': true, 'waiting-elsewhere': true })));
+  const list = await phoneShot(framed.page, BASE, 500);
+  const live = await phoneShot(framed.page, `${BASE}?s=${ELSEWHERE}`, 700);
+  await framed.context.close();
   return { shots, live, list };
 }
 

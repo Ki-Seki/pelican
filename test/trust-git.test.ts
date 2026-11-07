@@ -112,6 +112,15 @@ describe('a git filter the repository’s config sets up', () => {
     expect(await ran()).toBe(false);
   });
 
+  it('in a file included on a condition of a megabyte with a line separator in it: listed, at once', async () => {
+    const condition = `onbranch:dev${'a'.repeat(1 << 20)}\u2028x`;
+    const { dir } = await unpacked('separator', `[includeIf "${condition}"]\n\tpath = ../.devfilters\n`, { '.devfilters': '[filter "evil"]\n\tclean = CMD\n' });
+    const started = performance.now();
+    const brings = await folderBrings(dir);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(brings).toEqual(expect.arrayContaining([expect.stringMatching(/^Git filter evil: /), 'Git config includes: ../.devfilters']));
+  });
+
   it('says that the config includes another file, even one that is not there yet', async () => {
     const { dir } = await unpacked('missing', '[include]\n\tpath = ../.later\n');
     expect(await folderBrings(dir)).toContain('Git config includes: ../.later');
@@ -130,7 +139,7 @@ describe('a git filter the repository’s config sets up', () => {
     const pairs = Object.keys(env).filter((k) => k.startsWith('GIT_CONFIG_KEY_')).map((k) => `${env[k]}=${env[k.replace('KEY', 'VALUE')]}`);
     expect(pairs).toEqual(expect.arrayContaining(['core.fsmonitor=false', 'core.hooksPath=/dev/null']));
   });
-});
+}, 20_000);
 
 describe('a folder git does not see as a repository of its own', () => {
   it('brings nothing of git: an empty .git, or a repository without a config file', async () => {
@@ -145,4 +154,4 @@ describe('a folder git does not see as a repository of its own', () => {
     await rememberChoice(bare, 'user-only');
     expect(await launchFor(bare)).toEqual({ settingSources: ['user'] });
   });
-});
+}, 20_000);

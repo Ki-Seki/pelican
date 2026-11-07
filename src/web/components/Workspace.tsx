@@ -242,8 +242,8 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   const waits = !docked && Boolean(needsYou);
   const [foot, setFoot] = useState<HTMLDivElement | null>(null);
   const selectionFoot = useMemo<SelectionFootAt | undefined>(
-    () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: docked ? 'pane' : 'phone' } : {}) } : undefined),
-    [foot, waiting.length, waits, docked],
+    () => (foot ? { at: foot, ...(waiting.length === 0 && !waits ? { safe: true } : {}) } : undefined),
+    [foot, waiting.length, waits],
   );
 
   // What waits goes with the next message, as comments do in Claude Desktop; Send now (⌘↵) sends it

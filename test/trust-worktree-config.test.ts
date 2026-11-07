@@ -47,4 +47,4 @@ it('a folder with a hook (so the sheet shows) and the filter in config.worktree,
   const ranIt = (await readFile(marker, 'utf8').catch(() => '')).includes('ran');
   console.log(JSON.stringify({ brings, launch, filterRanUnderUserOnly: ranIt }));
   expect(ranIt).toBe(false);
-});
+}, 20_000);

@@ -1,4 +1,6 @@
-import type { Block, ChatMessage, ImageBlock, TextBlock, WorkflowLaunch } from '../shared/protocol.js';
+import path from 'node:path';
+
+import type { Block, ChatMessage, DeliveredFile, Delivery, ImageBlock, TextBlock, ToolResultBlock, WorkflowLaunch } from '../shared/protocol.js';
 import { RUN_ID } from '../shared/workflows.js';
 
 const MAX_TEXT = 60_000;
@@ -175,6 +177,41 @@ function workflowLaunch(output: Raw): WorkflowLaunch | undefined {
   };
 }
 
+/** Longer than any path a file system takes: a "path" past it is not one. */
+const MAX_PATH = 4096;
+const MEDIA_TYPE = /^[\w.+-]{1,60}\/[\w.+-]{1,100}$/;
+
+/**
+ * What a SendUserFile call delivered, from what Claude Code records of its result (`toolUseResult`
+ * in a transcript, `tool_use_result` in the stream): each file by the absolute path Claude Code
+ * checked it at. A file it says it did not deliver (`upload_error`: a path that came to lead
+ * somewhere not approved, or a viewer it could not reach), or did not check as a path on this
+ * computer, is only counted, so nothing shows it.
+ */
+export function deliveryOf(output: Raw): Delivery | undefined {
+  const list = output.attachments;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  const files: DeliveredFile[] = [];
+  let missed = 0;
+  for (const item of list) {
+    const file = isRecord(item) ? item.path : undefined;
+    const checked = isRecord(item) && item.upload_error === undefined && item.pathValidated !== false;
+    if (!checked || typeof file !== 'string' || !file || file.length > MAX_PATH || file.includes('\0') || !path.isAbsolute(file)) {
+      missed += 1;
+      continue;
+    }
+    files.push({
+      path: file,
+      ...(typeof item.size === 'number' && Number.isSafeInteger(item.size) && item.size >= 0 ? { size: item.size } : {}),
+      ...(item.isImage === true ? { image: true } : {}),
+      ...(typeof item.media_type === 'string' && MEDIA_TYPE.test(item.media_type) ? { type: item.media_type } : {}),
+    });
+  }
+  const display = output.display === 'render' || output.display === 'attach' ? output.display : undefined;
+  const caption = typeof output.caption === 'string' && output.caption.trim() ? output.caption.slice(0, 2000) : undefined;
+  return { files, ...(display ? { display } : {}), ...(caption ? { caption } : {}), ...(missed > 0 ? { missed } : {}) };
+}
+
 /**
  * Converts a transcript message (`getSessionMessages`) or a streamed SDK message
  * into the shape the app renders. Returns undefined for messages with nothing
@@ -215,9 +252,15 @@ export function toChatMessage(raw: Raw, address?: ImageAddress | 'omit'): ChatMe
   if (typeof raw.toolDenialKind === 'string' && raw.toolDenialKind !== 'interrupted') {
     for (const block of out.blocks) if (block.type === 'tool_result') block.denied = true;
   }
+  // What Claude Code records of a tool's result belongs to the one result the row holds.
   const output = isRecord(raw.toolUseResult) ? raw.toolUseResult : isRecord(raw.tool_use_result) ? raw.tool_use_result : undefined;
-  const launch = output && workflowLaunch(output);
-  const results = launch ? out.blocks.filter((b) => b.type === 'tool_result') : [];
-  if (launch && results.length === 1 && results[0]!.type === 'tool_result') results[0]!.workflow = launch;
+  const results = output ? out.blocks.filter((b): b is ToolResultBlock => b.type === 'tool_result') : [];
+  const only = results.length === 1 ? results[0] : undefined;
+  if (output && only) {
+    const launch = workflowLaunch(output);
+    if (launch) only.workflow = launch;
+    const delivered = only.is_error ? undefined : deliveryOf(output);
+    if (delivered) only.delivered = delivered;
+  }
   return out;
 }

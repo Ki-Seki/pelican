@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Claude Code's settings are read from a folder of the test's own, never ~/.claude.
 const scratch = vi.hoisted(() => {
@@ -53,6 +53,14 @@ describe('Claude Code that cannot start', () => {
 });
 
 describe('the mode a new session starts in', () => {
+  const user = () => path.join(scratch, 'claude', 'settings.json');
+  // Each starts with no mode set, in a folder Claude has not worked in.
+  beforeEach(async () => {
+    await rm(user(), { force: true });
+    await rm(path.join(project, '.claude', 'settings.json'), { force: true });
+    trusted.clear();
+  });
+
   it('is the user’s permissions.defaultMode, or none', async () => {
     expect(await defaultMode(project)).toBeUndefined();
     await settings(path.join(scratch, 'claude', 'settings.json'), 'plan');
@@ -61,6 +69,7 @@ describe('the mode a new session starts in', () => {
   });
 
   it('takes a folder’s own setting only once Claude has worked there, and never an escalating one from the repository', async () => {
+    await settings(user(), 'plan');
     await settings(path.join(project, '.claude', 'settings.json'), 'dontAsk');
     expect(await defaultMode(project)).toBe('plan');
     trusted.add(project);
@@ -68,7 +77,6 @@ describe('the mode a new session starts in', () => {
     // A repository cannot turn approvals off for whoever opens it: the user's own mode applies.
     await settings(path.join(project, '.claude', 'settings.json'), 'acceptEdits');
     expect(await defaultMode(project)).toBe('plan');
-    trusted.delete(project);
   });
 
   it('is never Bypass: Pelican enters it only when it is picked', async () => {

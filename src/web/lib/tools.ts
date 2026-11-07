@@ -10,6 +10,7 @@ import {
   Globe,
   ListChecks,
   type LucideIcon,
+  Paperclip,
   Plug,
   Search,
   SquareTerminal,
@@ -17,6 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 
+import { holdsWords, revealHidden } from '../../shared/hidden';
 import { todosOf } from '../../shared/tasks';
 import { workflowOf } from '../../shared/workflows';
 
@@ -30,8 +32,16 @@ export type ToolSummary = {
   path?: boolean;
   /** `target` is prose (a command's description), not code. */
   prose?: boolean;
+  /**
+   * `target` is words, though it shows as code: a web search, what an agent is to do, a tool's
+   * message. What it may hide is read as in words (src/shared/hidden.ts).
+   */
+  words?: boolean;
   /** Extra detail after the target, e.g. "lines 10–40". */
   note?: string;
+  /** What the step says while it runs, and once it failed, where Claude Desktop has words of its own for them. */
+  running?: string;
+  failed?: string;
 };
 
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
@@ -76,10 +86,10 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
     case 'WebFetch':
       return { icon: Globe, verb: 'Fetch', target: str(input.url) };
     case 'WebSearch':
-      return { icon: Globe, verb: 'Search the web', target: str(input.query) };
+      return { icon: Globe, verb: 'Search the web', target: str(input.query), words: true };
     case 'Agent':
     case 'Task':
-      return { icon: Bot, verb: str(input.subagent_type) ? `Agent · ${str(input.subagent_type)}` : 'Agent', target: str(input.description) };
+      return { icon: Bot, verb: str(input.subagent_type) ? `Agent · ${str(input.subagent_type)}` : 'Agent', target: str(input.description), words: true };
     case 'TodoWrite': {
       // Where the list stands: "2/4 · Remembering the choice", as the bar above the composer says it.
       const todos = todosOf(input);
@@ -101,6 +111,13 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
       return { icon: ClipboardList, verb: 'Proposed a plan' };
     case 'Skill':
       return { icon: Wrench, verb: 'Skill', target: str(input.skill) ?? str(input.command) };
+    case 'SendUserFile': {
+      // In Claude Desktop's words; each file by its name (the approval shows where it is), with any
+      // character that hides or turns text around shown as such.
+      const files = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
+      const target = files.map((f) => f.split('/').pop()).filter(Boolean).map((f) => revealHidden(f!).text).join(', ');
+      return { icon: Paperclip, verb: 'Send file', running: 'Sending file', failed: 'Failed to send', ...(target ? { target } : {}) };
+    }
     case 'Workflow': {
       // As Claude Code names it: the script's description, else its name, never the script itself.
       const { name, description } = workflowOf(input);
@@ -110,18 +127,19 @@ export function describeTool(name: string, input: Record<string, unknown>, cwd?:
       if (/(^|__)show_widget$/.test(name)) return { icon: ChartArea, verb: 'Drew', target: str(input.title)?.replace(/_/g, ' '), prose: true };
       if (name.startsWith('mcp__')) {
         const [, server, tool] = name.split('__');
-        return { icon: Plug, verb: `${server ?? 'mcp'} · ${tool ?? ''}`.trim(), target: firstString(input) };
+        return { icon: Plug, verb: `${server ?? 'mcp'} · ${tool ?? ''}`.trim(), ...firstString(input) };
       }
-      return { icon: Wrench, verb: name, target: firstString(input) };
+      return { icon: Wrench, verb: name, ...firstString(input) };
     }
   }
 }
 
-function firstString(input: Record<string, unknown>): string | undefined {
-  for (const value of Object.values(input)) {
-    if (typeof value === 'string' && value.length > 0) return value.split('\n')[0];
+/** The first line of an input's first string, and whether its key names words (a message, a query). */
+function firstString(input: Record<string, unknown>): { target?: string; words?: boolean } {
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === 'string' && value.length > 0) return { target: value.split('\n')[0], ...(holdsWords(key) ? { words: true } : {}) };
   }
-  return undefined;
+  return {};
 }
 
 export { currentTasks, type Todo, todosOf } from '../../shared/tasks';

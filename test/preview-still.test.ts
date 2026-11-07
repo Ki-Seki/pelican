@@ -49,6 +49,20 @@ describe('a still preview', () => {
     expect(page).toContain('<html lang="en"><head><title>T</title><style>p{color:blue}</style></head><body><p>Hi</p></body></html>');
   });
 
+  it('shows an SVG file Claude wrote or sent as it is, its colors and fonts its own; a visual in its vocabulary', () => {
+    const drawing = '<svg viewBox="0 0 200 80"><rect class="box" fill="#fde68a" width="90" height="40"></rect><text class="t" fill="#dc2626" font-family="Georgia">Queue</text></svg>';
+    for (const dark of [false, true]) {
+      const file = documentFor({ kind: 'svg', code: drawing, file: true }, dark, true);
+      expect(file).toContain(drawing);
+      // Nothing of the visuals' styles: no fill, stroke, font or color scheme of Pelican's.
+      expect(file).not.toMatch(/\.box\{|svg text\{|\.t\{|color-scheme|fill:var/);
+      expect(file).toContain('svg{display:block;max-width:100%;height:auto}');
+    }
+    // A visual, and an SVG in a reply, as Claude Desktop's visuals draw them.
+    expect(documentFor({ kind: 'svg', code: drawing, widget: true }, true, true)).toContain('.box{fill:var(--surface)');
+    expect(documentFor({ kind: 'svg', code: drawing }, true, true)).toContain('.box{fill:var(--surface)');
+  });
+
   it('runs as written once Run is tapped: only the still one is changed', () => {
     const running = documentFor({ kind: 'html', code: `<p>x</p>${vectors.frame}` }, false);
     expect(running).toContain(vectors.frame);

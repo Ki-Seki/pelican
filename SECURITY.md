@@ -64,7 +64,11 @@ can read your sessions and have Claude run commands as you, so treat access to i
   they appear and after the page comes back into view. Settings take web origins only: `*`,
   `null` and the like are refused at start, with a warning.
 - **What Claude writes stays on the screen.** Images in a reply load only from Pelican itself;
-  another site's image is a link you can open. Pages and visuals Claude makes show as still
+  another site's image is a link you can open. Export as Markdown writes it as that link too, and
+  a reply's HTML as text, so a Markdown reader that opens the file loads nothing a reply names and
+  shows no heading or turn the reply made up. A reply's links by reference are written with their
+  addresses and its footnotes under labels of its own, so no reply changes where another's links
+  lead or what its footnotes say. Pages and visuals Claude makes show as still
   pictures, in a sandboxed frame where nothing runs, and only from tool calls that ran: a visual
   Claude merely wrote into its reply shows as text. A still picture keeps no frames, embeds, links
   or scripts, wherever they hide: a browser looks up a frame's host name before any policy stops
@@ -76,23 +80,52 @@ can read your sessions and have Claude run commands as you, so treat access to i
   shows, so run a page only as you would open it in your browser. Uploaded files are served with
   no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,
-  helper commands and environment variables in its Claude Code settings, servers in its
-  `.mcp.json`, slash commands, skills and agents that run a shell or tools without asking, filters
-  in its git config. Claude Code asks before it runs them in a terminal, but never in a session
-  started through its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has
-  trusted that brings any of these, Pelican lists them, read from the folder's files (the git
-  config through `git config`, which starts nothing, with the files it includes), and offers
-  **Trust and start** or **Use my settings only**. With your settings only, Claude Code loads just
-  your user settings, and git runs none of the repository's filters, its file-system monitor or
-  its hooks folder; a folder whose git config git cannot read in full does not start that way.
-  A folder is trusted when Claude Code's own record says so (its trust dialog, read and never
-  written), when you trusted it in Pelican, when Pelican made it (a scratch folder), or when
-  Claude Code has worked there before, unless you chose your settings only for it. Listing a
-  folder's slash commands or MCP servers starts Claude Code with hooks off and, in a folder nobody
-  trusted, from your home folder with your settings only; git does not run there at all. In a
-  trusted folder, git runs for the Changes panel with hooks, the file-system monitor, external
-  diffs and text converters off, reads paths literally, refuses `..`, and shows nothing of a work
-  tree outside the folder.
+  helper commands and environment variables in its Claude Code settings, servers in its `.mcp.json`,
+  slash commands, skills and agents that run a shell or tools without asking, filters in its git
+  config. Claude Code asks before it runs them in a terminal, but never in a session started through
+  its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has trusted that
+  brings any of these, Pelican lists them, read from the folder's files as Claude Code reads them
+  (those of the folder and its parents up to the repository's top, and the `.mcp.json` of each
+  folder above it but your home folder and those that hold it; a skill's `SKILL.md` in any case, as
+  a Mac finds it, and commands and agents at any depth, a folder of them nested more than ten deep
+  named as one the sheet shows part of; a settings file saved with a byte-order mark or as UTF-16
+  too, and one it cannot read as JSON named as such; a skill's frontmatter broken into lines at a
+  carriage return too; the git config through `git config`, which starts nothing, with the files it
+  includes), each whole, its lines kept, a hook's arguments too (as much of a file and of a folder
+  as any project brings, what it warns of and its own notes always kept, so no number of harmless
+  items leaves one out, and what the repository's git config runs whatever the rest brings: past
+  that, the sheet names above the list, in red, the first three files it shows part of and how many
+  more, and the folder is asked about all the same), with what hides or turns text around written
+  out as ⟨U+…⟩ and warned of, as an approval shows it, and offers **Trust and start** or **Use my
+  settings only**. In a command a space other than a plain one is written out too, unless Pelican
+  finds it in quotes, a heredoc's body or a comment, as bash, zsh, dash and macOS's bash 3.2 read
+  the command and a script it hands a new shell in the ways Pelican follows (`bash -c`, `ssh`, a
+  heredoc or a pipe into `sh`, a file it writes with a redirection or `tee` and runs by its path or,
+  made a program, by its name, or that runs on its own as a git hook or a file a shell reads as it
+  starts, and the like); quoted text with a substitution's start in it counts as in a word. A
+  command that uses what can run text later in its own shell is one Pelican cannot tell, however the
+  text is made (split across quotes, by a variable or an escape): `eval`, `source`, `trap`, an alias
+  in any form, `read`, `declare`, `let`, `unset`, zsh's `set -A` and its `functions` array, bash's
+  `BASH_ALIASES`, a parameter flag such as zsh's `(e)` and `$~x` or bash's `@P`, `setopt`, `test`
+  with an operator a variable may give, a command whose name Pelican does not know, arithmetic on a
+  variable the command sets to anything but a number, and the like, a command's name counting in any
+  case (a Mac runs `READ` as /usr/bin/read); so is a script or a program run by a path that is not
+  plain text, or from a folder the command writes into but for a file it wrote there. Where Pelican
+  cannot tell, every such space is written out, and it cannot tell a command longer than 64 KB, or
+  one whose reading would take more than a fixed budget of steps and memory: no command, nor a
+  tool's input or a trust sheet's items, which share one, takes more time or memory than that to
+  read. A file that another program writes by itself (`sed`'s `w`, `sort -o`, `split`, perl, python,
+  awk) is not read as a script, nor is a string that a program runs in a shell of its own (python's
+  `os.system`, `make`) followed. With your settings only, Claude Code loads just your user settings,
+  and git runs none of the repository's filters, its file-system monitor or its hooks folder; a
+  folder whose git config git cannot read in full does not start that way. A folder is trusted when
+  Claude Code's own record says so (its trust dialog, read and never written), when you trusted it
+  in Pelican, when Pelican made it (a scratch folder), or when Claude Code has worked there before,
+  unless you chose your settings only for it. Listing a folder's slash commands or MCP servers
+  starts Claude Code with hooks off and, in a folder nobody trusted, from your home folder with your
+  settings only; git does not run there at all. In a trusted folder, git runs for the Changes panel
+  with hooks, the file-system monitor, external diffs and text converters off, reads paths
+  literally, refuses `..`, and shows nothing of a work tree outside the folder.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'
@@ -105,19 +138,45 @@ can read your sessions and have Claude run commands as you, so treat access to i
   never a path, from that session's own `tool-results` folder, or, for a record a branch copied,
   from that of the session its row says it came from, when the record's path names that session:
   a regular file reached through no link and with no other name (no hard link).
+- **Only the files Claude sent are shown, and only as files.** In the sessions Pelican runs,
+  Pelican tells Claude Code it shows the files Claude sends (`CLAUDE_CODE_ATTACHMENTS_BY_PATH`, set
+  for Claude Code alone, never for a `!` command), which turns on SendUserFile and nothing else. In
+  that mode Claude Code uploads nothing: it checks that each file exists and is a regular file,
+  asks you first where its Read rules would (a file outside the session's folder), and records
+  where the file is. It then leaves out what governs its uploads, your organization's "File upload"
+  policy and its checks for a provider other than Anthropic's API and for
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`; its own switch for the tool (`tengu_send_user_file`)
+  and its brief mode still turn the tool off, and it sends no file to Remote Control viewers on
+  claude.ai. Pelican serves a file of a session only at a path Claude Code recorded it delivered
+  there, the absolute path it checked rather than the one Claude asked for (or, from Claude
+  Desktop, the file an Artifact call published), and refuses any other path a request names; it
+  says whether a file is still there only of the files Claude sent in that session. It reads the
+  file as it is on disk when you look, read only, a regular file reached through no link that leads
+  out of its folder, up to 200 MB, and sends no more of it than it said it would, however the file
+  grows meanwhile (a download of one of the folder's files too). A picture shows as itself and text
+  as text, inert; a video or a sound plays as itself, never sniffed, a part at a time, and in a tab of
+  its own the browser's player may load it from Pelican but nothing runs (a sandbox that allows no
+  scripts, and no other content); a page or an SVG is a still preview, as above; a PDF opens in the
+  browser's own viewer, in a tab of its own, never sniffed or framed; anything else downloads. A
+  file's name shows any character that hides or turns text around as ⟨U+…⟩, with a warning, on its
+  card and in the name it is saved under, so a script cannot pass for a picture.
 - **A workflow's files stay in its session's folder.** A workflow's card reads, for a run the
   session's own transcript launched, only its record, journal, script copy and its agents'
   transcripts and meta files, by the names Claude Code gives them and ids checked against their
   formats, each a regular file whose real path, links followed, is inside the session's own folder
-  next to its transcript, and within a size. An agent's steps come a page at a time, at most 768 KB
+  next to its transcript, and within a size. An Agent call's steps are read the same way, from its
+  subagent's own transcript in that folder. An agent's steps come a page at a time, at most 768 KB
   of them (a message larger than 128 KB has its parts cut, saying how many were left out), and its
   pictures are left out.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
   Pelican resumes it or a branch of it.
-- **What gets installed is what was tested.** The package ships `npm-shrinkwrap.json`, so npm
-  installs the exact dependency tree CI tested, with integrity hashes, and the Agent SDK, with the
-  Claude Code it bundles, is pinned to one version.
+- **What gets installed is what was tested.** The packages Pelican's server uses are built into
+  it, as CI tested them, and npm installs one: the Agent SDK, pinned to one version, with the
+  Claude Code it bundles for your computer, each checked against the registry's integrity hash.
+  Beside it npm installs the packages the SDK lists as its peers, which Pelican never loads. The
+  package ships no `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
+  `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
 - **A service holds no secret.** `pelican service install` writes your `PATH` and Pelican's and
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
@@ -127,10 +186,11 @@ can read your sessions and have Claude run commands as you, so treat access to i
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them, and saves a `!` command's output too long for the conversation where Claude Code saves
 one, in the session's `tool-results` folder, readable only by you. It stores uploads, push
-notification keys and subscriptions, the folders you trusted or kept to your settings, the usage
-figures it counted from the transcripts (token counts, times, models and folders, no conversation
-text) with the sessions it ran and how long they waited for you, and a note of the running server
-in `~/.local/state/pelican`.
+notification keys and subscriptions, the folders you trusted or kept to your settings, which
+sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
+(token counts, times, models and folders, no conversation text) with the sessions it ran and how
+long they waited for you, and a note of the running server in `~/.local/state/pelican`. Its pins
+and archive are its own: Claude Desktop's are neither read nor written.
 
 ## Reporting a vulnerability
 

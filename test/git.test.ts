@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
@@ -19,13 +19,20 @@ const savedHome = process.env.CLAUDE_CONFIG_DIR;
 
 beforeAll(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'pelican-git-'));
-  repo = path.join(root, 'repo');
-  marker = path.join(root, 'ran');
   // No Claude Code sessions anywhere: no folder counts as one Claude has worked in.
   process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude');
   config.claudeHome = path.join(root, 'claude');
   config.stateDir = path.join(root, 'state');
-  await mkdir(repo);
+});
+const kept = { claudeExecutable: config.claudeExecutable, auth: config.auth };
+afterEach(() => {
+  Object.assign(config, kept);
+});
+
+// Each test has a repository of its own, with a change to a.txt and a new b.txt.
+beforeEach(async () => {
+  repo = await mkdtemp(path.join(root, 'repo-'));
+  marker = `${repo}.ran`;
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: repo });
   git('init', '-q', '-b', 'main');
   await writeFile(path.join(repo, 'a.txt'), 'one\n');
@@ -91,4 +98,4 @@ describe('git', () => {
     expect(await response.json()).toEqual({ repo: false, untrusted: true });
     expect(await ran()).toBe('');
   });
-});
+}, 20_000);

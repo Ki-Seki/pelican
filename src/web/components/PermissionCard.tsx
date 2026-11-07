@@ -1,17 +1,21 @@
 import { CircleHelp, ClipboardList, ExternalLink, Loader2, Plug, ShieldQuestion, TriangleAlert } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { revealHidden } from '../../shared/hidden';
+import { revealHidden, revealInput } from '../../shared/hidden';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { PermissionDecision, PermissionRequest } from '../../shared/protocol';
 import { workflowOf } from '../../shared/workflows';
 import { api } from '../lib/api';
-import { describeTool } from '../lib/tools';
+import { describeTool, relPath } from '../lib/tools';
 import { fenced } from '../lib/workflows';
 import { Diff } from './Diff';
 import { Markdown } from './Markdown';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
+
+/** The files a SendUserFile call names: a list, or one as a bare string, as Claude Code takes it. */
+const filesIn = (input: Record<string, unknown>): string[] =>
+  typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
 
 /**
  * Whether a click on an approval is meant for it. For a moment after the card appears, and after
@@ -85,6 +89,10 @@ function headline(request: PermissionRequest, cwd: string | undefined): string {
   if (request.title) return request.title;
   if (request.toolName === 'EnterPlanMode') return 'Claude wants to plan before it changes anything';
   if (request.toolName === 'Workflow') return 'Claude wants to run a dynamic workflow';
+  if (request.toolName === 'SendUserFile') {
+    const count = filesIn(request.input).length;
+    return count > 1 ? `Claude wants to send you ${count} files` : 'Claude wants to send you a file';
+  }
   const { verb } = describeTool(request.toolName, request.input, cwd);
   const plain = ['Read', 'Edit', 'Write', 'Run', 'Search', 'Find', 'Fetch', 'Search the web', 'Edit notebook'].includes(verb);
   return `Claude wants to ${plain ? verb.toLowerCase() : `use ${verb}`}`;
@@ -106,9 +114,11 @@ function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
   const phases = meta?.phases ?? [];
   const file = str(input.scriptPath);
   const resumes = str(input.resumeFromRunId);
-  const args = input.args === undefined ? undefined : revealHidden(typeof input.args === 'string' ? input.args : JSON.stringify(input.args, null, 2) ?? '');
-  const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !WORKFLOW_KEYS.has(key)));
-  const other = Object.keys(rest).length > 0 ? revealHidden(JSON.stringify(rest, null, 2)) : undefined;
+  const args = useMemo(() => (input.args === undefined ? undefined : typeof input.args === 'string' ? revealHidden(input.args) : revealInput(input.args)), [input]);
+  const other = useMemo(() => {
+    const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !WORKFLOW_KEYS.has(key)));
+    return Object.keys(rest).length > 0 ? revealInput(rest) : undefined;
+  }, [input]);
   return (
     <div className="space-y-2 text-[13px]">
       {name && <div className="font-mono text-[12px] text-muted">{revealHidden(name).text}</div>}
@@ -125,7 +135,7 @@ function WorkflowAsk({ input }: { input: Record<string, unknown> }) {
             {phases.map((phase, i) => (
               <li key={i} className="flex gap-2">
                 <span className="w-3.5 shrink-0 text-right text-faint tabular-nums">{i + 1}.</span>
-                <span className="min-w-0">{revealHidden(phase.title).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail).text}</span>}</span>
+                <span className="min-w-0">{revealHidden(phase.title, { prose: true }).text}{phase.detail && <span className="text-muted"> — {revealHidden(phase.detail, { prose: true }).text}</span>}</span>
               </li>
             ))}
           </ol>
@@ -176,19 +186,31 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const edit = request.toolName === 'Edit'
     ? { before: str(input.old_string), after: str(input.new_string) }
     : request.toolName === 'Write' ? { before: '', after: str(input.content) } : undefined;
-  const command = request.toolName === 'Bash' || request.toolName === 'PowerShell' ? revealHidden(str(input.command)) : undefined;
-  const target = summary.target ? revealHidden(summary.target) : undefined;
+  // A command as its shell reads it: in Bash, a space other than a plain one is written out where the
+  // shell takes it as part of a word; PowerShell takes every such space for a space, as it reads,
+  // but for what it hands a POSIX shell (src/shared/hidden.ts).
+  // Read once per approval, not again at each key typed in a note: a long command takes a while.
+  const command = useMemo(() => (request.toolName === 'Bash' ? revealHidden(str(request.input.command), { runs: 'shell' }) : request.toolName === 'PowerShell' ? revealHidden(str(request.input.command), { runs: 'powershell' }) : undefined), [request]);
+  const target = summary.target ? revealHidden(summary.target, { prose: summary.prose || summary.words }) : undefined;
   const workflow = request.toolName === 'Workflow';
-  const raw = !edit && !command && !workflow && Object.keys(input).length > 0 ? revealHidden(JSON.stringify(input, null, 2)) : undefined;
-  // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always" saves.
-  const [head, about, server, always] = [headline(request, cwd), request.description, request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
+  // Files Claude would send you: each by its path, and its caption, which is words.
+  const sending = request.toolName === 'SendUserFile' ? { files: filesIn(input).map((file) => revealHidden(relPath(file, cwd) ?? file)), caption: str(input.caption) ? revealHidden(str(input.caption), { prose: true }) : undefined } : undefined;
+  // A tool's input, each string by what its key names: words, a shell command (Monitor's), or a name.
+  const tool = !edit && !command && !workflow && !sending && Object.keys(input).length > 0;
+  const raw = useMemo(() => (tool ? revealInput(request.input) : undefined), [tool, request]);
+  // Text from Claude Code, a command or an MCP server can hide characters too; so can what "always"
+  // saves. Words keep the joiners and selectors their scripts write with; a name or a rule shows
+  // every one outside an emoji (src/shared/hidden.ts).
+  const [head, about, reason] = [headline(request, cwd), request.description, request.reason].map((text) => (text ? revealHidden(text, { prose: true }) : undefined));
+  const [server, always] = [request.server, request.always].map((text) => (text ? revealHidden(text) : undefined));
   // A workflow agent's label is the script's to choose: cut, as its card cuts it, and its hidden characters shown.
-  const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent) : undefined;
+  const agent = request.agent ? revealHidden(request.agent.length > 200 ? `${request.agent.slice(0, 199)}…` : request.agent, { prose: true }) : undefined;
   // A workflow's input shows part by part, each with what hides in it shown; it is warned of all the same.
-  const asked = workflow ? revealHidden(JSON.stringify(input)) : undefined;
-  const hidden = [command, target, raw, asked, head, about, server, always, agent].some((text) => text?.hidden);
+  const asked = useMemo(() => (workflow ? revealInput(request.input) : undefined), [workflow, request]);
+  const hidden = [command, target, raw, asked, head, about, reason, server, always, agent, sending?.caption, ...(sending?.files ?? [])].some((text) => text?.hidden);
   // Claude Code often passes the command's own few words as the request's line too: said once.
-  const shownTarget = target && (summary.prose || !command) ? target : undefined;
+  // Files to send are listed below, whole.
+  const shownTarget = target && !sending && (summary.prose || !command) ? target : undefined;
   const repeats = (text?: string) => Boolean(about && text && plainWords(about.text) === plainWords(text));
   const aboutShown = about && !repeats(shownTarget?.text) && !repeats(command?.text.split('\n')[0]) ? about : undefined;
 
@@ -205,12 +227,19 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
       {aboutShown && <div className="mt-1 text-[12.5px] leading-snug text-muted">{aboutShown.text}</div>}
       {/* Claude's few words on a command, above it; a command's own first line would only repeat it. */}
       {shownTarget && <div className={`mt-1 text-[13px] ${summary.prose ? '' : 'font-mono break-all'}`}>{shownTarget.text}</div>}
-      {request.reason && <div className="mt-1 text-[12.5px] text-faint">{request.reason}</div>}
+      {reason && <div className="mt-1 text-[12.5px] text-faint">{reason.text}</div>}
       <div className="mt-2 max-h-[34dvh] overflow-y-auto">
         {edit ? (
           <Diff before={edit.before} after={edit.after} maxLines={160} />
         ) : workflow ? (
           <WorkflowAsk input={input} />
+        ) : sending ? (
+          <div className="space-y-1.5 text-[13px]">
+            {sending.caption && <div className="text-muted">{sending.caption.text}</div>}
+            <ul className="space-y-0.5 rounded-lg bg-chip px-3 py-2">
+              {sending.files.map((file, i) => <li key={i} className="font-mono text-[12px] break-all">{file.text}</li>)}
+            </ul>
+          </div>
         ) : command ? (
           <pre className="rounded-lg bg-chip px-3 py-2 font-mono text-[12.5px] whitespace-pre-wrap break-words">{command.text}</pre>
         ) : raw ? (

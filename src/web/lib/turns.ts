@@ -220,13 +220,13 @@ export function buildItems(messages: ChatMessage[], machine?: string): Item[] {
   const workflows = new Map<string, ToolCall>();
   const runs = new Map<string, ToolCall[]>();
 
+  // The day goes above the conversation's first message and above each prompt on a new day, as
+  // Claude Desktop shows it.
   const push = (item: Item, timestamp?: number) => {
-    if (timestamp && item.kind === 'user') {
+    if (timestamp && (item.kind === 'user' || !lastDay)) {
       const day = dayOf(timestamp);
-      if (lastDay && day !== lastDay) items.push({ kind: 'day', key: `day-${item.key}`, timestamp });
+      if (day !== lastDay) items.push({ kind: 'day', key: `day-${item.key}`, timestamp });
       lastDay = day;
-    } else if (timestamp && !lastDay) {
-      lastDay = dayOf(timestamp);
     }
     items.push(item);
   };

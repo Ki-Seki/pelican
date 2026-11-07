@@ -42,6 +42,206 @@
 - A session called by a prompt that quotes is called by its words, not its markers, and so is a
   queued message.
 
+## 0.4.1
+
+Pinned sessions and the files Claude sends you, as in Claude Desktop; approvals that show what a
+command hides; and what the reviews of 0.4.0 left.
+
+### Highlights
+
+- **Pinned sessions, as in Claude Desktop.** On a phone, a short swipe left on a row shows Pin
+  (Unpin on a pinned row) beside Archive, Archive at the edge as in Mail; a swipe all the way across
+  archives, with Undo, as before. On a computer the pin sits beside Archive when you point at a row,
+  and Pin is in the session menu; in the list, Undo shows for five seconds. A row takes no swipe
+  right, which is Safari's Back, nor one that starts at the very edge of the screen. Pinned sessions
+  lead the list under Pinned, grouped by time or by project, and under their project's filter, each
+  with its status (Working, Needs you, tasks) and its earlier runs. Pins are Pelican's own, kept on
+  the computer for all your browsers: a session pinned in Claude Desktop is not pinned here, and
+  Desktop's pins are left alone. Archiving a session unpins it.
+- **Files Claude sends you, as in Claude Desktop.** In the sessions Pelican runs, Claude can send
+  you files (Claude Code's SendUserFile): Pelican now tells Claude Code it shows them, the way
+  Claude Code expects of an app that does, which turns that tool on and nothing else. Before, the
+  call failed with "SendUserFile is still listed for this conversation but is switched off in this
+  session right now". A file shows where Claude sent it, as it is sent and after a reload, read
+  from where Claude Code delivered it, under the words Claude sends with it, which read as a reply
+  does, Markdown and all: pictures in place, side by side at their own size when they come alone and
+  as small squares beside other files, larger on a tap; a video or a sound in a player, a part at a
+  time, so it plays in Safari too; a page or an SVG as the still preview, with Run; text to read,
+  Markdown as it reads, folded when long; a PDF in your browser's own viewer, in a tab of its own;
+  anything else as a card to download, with its type, name and size. A file Claude meant you to
+  save stays a card until you open it. While the call runs its step says "Sending file", and
+  "Failed to send" if it fails, in Claude Desktop's words, and sent files are never folded away
+  among steps. Asked to send one from outside the session's folder, the approval says "Claude wants
+  to send you a file" and lists it, instead of the call's raw input.
+
+### Fixes
+
+- `npm install -g pelican-cc` installs Claude Code for this computer alone, about 150 MB to
+  download: from the package's npm-shrinkwrap.json, npm installed it for all eight platforms, 1.2 GB
+  to download and 2.6 GB on disk, and in a project Pelican's own build and test tools too. The
+  packages Pelican's server uses are built into it instead, as CI tested them, and the Agent SDK,
+  with the Claude Code it brings, stays pinned to one version. The package now ships
+  `THIRD_PARTY_NOTICES`: each package built into the server and the web app, with its version and
+  license in full, and, for web-push, which is under the MPL 2.0, that its source is its npm
+  package. It credits esbuild for the helper code it writes into the server, gives what rolldown's
+  runtime takes from others, and quotes the notices of others that files built in carry at their
+  top, such as path-browserify's in code of vfile's, which minifying leaves out. The build writes it
+  from what it puts in the bundles, and fails if one is missing.
+- A file Claude sent that is no longer there, as many are in older sessions, says "No longer on
+  this computer" before you tap anything, the same for every type, with its name and size and
+  nothing to tap; one past 200 MB says it is larger than Pelican serves, and a text file that large
+  still shows its start. A browser tab that opens one anyway says so in a page, not in JSON.
+- A character in a sent file's name that hides or turns text around shows as ⟨U+202E⟩, with the
+  approval's warning, on its card, in the step that sends it and in the name it is saved under: a
+  script named to read as a picture no longer does. A screenshot keeps the name macOS gave it.
+- Files Claude sent in Claude Desktop show from Claude Code's record of what it delivered, so one
+  Claude named by a relative path shows too; a file Claude Code did not deliver never shows.
+- An SVG file Claude writes shows in its own colors and fonts, as a browser shows it: the visuals'
+  styles repainted its text and boxes (a yellow box near-white, a white label near-black). A sent
+  picture too small for the download button in its corner has the button beside it.
+- A download, of a file Claude sent or from Changes and files, stops at the size the file had when
+  you asked for it: one that grew meanwhile, such as a log still being written, went on past the
+  size it had announced, and past the 200 MB limit. One cut short meanwhile breaks the download off.
+- A file whose extension names what every JavaScript object has, such as `.constructor`, opens as a
+  file: sent by Claude it failed with a server error, in Changes and files it showed as a broken
+  picture, and as an upload it would not open.
+- On a computer, a row's buttons cut none of its words: the words under them fade out, and in a
+  compact row the project and time make room for them. From the keyboard, Pin, Unpin and Archive
+  leave focus on the session's row where it went, or on the next row when it leaves the list, and
+  Undo brings focus back to it; Archive used to drop it to the page.
+- A compact row keeps a date on one line ("Oct 25", not "Oct" over "25"), and grouped by time the
+  list's headings say what they hold, Previous 7 days and Previous 30 days: "This month" held
+  October's sessions on 6 November.
+- A session archived in 0.4.0 while pinned in 0.4.1 comes back unpinned when you unarchive it.
+- A step Claude is still writing keeps its icon and its verb at their size beside a long command.
+- A conversation shows its day above its first message too, and above the first prompt of each new
+  day, as Claude Desktop does: Today, Yesterday, or the weekday and date.
+- A `!` command that is a command in backquotes, such as `` `grep x f` ``, takes exit code 1 as
+  an answer, as Claude Code does, not as a failure: where a command would start, Pelican reads a
+  backquote as Claude Code's parser does, after `;`, `|`, `if` or an assignment too.
+- Beside the conversation on a computer, a file's Quote and Copy row ends level with Send now and
+  the message boxes; it sat 2px lower.
+- An Agent call's steps come a page at a time, the newest first, with Show earlier, as a workflow
+  agent's do: a long subagent's transcript, tens of megabytes, no longer reaches the phone whole. A
+  page with no step in it, such as a long answer at the end, is read past, so the card counts the
+  steps it shows, never "Last 0 steps", and Show earlier always brings at least one more; a page
+  that cannot be read says why, and Show earlier asks again. A step too large to show says what was
+  left out of it, and the transcript is read only from the session's own folder.
+- Behind a tunnel or a proxy that cannot reach Pelican, a 502, 503 or 504 shows the quiet "Can't
+  reach" line, which keeps trying, instead of the error; a conversation that could not load then
+  loads once the computer is in reach again, also while the live connection stayed up.
+- Export as Markdown reads as the conversation does, but for a reply's single line breaks, which a
+  Markdown file joins, as GitHub does. A prompt is text, as you typed it: none of its Markdown takes
+  effect, so a ``` it opens no longer swallows the rest of the file, nor makes a line of `:--` a
+  table, and its quotes are quotes, a quote from a file its lines as code. A reply keeps to itself
+  in any reader (GitHub, VS Code's preview, the spec's own): a heading in it sits under the
+  speakers' (`##` becomes `####`), so none passes for "You" or "Claude"; its HTML is text, as the
+  conversation shows it, so none hides the turns after it; a picture is a link that names its site,
+  never loaded when the file is read; its links by reference are written with their addresses and
+  its footnotes under labels of its own, so two replies' `[^1]` are two footnotes and no reply
+  changes where another's links lead or what its footnotes say; and a code block it leaves open ends
+  with it. Where readers part ways on a reply (an autolink with a character one of them takes, an
+  address with a control character, `ftp://`, a table VS Code's preview finds under a fence or a
+  heading), it is written so that they read it alike. The files Claude sent are named under their
+  step, with the words Claude sent with them. An address that starts with http://, https://, ftp://
+  or www., and an email, in prompts and Claude Code's notes stay text, as code, where a reader would
+  link them. A text past 60,000 characters ends with "…", as the conversation shows it. The folder
+  is named as the app names it, from your home folder (`~/code/acme-web`), and a file a step reads,
+  edits or writes from the session's folder (`src/styles/theme.css`).
+
+### Security
+
+- An approval shows the characters that show as nothing or turn text around, as `⟨U+E0078⟩`, and
+  warns of them: besides the zero-width and direction-changing ones, tags, a variation selector
+  after a letter or a run of them, fillers, soft hyphens, a carriage return, a code point not
+  assigned yet and the others Chrome draws as nothing or as a blank, so a command can no longer read
+  as `./build.sh` and run another file. The trust sheet, the line saying why Claude Code asks and a
+  sent file's name show them the same way.
+- A space other than a plain one in a command shows as `⟨U+00A0⟩`, with the warning, unless Pelican
+  finds it in quotes, a heredoc's body or a comment: a shell takes it as part of a word, so `echo
+  done⟨U+00A0⟩# ; curl … | sh` read as a comment and ran curl, and `LC_ALL=C⟨U+00A0⟩cat ./setup.sh`
+  ran ./setup.sh. Pelican reads the command as bash, zsh, dash and macOS's bash 3.2 do, and the
+  scripts it hands a new shell: after `bash -c` or `ssh`, in a heredoc or pipe into `sh`, a script
+  it writes with a redirection or `tee` and then runs by its path, or by its name once it makes it a
+  program, or that runs on its own as a git hook or as a file a shell reads as it starts (what
+  BASH_ENV, ENV or `--rcfile` names, a .zshenv). A command that uses what can run text later in its
+  own shell has every such space show, however the text is made (split across quotes, by a variable
+  or an escape): `eval`, `source`, `trap`, an alias in any form (after `command` or `builtin`, or
+  named by a variable), `read`, `declare`, `let`, `unset`, zsh's `set -A` and its functions array,
+  bash's `BASH_ALIASES`, a parameter flag such as zsh's `(e)` and `$~x` or bash's `@P`, `setopt` or
+  `set -o` with an option that changes how text reads, `test` or `[` with an operator a variable may
+  give (`-v`), `at` and `crontab`, a command whose name Pelican does not know, arithmetic on a
+  variable the command sets to anything but a number, and the like, each by its name in any case (a
+  Mac runs `READ` as /usr/bin/read); so does a ksh script with a `<<#` heredoc, a script or a
+  program run by a path that is not plain text (`bash "$t"`) or from a folder the command writes
+  into but for a file it wrote there, and one run by its path where the command unpacks, patches or
+  copies a folder. Quoted text with a substitution's start in it counts as in a word. Where it
+  cannot tell, every such space shows. The same goes for a Monitor's command and, in the trust
+  sheet, for a hook, a helper, a skill's command and a git filter; between the arguments of an MCP
+  server, or of a hook run without a shell, every such space shows. A script another program writes
+  by itself, as `sed`'s `w`, `sort -o`, `split`, perl, python or awk can, is not followed, nor a
+  string another program runs in a shell of its own, such as python's `os.system` or a Makefile's
+  recipe. A long command shows at once, read once, and reading one takes at most a fixed time and
+  memory: a command longer than 64 KB, or that would take more to read than a fixed budget, has
+  every such space show, as a tool's input with many commands and a trust sheet's items share one
+  such budget (`x=…; bash -c "$x $x …"` of 24 KB took gigabytes, and crashed the page with the
+  approval on it again after each reload).
+- In a PowerShell command such a space shows as it is, as PowerShell takes it for a space, unless
+  the command hands a script to bash, sh, wsl or ssh, which read it otherwise: then every one shows,
+  with the warning; in the trust sheet too, for a hook PowerShell runs.
+- Ordinary text on an approval shows as it is, with no warning, as in Claude Code and Claude
+  Desktop: an emoji whole, in a command too, with its style, keycap, skin tone, flag and the joiners
+  between its pictures (a joined emoji such as a technologist warned in 0.4.0); a space other than a
+  plain one in a path, in words or in a command's quotes, such as the narrow one macOS puts in a
+  screenshot's name or a full-width one between Chinese words in a commit message; Apple's logo.
+  Words keep the joiners Persian and the Indic scripts are written with: what Claude says a command
+  does, a web search, what an agent is to do, a task, a tool's message and the caption of a file it
+  asks to send (a web search in Sinhala or Persian warned).
+- The trust sheet lists a hook's arguments: a hook run without a shell (with `args`) showed only its
+  program.
+- The trust sheet reads a folder's files as Claude Code reads them. A `.mcp.json` in a folder that
+  holds the repository was not read, though Claude Code reads one from every folder up to the file
+  system's top and starts its servers with the session: with `outer/.mcp.json` above the repository
+  `outer/repo`, a session there started with nothing asked, and the server ran. The folders above
+  the repository's top are now read for their `.mcp.json`, short of your home folder, whose files
+  are your own. A skill saved as `SKILL.MD`, which Claude Code opens on a Mac as `SKILL.md`, listed
+  nothing, nor did a command or an agent more than ten folders down, which Claude Code finds at any
+  depth: such a folder is now named above the list. A `.claude/settings.json` or `.mcp.json` saved
+  with a byte-order mark, as Windows' Notepad saves it, or as UTF-16, listed nothing, so the folder
+  was not asked about and Claude Code started with its hooks and servers; one Pelican cannot read as
+  JSON is listed by its name. A skill's, command's or agent's frontmatter whose lines end with a
+  carriage return alone, which Claude Code's YAML breaks at, hid its allowed-tools and hooks, and a
+  line separator (U+2028) on a key's line, which it reads as text, the key. A hook's or a server's
+  YAML shows with its lines as written, so a second line that runs curl no longer reads as part of a
+  `#` comment on the first, and the sheet says where an escape such as `\n` reads otherwise than it
+  is written. A folder's files are read in time that grows with their size, not with its square: in
+  0.4.0, a skill whose frontmatter was 480 KB of list items naming a power held the server for half
+  a minute, a command of a megabyte whose ```! block of blank lines never ends for four minutes, and
+  a skill of 1.1 MB with a line separator after a line of keys for a minute, after which the folder
+  counted as bringing nothing. The sheet lists from a file up to 200 items and 256 KB of them as it
+  shows them, and from a folder up to 1,000 and 1 MB, reading up to 32 MB of its files, more than
+  any project brings. An item it warns of, and Pelican's own word on what it could not read, are
+  always kept, so no number of harmless items leaves one out, and what the repository's git config
+  runs is read and listed whatever the folder's other files bring. Past that the sheet names, above
+  the list and in red, the first three files it shows part of and how many more, and the folder is
+  asked about as before, also where it lists nothing. A hook whose type or arguments are nested too
+  deep to read shows as one Pelican cannot read, where the request failed and nothing started.
+- A notification keeps a flag made of tags only for England, Scotland and Wales, the three Unicode
+  recommends; other tags after a black flag, which can spell anything unseen, are left out. The
+  repository's check for hidden characters holds the docs to the same three.
+
+### Site, docs and project
+
+- The demo, and the live demo on the website, have a pinned session and a file Claude sent: in "Try
+  the dark theme on my phone", a screenshot of the settings page in dark. Export as Markdown
+  downloads the session in the live demo too, where it fetched nothing, its folder named
+  `~/code/acme-web` as the demo shows it, not by where the site was built.
+- The docs say what the install takes: about 150 MB to download, about 400 MB on disk.
+- The tests pass in any order, at any time of day, and hold on a busy computer: each starts from a
+  state of its own, a page's tests wait up to 3 seconds for what they look for, and those that
+  start a shell or Pelican give it time to start and leave nothing running when they fail. CI checks
+  that an install brings one Claude Code, and the smoke test that Export as Markdown downloads.
+
 ## 0.4.0
 
 Files, changes and side chats as in Claude Desktop, workflows and `!` commands you can watch, and

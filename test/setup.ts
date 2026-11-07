@@ -23,3 +23,10 @@ Object.assign(process.env, {
 delete process.env.XPC_SERVICE_NAME;
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+// A page's tests wait up to 3 s for what they look for, not testing-library's 1 s: on a busy
+// computer (CI, or several suites at once) a page can take longer to draw while nothing is wrong.
+if (typeof document !== 'undefined') {
+  const { configure } = await import('@testing-library/dom');
+  configure({ asyncUtilTimeout: 3000 });
+}

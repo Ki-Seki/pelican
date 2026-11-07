@@ -44,9 +44,9 @@ pelican
 ```
 
 On the computer where you use Claude Code, with Node 22.12 or newer and Claude Code signed in, on
-macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB,
-most of it the copy of Claude Code that the Agent SDK brings. The command is also called
-`pelican-cc`, for computers where Python's Pelican has `pelican`.
+macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB
+to download and about 400 MB on disk, most of it the copy of Claude Code that the Agent SDK brings.
+The command is also called `pelican-cc`, for computers where Python's Pelican has `pelican`.
 
 ## On your phone
 
@@ -69,8 +69,10 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   works, quotes with notes and side chats as in Claude Desktop, `!` commands with their output live,
   `/` commands and skills, `@` files, every model and permission mode, rewind and branch, subagents
   and background tasks, MCP servers.
-- **What Claude makes, in place.** Charts and diagrams Claude draws and pages it writes show in the
-  conversation, as still pictures until you tap Run.
+- **What Claude makes, in place.** Charts and diagrams Claude draws, pages it writes and files it
+  sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
+  Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
+  anything else to download.
 - **Changes and files, as in Claude Desktop.** What each turn changed, what is uncommitted, or
   everything since your branch split, with diffs. Search and read the folder; a path in a reply
   opens the file at its line. Comment on a line or quote it, and Create PR asks Claude.
@@ -81,7 +83,7 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   changes sit side by side.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: a chart and a page Claude made, rendered in place; an edit waiting for approval with its diff; a session another app is running">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: the list with a pinned session; a chart Claude drew, in place, and a page it wrote, run; an edit waiting for approval, and what changed; a screenshot Claude sent; a session Claude Desktop is running">
 </p>
 
 ## Compared with
@@ -164,4 +166,6 @@ through [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic.
+[MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic. The
+packages built into its server and web app are under their own licenses: `THIRD_PARTY_NOTICES`,
+in the npm package, gives each with its license in full.

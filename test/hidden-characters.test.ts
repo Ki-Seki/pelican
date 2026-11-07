@@ -9,10 +9,15 @@ import { EMOJI } from '../src/shared/hidden';
 const root = path.join(import.meta.dirname, '..');
 
 /**
- * Characters that do not show as what they are: controls, invisible ones (joiners, variation
- * selectors, tags), direction-changing ones, private ones, spaces other than a plain one, and ones
- * drawn blank. In a file as they are, the code reads otherwise than it runs, and GitHub warns of
- * hidden Unicode; written as escapes (\u202e), they read as they compile.
+ * Characters that do not show as what they are: controls, invisible ones (zero-width ones, joiners,
+ * variation selectors, tags, fillers), direction-changing ones, private ones, separators and spaces
+ * other than a plain one, and ones drawn blank. In a file as they are, the code reads otherwise
+ * than it runs, and GitHub warns of hidden Unicode; written as escapes (\u202e), they read as they
+ * compile. This is code hygiene, a list of its own: what Pelican writes out on screen (revealHidden
+ * in src/shared/hidden.ts) leaves ordinary text alone, a space other than a plain one in words, a
+ * path or where it finds a shell reads it as text, an emoji's own characters, a private-use glyph,
+ * and writes out some characters this lets through, such as a carriage return or a code point not
+ * assigned yet.
  */
 const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Default_Ignorable_Code_Point}\u2800\ufffc\u{1d159}]|(?! )\p{Zs}/u;
 
@@ -75,6 +80,17 @@ describe('the code, its tests and its docs', () => {
       ['\u{1f3f4}\u{e0069}\u{e0067}\u{e006e}\u{e006f}\u{e0072}\u{e0065}\u{e0061}\u{e006c}\u{e006c}\u{e007f}', '\u{e0069}'],
     ];
     for (const [line, char] of stray) expect(hiddenIn(line, true), JSON.stringify(line)).toBe(char);
+  });
+
+  it('let the docs hold the flags of England, Scotland and Wales, and no other tags after a black flag', () => {
+    const flag = (letters: string) => `\u{1f3f4}${[...letters].map((letter) => String.fromCodePoint(0xe0000 + letter.codePointAt(0)!)).join('')}\u{e007f}`;
+    for (const region of ['gbeng', 'gbsct', 'gbwls']) expect(hiddenIn(`Made in ${flag(region)} here`, true), region).toBeUndefined();
+    // A region's code Unicode recommends no flag for, or tags that spell a word or a number, are
+    // hidden text: a system shows them as nothing, or as the letters they are.
+    for (const tags of ['ustx', 'gbnir', 'gbeng1', 'gbengx', 'gb', 'ab', 'x', 'pwned', 'gbsc', 'gbwlss']) {
+      expect(hiddenIn(`Made in ${flag(tags)} here`, true), tags).toBe(String.fromCodePoint(0xe0000 + tags.codePointAt(0)!));
+    }
+    expect(hiddenIn(`${flag('gbeng')}${flag('ustx')}`, true)).toBe('\u{e0075}');
   });
 
   it('read every file as text but those that are not, whatever kind they are', () => {

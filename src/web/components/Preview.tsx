@@ -1,4 +1,4 @@
-import { Code2, Eye, Maximize2, Play, X } from 'lucide-react';
+import { Code2, Download, Eye, Maximize2, Play, X } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { PREVIEW_POLICY } from '../../shared/preview-policy';
@@ -57,7 +57,11 @@ svg text{fill:var(--text);font-family:inherit}
 /** Tells the parent how tall the content is, so the frame fits it (only where scripts run). */
 const RESIZE = `<script>(()=>{const post=()=>parent.postMessage({pelicanPreviewHeight:Math.ceil(document.documentElement.scrollHeight)},"*");new ResizeObserver(post).observe(document.documentElement);addEventListener("load",post);post()})()</script>`;
 
-export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean };
+/**
+ * What a preview shows: an HTML page or fragment, or an SVG; a visual Claude Desktop draws (`widget`),
+ * or a file (`file`: one Claude wrote or sent you), which shows as it is, as a browser shows it.
+ */
+export type PreviewSource = { kind: 'html' | 'svg'; code: string; title?: string; widget?: boolean; file?: boolean };
 
 const fullPage = (code: string) => /^(<!doctype|<html)/i.test(code.replace(/^\uFEFF/, '').slice(LEADING.exec(code)?.[0].length ?? 0));
 
@@ -115,7 +119,11 @@ export function documentFor(source: PreviewSource, dark: boolean, still = false)
     const page = `<!doctype html>${preamble}${start.replace(/^<!doctype[^>]*>/i, '')}`;
     return /<\/body>/i.test(page) ? page.replace(/<\/body>(?![\s\S]*<\/body>)/i, `${resize}</body>`) : `${page}${resize}`;
   }
-  const css = source.widget || source.kind === 'svg' ? `<style>${WIDGET_CSS}</style>` : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
+  // A visual, or an SVG in a reply, in the vocabulary Claude Desktop's visuals use; a file of
+  // Claude's in its own colors and fonts, as a browser shows it, only sized to fit.
+  const css = source.widget || (source.kind === 'svg' && !source.file) ? `<style>${WIDGET_CSS}</style>`
+    : source.kind === 'svg' ? '<style>html,body{margin:0}body{padding:2px}svg{display:block;max-width:100%;height:auto}</style>'
+    : '<style>html,body{margin:0}body{font-family:-apple-system,system-ui,sans-serif}</style>';
   return `<!doctype html><html data-theme="${theme}"><head>${preamble}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css}</head><body>${code}${resize}</body></html>`;
 }
 
@@ -245,8 +253,11 @@ export function PreviewOverlay() {
   );
 }
 
-/** A visual or a page, shown rendered, with a way to run its scripts, see its code and open it full screen. */
-export function PreviewCard({ source, label, defaultCode = false }: { source: PreviewSource; label?: string; defaultCode?: boolean }) {
+/**
+ * A visual or a page, shown rendered, with a way to run its scripts, see its code and open it full
+ * screen; a file Claude sent, also to save (`download`).
+ */
+export function PreviewCard({ source, label, defaultCode = false, download }: { source: PreviewSource; label?: string; defaultCode?: boolean; download?: { href: string; name: string } }) {
   const [code, setCode] = useState(defaultCode);
   const [run, setRun] = useState(false);
   return (
@@ -258,6 +269,11 @@ export function PreviewCard({ source, label, defaultCode = false }: { source: Pr
           {code ? <Eye className="size-3.5" /> : <Code2 className="size-3.5" />}
           {code ? 'Preview' : 'Code'}
         </button>
+        {download && (
+          <a href={download.href} download={download.name} aria-label={`Download ${download.name}`} title="Download" className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
+            <Download className="size-3.5" />
+          </a>
+        )}
         <button type="button" aria-label="Open full screen" onClick={() => openPreview(source, run)} className="grid size-7 place-items-center rounded-md hover:bg-hover hover:text-fg">
           <Maximize2 className="size-3.5" />
         </button>

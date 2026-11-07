@@ -22,6 +22,17 @@ afterAll(async () => {
   config.auth = 'auto';
   await rm(dir, { recursive: true, force: true });
 });
+// Each test starts with the token in use, whichever ran before it.
+beforeEach(async () => {
+  if (passwordSet()) await clearPassword();
+});
+
+/**
+ * A moment at least a second after every look at the files so far, real or made up, so a look then
+ * reads them again: they are read at most once a second, whatever order the tests run in.
+ */
+let clock = 0;
+const aSecondLater = () => (clock = Math.max(clock, Date.now()) + 1500);
 
 const cookieOf = () => {
   const cookie = newSessionCookie();
@@ -162,9 +173,9 @@ describe('a change made by another process (`pelican token --reset`, `pelican pa
     const cookie = cookieOf();
     const code = issueCode();
     // What `pelican token --reset` writes, from another process.
-    await writeFile(path.join(dir, 'token.json'), JSON.stringify({ version: 1, token: 'a-new-token-from-the-cli-000000', secret: randomBytes(32).toString('base64') }));
-    refreshAuth(Date.now() + 1500);
-    expect(accessToken()).toBe('a-new-token-from-the-cli-000000');
+    await writeFile(path.join(dir, 'token.json'), JSON.stringify({ version: 1, token: 'a-new-token-from-the-cli-0000000', secret: randomBytes(32).toString('base64') }));
+    refreshAuth(aSecondLater());
+    expect(accessToken()).toBe('a-new-token-from-the-cli-0000000');
     expect(checkToken(old)).toBe(false);
     expect(signedIn(cookie)).toBe(false);
     expect(redeemCode(code)).toBe(false);
@@ -177,10 +188,10 @@ describe('a change made by another process (`pelican token --reset`, `pelican pa
     await clearPassword();
     expect(authMode()).toBe('token');
     await writeFile(written, saved);
-    refreshAuth(Date.now() + 3000);
+    refreshAuth(aSecondLater());
     expect(authMode()).toBe('password');
     await rm(written);
-    refreshAuth(Date.now() + 4500);
+    refreshAuth(aSecondLater());
     expect(authMode()).toBe('token');
   });
 });
@@ -190,7 +201,7 @@ describe('a file caught half-written', () => {
     await setPassword('a good password');
     const written = path.join(dir, 'auth.json');
     await writeFile(written, '{"version": 1, "salt": "');
-    refreshAuth(Date.now() + 6000);
+    refreshAuth(aSecondLater());
     expect(authMode()).toBe('password');
     expect(await checkPassword('a good password')).toBe(true);
     await clearPassword();

@@ -1,6 +1,6 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
-// sheets, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
+// sheets and the files Claude sent there, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
 // published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
@@ -289,9 +289,188 @@ async function walkable(sessions, answer) {
 }
 
 /**
- * The list, its sheets, a new session in another folder, and every session with its sheets; then
- * Changes and files, walked through in `walked` (see walkable).
+ * The Pinned group, grouped by time and then by project: it comes first and holds the pinned
+ * sessions. Then a pinned row's Unpin, beside Archive: on a phone under a finger's short slide to
+ * the left, which stops short of acting, Archive at the edge (a slide to the right, Safari's Back,
+ * shows nothing and opens nothing); on a computer on hover, where it is not pressed; and there,
+ * every row's buttons, which cut none of its words (see walkRowButtons).
  */
+async function walkPinned(page, sessions, size, where) {
+  const pinned = sessions.filter((s) => s.pinned && !s.archived && s.title).map((s) => s.title);
+  if (pinned.length === 0) {
+    notes.push(`${where}: no session is pinned`);
+    return;
+  }
+  const missing = (what) => problems.push(`${where}: ${what}`);
+  const first = () => page.evaluate(() => {
+    const section = document.querySelector('section');
+    return {
+      heading: section?.querySelector('h2, button[aria-expanded]')?.textContent?.trim().replace(/\d+$/, '') ?? '',
+      rows: [...(section?.querySelectorAll('a[aria-label]') ?? [])].map((row) => row.getAttribute('aria-label')),
+    };
+  });
+  for (const group of ['Time', 'Project']) {
+    if (group === 'Project') {
+      await page.getByRole('button', { name: 'List options', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Project', exact: true }).click();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+    }
+    const { heading, rows } = await first();
+    if (heading !== 'Pinned') missing(`grouped by ${group.toLowerCase()}, the list starts with "${heading}", not Pinned`);
+    for (const title of pinned) if (!rows.some((row) => row.startsWith(`${title}, `))) missing(`grouped by ${group.toLowerCase()}, Pinned does not hold "${title}"`);
+  }
+  await page.getByRole('button', { name: 'List options', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Time', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  const row = page.locator('section').first().locator('a[aria-label]').first();
+  const box = await row.boundingBox();
+  if (!box) return missing('the first pinned row has no place on the screen');
+  if (size === 'phone') {
+    const cdp = await page.context().newCDPSession(page);
+    const y = box.y + box.height / 2;
+    const touch = (type, x) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+    const swipe = async (x, dx) => {
+      await touch('touchStart', x);
+      for (const part of [0.2, 0.45, 0.7, 0.9, 1]) await touch('touchMove', x + dx * part);
+      await touch('touchEnd', x + dx);
+      await page.waitForTimeout(300);
+    };
+    // What a slide shows under a row: its buttons, named as a screen reader names them.
+    const under = page.locator('button[data-row-action]:not([aria-label])');
+    await swipe(box.x + 60, 120);
+    if (await under.count()) missing('a slide to the right on a pinned row shows buttons');
+    if (new URL(page.url()).searchParams.has('s')) missing('a slide to the right on a pinned row opens it');
+    await swipe(box.x + box.width - 60, -120);
+    const unpin = page.getByRole('button', { name: 'Unpin', exact: true });
+    const archive = page.getByRole('button', { name: 'Archive', exact: true });
+    if (!(await unpin.waitFor({ timeout: 2000 }).then(() => true, () => false))) missing('a short slide to the left on a pinned row shows no Unpin');
+    else {
+      const [left, right] = [await unpin.boundingBox(), await archive.boundingBox().catch(() => null)];
+      if (!left || !right || left.x + left.width > right.x + 1 || right.x + right.width < box.x + box.width - 1) {
+        missing('a short slide to the left on a pinned row shows Unpin, but not beside Archive at the row’s edge');
+      }
+    }
+    if (new URL(page.url()).searchParams.has('s')) missing('a short slide to the left on a pinned row opens it');
+    // A tap elsewhere closes the row again.
+    await page.mouse.click(5, 5);
+    await cdp.detach();
+  } else {
+    await row.hover();
+    const unpin = page.getByRole('button', { name: /^Unpin: / }).first();
+    await page.waitForTimeout(250);
+    if (!(await unpin.isVisible()) || !(await unpin.evaluate(shownOnScreen))) missing('pointing at a pinned row shows no Unpin');
+    await walkRowButtons(page, where);
+  }
+  await page.waitForTimeout(250);
+}
+
+/** Whether an element shows: none of it or what holds it is hidden or see-through. Runs in the page. */
+function shownOnScreen(el) {
+  for (let at = el; at; at = at.parentElement) {
+    const style = getComputedStyle(at);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+  }
+  return true;
+}
+
+/**
+ * The words of a row, pointed at, that its buttons cut: words under a button, or under its icon
+ * where the button is clear, unless they lie wholly under the row-coloured backdrop the buttons
+ * stand on, which fades them out from before the first button. Runs in the page, on a row's link.
+ */
+function wordsCut(link) {
+  const shown = (el) => {
+    for (let at = el; at; at = at.parentElement) {
+      const style = getComputedStyle(at);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    }
+    return true;
+  };
+  const row = link.closest('.group\\/row');
+  const buttons = [...row.querySelectorAll('button[data-row-action][aria-label]')].filter((button) => button.closest('.group\\/row') === row && shown(button));
+  if (buttons.length === 0) return ['(no button shows)'];
+  const clear = (color) => color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color);
+  const backdrop = buttons[0].parentElement;
+  const fades = getComputedStyle(backdrop).backgroundImage.includes('gradient');
+  const under = backdrop.getBoundingClientRect();
+  const first = Math.min(...buttons.map((button) => button.getBoundingClientRect().left));
+  const covers = buttons.map((button) => (clear(getComputedStyle(button).backgroundColor) ? button.querySelector('svg') ?? button : button).getBoundingClientRect());
+  if (fades) covers.push(under);
+  const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+  const cut = [];
+  const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent.trim() || !shown(node.parentElement)) continue;
+    // Words a box cuts off (truncate, line-clamp) show only inside it.
+    let clip = { left: -Infinity, right: Infinity, top: -Infinity, bottom: Infinity };
+    for (let at = node.parentElement; at && at !== row; at = at.parentElement) {
+      if (getComputedStyle(at).overflow === 'visible') continue;
+      const box = at.getBoundingClientRect();
+      clip = { left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), top: Math.max(clip.top, box.top), bottom: Math.min(clip.bottom, box.bottom) };
+    }
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const box of range.getClientRects()) {
+      const line = { left: Math.max(box.left, clip.left), right: Math.min(box.right, clip.right), top: Math.max(box.top, clip.top), bottom: Math.min(box.bottom, clip.bottom) };
+      if (line.right <= line.left || line.bottom <= line.top || !covers.some((cover) => meet(line, cover))) continue;
+      const faded = fades && under.top <= line.top + 1 && under.bottom >= line.bottom - 1 && under.left <= first - 16;
+      if (!faded) cut.push(node.textContent.trim().slice(0, 40));
+    }
+  }
+  return cut;
+}
+
+/**
+ * On a computer, every row pointed at, compact and detailed, as wide as the window lets the list
+ * be and on a tablet's width: its buttons show, and cut none of its words in two.
+ */
+async function walkRowButtons(page, where) {
+  const viewport = page.viewportSize();
+  for (const width of [viewport.width, 768]) {
+    await page.setViewportSize({ width, height: viewport.height });
+    for (const density of ['Compact', 'Detailed']) {
+      await page.getByRole('button', { name: 'List options', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: density, exact: true }).click();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      // A compact row's time on one line, a date ("Oct 25") too.
+      if (density === 'Compact') {
+        const wrapped = await page.locator('a[href^="?s="] span.tabular-nums').evaluateAll((spans) => spans.filter((span) => span.getClientRects().length > 1 || span.getBoundingClientRect().height > 24).map((span) => span.textContent));
+        for (const time of wrapped) problems.push(`${where}, ${width}px, compact: the time "${time}" takes more than a line`);
+      }
+      const rows = page.locator('a[href^="?s="]');
+      const count = Math.min(await rows.count(), 12);
+      for (let i = 0; i < count; i += 1) {
+        const row = rows.nth(i);
+        if (!(await row.isVisible())) continue;
+        await row.hover();
+        await page.waitForTimeout(120);
+        const title = (await row.getAttribute('aria-label'))?.split(', ')[0];
+        for (const words of await row.evaluate(wordsCut)) problems.push(`${where}, ${width}px, ${density.toLowerCase()}: pointed at, "${title}" has "${words}" cut by its buttons`);
+      }
+    }
+  }
+  await page.setViewportSize(viewport);
+}
+
+/**
+ * The list, its sheets and its Pinned group, a new session in another folder, and every session
+ * with its sheets; then Changes and files, walked through in `walked` (see walkable).
+ */
+/**
+ * The list's first screen comes in one script: left to itself, Rolldown moves what the list shares
+ * with a part loaded inside a lazily loaded one into a chunk of its own (`api`), which the page
+ * then preloads and the list waits for too (vite.config.ts keeps them together).
+ */
+async function checkFirstScreen(base, where) {
+  const page = await (await fetch(base)).text();
+  const scripts = page.match(/<script\b[^>]*\bsrc=/g)?.length ?? 0;
+  const preloaded = page.match(/<link\b[^>]*\brel="modulepreload"/g)?.length ?? 0;
+  if (scripts !== 1 || preloaded > 0) problems.push(`${where}: the first screen loads ${scripts + preloaded} scripts, not one`);
+}
+
 async function driveApp(browser, base, sessions, walked) {
   // The list folds side chats away under their session.
   const titles = [...new Set(sessions.filter((s) => !s.sideChatOf).map((s) => s.title).filter(Boolean))].slice(0, 3);
@@ -309,6 +488,9 @@ async function driveApp(browser, base, sessions, walked) {
       for (const title of titles) {
         if (!(await page.getByText(title, { exact: true }).first().isVisible())) problems.push(`app, ${size}, ${scheme}: the list does not show "${title}"`);
       }
+      at = 'the Pinned group';
+      await walkPinned(page, sessions, size, `app, ${size}, ${scheme}`);
+      at = 'the list';
       for (const label of LIST_BUTTONS) {
         await press(page, label, `app, ${size}`);
         await page.goto(base, { waitUntil: 'networkidle' });
@@ -469,6 +651,86 @@ async function checkSideChat(browser, base, sessions) {
 }
 
 /**
+ * The files Claude sent, in the sessions where Claude Code recorded one delivered (`answer` asks the
+ * demo for a session's messages, or reads the answer the site saved), on a phone and wide, light
+ * and dark: each shows, a picture loaded, with a way to save it, and a picture opens large.
+ */
+async function checkSentFiles(browser, base, sessions, answer) {
+  const sending = [];
+  for (const session of sessions) {
+    const page = await answer(`sessions/${encodeURIComponent(session.id)}/messages?limit=120`).catch(() => undefined);
+    const sent = (page?.messages ?? []).flatMap((m) => m.blocks).filter((b) => b.type === 'tool_result' && b.delivered?.files?.length);
+    if (sent.length > 0) sending.push(session);
+  }
+  if (sending.length === 0) problems.push('the demo has no session where Claude sent a file');
+  for (const [size, options] of Object.entries(SIZES)) {
+    for (const scheme of ['light', 'dark']) {
+      const context = await browser.newContext({ ...options, colorScheme: scheme });
+      const page = await context.newPage();
+      let at = '';
+      watch(page, () => `app, sent files, ${size}, ${scheme}, ${at}`);
+      for (const session of sending) {
+        at = `session ${session.id}`;
+        await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+        const group = page.locator('[role="group"][aria-label^="Sent "]').first();
+        if (!(await group.waitFor({ timeout: 5000 }).then(() => true, () => false))) {
+          problems.push(`app, sent files, ${size}, ${scheme}, ${at}: the file Claude sent does not show`);
+          continue;
+        }
+        await group.scrollIntoViewIfNeeded();
+        await page.waitForLoadState('networkidle');
+        const found = await group.evaluate((el) => {
+          const out = [];
+          for (const img of el.querySelectorAll('img')) if (!img.complete || img.naturalWidth === 0) out.push(`the picture ${img.alt} does not load`);
+          if (!el.querySelector('a[download]')) out.push('there is no way to save the file');
+          const box = el.getBoundingClientRect();
+          if (box.right > innerWidth + 1) out.push(`it ends ${Math.round(box.right - innerWidth)}px past the window`);
+          return out;
+        });
+        problems.push(...found.map((problem) => `app, sent files, ${size}, ${scheme}, ${at}: ${problem}`));
+        const open = group.getByRole('button', { name: /^Open / }).first();
+        if (await open.count()) {
+          await open.click();
+          if (!(await page.getByRole('dialog', { name: 'Image' }).waitFor({ timeout: 3000 }).then(() => true, () => false))) problems.push(`app, sent files, ${size}, ${scheme}, ${at}: the picture does not open large`);
+          await page.keyboard.press('Escape');
+        }
+      }
+      await context.close();
+    }
+  }
+}
+
+/**
+ * Export as Markdown, from the session menu of a few sessions: a file of Markdown downloads, with
+ * the conversation in it, on the site too, which saved each from the demo.
+ */
+async function checkExport(browser, base, sessions, where) {
+  const context = await browser.newContext({ ...SIZES.wide, acceptDownloads: true });
+  const page = await context.newPage();
+  let at = '';
+  watch(page, () => `${where}, export, ${at}`);
+  for (const session of sessions.slice(0, 3)) {
+    at = `session ${session.id}`;
+    await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Session menu', exact: true }).first().click();
+    const downloaded = page.waitForEvent('download', { timeout: 10_000 }).catch(() => undefined);
+    await page.getByRole('dialog').getByRole('button', { name: /Export as Markdown/ }).click();
+    const download = await downloaded;
+    if (!download) {
+      problems.push(`${where}, export, ${at}: nothing downloads`);
+      continue;
+    }
+    const chunks = [];
+    for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+    const markdown = Buffer.concat(chunks).toString('utf8');
+    if (!/^# .+\n/.test(markdown) || !/^## (?:You|Claude)$/m.test(markdown)) problems.push(`${where}, export, ${at}: ${download.suggestedFilename()} is no conversation: ${JSON.stringify(markdown.slice(0, 80))}`);
+    if (!download.suggestedFilename().endsWith('.md')) problems.push(`${where}, export, ${at}: saved as ${download.suggestedFilename()}`);
+    await page.keyboard.press('Escape');
+  }
+  await context.close();
+}
+
+/**
  * Settings > Usage and activity, on a phone and wide, light and dark, in each range: it fills in
  * from the demo's transcripts, and nothing on it ends past the window.
  */
@@ -564,7 +826,7 @@ async function checkSite(browser, base) {
 /** What the saved demo answers say the sessions are. */
 async function savedSessions(site) {
   const data = path.join(site, 'demo', 'data');
-  for (const file of await readdir(data)) {
+  for (const file of (await readdir(data)).filter((name) => name.endsWith('.json'))) {
     const body = JSON.parse(await readFile(path.join(data, file), 'utf8'));
     if (Array.isArray(body?.sessions)) return body.sessions;
   }
@@ -580,19 +842,25 @@ try {
     const server = await serveFolder(site);
     stop = async () => server.stop();
     await checkSite(browser, server.base);
+    await checkFirstScreen(`${server.base}demo/`, 'site, demo');
     const sessions = await savedSessions(site);
     const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
+    await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
+    await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
     stop = demo.stop;
     const { sessions } = await (await fetch(`${demo.base}api/sessions`, { headers: MARK })).json();
     if (!sessions?.length) problems.push('the demo has no sessions');
+    await checkFirstScreen(demo.base, 'app');
     const asked = (request) => fetch(`${demo.base}api/${request}`, { headers: MARK }).then((r) => r.json());
     await driveApp(browser, demo.base, sessions ?? [], await walkable(sessions ?? [], asked));
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
+    await checkSentFiles(browser, demo.base, sessions ?? [], asked);
+    await checkExport(browser, demo.base, sessions ?? [], 'app');
     await checkUsage(browser, demo.base);
   }
 } finally {

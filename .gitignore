@@ -1,5 +1,7 @@
 node_modules
 dist/
+# Written by npm run build, from what the build puts in dist/
+/THIRD_PARTY_NOTICES
 .DS_Store
 *.tgz
 coverage/

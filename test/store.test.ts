@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage, MessagesPage, RunState } from '../src/shared/protocol';
 import { api } from '../src/web/lib/api';
 import { socket } from '../src/web/lib/socket';
-import { addLocalMessage, getView, handleEvent, loadLatest, merge, syncRun } from '../src/web/lib/store';
+import { addLocalMessage, getView, handleEvent, loadLatest, merge, syncRun, useSessionView } from '../src/web/lib/store';
 
 const text = (uuid: string, body: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({ uuid, role: 'user', blocks: [{ type: 'text', text: body }], ...extra });
@@ -92,5 +92,28 @@ describe('a session’s run', () => {
     // A page load read before the socket answered says no run: the socket knows better.
     syncRun(id, null);
     expect(getView(id).run?.busy).toBe(true);
+  });
+});
+
+describe('a conversation that could not load', () => {
+  it('loads once requests reach the server again, while the socket stayed up', async () => {
+    const { renderHook, waitFor } = await import('@testing-library/react');
+    const { ApiError, api: client } = await import('../src/web/lib/api');
+    const id = 'session-proxy';
+    const fetching = vi.spyOn(globalThis, 'fetch');
+    // A proxy's 503 page for every request: the computer is out of reach.
+    fetching.mockResolvedValue(new Response('Service Unavailable', { status: 503, headers: { 'content-type': 'text/html' } }));
+    const messages = vi.spyOn(client, 'messages').mockRejectedValueOnce(new ApiError('Can’t reach laptop', 0));
+    const shown = renderHook(() => useSessionView(id));
+    expect(await client.probe()).toBe(false);
+    await loadLatest(id);
+    expect(getView(id).error).toBe('Can’t reach laptop');
+    // Requests get through again: the probe's comes back, and the conversation loads.
+    messages.mockResolvedValue(page([text('u1', 'hello', { timestamp: 1 })]));
+    fetching.mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+    expect(await client.probe()).toBe(true);
+    await waitFor(() => expect(getView(id).error).toBeUndefined());
+    expect(uuids(id)).toEqual(['u1']);
+    shown.unmount();
   });
 });

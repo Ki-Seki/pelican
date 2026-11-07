@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readlinkSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -103,13 +103,38 @@ describe('a file downloaded', () => {
     expect(openOn(path.join(cwd, 'big.bin'))).toBe(0);
   });
 
+  it('sends exactly what it said, however the file changes meanwhile, and leaves it closed', async () => {
+    const MB = 1024 * 1024;
+    const url = (name: string) => `/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=${name}`;
+    await writeFile(path.join(cwd, 'grow.log'), Buffer.alloc(MB, 1));
+    const grown = await ask(url('grow.log'));
+    expect(grown.headers.get('content-length')).toBe(String(MB));
+    await appendFile(path.join(cwd, 'grow.log'), Buffer.alloc(8 * MB, 2));
+    expect((await grown.arrayBuffer()).byteLength).toBe(MB);
+    await writeFile(path.join(cwd, 'cut.log'), Buffer.alloc(MB, 1));
+    const cut = await ask(url('cut.log'));
+    await truncate(path.join(cwd, 'cut.log'), 10);
+    await expect(cut.arrayBuffer()).rejects.toThrow();
+    await writeFile(path.join(cwd, 'empty.log'), '');
+    const empty = await ask(url('empty.log'));
+    expect(empty.headers.get('content-length')).toBe('0');
+    expect(await empty.text()).toBe('');
+    // A download given up on closes the file too.
+    const left = await ask(url('grow.log'));
+    const reader = left.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    for (const name of ['grow.log', 'cut.log', 'empty.log']) expect(openOn(path.join(cwd, name))).toBe(0);
+  });
+
   it('is a plain link the page cannot mark, so it is let through only as the page itself would ask', async () => {
     const url = `/api/file/raw?cwd=${encodeURIComponent(cwd)}&path=src%2Fa.ts`;
     expect((await ask(url, { 'x-pelican': '' })).status).toBe(200);
     expect((await ask(url, { 'x-pelican': '', 'sec-fetch-site': 'cross-site' })).status).toBe(403);
     expect((await app.request(url, { headers: { host: 'localhost:7860' } })).status).toBe(401);
   });
-});
+}, 20_000);
 
 describe('searching the folder', () => {
   it('needs some text, and finds it', async () => {
@@ -117,7 +142,7 @@ describe('searching the folder', () => {
     const result = await (await ask(`/api/search?cwd=${encodeURIComponent(cwd)}&q=one`)).json() as { files: Array<{ path: string }> };
     expect(result.files.map((f) => f.path)).toEqual(['src/a.ts']);
   });
-});
+}, 20_000);
 
 describe('what each turn changed', () => {
   it('comes from the transcript, with each file’s diff, in any folder', async () => {

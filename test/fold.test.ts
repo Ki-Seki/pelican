@@ -21,4 +21,20 @@ describe('fold', () => {
     const entries = fold([session('a', 'Check', '/code/app', 'idle', 2), session('b', 'Check'), session('c', 'Check')]);
     expect(entries.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', []], ['b', ['c']]]);
   });
+
+  it('never folds a pinned one into another: it leads its own row, and the earlier ones fold into it', () => {
+    const pinned = (s: SessionSummary): SessionSummary => ({ ...s, pinned: true });
+    const entries = fold([session('a', 'Check'), session('b', 'Check'), pinned(session('c', 'Check')), session('d', 'Check'), session('e', 'Check')]);
+    expect(entries.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', ['b']], ['c', ['d', 'e']]]);
+  });
+
+  it('keeps the earlier ones under a pinned one while it works, waits or has tasks, as when it is idle', () => {
+    const pinned = (s: SessionSummary): SessionSummary => ({ ...s, pinned: true });
+    for (const status of ['running', 'waiting'] as const) {
+      const entries = fold([session('a', 'Check'), pinned(session('b', 'Check', '/code/app', status)), session('c', 'Check'), session('d', 'Check', '/code/app', 'running'), session('e', 'Check')]);
+      expect(entries.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', []], ['b', ['c', 'e']], ['d', []]]);
+    }
+    const tasks = fold([pinned(session('a', 'Check', '/code/app', 'idle', 1)), session('b', 'Check')]);
+    expect(tasks.map((e) => [e.session.id, e.earlier.map((s) => s.id)])).toEqual([['a', ['b']]]);
+  });
 });

@@ -50,7 +50,7 @@ import { type Completions, forgetCompletions, knownModels, noteTerminalCommands,
 import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
-import { toChatMessage } from './normalize.js';
+import { deliveryOf, toChatMessage } from './normalize.js';
 import { answerable, notify, oneLine } from './push.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
@@ -155,6 +155,16 @@ const REFUSED = 'The user doesn\'t want to proceed with this tool use. The tool 
 const STOP_AND_WAIT = `${REFUSED} STOP what you are doing and wait for the user to tell you how to proceed.`;
 const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, the user said:\n${note}`;
 
+/**
+ * What Claude Code runs with: Pelican's environment, what the folder's trust adds, and the word
+ * Claude Code takes from a host that shows the files Claude sends (SendUserFile) from where they
+ * are on this computer. That word turns on SendUserFile and nothing else, and Claude Code keeps
+ * it from the commands it runs; a `!` command runs without it too, as it is set here only.
+ */
+export function claudeEnv(launch: Launch): Record<string, string | undefined> {
+  return { ...process.env, ...launch.env, CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1' };
+}
+
 /** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
 const CLEARS = /^\/(clear|reset|new)(\s|$)/;
 const AFRESH = 'To start afresh, open a new session in this folder.';
@@ -197,6 +207,11 @@ export function askedFor(request: PermissionRequest, cwd: string): string {
       return `Edit ${file(input.notebook_path)}`;
     case 'Write':
       return `Write ${file(input.file_path)}`;
+    case 'SendUserFile': {
+      // The file by its name, or how many: a lock screen has room for little more.
+      const files = typeof input.files === 'string' ? [input.files] : Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string') : [];
+      return files.length === 1 ? `Send ${file(files[0])}` : files.length > 1 ? `Send ${files.length} files` : 'Send a file';
+    }
     case 'WebFetch': {
       try {
         return `Fetch ${new URL(str(input.url)).host}`;
@@ -354,6 +369,13 @@ export class SessionRun {
   private flows = new Map<string, LiveFlow>();
   /** Claude's calls to schedule tools, until their results say what was scheduled. */
   private scheduling = new Map<string, { name: string; input: Record<string, unknown> }>();
+  /** Claude's SendUserFile calls, until their results say what Claude Code delivered. */
+  private sending = new Set<string>();
+  /**
+   * The files Claude Code said it delivered here, by their paths, as it says so: its transcript has
+   * them a moment later, and a page shows a file as soon as the result comes.
+   */
+  readonly delivered = new Set<string>();
   private wakeup?: ScheduledCheck;
   private crons = new Map<string, ScheduledCheck>();
   /** When Claude Code lets each recurring check go. */
@@ -481,7 +503,7 @@ export class SessionRun {
       perTaskStopAffordance: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       settingSources: this.launch.settingSources,
-      ...(this.launch.env ? { env: { ...process.env, ...this.launch.env } } : {}),
+      env: claudeEnv(this.launch),
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
@@ -1113,6 +1135,8 @@ export class SessionRun {
       const name = str(block.name);
       if (name === 'ScheduleWakeup' || name === 'CronCreate' || name === 'CronDelete') {
         this.scheduling.set(block.id, { name, input: (block.input ?? {}) as Record<string, unknown> });
+      } else if (name === 'SendUserFile') {
+        this.sending.add(block.id);
       }
     }
   }
@@ -1120,6 +1144,13 @@ export class SessionRun {
   private noteResults(raw: Record<string, unknown>): void {
     const content = (raw.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(content)) return;
+    // What a SendUserFile call delivered, by the one result its row holds, as normalize reads it.
+    const results = (content as Array<Record<string, unknown>>).filter((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string');
+    const sends = results.filter((b) => this.sending.delete(b.tool_use_id as string));
+    const output = raw.tool_use_result;
+    if (results.length === 1 && sends.length === 1 && sends[0]!.is_error !== true && output && typeof output === 'object' && !Array.isArray(output)) {
+      for (const file of deliveryOf(output as Record<string, unknown>)?.files ?? []) this.delivered.add(file.path);
+    }
     // A workflow's run id is only in its call's result: the folder its agents write to.
     const launched = (raw.tool_use_result ?? {}) as { taskId?: unknown; runId?: unknown };
     const flow = typeof launched.taskId === 'string' ? this.flows.get(launched.taskId) : undefined;

@@ -32,12 +32,17 @@ const startOfDay = (ms: number) => {
   return d.getTime();
 };
 
+/**
+ * The heading a session's time puts it under in the list: Today, Yesterday, then the 7 and the 30
+ * days before today, which is what they are (on 6 November, 23 October is no session of "this
+ * month"), then Older.
+ */
 export function dayGroup(ms: number, now = Date.now()): string {
   const today = startOfDay(now);
   if (ms >= today) return 'Today';
   if (ms >= today - DAY) return 'Yesterday';
-  if (ms >= today - 6 * DAY) return 'This week';
-  if (ms >= today - 30 * DAY) return 'This month';
+  if (ms >= today - 6 * DAY) return 'Previous 7 days';
+  if (ms >= today - 30 * DAY) return 'Previous 30 days';
   return 'Older';
 }
 
@@ -45,10 +50,16 @@ export function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * A day as Claude Desktop names it above a conversation's messages: Today, Yesterday, or the
+ * weekday and date ("Tuesday, Nov 4"), with the year when it is not this one. In the app's words,
+ * so in English, as "Today" is.
+ */
 export function dayLabel(ms: number, now = Date.now()): string {
   const group = dayGroup(ms, now);
   if (group === 'Today' || group === 'Yesterday') return group;
-  return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const sameYear = new Date(ms).getFullYear() === new Date(now).getFullYear();
+  return new Date(ms).toLocaleDateString('en', { weekday: 'long', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
 }
 
 /** `~/repos/x` for paths under home. */

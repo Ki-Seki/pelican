@@ -560,6 +560,8 @@ export function Chat({
         };
         setTrustAsk({
           brings: error.trust.brings,
+          commands: error.trust.commands,
+          more: error.trust.more,
           answer: (choice) => once(() => void send(text, attachments, mode, from, choice)),
           cancel: () => once(giveBack),
         });
@@ -629,6 +631,8 @@ export function Chat({
         let settled = false;
         setTrustAsk({
           brings: error.trust.brings,
+          commands: error.trust.commands,
+          more: error.trust.more,
           answer: (choice) => {
             if (!settled) void shell(command, choice);
             settled = true;

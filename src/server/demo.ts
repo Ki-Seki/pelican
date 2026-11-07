@@ -8,10 +8,11 @@ import { lineDiff, splitLines, toHunks } from '../shared/line-diff.js';
 import type { ModelOption, RunState, SessionStatus, TaskOutput } from '../shared/protocol.js';
 import { config } from './config.js';
 import type { LiveProcess } from './live.js';
-import { SETTINGS_SCREENSHOT } from './demo-image.js';
+import { SETTINGS_DARK_SCREENSHOT, SETTINGS_SCREENSHOT } from './demo-image.js';
 import { demoRowUsage, writeDemoUsage } from './demo-usage.js';
 import { DEMO_WORKFLOW_FILES, demoWorkflowRun, WORKFLOW_DEMO } from './demo-workflows.js';
 import { REPORT_HTML, SIGNUPS_CSV, signupsChart } from './demo-visuals.js';
+import { setPinned } from './pinned.js';
 
 /**
  * `pelican --demo`: a made-up home with a few sessions, for trying Pelican
@@ -222,6 +223,9 @@ ${LOGIN_NEW}
 });
 `;
 
+/** Pinned, as a session you keep coming back to is: the list shows its Pinned group. */
+const RELEASE_NOTES = 'd1e4c7f3-4444-4d4e-bf60-000000000004';
+
 const SESSIONS: DemoSession[] = [
   {
     id: 'a3f1c2d4-1111-4a1b-8c3d-000000000001',
@@ -367,7 +371,7 @@ const SESSIONS: DemoSession[] = [
     },
   },
   {
-    id: 'd1e4c7f3-4444-4d4e-bf60-000000000004',
+    id: RELEASE_NOTES,
     title: 'Release notes for v2.4',
     project: 'docs-site',
     branch: 'main',
@@ -569,12 +573,16 @@ const DEMO_FILES: Record<string, string[]> = {
 // ---- What runs on and what waits (0.4.0): a command still running after its turn, a turn that
 // ---- stopped on an API error, and a session waiting for an answer in the terminal.
 
+/** The screenshot Claude takes of the settings page in its dark theme, and sends (0.4.1). */
+const DARK_SHOT = 'screenshots/settings-dark.png';
+const DARK_SHOT_BYTES = Buffer.from(SETTINGS_DARK_SCREENSHOT, 'base64');
+
 const DEV_SERVER: DemoSession = {
   id: 'c4b7d2e9-8888-4c8d-9e1f-000000000010',
   title: 'Try the dark theme on my phone',
   project: 'acme-web',
   branch: 'feat/dark-theme',
-  rows: () => {
+  rows: (cwd) => {
     const t = Date.now() - 41 * MIN;
     return [
       { role: 'user', at: t, content: 'Start the dev server so I can try the dark theme on my phone.' },
@@ -582,8 +590,22 @@ const DEV_SERVER: DemoSession = {
       { role: 'user', at: t + 6000, content: [result('d1', 'Command running in background with ID: bash_1')] },
       {
         role: 'assistant',
-        at: t + 11000,
-        content: [text('The dev server is up. On your phone, open **http://192.168.1.24:5173** and switch the theme under Settings › Display.\n\nIt keeps running after this; stop it when you are done.')],
+        at: t + 9000,
+        content: [tool('d2', 'Bash', { command: `npx playwright screenshot --color-scheme=dark --viewport-size=720,450 http://localhost:5173/settings ${DARK_SHOT}`, description: 'Take a screenshot of the settings page in dark' })],
+      },
+      { role: 'user', at: t + 13000, content: [result('d2', `Navigating to http://localhost:5173/settings\nCapturing screenshot into ${DARK_SHOT}`)] },
+      // Claude sends it, as in Claude Desktop: Claude Code records what it delivered, from where.
+      { role: 'assistant', at: t + 15000, content: [tool('d3', 'SendUserFile', { files: [DARK_SHOT], caption: 'The settings page in the dark theme', status: 'proactive' })] },
+      {
+        role: 'user',
+        at: t + 15500,
+        content: [result('d3', '1 file delivered to user.')],
+        result: { caption: 'The settings page in the dark theme', attachments: [{ path: path.join(cwd, DARK_SHOT), size: DARK_SHOT_BYTES.length, isImage: true, media_type: 'image/png', pathValidated: true }] },
+      },
+      {
+        role: 'assistant',
+        at: t + 19000,
+        content: [text('The dev server is up. On your phone, open **http://192.168.1.24:5173** and switch the theme under Settings › Display; `settings-dark.png` is how it looks.\n\nIt keeps running after this; stop it when you are done.')],
       },
     ];
   },
@@ -681,7 +703,7 @@ function devServerRun(sessionId: string): RunState | undefined {
     partial: [],
     permissions: [],
     tasks: [DEV_TASK],
-    lastTurn: { durationMs: 11_000, outputTokens: 184 },
+    lastTurn: { durationMs: 19_000, outputTokens: 236 },
     context: { percent: 12, tokens: 24_000, max: 200_000 },
   };
 }
@@ -726,6 +748,9 @@ export async function prepareDemo(): Promise<void> {
     }
   }
   await demoRepository(path.join(root, 'code', 'acme-web'));
+  // Made after the repository's commits, as Claude took it: a new file there.
+  await mkdir(path.join(root, 'code', 'acme-web', path.dirname(DARK_SHOT)), { recursive: true });
+  await writeFile(path.join(root, 'code', 'acme-web', DARK_SHOT), DARK_SHOT_BYTES);
   const written = new Map<string, Array<{ row: Row; uuid: string; message: Record<string, unknown>; meta: Record<string, unknown> }>>();
   for (const session of SESSIONS) {
     const cwd = session.scratch ? path.join(root, 'scratch', '2026-11-04-7c2e') : path.join(root, 'code', session.project);
@@ -774,6 +799,7 @@ export async function prepareDemo(): Promise<void> {
   // Its own config and state too: the demo never reads or writes your password, token or push keys.
   config.configDir = path.join(root, 'config');
   config.stateDir = path.join(root, 'state');
+  await setPinned(RELEASE_NOTES, true);
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.PELICAN_SCRATCH_DIR = path.join(root, 'scratch');
 }

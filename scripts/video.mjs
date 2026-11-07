@@ -28,7 +28,12 @@ await context.addInitScript(() => {
     requestAnimationFrame(() => { dot.style.transform = 'scale(1.5)'; dot.style.opacity = '0'; });
     setTimeout(() => dot.remove(), 500);
   }, true);
-  addEventListener('DOMContentLoaded', () => document.querySelector('[data-demo-banner]')?.remove());
+  // The demo's note, which the list draws again each time it comes back, is no part of the tour.
+  addEventListener('DOMContentLoaded', () => {
+    const style = document.createElement('style');
+    style.textContent = '[data-demo-banner]{display:none!important}';
+    document.head.append(style);
+  });
 });
 const page = await context.newPage();
 const pause = (ms) => page.waitForTimeout(ms);
@@ -50,18 +55,20 @@ const tap = async (locator) => {
 };
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
-await page.evaluate(() => document.querySelector('[data-demo-banner]')?.remove());
 await pause(300);
 await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, everyNthFrame: 1 });
 await pause(1400);
-// A chart Claude drew, and the page it wrote, rendered right in the conversation
+// A chart Claude drew, rendered right in the conversation, and the page it wrote, opened from its
+// step and run
 await tap(page.getByText("Chart last week's signups").first());
 await pause(2200);
-await tap(page.getByRole('button', { name: /^Write/ }).first());
+await tap(page.getByRole('button', { name: /^Write / }).first());
+await pause(1200);
+await tap(page.getByRole('button', { name: 'Preview', exact: true }));
+await pause(900);
+await tap(page.getByRole('button', { name: 'Run', exact: true }).last());
 await pause(2600);
-await tap(page.getByRole('button', { name: 'Open full screen' }).last());
-await pause(2400);
-await tap(page.getByRole('button', { name: 'Close preview' }));
+await tap(page.getByRole('button', { name: 'Back to the conversation' }));
 await pause(700);
 await tap(page.getByRole('button', { name: 'Back to sessions' }));
 await pause(800);
@@ -70,17 +77,22 @@ await tap(page.getByText('Add a dark theme to the settings page').first());
 await pause(2000);
 await tap(page.getByRole('button', { name: 'Changes and files' }));
 await pause(1200);
-await tap(page.getByRole('dialog').getByText('theme.css').first());
+await tap(page.getByText('theme.css').last());
 await pause(2000);
-await tap(page.getByRole('dialog').getByRole('button', { name: 'Done' }));
+await tap(page.getByRole('button', { name: 'Back to the conversation' }));
+await pause(700);
+await tap(page.getByRole('button', { name: 'Back to sessions' }));
 await pause(800);
+// A screenshot Claude sent from the computer, shown where it sent it
+await tap(page.getByText('Try the dark theme on my phone').first());
+await pause(1000);
+await page.getByRole('group', { name: /^Sent / }).first().evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+await pause(2200);
 await tap(page.getByRole('button', { name: 'Back to sessions' }));
 await pause(800);
 // A session Claude Desktop is running, followed live
 await tap(page.getByText('Why is the nightly export slow?').first());
-await pause(1300);
-await tap(page.getByRole('button', { name: /Run/ }).first());
-await pause(2200);
+await pause(2600);
 await cdp.send('Page.stopScreencast');
 const end = Date.now() / 1000;
 await context.close();

@@ -1,18 +1,17 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, getSubagentMessages, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
-import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary } from '../shared/protocol.js';
+import type { ChatMessage, MessagesPage, RecordedSettings, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { promptGist } from '../shared/quoted.js';
 import { shortTitle } from '../shared/titles.js';
-import { archivedIds } from './archive.js';
 import { config } from './config.js';
 import { folderKind } from './folders.js';
+import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
-import { toChatMessage } from './normalize.js';
 import { sideChatSource } from './side-chat.js';
 import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
@@ -40,7 +39,7 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
 async function summarize(
-  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, archived: Set<string>, fresh?: Seen,
+  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, { archived, pinned }: Kept, fresh?: Seen,
 ): Promise<SessionSummary> {
   const file = fresh?.file ?? await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file, fresh) : undefined;
@@ -82,7 +81,8 @@ async function summarize(
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(working > 0 ? { tasks: working } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
-    ...(archived.has(info.sessionId) ? { archived: true } : {}),
+    // Never both (kept.ts); should the files say both (written by hand), archived wins.
+    ...(archived.has(info.sessionId) ? { archived: true } : pinned.has(info.sessionId) ? { pinned: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
     ...(other && !other.busy ? { openIn: other.app ?? 'another app' } : {}),
   };
@@ -161,8 +161,8 @@ function sessionInfos(): Promise<SDKSessionInfo[]> {
 /** Every session on this machine, newest activity first. */
 export async function listSummaries(status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary[]> {
   const infos = await sessionInfos();
-  const [live, archived] = await Promise.all([liveProcesses(), archivedIds()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, archived, files.get(info.sessionId))));
+  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, ours, files.get(info.sessionId))));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -186,7 +186,9 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 
 export async function sessionSummary(sessionId: string, status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
-  return info ? summarize(info, status, tasks, await liveProcesses(), await archivedIds()) : undefined;
+  if (!info) return undefined;
+  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
+  return summarize(info, status, tasks, live, ours);
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {
@@ -208,39 +210,33 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
 }
 
 /**
- * Files Claude handed to the user in a session (SendUserFile, Artifact): the
- * only files outside the session's folder the app may show, and only these paths.
+ * Files Claude handed to the user in a session: the only files the app shows by a path a request
+ * names, and only these paths. For SendUserFile, each file Claude Code recorded it delivered, at
+ * the path it checked, never the path Claude asked for; for Claude Desktop's Artifact, the file
+ * it published. Only calls that ran: one Claude only wrote (no app answered it, or it failed)
+ * hands over nothing.
  */
 export async function sentFiles(sessionId: string): Promise<Set<string>> {
   const messages = await loadMessages(sessionId);
-  // Only calls that ran: one Claude only wrote (no app answered it, or it failed) hands over nothing.
-  const ran = new Set<string>();
+  const ran = new Map<string, ToolResultBlock>();
   for (const message of messages) {
-    for (const block of message.blocks) if (block.type === 'tool_result' && !block.is_error) ran.add(block.tool_use_id);
+    for (const block of message.blocks) if (block.type === 'tool_result' && !block.is_error) ran.set(block.tool_use_id, block);
   }
   const paths = new Set<string>();
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
     for (const block of message.blocks) {
-      if (block.type !== 'tool_use' || !ran.has(block.id)) continue;
-      if (block.name === 'SendUserFile' && Array.isArray(block.input.files)) {
-        for (const file of block.input.files) if (typeof file === 'string') paths.add(file);
+      if (block.type !== 'tool_use') continue;
+      const result = ran.get(block.id);
+      if (!result) continue;
+      if (block.name === 'SendUserFile') {
+        for (const file of result.delivered?.files ?? []) paths.add(file.path);
       } else if (block.name === 'Artifact' && typeof block.input.file_path === 'string') {
         paths.add(block.input.file_path);
       }
     }
   }
   return paths;
-}
-
-/** What a subagent did inside an Agent call: its own transcript, next to the session's. */
-export async function loadSubagent(sessionId: string, agentId: string): Promise<ChatMessage[]> {
-  if (!/^[\w-]{1,80}$/.test(agentId)) return [];
-  const dir = infoCache.get(sessionId)?.cwd;
-  const raw = await getSubagentMessages(sessionId, agentId, dir ? { dir } : {}).catch(() => []);
-  return raw
-    .map((message) => toChatMessage(message as unknown as Record<string, unknown>))
-    .filter((message): message is ChatMessage => Boolean(message));
 }
 
 /** A page of messages ending before index `before` (default: the end). */

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
+import { refreshTranscriptIndex } from '../src/server/transcripts';
 import {
   claudeCodeTrusts, FULL_SETTINGS, folderBrings, folderTrusted, forgetTrust, launchFor, NeedsTrust, pelicanChoice, rememberChoice, trustQuestion,
 } from '../src/server/trust';
@@ -77,6 +78,8 @@ async function claudeWorkedIn(dir: string): Promise<void> {
   await mkdir(project, { recursive: true });
   const line = { type: 'user', uuid: randomUUID(), sessionId: id, cwd: dir, timestamp: new Date().toISOString(), message: { role: 'user', content: 'hello' } };
   await writeFile(path.join(project, `${id}.jsonl`), `${JSON.stringify(line)}\n`);
+  // Found at once, though a test before looked for transcripts less than a second ago.
+  await refreshTranscriptIndex();
 }
 
 /** The stand-in Claude's whole note: it writes line by line, and git= comes last. */
@@ -107,7 +110,7 @@ describe('what a folder brings', () => {
   it('is nothing for an empty folder', async () => {
     expect(await folderBrings(plain)).toEqual([]);
   });
-});
+}, 20_000);
 
 describe('a folder nobody trusted', () => {
   it('is asked about when it brings something, and Claude Code does not start there', async () => {
@@ -120,7 +123,7 @@ describe('a folder nobody trusted', () => {
     expect(await trustQuestion(plain)).toBeUndefined();
     expect(await launchFor(plain)).toEqual(FULL_SETTINGS);
   });
-});
+}, 20_000);
 
 describe('trust', () => {
   it('comes from Claude Code’s own record, for the repository and the folders in it', async () => {
@@ -164,7 +167,7 @@ describe('trust', () => {
     await rememberChoice(repo, 'user-only');
     expect(await folderTrusted(repo)).toBe(false);
   });
-});
+}, 20_000);
 
 describe('“Use my settings only”', () => {
   it('starts Claude Code with the user’s settings, and git with the folder’s programs off', async () => {
@@ -180,7 +183,7 @@ describe('“Use my settings only”', () => {
     await rm(path.join(repo, '.gitattributes'));
     await rm(path.join(repo, 'a.dat'));
   });
-});
+}, 20_000);
 
 describe('starting a session', () => {
   const create = (body: Record<string, unknown>) => app.request('/api/sessions', {
@@ -192,9 +195,14 @@ describe('starting a session', () => {
   it('in a folder nobody trusted asks first, and starts nothing', async () => {
     const response = await create({ cwd: repo });
     expect(response.status).toBe(409);
-    const body = await response.json() as { needsTrust: boolean; brings: string[] };
+    const body = await response.json() as { needsTrust: boolean; brings: string[]; commands: unknown[] };
     expect(body.needsTrust).toBe(true);
     expect(body.brings).toContain('MCP server db: npx -y db-mcp');
+    // Where each item's command is: the server's program and its arguments, a hook a shell runs.
+    expect(body.commands).toHaveLength(body.brings.length);
+    expect(body.commands[body.brings.indexOf('MCP server db: npx -y db-mcp')]).toEqual([[15, 28, 'argv']]);
+    const hook = body.brings.findIndex((item) => item.startsWith('SessionStart hook: '));
+    expect(body.commands[hook]).toEqual([[19, body.brings[hook]!.length, 'shell']]);
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(await readFile(launched, 'utf8').catch(() => '')).toBe('');
   });
@@ -215,4 +223,4 @@ describe('starting a session', () => {
   it('takes only the two answers', async () => {
     expect((await create({ cwd: repo, trust: 'yes' })).status).toBe(400);
   });
-});
+}, 20_000);

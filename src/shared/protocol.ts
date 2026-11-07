@@ -9,6 +9,12 @@ export type { PermissionMode } from './modes';
  *  (Desktop, the terminal) is working on it, or wrote to it just now. */
 export type SessionStatus = 'idle' | 'running' | 'waiting' | 'live';
 
+/**
+ * Where a command is in an item of what a folder brings (its trust sheet): from, to, and whether a
+ * shell runs it, it is a program and its arguments, joined by spaces, or PowerShell runs it.
+ */
+export type CommandAt = [from: number, to: number, runs: 'shell' | 'argv' | 'powershell'];
+
 export type SessionSummary = {
   id: string;
   title: string;
@@ -29,6 +35,11 @@ export type SessionSummary = {
   sideChatOf?: string;
   /** Put away from the list in Pelican; the transcript is untouched. */
   archived?: boolean;
+  /**
+   * Kept at the top of the list in Pelican: its own pins, apart from Claude Desktop's. Never
+   * together with `archived`.
+   */
+  pinned?: boolean;
   /** Open (idle) in another app too, which does not see what is sent here until it reopens the session. */
   openIn?: string;
   /** The other app working on it right now, or waiting there for an answer: "the terminal", "Claude Desktop". */
@@ -65,7 +76,22 @@ export type ToolResultBlock = {
   denied?: boolean;
   /** What a Workflow call launched, as Claude Code records it next to the result. */
   workflow?: WorkflowLaunch;
+  /** What a SendUserFile call delivered, as Claude Code records it next to the result. */
+  delivered?: Delivery;
 };
+
+/**
+ * A file Claude sent you, as Claude Code recorded it delivered: its absolute path on the computer,
+ * as Claude Code checked it, its size then, whether Claude Code took it for a picture, and its type.
+ */
+export type DeliveredFile = { path: string; size?: number; image?: boolean; type?: string };
+
+/**
+ * What one SendUserFile call delivered: the files, how Claude meant them shown (`render`: in
+ * place; `attach`: as a file to save; unset: by their type), its caption, and how many files
+ * Claude Code did not deliver (`missed`).
+ */
+export type Delivery = { files: DeliveredFile[]; display?: 'render' | 'attach'; caption?: string; missed?: number };
 
 /** The run a Workflow call started: its run id (the folder its agents write to) and its task. */
 export type WorkflowLaunch = {

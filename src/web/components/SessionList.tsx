@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, Plus, Search, Settings, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, GitBranch, ListFilter, Loader2, type LucideIcon, Pin, PinOff, Plus, Search, Settings, X } from 'lucide-react';
 import { memo, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { SessionStatus, SessionSummary } from '../../shared/protocol';
 import { api, isUnreachable } from '../lib/api';
-import { type Entry, fold, foldKey, isActive, single } from '../lib/fold';
+import { type Entry, fold, foldKey, isActive } from '../lib/fold';
 import { dayGroup, relativeTime, timeAgo } from '../lib/format';
 import { composing, MOD_ARIA } from '../lib/keyboard';
+import { changed, changeWords, type ListChange, makeChange, undoOf } from '../lib/list-changes';
 import { type Prefs, setPrefs, usePrefs, useSeen } from '../lib/prefs';
 import { defaultStart, type Start } from '../lib/start';
 import { statusLabel } from '../lib/status';
@@ -17,6 +18,8 @@ const SCRATCH = '\u0000scratch';
 const TEMP = '\u0000temp';
 const ARCHIVED = '\u0000archived';
 const SPECIAL: Record<string, string> = { [SCRATCH]: 'Scratch', [TEMP]: 'Temporary', [ARCHIVED]: 'Archived' };
+/** The group pinned sessions show in, at the top of the list in either grouping. */
+const PINNED = '\u0000pinned';
 
 const DOT: Record<SessionStatus, string> = { running: 'bg-run', waiting: 'bg-wait', live: 'bg-live', idle: 'bg-line' };
 const TEXT: Record<SessionStatus, string> = { running: 'text-run', waiting: 'text-wait', live: 'text-live', idle: 'text-faint' };
@@ -73,6 +76,7 @@ function rowName(session: SessionSummary, unread: boolean, showProject: boolean)
     session.title,
     statusLabel(session.status, session.runningIn, session.tasks),
     unread ? 'new activity' : '',
+    session.pinned ? 'pinned' : '',
     session.archived ? 'archived' : '',
     showProject ? (session.scratch ? 'scratch' : session.project) : '',
     timeAgo(session.lastActivity),
@@ -119,6 +123,12 @@ const DetailedRow = memo(function DetailedRow({ session, selected, unread, showP
   );
 });
 
+/**
+ * A compact row's project and time, which give way to its buttons where they show, on a computer:
+ * the title then ends before them, never under them.
+ */
+const GIVES_WAY = 'pointer-fine:group-hover/row:hidden pointer-fine:group-has-[[data-row-action]:focus-visible]/row:hidden';
+
 const CompactRow = memo(function CompactRow({ session, selected, unread, showProject, onOpen }: RowProps) {
   return (
     <a
@@ -127,68 +137,113 @@ const CompactRow = memo(function CompactRow({ session, selected, unread, showPro
       aria-current={selected ? 'page' : undefined}
       onClick={(e) => openHere(e, session.id, onOpen)}
       title={statusLabel(session.status, session.runningIn, session.tasks) || undefined}
-      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
+      className={`relative flex h-11 items-center gap-2.5 rounded-lg px-3 transition-colors pointer-fine:h-10 pointer-fine:group-hover/row:pr-(--row-actions) pointer-fine:group-has-[[data-row-action]:focus-visible]/row:pr-(--row-actions) ${selected ? 'bg-chip' : 'group-hover/row:bg-hover active:bg-hover'}`}
     >
       {selected && <OpenMark />}
       {unread ? <span aria-label="New activity" className="size-2 shrink-0 rounded-full bg-run" /> : <StatusDot status={session.status} tasks={session.tasks} />}
       <span className={`min-w-0 flex-1 truncate text-[14.5px] ${unread ? 'font-semibold' : ''}`}>{session.title}</span>
-      {showProject && <span className="max-w-[35%] shrink-0 truncate text-[12px] text-faint">{session.scratch ? 'Scratch' : session.project}</span>}
-      <span className="w-8 shrink-0 text-right text-[12px] text-faint tabular-nums">{relativeTime(session.lastActivity)}</span>
+      {showProject && <span className={`max-w-[35%] shrink-0 truncate text-[12px] text-faint ${GIVES_WAY}`}>{session.scratch ? 'Scratch' : session.project}</span>}
+      {/* As wide as "11h" at least, and as a date ("Oct 25") on one line. */}
+      <span className={`min-w-8 shrink-0 whitespace-nowrap text-right text-[12px] text-faint tabular-nums ${GIVES_WAY}`}>{relativeTime(session.lastActivity)}</span>
     </a>
   );
 });
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** How far a row slides to show its button, and how far (of its width) a slide acts on release. */
-const REVEAL = 104;
-const COMMIT = 0.4;
+/** Whether focus came by the keyboard, as the browser shows it: a pointer's leaves no ring. */
+function keyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return false;
+  }
+}
 
 /**
- * A row with one action, Archive (Unarchive once archived), reached without opening the session.
- * Under a finger the row slides left, as in Mail: far enough, it acts when let go; less far, the
- * button stays showing. With a mouse or the keyboard the action is a button on the row, shown on
+ * Under a finger: how wide a row's buttons are, two side by side or Unarchive alone; how close to
+ * the screen's edge a slide may start (nearer, it is the browser's Back or Forward); how far a
+ * finger goes before the row follows it; and how far the row must slide, of its width and past its
+ * buttons, to archive when let go.
+ */
+const BUTTON = 88;
+const ALONE = 104;
+const EDGE = 24;
+const SLOP = 12;
+const FULL = 0.6;
+const FULL_PAST = 64;
+
+/** What a row can do without opening its session: Pin (Unpin), or Archive (Unarchive). */
+type RowAction = { label: string; icon: LucideIcon; act: () => void };
+
+/**
+ * A row with its actions, reached without opening the session: Pin and Archive (Unpin and
+ * Unarchive once done). Under a finger the row slides left only, as in Mail: a short slide shows
+ * Pin and Archive side by side, Archive at the edge, and leaves them to a tap; a full one archives
+ * when let go. A slide to the right is Safari's Back, so the row takes none, nor one that starts
+ * at the screen's edge. With a mouse or the keyboard the actions are buttons on the row, shown on
  * hover or focus.
  */
-function Swipeable({ name, archived, compact, selected, onAction, children }: {
-  /** The session's title, so each row's button says which session it acts on. */
+function Swipeable({ id, name, pin, archive, compact, selected, children }: {
+  /** The session's id, which tells its row in the list. */
+  id: string;
+  /** The session's title, so each row's buttons say which session they act on. */
   name: string;
-  archived: boolean;
+  /** Pin or Unpin; none for an archived session. */
+  pin?: RowAction;
+  /** Archive or Unarchive: what a full slide does. */
+  archive: RowAction;
   compact: boolean;
   selected: boolean;
-  onAction: () => void;
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: number; x: number; y: number; from: number; dx: number; sideways?: boolean } | null>(null);
+  const drag = useRef<{ id: number; x: number; y: number; width: number; from: number; dx: number; sideways?: boolean } | null>(null);
   const swallowClicksUntil = useRef(0);
+  // How far the row is slid, never right of its place; and whether far enough to archive when let go.
   const [offset, setOffset] = useState(0);
+  const [full, setFull] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const label = archived ? 'Unarchive' : 'Archive';
-  const Icon = archived ? ArchiveRestore : Archive;
+  // What lies under the row stays while the row slides back over it.
+  const [under, setUnder] = useState(false);
+  if (offset < 0 && !under) setUnder(true);
+  useEffect(() => {
+    if (offset < 0 || !under) return undefined;
+    const timer = window.setTimeout(() => setUnder(false), reducedMotion() ? 0 : 220);
+    return () => window.clearTimeout(timer);
+  }, [offset, under]);
+  const open = pin ? 2 * BUTTON : ALONE;
+  const fullAt = (width: number) => Math.max(width * FULL, open + FULL_PAST);
+  const slide = (to: number, isFull = false) => {
+    setOffset(to);
+    setFull(isFull);
+  };
 
   // A row left open closes at the next touch anywhere else, as rows in Mail do.
   useEffect(() => {
     if (offset === 0 || dragging) return undefined;
     const close = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOffset(0);
+      if (!box.current?.contains(e.target as Node)) slide(0);
     };
     document.addEventListener('pointerdown', close, true);
     return () => document.removeEventListener('pointerdown', close, true);
   }, [offset, dragging]);
 
-  const act = () => {
-    setOffset(-(box.current?.offsetWidth ?? 0));
-    // The row slides out of sight, then leaves the list; if the change fails it comes back closed.
+  // Archive: the row slides out of sight, then leaves its place in the list. Pin: the row closes,
+  // then moves. If the change fails the row comes back closed.
+  const act = (action: RowAction) => {
+    if (action === archive) slide(-(box.current?.offsetWidth ?? 0), true);
+    else slide(0);
     window.setTimeout(() => {
-      onAction();
-      setOffset(0);
+      action.act();
+      slide(0);
     }, reducedMotion() ? 0 : 180);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType !== 'touch' || !e.isPrimary) return;
-    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: offset, dx: 0 };
+    if (e.clientX < EDGE || e.clientX > window.innerWidth - EDGE) return;
+    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, width: box.current?.offsetWidth ?? 1, from: offset, dx: 0 };
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
@@ -196,9 +251,10 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
     if (d.sideways === undefined) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      // Mostly up or down: that is the list scrolling, and the browser has it already.
-      d.sideways = Math.abs(dx) > Math.abs(dy);
+      if (Math.abs(dx) <= SLOP && Math.abs(dy) <= SLOP) return;
+      // Sideways is at least twice as far across as up or down, and to the left, or back from
+      // where the row was left open. Anything else is the list scrolling, which the browser has.
+      d.sideways = Math.abs(dx) >= 2 * Math.abs(dy) && (dx < 0 || d.from < 0);
       if (!d.sideways) {
         drag.current = null;
         return;
@@ -207,7 +263,8 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
       setDragging(true);
     }
     d.dx = dx;
-    setOffset(Math.min(0, d.from + dx));
+    const at = Math.min(0, d.from + dx);
+    slide(at, -at > fullAt(d.width));
   };
   const onPointerEnd = (e: React.PointerEvent, cancelled: boolean) => {
     const d = drag.current;
@@ -218,24 +275,54 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
     // Some browsers follow a slide with a click on the row: it was not a tap.
     swallowClicksUntil.current = Date.now() + 400;
     const at = Math.min(0, d.from + d.dx);
-    const width = box.current?.offsetWidth ?? 1;
-    if (cancelled) setOffset(d.from);
-    else if (-at > width * COMMIT) act();
-    else setOffset(-at > REVEAL / 2 ? -REVEAL : 0);
+    if (cancelled) slide(d.from);
+    else if (-at > fullAt(d.width)) act(archive);
+    else slide(-at > open / 2 ? -open : 0);
   };
   const onClickCapture = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-row-action]')) return;
     if (Date.now() < swallowClicksUntil.current || offset !== 0) {
-      // A tap on a row showing its button closes it, rather than opening the session.
+      // A tap on a row showing its buttons closes it, rather than opening the session.
       e.preventDefault();
       e.stopPropagation();
-      setOffset(0);
+      slide(0);
     }
   };
+
+  // Under the row, Archive at the edge and Pin beside it, as Mail has them. Archive keeps up with
+  // the finger; past the point where letting go archives, it takes all the room, Pin giving way.
+  const pinWidth = pin && !full ? BUTTON : 0;
+  const archiveWidth = Math.max(pin ? BUTTON : ALONE, -offset - pinWidth);
+  const revealed = (action: RowAction, width: number, tone: string, follows: boolean) => (
+    <button
+      type="button"
+      data-row-action
+      onClick={() => act(action)}
+      className={`flex h-full shrink-0 items-center justify-center gap-1.5 overflow-hidden text-[14px] font-medium whitespace-nowrap ${tone} ${follows ? '' : 'transition-[width] duration-200 motion-reduce:transition-none'}`}
+      style={{ width }}
+    >
+      <action.icon className="size-4 shrink-0" />
+      {action.label}
+    </button>
+  );
+
+  const button = (action: RowAction) => (
+    <button
+      type="button"
+      data-row-action
+      aria-label={`${action.label}: ${name}`}
+      title={action.label}
+      onClick={action.act}
+      className="pointer-events-auto grid size-8 place-items-center rounded-full text-muted hover:text-fg"
+    >
+      <action.icon className="size-4" />
+    </button>
+  );
 
   return (
     <div
       ref={box}
+      data-session={id}
       className="group/row relative touch-pan-y touch-pinch-zoom"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -243,44 +330,48 @@ function Swipeable({ name, archived, compact, selected, onAction, children }: {
       onPointerCancel={(e) => onPointerEnd(e, true)}
       onClickCapture={onClickCapture}
     >
-      {(offset !== 0 || dragging) && (
-        <div className="absolute inset-0 flex justify-end overflow-hidden rounded-xl bg-fg">
-          <button
-            type="button"
-            data-row-action
-            onClick={act}
-            className="flex h-full shrink-0 items-center justify-center gap-1.5 text-[14px] font-medium text-bg"
-            style={{ width: Math.max(REVEAL, -offset) }}
-          >
-            <Icon className="size-4 shrink-0" />
-            {label}
-          </button>
+      {under && (
+        // Behind the row's rounded corners, the color of the button they meet.
+        <div className={`absolute inset-0 flex justify-end overflow-hidden rounded-xl ${pinWidth ? 'bg-chip' : 'bg-fg'}`}>
+          {pin && revealed(pin, pinWidth, 'bg-chip text-fg', false)}
+          {revealed(archive, archiveWidth, 'bg-fg text-bg', dragging)}
         </div>
       )}
       <div
-        className={`relative rounded-xl bg-bg ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
+        // How far a compact row's words keep from its right edge while its buttons show: the
+        // buttons, 6px in, 32px each and 2px apart, and 6px more.
+        className={`relative rounded-xl bg-bg ${pin ? '[--row-actions:78px]' : '[--row-actions:44px]'} ${dragging ? '' : 'transition-transform duration-200 motion-reduce:transition-none'}`}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         {children}
-        <button
-          type="button"
-          data-row-action
-          aria-label={`${label}: ${name}`}
-          title={label}
-          onClick={onAction}
-          className={`absolute right-1.5 hidden size-8 place-items-center rounded-full text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg pointer-fine:grid ${compact ? 'top-1/2 -translate-y-1/2' : 'top-1.5'} ${selected ? 'bg-chip' : 'bg-hover'}`}
+        {/*
+          Shown together, on hover or when the keyboard reaches either. Over a detailed row's title
+          they stand on the row's own color, as tall as the title's first line, which fades out the
+          words they cover rather than cutting one off mid-letter.
+        */}
+        <div
+          className={`pointer-events-none absolute right-1.5 hidden items-start gap-0.5 opacity-0 group-hover/row:opacity-100 has-focus-visible:opacity-100 pointer-fine:flex ${compact
+            ? 'top-1/2 -translate-y-1/2'
+            : `top-1.5 h-[25px] rounded-r-full bg-linear-to-l from-75% to-transparent pl-6 ${selected ? 'from-chip' : 'from-bg group-hover/row:from-hover'}`}`}
         >
-          <Icon className="size-4" />
-        </button>
+          {pin && button(pin)}
+          {button(archive)}
+        </div>
       </div>
     </div>
   );
 }
 
-const ListRow = memo(function ListRow({ session, compact, onArchive, ...row }: RowProps & { compact: boolean; onArchive: (session: SessionSummary, archived: boolean) => void }) {
+const ListRow = memo(function ListRow({ session, compact, onChange, ...row }: RowProps & { compact: boolean; onChange: (session: SessionSummary, change: ListChange) => void }) {
   const Row = compact ? CompactRow : DetailedRow;
+  const pin: RowAction = session.pinned
+    ? { label: 'Unpin', icon: PinOff, act: () => onChange(session, { pinned: false }) }
+    : { label: 'Pin', icon: Pin, act: () => onChange(session, { pinned: true }) };
+  const archive: RowAction = session.archived
+    ? { label: 'Unarchive', icon: ArchiveRestore, act: () => onChange(session, { archived: false }) }
+    : { label: 'Archive', icon: Archive, act: () => onChange(session, { archived: true }) };
   return (
-    <Swipeable name={session.title} archived={Boolean(session.archived)} compact={compact} selected={row.selected} onAction={() => onArchive(session, !session.archived)}>
+    <Swipeable id={session.id} name={session.title} {...(session.archived ? {} : { pin })} archive={archive} compact={compact} selected={row.selected}>
       <Row session={session} {...row} />
     </Swipeable>
   );
@@ -352,6 +443,9 @@ function MoreRows({ root, onNear }: { root: React.RefObject<HTMLElement | null>;
 
 type Group = { key: string; label: string; entries: Entry[]; count: number };
 
+/** How many sessions a group holds, the earlier ones folded into its rows too. */
+const sessionsIn = (entries: Entry[]) => entries.reduce((n, entry) => n + 1 + entry.earlier.length, 0);
+
 function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const prefs = usePrefs();
   return (
@@ -384,8 +478,8 @@ function ListViewSheet({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
-/** What was just archived or brought back, for Undo; or why it could not be. */
-type Done = { session: SessionSummary; archived: boolean; error?: string; at: number };
+/** What was just pinned or archived, or brought back, for Undo; or why it could not be. */
+type Done = { session: SessionSummary; change: ListChange; error?: string; at: number };
 
 export function SessionList({
   machine,
@@ -430,20 +524,27 @@ export function SessionList({
   });
   const openSession = useCallback((id: string) => openRef.current(id), []);
 
-  // Archived at once in the list, then on the server; put back if the server says no.
-  const setArchived = useCallback((session: SessionSummary, archived: boolean, undoable = true) => {
-    const mark = (to: boolean) => queryClient.setQueryData<SessionSummary[]>(['sessions'], (list) =>
-      list?.map((s) => (s.id === session.id ? { ...s, archived: to } : s)));
-    void queryClient.cancelQueries({ queryKey: ['sessions'] });
-    mark(archived);
-    setDone(undoable ? { session, archived, at: Date.now() } : undefined);
-    api.archive(session.id, archived)
-      .catch((err: Error) => {
-        mark(!archived);
-        setDone({ session, archived, error: err.message, at: Date.now() });
-      })
-      .finally(() => void queryClient.invalidateQueries({ queryKey: ['sessions'] }));
-  }, [queryClient]);
+  // A row's own button, or Undo, leaves focus with the session it changed, which the list draws
+  // anew elsewhere or no longer shows: on its row, where it went, or on the row that took its place.
+  const toast = useRef<HTMLDivElement>(null);
+  const refocus = useRef<{ ids: string[]; scroll: boolean }>(undefined);
+  const keepFocus = useCallback((id: string) => {
+    const from = document.activeElement;
+    if (!from || (from.closest('[data-session]')?.getAttribute('data-session') !== id && !toast.current?.contains(from))) return;
+    const ids = [...(scroller.current?.querySelectorAll('[data-session]') ?? [])].map((row) => row.getAttribute('data-session')!);
+    const at = ids.indexOf(id);
+    refocus.current = { ids: at < 0 ? [id] : [id, ...ids.slice(at + 1), ...ids.slice(0, at).reverse()], scroll: keyboardFocus(from) };
+  }, []);
+
+  // Pinned or archived at once in the list, then on the server; put back if the server says no.
+  const change = useCallback((session: SessionSummary, to: ListChange, undoable = true) => {
+    keepFocus(session.id);
+    setDone(undoable ? { session, change: to, at: Date.now() } : undefined);
+    makeChange(queryClient, session, to).catch((err: Error) => {
+      keepFocus(session.id);
+      setDone({ session, change: to, error: err.message, at: Date.now() });
+    });
+  }, [queryClient, keepFocus]);
   useEffect(() => {
     if (!done) return undefined;
     const timer = setTimeout(() => setDone(undefined), done.error ? 8000 : 5000);
@@ -474,39 +575,47 @@ export function SessionList({
       // Archived sessions show under their own chip, or when a search finds them.
       if (project === ARCHIVED) return s.archived && (!q || matches(s, q));
       if (s.archived && !q) return false;
-      // Side chats belong to the session they came from: shown when asked for, or found by a search.
-      if (s.sideChatOf && !q && !prefs.showSideChats) return false;
+      // Side chats belong to the session they came from: shown when asked for, found by a search,
+      // or pinned (as is a temporary session: a pin keeps it in view whatever the list's options).
+      if (s.sideChatOf && !q && !prefs.showSideChats && !s.pinned) return false;
       if (project === TEMP) {
         if (!s.temp) return false;
       } else if (project === SCRATCH) {
         if (!s.scratch) return false;
       } else if (project) {
         if (s.scratch || s.temp || s.project !== project) return false;
-      } else if (s.temp && !q && !prefs.showTemporary) {
+      } else if (s.temp && !q && !prefs.showTemporary && !s.pinned) {
         return false;
       }
       return !q || matches(s, q);
     });
 
+    // Pinned sessions lead, whatever the grouping, each with its status and its earlier runs.
+    const entries = fold(filtered);
+    const out: Group[] = [];
+    const pinned = entries.filter((entry) => entry.session.pinned);
+    if (pinned.length > 0) out.push({ key: PINNED, label: 'Pinned', entries: pinned, count: sessionsIn(pinned) });
+    const rest = entries.filter((entry) => !entry.session.pinned);
+
     if (prefs.listGroup === 'project' && !project) {
-      const byProject = new Map<string, { key: string; label: string; sessions: SessionSummary[] }>();
-      for (const s of filtered) {
+      const byProject = new Map<string, Group>();
+      for (const entry of rest) {
+        const s = entry.session;
         const key = s.temp ? TEMP : s.scratch ? SCRATCH : s.cwd || s.project;
-        const label = s.temp ? 'Temporary' : s.scratch ? 'Scratch' : s.project || '—';
         let group = byProject.get(key);
         if (!group) {
-          group = { key, label, sessions: [] };
+          group = { key, label: s.temp ? 'Temporary' : s.scratch ? 'Scratch' : s.project || '—', entries: [], count: 0 };
           byProject.set(key, group);
         }
-        group.sessions.push(s);
+        group.entries.push(entry);
       }
-      return [...byProject.values()].map((g) => ({ key: g.key, label: g.label, entries: fold(g.sessions), count: g.sessions.length }));
+      return [...out, ...[...byProject.values()].map((group) => ({ ...group, count: sessionsIn(group.entries) }))];
     }
 
-    const out: Group[] = [];
-    const active = filtered.filter(isActive);
-    if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active.map(single), count: active.length });
-    for (const entry of fold(filtered.filter((s) => !isActive(s)))) {
+    const active = rest.filter((entry) => isActive(entry.session));
+    if (active.length > 0) out.push({ key: 'active', label: 'Active', entries: active, count: active.length });
+    for (const entry of rest) {
+      if (isActive(entry.session)) continue;
       const label = dayGroup(entry.session.lastActivity);
       const last = out.at(-1);
       if (last && last.label === label) last.entries.push(entry);
@@ -514,6 +623,11 @@ export function SessionList({
     }
     return out;
   }, [sessions, query, project, prefs.listGroup, prefs.showTemporary, prefs.showSideChats]);
+
+  const byProject = prefs.listGroup === 'project' && !project;
+  // A group folds only where its heading can unfold it, grouped by project: Pinned, folded there,
+  // still shows its sessions grouped by time or under a chip.
+  const isFolded = useCallback((key: string) => byProject && collapsed.has(key), [byProject, collapsed]);
 
   // A long list is drawn in pages; search and the filters above still go through every session.
   const pagesFor = `${query}\u0000${project ?? ''}\u0000${prefs.listGroup}`;
@@ -524,7 +638,7 @@ export function SessionList({
     const out: Group[] = [];
     for (const group of groups) {
       if (left <= 0) break;
-      if (collapsed.has(group.key)) {
+      if (isFolded(group.key)) {
         out.push(group);
         continue;
       }
@@ -532,15 +646,30 @@ export function SessionList({
       left -= entries.length;
       out.push(entries.length === group.entries.length ? group : { ...group, entries });
     }
-    const total = groups.reduce((sum, g) => sum + (collapsed.has(g.key) ? 0 : g.entries.length), 0);
+    const total = groups.reduce((sum, g) => sum + (isFolded(g.key) ? 0 : g.entries.length), 0);
     return { groups: out, more: total > rowLimit };
-  }, [groups, collapsed, rowLimit]);
+  }, [groups, isFolded, rowLimit]);
   const showMore = useCallback(() => setPaging({ for: pagesFor, rows: rowLimit + PAGE }), [pagesFor, rowLimit]);
 
-  const byProject = prefs.listGroup === 'project' && !project;
+  useLayoutEffect(() => {
+    const kept = refocus.current;
+    if (!kept) return;
+    refocus.current = undefined;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const rows = [...(scroller.current?.querySelectorAll<HTMLElement>('[data-session]') ?? [])];
+    for (const id of kept.ids) {
+      const link = rows.find((row) => row.getAttribute('data-session') === id)?.querySelector<HTMLElement>('a[href]');
+      if (link) {
+        // Followed on the keyboard; with a pointer, the list stays where it is.
+        link.focus({ preventScroll: !kept.scroll });
+        return;
+      }
+    }
+  }, [shown]);
+
   const compact = prefs.listDensity === 'compact';
   // What "All" shows, counted the way it is filtered.
-  const visibleCount = (sessions ?? []).filter((s) => !s.archived && !(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)).length;
+  const visibleCount = (sessions ?? []).filter((s) => !s.archived && (s.pinned || (!(s.temp && !prefs.showTemporary) && !(s.sideChatOf && !prefs.showSideChats)))).length;
   const startNew = () => onNew(project === SCRATCH ? { scratch: true } : defaultStart(sessions ?? [], project && !SPECIAL[project] ? project : undefined));
 
   return (
@@ -622,7 +751,7 @@ export function SessionList({
         {/* Out of reach, the line under the header says so (App). */}
         {error && !isUnreachable(error) && <div className="px-4 py-8 text-[13px] text-danger">{(error as Error).message}</div>}
         {shown.groups.map((group) => {
-          const folded = collapsed.has(group.key);
+          const folded = isFolded(group.key);
           return (
             <section key={group.key}>
               {byProject ? (
@@ -649,20 +778,22 @@ export function SessionList({
                     compact={compact}
                     selected={session.id === selectedId}
                     unread={session.id !== selectedId && session.status !== 'running' && isUnread(session.id, session.lastActivity)}
-                    showProject={!byProject}
+                    showProject={!byProject || group.key === PINNED}
                     onOpen={openSession}
-                    onArchive={setArchived}
+                    onChange={change}
                   />
                 );
                 if (earlier.length === 0) return row(s);
-                const open = unfolded.has(foldKey(s)) || earlier.some((e) => e.id === selectedId);
+                // Unfolded stays unfolded when a newer run takes the row; a pinned row keeps its session.
+                const key = s.pinned ? s.id : foldKey(s);
+                const open = unfolded.has(key) || earlier.some((e) => e.id === selectedId);
                 return (
                   <div key={s.id}>
                     {row(s)}
                     <button
                       type="button"
                       aria-expanded={open}
-                      onClick={() => toggle(setUnfolded, foldKey(s))}
+                      onClick={() => toggle(setUnfolded, key)}
                       className="-mt-2 ml-1.5 flex h-10 items-center gap-1 rounded-full px-1.5 text-[12.5px] text-faint hover:text-fg"
                     >
                       {open ? 'Hide' : `${earlier.length} earlier`}
@@ -690,14 +821,14 @@ export function SessionList({
         ))}
       </div>
       {/* Always there, so a screen reader hears what lands in it. */}
-      <div role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
+      <div ref={toast} role="status" className="pb-safe pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-3">
         {done && (
           <div className="animate-fade pointer-events-auto mb-2 flex min-h-11 max-w-sm items-center gap-2 rounded-2xl bg-fg py-1 pr-1 pl-4 text-[14px] leading-snug text-bg shadow-lg">
-            <span className="min-w-0 py-1.5">{done.error ?? (done.archived ? 'Archived' : 'Unarchived')}</span>
+            <span className="min-w-0 py-1.5">{done.error ?? changeWords(done.change)}</span>
             {done.error ? (
               <button type="button" aria-label="Dismiss" onClick={() => setDone(undefined)} className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-bg/15"><X className="size-4" /></button>
             ) : (
-              <button type="button" onClick={() => setArchived(done.session, !done.archived, false)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
+              <button type="button" onClick={() => change(changed(done.session, done.change), undoOf(done.session, done.change), false)} className="h-9 shrink-0 rounded-full px-3 font-medium hover:bg-bg/15">Undo</button>
             )}
           </div>
         )}

@@ -47,7 +47,11 @@ const MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
   pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', json: 'application/json', csv: 'text/csv',
 };
-const mimeOf = (name: string) => MIME[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+// Only the table's own entries: `x.constructor` names what every object has, and is no type.
+const mimeOf = (name: string) => {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  return (Object.hasOwn(MIME, ext) ? MIME[ext] : undefined) ?? 'application/octet-stream';
+};
 
 export type DirListing = { path: string; parent?: string; dirs: Array<{ name: string; path: string }> };
 
