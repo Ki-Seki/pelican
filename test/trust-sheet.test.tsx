@@ -116,6 +116,13 @@ describe('what the trust sheet leaves out of a folder that brings more than it s
     expect(screen.getByText(WARNING)).toBeTruthy();
   });
 
+  it('is named by its first three files and how many more, so that the list and the buttons stay in view', () => {
+    // Thirty named one by one made the note 722 px tall on a 390x844 phone.
+    const more = Array.from({ length: 30 }, (_, i) => `.claude/commands/folder-with-a-long-name-${i}/command-${i}.md`);
+    render(<TrustSheet ask={{ brings: ['SessionStart hook: echo 1'], commands: [[[19, 25, 'shell']]], more, answer: () => {}, cancel: () => {} }} folder={root} home={root} onDone={() => {}} />);
+    expect(screen.getByText(MORE).closest('div')!.textContent).toBe(`It brings more than Pelican shows, in ${more.slice(0, 3).join(', ')} and 27 more. What is left out may run too.`);
+  });
+
   it('is never what the repository’s git config runs, however many items its other files bring', async () => {
     const dir = path.join(root, 'five-files');
     const many = (prefix: string) => JSON.stringify({ hooks: { SessionStart: [{ hooks: hooks(Array.from({ length: 200 }, (_, i) => `echo ${prefix}${i}`)) }] } });

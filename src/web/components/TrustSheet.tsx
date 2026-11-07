@@ -14,6 +14,9 @@ import { Sheet, SheetOption } from './Sheet';
  */
 export type TrustAsk = { brings: string[]; commands?: CommandAt[][]; more?: string[]; answer: (choice: TrustChoice) => void; cancel: () => void };
 
+/** Of the files the sheet shows part of, how many it names above the list: the others it counts, so that the list and the buttons stay in view. */
+const NAMED = 3;
+
 /**
  * Asked before Claude Code first starts in a folder nobody has trusted, as the CLI's trust dialog
  * asks: what the folder would run, and whether to run it or to start with the user's settings only.
@@ -32,8 +35,9 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
     const budget = sharedBudget();
     return (ask?.brings ?? []).map((item, i) => revealItem(item, ask?.commands?.[i], budget));
   }, [ask]);
-  // The files it shows part of, named as paths are, by the folder's own choosing.
-  const more = useMemo(() => (ask?.more ?? []).map((file) => revealHidden(file)), [ask]);
+  // The files it shows part of, named as paths are, by the folder's own choosing: the first few, and how many more.
+  const more = useMemo(() => (ask?.more ?? []).slice(0, NAMED).map((file) => revealHidden(file)), [ask]);
+  const unnamed = (ask?.more?.length ?? 0) - more.length;
   return (
     <Sheet
       open={Boolean(ask)}
@@ -52,6 +56,7 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
             <span>
               It brings more than Pelican shows, in{' '}
               {more.map((file, i) => <span key={i}>{i > 0 && ', '}<span className="font-mono break-all">{file.text}</span></span>)}
+              {unnamed > 0 && ` and ${unnamed} more`}
               . What is left out may run too.
             </span>
           </div>
