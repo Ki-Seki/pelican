@@ -25,17 +25,20 @@ const changing = (status: PrStatus | undefined) => Boolean(status?.live && statu
  * The pull request Claude made, from Desktop's `<pr-created>` tag in its reply: a card with its
  * title and number, and View PR. Its live status (open, a draft, merged or closed, its branches,
  * its checks) shows only where gh on the computer can read it, as GitHub says it is now, read again
- * every half minute while its checks run; elsewhere the card names the repository alone.
+ * every half minute while its checks run; elsewhere the card names the repository alone. Only a
+ * github.com pull request's address is asked about, and named by its repository alone: any other
+ * names its host first, whole, so a host made to look like GitHub's shows as what it is.
  */
 export function PrCard({ pr }: { pr: PrCreated }) {
   const { data } = useQuery({
     queryKey: ['pr', pr.url],
     queryFn: () => api.pr(pr.url),
+    enabled: pr.github,
     staleTime: 30_000,
     retry: false,
     refetchInterval: (query) => (changing(query.state.data) ? 30_000 : false),
   });
-  const live = data?.live ? data : undefined;
+  const live = pr.github && data?.live ? data : undefined;
   const state = live ? STATE[live.state === 'open' && live.draft ? 'draft' : live.state] : undefined;
   const Icon = state?.icon ?? GitPullRequest;
   return (
@@ -53,8 +56,10 @@ export function PrCard({ pr }: { pr: PrCreated }) {
               {live.head && live.base && <span className="min-w-0 truncate font-mono text-[12px] text-muted">{live.head} → {live.base}</span>}
               {live.checks && <span className={`shrink-0 ${CHECKS[live.checks].tone}`}>· {CHECKS[live.checks].word}</span>}
             </>
-          ) : (
+          ) : pr.github ? (
             <span className="min-w-0 truncate font-mono text-[12px]">{pr.repo}</span>
+          ) : (
+            <span data-pr-host className="min-w-0 font-mono text-[12px] break-all"><span className="text-muted">{pr.host}</span>/{pr.repo}</span>
           )}
         </div>
       </div>

@@ -1,13 +1,14 @@
-import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { createHmac, randomBytes } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   accessToken, attemptAllowed, authMode, beginAttempt, checkPassword, checkToken, clearPassword, cookieName, issueCode, loadAuth,
-  newSessionCookie, noteFailure, passwordSet, redeemCode, refreshAuth, renewedCookie, resetAttempts, resetToken, setPassword, signedIn,
+  newSessionCookie, noteFailure, onSignOut, passwordSet, redeemCode, refreshAuth, renewedCookie, resetAttempts, resetToken, setPassword, signedIn,
+  signOut,
 } from '../src/server/auth';
 import { config } from '../src/server/config';
 
@@ -221,3 +222,105 @@ describe('a sign-in in use', () => {
     expect(renewedCookie(undefined, now)).toBeUndefined();
   });
 });
+
+describe('signing out', () => {
+  const header = (cookie: { name: string; value: string }) => `${cookie.name}=${cookie.value}`;
+  const signedOutFile = () => path.join(config.stateDir, 'signed-out.json');
+
+  it('refuses that cookie from then on, and every renewal of it, while other browsers stay signed in', async () => {
+    const now = Date.now();
+    const browser = newSessionCookie(now - 2 * 86_400_000);
+    const renewed = renewedCookie(header(browser), now)!;
+    const other = newSessionCookie(now);
+    expect(signedIn(header(browser))).toBe(true);
+    expect(signedIn(header(renewed))).toBe(true);
+    // Signed out with the newer cookie: the older one, which a page's socket may have opened with, goes too.
+    expect(await signOut(header(renewed))).toBe(true);
+    expect(signedIn(header(renewed))).toBe(false);
+    expect(signedIn(header(browser))).toBe(false);
+    expect(renewedCookie(header(browser), now)).toBeUndefined();
+    expect(signedIn(header(other))).toBe(true);
+    // Nothing to sign out: no cookie, a forged one, one already signed out.
+    expect(await signOut(undefined)).toBe(false);
+    expect(await signOut(`${other.name}=${other.value.slice(0, -2)}xx`)).toBe(false);
+    expect(await signOut(header(renewed))).toBe(false);
+    // Signing in again is a new sign-in.
+    expect(signedIn(header(newSessionCookie()))).toBe(true);
+  });
+
+  it('is kept in the state folder, without anything that signs a browser in, and holds after a restart and in another Pelican', async () => {
+    const browser = newSessionCookie();
+    const later = newSessionCookie();
+    await signOut(header(browser));
+    const file = await readFile(signedOutFile(), 'utf8');
+    expect((await stat(signedOutFile())).mode & 0o777).toBe(0o600);
+    // Its id and signature: when it ends is no secret.
+    for (const part of browser.value.split('.').slice(1)) expect(file).not.toContain(part);
+    // Pelican started again: what it reads at start.
+    const restarted = await freshAuth();
+    expect(restarted.signedIn(header(browser))).toBe(false);
+    expect(restarted.signedIn(header(later))).toBe(true);
+    // Signed out in this one, while the other runs: it reads the folder again within a second.
+    await signOut(header(later));
+    restarted.refreshAuth(aSecondLater(), true);
+    expect(restarted.signedIn(header(later))).toBe(false);
+  });
+
+  it('closes what the browser has open at once', async () => {
+    const heard = vi.fn();
+    const stop = onSignOut(heard);
+    await signOut(header(newSessionCookie()));
+    expect(heard).toHaveBeenCalledTimes(1);
+    stop();
+    await signOut(header(newSessionCookie()));
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs out a cookie made before sign-ins had ids (0.4), and the renewal that took its place', async () => {
+    const { secret } = JSON.parse(await readFile(path.join(dir, 'token.json'), 'utf8')) as { secret: string };
+    const now = Date.now();
+    const expires = now + 20 * 86_400_000;
+    const old = `${cookieName()}=${expires}.${createHmac('sha256', Buffer.from(secret, 'base64')).update(String(expires)).digest('base64url')}`;
+    expect(signedIn(old)).toBe(true);
+    const renewed = renewedCookie(old, now)!;
+    expect(await signOut(header(renewed))).toBe(true);
+    expect(signedIn(old)).toBe(false);
+  });
+
+  it('keeps at most 256 sign-ins, and past that refuses every cookie as old as those it lets go of', async () => {
+    // A Pelican of its own state folder, so that what it refuses for age stays its own.
+    const own = await freshAuth(await mkdtemp(path.join(dir, 'state-')));
+    const now = Date.now();
+    // Signed in 20 days ago, and not used since: older than every sign-in signed out below.
+    const idle = own.newSessionCookie(now - 20 * 86_400_000);
+    const first = own.newSessionCookie(now - 1000);
+    await own.signOut(header(first), now - 1000);
+    for (let i = 0; i < 256; i += 1) await own.signOut(header(own.newSessionCookie(now)), now);
+    const kept = JSON.parse(await readFile(path.join(own.stateDir, 'signed-out.json'), 'utf8')) as { floor: number; signedOut: Record<string, number> };
+    expect(Object.keys(kept.signedOut)).toHaveLength(256);
+    expect(own.signedIn(header(first))).toBe(false);
+    expect(own.signedIn(header(idle))).toBe(false);
+    // A browser in use has a newer cookie, and one signing in now gets one.
+    expect(own.signedIn(header(own.newSessionCookie(now)))).toBe(true);
+    expect(own.signedIn(header(own.newSessionCookie()))).toBe(true);
+  });
+
+  it('lets go of sign-ins whose cookies have all expired', async () => {
+    await writeFile(signedOutFile(), JSON.stringify({ version: 1, floor: 0, signedOut: { gone: Date.now() - 1000, kept: Date.now() + 86_400_000 } }));
+    const restarted = await freshAuth();
+    await restarted.signOut(header(newSessionCookie()));
+    const kept = JSON.parse(await readFile(signedOutFile(), 'utf8')) as { signedOut: Record<string, number> };
+    expect(Object.keys(kept.signedOut)).toContain('kept');
+    expect(Object.keys(kept.signedOut)).not.toContain('gone');
+    expect(Object.keys(kept.signedOut)).toHaveLength(2);
+  });
+});
+
+/** auth.ts as a Pelican started now loads it, with this test's folders (or a state folder of its own). */
+async function freshAuth(stateDir = config.stateDir): Promise<typeof import('../src/server/auth') & { stateDir: string }> {
+  vi.resetModules();
+  const [fresh, { config: freshConfig }] = await Promise.all([import('../src/server/auth'), import('../src/server/config')]);
+  Object.assign(freshConfig, { configDir: config.configDir, stateDir, auth: 'auto' });
+  await fresh.loadAuth();
+  return { ...fresh, stateDir };
+}

@@ -5,7 +5,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { checksOf, PULL_URL, pullRequestStatus, readPull } from '../src/server/pull-requests';
 
@@ -48,6 +48,28 @@ describe('a pull request’s live status', () => {
     }
   });
 
+  it('runs gh from no repository: none that Pelican’s environment names, and no git settings of its own', async () => {
+    const seen = path.join(bin, 'env.txt');
+    await writeFile(path.join(bin, 'gh-env'), `#!/bin/sh\nenv | grep '^GIT_' > '${seen}'\nprintf '%s' '{}'\n`);
+    await chmod(path.join(bin, 'gh-env'), 0o755);
+    const only = await mkdtemp(path.join(os.tmpdir(), 'pelican-gh-env-'));
+    const { symlink, readFile } = await import('node:fs/promises');
+    await symlink(path.join(bin, 'gh-env'), path.join(only, 'gh'));
+    const saved = { dir: process.env.GIT_DIR, count: process.env.GIT_CONFIG_COUNT, key: process.env.GIT_CONFIG_KEY_0, value: process.env.GIT_CONFIG_VALUE_0 };
+    Object.assign(process.env, { PATH: `${only}:${savedPath}`, GIT_DIR: '/somewhere/.git', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.sshCommand', GIT_CONFIG_VALUE_0: 'evil' });
+    try {
+      await pullRequestStatus('https://github.com/acme/web/pull/4242');
+      expect(await readFile(seen, 'utf8')).not.toMatch(/^GIT_(DIR|CONFIG_COUNT|CONFIG_KEY_0|CONFIG_VALUE_0)=/m);
+    } finally {
+      process.env.PATH = savedPath;
+      for (const [name, value] of [['GIT_DIR', saved.dir], ['GIT_CONFIG_COUNT', saved.count], ['GIT_CONFIG_KEY_0', saved.key], ['GIT_CONFIG_VALUE_0', saved.value]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await rm(only, { recursive: true, force: true });
+    }
+  });
+
   it('says nothing where gh is not there to ask', async () => {
     process.env.PATH = '/nonexistent';
     try {
@@ -72,4 +94,59 @@ describe('a pull request’s live status', () => {
     expect(PULL_URL.test('https://github.com/acme/web/pull/128/files')).toBe(false);
     expect(PULL_URL.test('https://github.com.evil.example/acme/web/pull/1')).toBe(false);
   });
+});
+
+describe('asking gh, however many cards a page shows', () => {
+  /**
+   * pull-requests.ts as at start, its answers kept none, and a gh of its own folder (PATH: `own`)
+   * that takes `ms` to answer and notes when it ran.
+   */
+  async function fresh(ms: number) {
+    const own = await mkdtemp(path.join(bin, 'slow-'));
+    const log = path.join(own, 'runs.txt');
+    const answer = JSON.stringify({ number: 1, title: 'T', state: 'OPEN', isDraft: false });
+    await writeFile(path.join(own, 'gh'), `#!/bin/sh\necho "start $3" >> '${log}'\nsleep ${ms / 1000}\necho "end $3" >> '${log}'\nprintf '%s' '${answer}'\n`);
+    await chmod(path.join(own, 'gh'), 0o755);
+    process.env.PATH = `${own}:${savedPath}`;
+    vi.resetModules();
+    const module = await import('../src/server/pull-requests');
+    const { readFile } = await import('node:fs/promises');
+    return { ...module, runs: async () => (await readFile(log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean) };
+  }
+
+  it('runs at most four at once, the others in turn', async () => {
+    try {
+      const { pullRequestStatus, runs } = await fresh(300);
+      const answers = await Promise.all(Array.from({ length: 10 }, (_, i) => pullRequestStatus(`https://github.com/acme/web/pull/${i + 1}`)));
+      expect(answers.every((answer) => answer.live)).toBe(true);
+      let now = 0;
+      let most = 0;
+      for (const line of await runs()) {
+        now += line.startsWith('start') ? 1 : -1;
+        most = Math.max(most, now);
+      }
+      expect((await runs()).filter((line) => line.startsWith('start'))).toHaveLength(10);
+      expect(most).toBeLessThanOrEqual(4);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  }, 20_000);
+
+  it('asks about a pull request at most once in half a minute, however many others are asked about meanwhile', async () => {
+    try {
+      const { pullRequestStatus, runs } = await fresh(0);
+      const watched = 'https://github.com/acme/web/pull/9999';
+      await pullRequestStatus(watched);
+      // Hundreds of others, as a reply full of tags (or a page asking by itself) would have it.
+      const others = await Promise.all(Array.from({ length: 300 }, (_, i) => pullRequestStatus(`https://github.com/acme/other/pull/${i + 1}`)));
+      expect(await pullRequestStatus(watched)).toMatchObject({ live: true });
+      const asked = (await runs()).filter((line) => line.startsWith('start'));
+      expect(asked.filter((line) => line.endsWith(watched))).toHaveLength(1);
+      // Kept for half a minute: past what can be kept, others get no live status, and run nothing.
+      expect(asked.length).toBeLessThanOrEqual(256);
+      expect(others.filter((answer) => !answer.live).length).toBe(301 - asked.length);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  }, 60_000);
 });

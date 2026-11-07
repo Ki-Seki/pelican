@@ -1,4 +1,4 @@
-import { type DefaultChange, type DefaultSource, effortOf, isSavedEffort, SOURCE_LABEL, type StartDefaults, startModeFor } from '../../shared/defaults';
+import { type DefaultChange, type DefaultSource, effortOf, type FolderSetting, isSavedEffort, SOURCE_LABEL, type StartDefaults, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { ModelOption, RunSettings } from '../../shared/protocol';
@@ -64,6 +64,19 @@ const other = (source: DefaultSource) => source !== 'user' && source !== 'built-
 /** The verb's ending for what a source's name is: "Your Claude Code settings start", "This folder's file starts". */
 const s = (source: DefaultSource) => (source === 'user' || source === 'managed' ? '' : 's');
 
+const WAITING: Record<FolderSetting, string> = { model: 'the model', effort: 'the effort', fast: 'fast mode', ultracode: 'Ultracode', mode: 'the mode' };
+
+/**
+ * Says what of a folder's own settings waits for the folder to be trusted, of `kinds`: they count
+ * only once it is, and Pelican asks before the new session starts.
+ */
+function waitingNote(defaults: StartDefaults, kinds: readonly FolderSetting[]): string | undefined {
+  const words = (defaults.waiting ?? []).filter((what) => kinds.includes(what)).map((what) => WAITING[what]);
+  if (words.length === 0) return undefined;
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+  return `This folder’s own settings for ${list} wait until you trust the folder, which Pelican asks before the session starts.`;
+}
+
 /** Says which file sets what here, where it is not the user's own settings: the model sheet's note. */
 export function modelNote(defaults: StartDefaults, models: ModelOption[] | undefined, model?: string): string | undefined {
   const lines: string[] = [];
@@ -80,11 +93,18 @@ export function modelNote(defaults: StartDefaults, models: ModelOption[] | undef
   if (defaults.fast.perSession) lines.push('Each session starts without fast mode: your Claude Code settings ask for it per session.');
   else if (defaults.fast.value && other(defaults.fast.source)) lines.push(`${SOURCE_LABEL[defaults.fast.source]} turn${s(defaults.fast.source)} fast mode on.`);
   if (defaults.ultracode.value) lines.push(`${SOURCE_LABEL[defaults.ultracode.source]} turn${s(defaults.ultracode.source)} Ultracode on for every session.`);
+  const waiting = waitingNote(defaults, ['model', 'effort', 'fast', 'ultracode']);
+  if (waiting) lines.push(waiting);
   return lines.length > 0 ? lines.join(' ') : undefined;
 }
 
-/** Says why new sessions start in the mode they do, where that is not plain: the mode sheet's note. */
+/** Says why new sessions start in the mode they do, where that is not plain, and what of the folder's waits: the mode sheet's note. */
 export function modeNote(defaults: StartDefaults, model: ModelOption | undefined): string | undefined {
+  const said = [startNote(defaults, model), waitingNote(defaults, ['mode'])].filter(Boolean);
+  return said.length > 0 ? said.join(' ') : undefined;
+}
+
+function startNote(defaults: StartDefaults, model: ModelOption | undefined): string | undefined {
   const { permissionMode: mode } = defaults;
   const start = startModeFor(defaults, model);
   const label = (m: PermissionMode) => MODE_INFO[m].label;

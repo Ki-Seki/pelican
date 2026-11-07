@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, opendir, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -423,9 +423,17 @@ function* fromSettings(settings: unknown): Generator<Item> {
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   if (strings(permissions.allow).length > 0) yield said(`Allowed without asking: ${strings(permissions.allow).join(', ')}`);
   if (strings(permissions.additionalDirectories).length > 0) yield said(`Extra folders: ${strings(permissions.additionalDirectories).join(', ')}`);
-  if (typeof permissions.defaultMode === 'string' && !['default', 'plan', 'dontAsk'].includes(permissions.defaultMode)) {
-    yield said(`Permission mode: ${permissions.defaultMode}`);
+  // What a new session starts with (defaults.ts): a folder's applies only once it is trusted, as in
+  // Claude Code, so it is asked about rather than taken. Its model, effort, fast mode and Ultracode
+  // cost what they cost, and its mode, Plan too, decides how the session goes.
+  if (typeof permissions.defaultMode === 'string') yield said(`Permission mode: ${permissions.defaultMode}`);
+  if (typeof settings.model === 'string' && settings.model.trim()) yield said(`Model: ${settings.model}`);
+  if (typeof settings.effortLevel === 'string') yield said(`Effort: ${settings.effortLevel}`);
+  for (const [model, entry] of Object.entries(isObject(settings.modelSettings) ? settings.modelSettings : {})) {
+    if (isObject(entry) && typeof entry.effortLevel === 'string') yield said(`Effort for ${model}: ${entry.effortLevel}`);
   }
+  if (typeof settings.fastMode === 'boolean') yield said(`Fast mode: ${settings.fastMode ? 'on' : 'off'}`);
+  if (typeof settings.ultracode === 'boolean') yield said(`Ultracode: ${settings.ultracode ? 'on' : 'off'}`);
   const plugins = isObject(settings.enabledPlugins) ? Object.entries(settings.enabledPlugins).filter(([, on]) => on).map(([name]) => name) : [];
   if (plugins.length > 0) yield said(`Plugins: ${plugins.join(', ')}`);
   if (isObject(settings.extraKnownMarketplaces) && Object.keys(settings.extraKnownMarketplaces).length > 0) {
@@ -780,33 +788,105 @@ function gitRuns(): Promise<boolean> {
 
 const UNREAD_GIT = 'Git config that git could not read';
 
-/** Programs the repository's git config makes git start on its own, even for `git status`, each with the file it is in. */
-function* gitPrograms(repo: GitConfig, config: string): Generator<[Item, string]> {
-  for (const entry of repo.entries) {
-    const { section, subsection, key } = nameParts(entry.name);
-    if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key) && entry.value) {
-      yield [runs(`Git filter ${subsection ?? ''}: `, entry.value, 'shell'), entry.file];
-    } else if (section === 'core' && key === 'fsmonitor' && !['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''].includes(entry.value.toLowerCase())) {
-      yield [runs('Git fsmonitor: ', entry.value, 'shell'), entry.file];
-    } else if (section === 'core' && key === 'hookspath' && entry.value) {
-      yield [said(`Git hooks folder: ${entry.value}`), entry.file];
-    }
+const BOOLEAN = ['false', 'true', '0', '1', 'no', 'yes', 'off', 'on', ''];
+
+/** A command git runs through a shell, written after a `!` or not, as its item. */
+const shellValue = (label: string, value: string): Item => (value.startsWith('!') ? runs(`${label}!`, value.slice(1), 'shell') : runs(label, value, 'shell'));
+
+/**
+ * What a setting of the repository's git config makes git start, if anything, as its item: what
+ * git starts on its own (filters, the file-system monitor, hooks), and what a command git or Claude
+ * runs there starts: an external diff and a diff driver's command (git diff), a text converter
+ * (git diff, git log -p, git show), a pager (any command in a terminal), the program SSH runs as and
+ * a credential helper or password prompt (fetch, pull, push), a signing program (a signed commit),
+ * and an alias, which a `!` makes a shell command and `-c` can give any setting.
+ */
+function gitProgram(entry: GitEntry): Item | undefined {
+  const { section, subsection, key } = nameParts(entry.name);
+  const { value } = entry;
+  if (!value) return undefined;
+  if (section === 'filter' && ['clean', 'smudge', 'process'].includes(key)) return runs(`Git filter ${subsection ?? ''}: `, value, 'shell');
+  if (section === 'core' && key === 'fsmonitor') return BOOLEAN.includes(value.toLowerCase()) ? undefined : runs('Git fsmonitor: ', value, 'shell');
+  if (section === 'core' && key === 'hookspath') return said(`Git hooks folder: ${value}`);
+  if (section === 'diff' && key === 'external' && subsection === undefined) return runs('Git external diff: ', value, 'shell');
+  if (section === 'diff' && key === 'command' && subsection !== undefined) return runs(`Git diff driver ${subsection}: `, value, 'shell');
+  if (section === 'diff' && key === 'textconv' && subsection !== undefined) return runs(`Git text converter ${subsection}: `, value, 'shell');
+  if (section === 'core' && key === 'pager') return runs('Git pager: ', value, 'shell');
+  if (section === 'pager' && subsection === undefined) return BOOLEAN.includes(value.toLowerCase()) ? undefined : runs(`Git pager for ${key}: `, value, 'shell');
+  if (section === 'core' && key === 'sshcommand') return runs('Git SSH command: ', value, 'shell');
+  if (section === 'core' && key === 'askpass') return runs('Git password prompt: ', value, 'shell');
+  if (section === 'credential' && key === 'helper') return shellValue(`Git credential helper${subsection === undefined ? '' : ` for ${subsection}`}: `, value);
+  if (section === 'gpg' && key === 'program') return runs(`Git signing program${subsection === undefined ? '' : ` (${subsection})`}: `, value, 'shell');
+  if (section === 'gpg' && subsection === 'ssh' && key === 'defaultkeycommand') return runs('Git signing key command: ', value, 'shell');
+  if (section === 'alias') {
+    const name = subsection ?? key;
+    return value.startsWith('!') ? shellValue(`Git alias ${name}: `, value) : runs(`Git alias ${name}: `, value, 'argv');
   }
+  return undefined;
+}
+
+/** Hook files, found in a repository's hooks folder, past which no more are looked at. */
+const HOOKS_LOOKED_AT = 1000;
+
+/**
+ * The repository's own hooks folder, where git finds hooks unless core.hooksPath says otherwise: in
+ * its git directory, which a worktree's `.git` file names, the one its worktrees share.
+ */
+async function hooksFolder(top: string): Promise<string | undefined> {
+  const dotGit = path.join(top, '.git');
+  const info = await stat(dotGit).catch(() => undefined);
+  let gitDir: string | undefined;
+  if (info?.isDirectory()) gitDir = dotGit;
+  else if (info?.isFile()) {
+    const named = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec((await readText(dotGit)).text ?? '')?.[1];
+    if (named) gitDir = path.resolve(top, named);
+  } else if (await isGitDirectory(top)) gitDir = top;
+  if (!gitDir) return undefined;
+  const common = (await readText(path.join(gitDir, 'commondir'))).text?.trim();
+  return path.join(common ? path.resolve(gitDir, common) : gitDir, 'hooks');
+}
+
+/**
+ * The hooks the repository brought in its own hooks folder (a tarball's `.git` keeps them; a clone
+ * gets none): each file there that git would run, one it may execute, its samples aside.
+ */
+async function broughtHooks(top: string): Promise<{ folder: string; names: string[] } | undefined> {
+  const folder = await hooksFolder(top);
+  const names: string[] = [];
+  const dir = folder ? await opendir(folder).catch(() => undefined) : undefined;
+  if (!folder || !dir) return undefined;
+  let looked = 0;
+  for await (const entry of dir) {
+    if ((looked += 1) > HOOKS_LOOKED_AT) break;
+    if (entry.name.endsWith('.sample') || entry.name.startsWith('.')) continue;
+    const info = await stat(path.join(folder, entry.name)).catch(() => undefined);
+    if (info?.isFile() && (info.mode & 0o111) !== 0) names.push(entry.name);
+  }
+  return names.length > 0 ? { folder, names: names.sort() } : undefined;
+}
+
+/** Programs the repository's git config, and its hooks folder, make git start, each with the file it is in. */
+function* gitPrograms(repo: GitConfig, config: string, hooks?: { folder: string; names: string[] }): Generator<[Item, string]> {
+  for (const entry of repo.entries) {
+    const item = gitProgram(entry);
+    if (item) yield [item, entry.file];
+  }
+  if (hooks) yield [said(`Git hooks: ${hooks.names.join(', ')}`), hooks.folder];
   // An included file can change (another branch, a pull), and with it what git runs.
   for (const include of repo.includes) yield [note(`Git config includes: ${include.value}`), include.file];
   if (repo.unread) yield [note(UNREAD_GIT), config];
 }
 
 /**
- * What git would run of the repository's own config, also when git could not read it all, to
- * `found`, read whatever the folder's other files bring: what goes first, and a file's share of
- * the rest.
+ * What git would run of the repository's own config and hooks folder, also when git could not
+ * read it all, to `found`, read whatever the folder's other files bring: what goes first, and a
+ * file's share of the rest.
  */
 async function gitBrings(top: string, from: string, found: Gathered): Promise<void> {
   const config = path.join(top, '.git', 'config');
   try {
     const repo = await repositoryConfig(top);
-    if (repo) for (const [item, file] of gitPrograms(repo, config)) found.add(item, path.relative(from, file));
+    if (repo) for (const [item, file] of gitPrograms(repo, config, await broughtHooks(top))) found.add(item, path.relative(from, file));
   } catch {
     found.add(note(UNREAD_GIT), path.relative(from, config));
   }
@@ -868,11 +948,59 @@ export async function folderBrings(folder: string): Promise<string[]> {
   return (await whatFolderBrings(folder)).brings;
 }
 
+/** The programs git signs with by default, by the signature's format (gpg.format), as git names them. */
+const SIGNERS: Record<string, string> = { openpgp: 'gpg', x509: 'gpgsm', ssh: 'ssh-keygen' };
+
+/**
+ * The user's own git config, the system's and the global one, as git reads them in this repository
+ * (an includeIf that names it, too): each setting by its name as git spells it, in order. None
+ * where git cannot say.
+ */
+function userGitConfig(top: string): Promise<GitEntry[]> {
+  const env: NodeJS.ProcessEnv = {};
+  // As git reads them where Claude Code runs: GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM count, what
+  // picks another repository or adds settings of its own does not.
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!/^GIT_(DIR|WORK_TREE|COMMON_DIR|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+|CEILING_DIRECTORIES)$/.test(name)) env[name] = value;
+  }
+  Object.assign(env, { GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' });
+  return new Promise((resolve) => {
+    execFile('git', ['-c', 'safe.directory=*', 'config', '--list', '-z', '--show-scope', '--includes'], { cwd: top, env, timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      if (error) {
+        resolve([]);
+        return;
+      }
+      // `<scope>` NUL `<name>` newline `<value>` NUL.
+      const fields = String(stdout).split('\0');
+      const entries: GitEntry[] = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        if (fields[i] !== 'system' && fields[i] !== 'global') continue;
+        const item = fields[i + 1]!;
+        const cut = item.indexOf('\n');
+        entries.push({ file: fields[i]!, name: cut < 0 ? item : item.slice(0, cut), value: cut < 0 ? '' : item.slice(cut + 1) });
+      }
+      resolve(entries);
+    });
+  });
+}
+
+/** A setting's name as git compares it: its section and key in any case, its subsection as written. */
+function canonical(name: string): string {
+  const { section, subsection, key } = nameParts(name);
+  return [section.toLowerCase(), ...(subsection === undefined ? [] : [subsection]), key.toLowerCase()].join('.');
+}
+
 /**
  * Git settings, for Claude Code and every git it starts, that turn off what the repository's own
- * config makes git run (filters, a file-system monitor, a hooks folder): the folder's settings are
- * left out, so are its programs. Names as git spells them, so `[filter.Evil]` is turned off as
- * `filter.evil`. A config git could not read in full cannot be turned off, so nothing starts.
+ * config and hooks folder make git run (gitProgram): the folder's settings are left out, so are its
+ * programs. Each such setting gets the user's own value from their system and global config, as
+ * git would read it without the repository's, or else one that runs nothing of the folder's: no
+ * filter, file-system monitor or hooks; an external diff or a diff driver's command of nothing, so
+ * `git diff` stops rather than run one (`--no-ext-diff` shows it); `cat` as a text converter,
+ * which shows a file as it is; the pager in PAGER, or less; ssh; no password prompt; the format's
+ * own signing program; an alias of nothing. Credential helpers are emptied, then given the user's
+ * own again. Names as git spells them, so `[filter.Evil]` is turned off as `filter.evil`. A config
+ * git could not read in full cannot be turned off, so nothing starts.
  */
 async function gitOff(dir: string): Promise<Record<string, string>> {
   const top = await gitRoot(dir);
@@ -880,14 +1008,44 @@ async function gitOff(dir: string): Promise<Record<string, string>> {
   const repo = await repositoryConfig(top).catch((): GitConfig => ({ entries: [], includes: [], unread: true }));
   if (!repo) return {};
   if (repo.unread) throw new Error('Git could not read this folder’s git config, so Claude Code cannot start in it with your settings only.');
-  const off: Array<[string, string]> = [];
-  const parts = repo.entries.map((e) => nameParts(e.name));
-  for (const name of new Set(parts.filter((p) => p.section === 'filter' && p.subsection !== undefined).map((p) => p.subsection!))) {
-    off.push([`filter.${name}.clean`, ''], [`filter.${name}.smudge`, ''], [`filter.${name}.process`, ''], [`filter.${name}.required`, 'false']);
+  // Each setting to give, with what runs nothing of the folder's, in the order first met.
+  const neutral = new Map<string, [string, string]>();
+  const turnOff = (name: string, value: string) => {
+    if (!neutral.has(canonical(name))) neutral.set(canonical(name), [name, value]);
+  };
+  let helpers = false;
+  for (const entry of repo.entries) {
+    const { section, subsection, key } = nameParts(entry.name);
+    if (section === 'filter' && subsection !== undefined) {
+      turnOff(`filter.${subsection}.clean`, '');
+      turnOff(`filter.${subsection}.smudge`, '');
+      turnOff(`filter.${subsection}.process`, '');
+      turnOff(`filter.${subsection}.required`, 'false');
+    } else if (section === 'core' && key === 'fsmonitor') turnOff('core.fsmonitor', 'false');
+    else if (section === 'core' && key === 'hookspath') turnOff('core.hooksPath', '/dev/null');
+    else if (!gitProgram(entry)) continue;
+    else if (section === 'diff' && key === 'external') turnOff('diff.external', '');
+    else if (section === 'diff' && key === 'command') turnOff(`diff.${subsection}.command`, '');
+    else if (section === 'diff' && key === 'textconv') turnOff(`diff.${subsection}.textconv`, 'cat');
+    else if (section === 'core' && key === 'pager') turnOff('core.pager', process.env.PAGER || 'less');
+    else if (section === 'pager') turnOff(`pager.${key}`, 'true');
+    else if (section === 'core' && key === 'sshcommand') turnOff('core.sshCommand', 'ssh');
+    else if (section === 'core' && key === 'askpass') turnOff('core.askPass', '');
+    else if (section === 'credential') helpers = true;
+    else if (section === 'gpg' && key === 'program') turnOff(subsection === undefined ? 'gpg.program' : `gpg.${subsection}.program`, SIGNERS[subsection ?? 'openpgp'] ?? 'gpg');
+    else if (section === 'gpg') turnOff('gpg.ssh.defaultKeyCommand', '');
+    else if (section === 'alias') turnOff(subsection === undefined ? `alias.${key}` : `alias.${subsection}.${key}`, '');
   }
-  if (parts.some((p) => p.section === 'core' && p.key === 'fsmonitor')) off.push(['core.fsmonitor', 'false']);
-  if (parts.some((p) => p.section === 'core' && p.key === 'hookspath')) off.push(['core.hooksPath', '/dev/null']);
-  if (off.length === 0) return {};
+  if (await broughtHooks(top)) turnOff('core.hooksPath', '/dev/null');
+  if (neutral.size === 0 && !helpers) return {};
+  const mine = await userGitConfig(top);
+  const own = new Map(mine.map((entry) => [canonical(entry.name), entry.value]));
+  const off: Array<[string, string]> = [...neutral.entries()].map(([name, [spelled, value]]) => [spelled, own.get(name) ?? value]);
+  // The folder's credential helpers emptied, then the user's own, as they come.
+  if (helpers) {
+    off.push(['credential.helper', '']);
+    for (const entry of mine) if (nameParts(entry.name).section.toLowerCase() === 'credential' && nameParts(entry.name).key.toLowerCase() === 'helper') off.push([entry.name, entry.value]);
+  }
   // After any the environment already holds, which git reads first.
   const start = Number(process.env.GIT_CONFIG_COUNT) || 0;
   const env: Record<string, string> = { GIT_CONFIG_COUNT: String(start + off.length) };

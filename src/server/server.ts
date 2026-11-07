@@ -7,7 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { type ClientEvent, type RunState, type ServerEvent, SIGNED_OUT_CLOSE } from '../shared/protocol.js';
 import { TERMINAL_LIMITS } from '../shared/terminal.js';
 import { app } from './app.js';
-import { loadAuth, refreshAuth, signedIn } from './auth.js';
+import { loadAuth, onSignOut, refreshAuth, signedIn } from './auth.js';
 import { config } from './config.js';
 import { connect, subscribe } from './feed.js';
 import { keepDays, sweepUploads } from './files.js';
@@ -64,13 +64,24 @@ function guardRejections(): void {
 /**
  * The sockets of api/ws, each with the sign-in it opened with. A socket lives on after the
  * request that opened it, so its sign-in is looked at again every second: once it signs nobody in
- * (a new token or password, which Pelican notices within a second, or a cookie that expired), the
- * socket closes (SIGNED_OUT_CLOSE). A terminal's socket is checked the same way (terminals.ts),
- * and before each key it passes on.
+ * (a new token or password, which Pelican notices within a second, a cookie that expired, or
+ * one signed out in another Pelican sharing the state folder), the socket closes
+ * (SIGNED_OUT_CLOSE); a browser signed out here closes its own at once. A terminal's socket is
+ * checked the same way (terminals.ts), and before each key it passes on.
  */
 const SIGN_IN_CHECK_MS = 1000;
 const sockets = new Map<WebSocket, () => boolean>();
 let checkingSignIn: NodeJS.Timeout | undefined;
+
+/** Closes the sockets whose sign-in signs nobody in any more. */
+function letGoOfSignedOut(): void {
+  for (const [socket, still] of sockets) {
+    if (still()) continue;
+    sockets.delete(socket);
+    socket.close(SIGNED_OUT_CLOSE, 'Signed out');
+  }
+}
+onSignOut(letGoOfSignedOut);
 
 function keepSignedIn(ws: WebSocket, stillSignedIn: () => boolean): void {
   sockets.set(ws, stillSignedIn);
@@ -79,11 +90,7 @@ function keepSignedIn(ws: WebSocket, stillSignedIn: () => boolean): void {
   checkingSignIn = setInterval(() => {
     // The sign-in files read again now, not up to a second from now: a reset closes them within one.
     refreshAuth(Date.now(), true);
-    for (const [socket, still] of sockets) {
-      if (still()) continue;
-      sockets.delete(socket);
-      socket.close(SIGNED_OUT_CLOSE, 'Signed out');
-    }
+    letGoOfSignedOut();
     if (sockets.size > 0) return;
     clearInterval(checkingSignIn);
     checkingSignIn = undefined;

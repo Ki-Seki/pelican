@@ -233,7 +233,8 @@ settings; and updates from Settings.
 - **New sessions start as Claude Code starts them.** Their model, effort, fast mode, Ultracode and
   permission mode come from Claude Code's settings, the files the terminal and Claude Desktop read:
   yours (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`), the folder's
-  `.claude/settings.json` and `.claude/settings.local.json` once it is trusted, and managed
+  `.claude/settings.json` and `.claude/settings.local.json` once it is trusted (until then a new
+  session's model and mode sheets say they wait, and its first message asks), and managed
   settings, each over the one before, as in Claude Code 2.1.318. Pelican keeps no defaults of its
   own: its High effort is gone, and so are the picks each browser kept under Settings; those kept
   before 0.5.0 are no longer read. A model starts with the effort Claude Code keeps for it
@@ -247,7 +248,7 @@ settings; and updates from Settings.
   new sessions start in it, as Claude Code's do, and Settings and the new session's mode sheet say
   so; a fork, Fork from here or a `/clear` of a session in Bypass starts as a new session would.
   Settings › New sessions start with shows all this and where each value comes from, and a new
-  session's model and mode sheets say when the folder's or managed settings decide.
+  session's model and mode sheets say when the folder's or managed settings decide, or wait.
 - **Settings writes Claude Code's settings, as `/model` does.** A model, an effort, fast mode or a
   mode picked under Settings › New sessions start with is saved in your Claude Code user settings,
   as `/model`, `/effort`, `/fast` and `/config` save it, so new sessions in the terminal and in
@@ -256,8 +257,9 @@ settings; and updates from Settings.
   Ultracode are not offered there, as Claude Code keeps neither as a default, and Bypass never is.
   A model, an effort or fast mode picked in a session's model sheet is saved too, as `/model`,
   `/effort` and `/fast` save it in the terminal; Max effort, Ultracode and the mode stay with the
-  session. A settings file that is not valid JSON is left as it is, and Settings says so. A running
-  session keeps the model, effort and mode it started with, as in Claude Code.
+  session. A settings file that is not valid JSON is left as it is, and Settings says so; one
+  reached through links, also a link to a link, is written where they lead, every link kept. A
+  running session keeps the model, effort and mode it started with, as in Claude Code.
 - A session's effort shows as Claude Code applies it, its own default for the model included.
 - Keys are Claude Desktop's, as it takes them in a browser: ⌘K (Ctrl+K) opens the command menu and
   ⇧⌘K (Ctrl+Shift+K) searches sessions, which ⌘K did before; ⇧⌘O starts a session, ⇧⌘, opens
@@ -361,10 +363,13 @@ settings; and updates from Settings.
 - A pull request's card asks GitHub what it says of it now with `gh pr view <address> --json …`, the
   GitHub CLI as you, only where it is installed and signed in, only for an address of the form
   `https://github.com/<owner>/<repo>/pull/<n>` that Claude named in Desktop's `<pr-created>` tag,
-  from no repository, with no prompt and within 10 seconds, at most every half minute for a pull
-  request; it changes nothing. Pelican runs no git that changes anything: Commit changes and Create
-  PR are requests to Claude, which runs git and gh under your permission rules. The demo asks
-  nothing of GitHub.
+  from no repository, with no prompt and within 10 seconds, at most four at once and at most every
+  half minute for a pull request, however many cards pages show (a reply has at most five); it
+  changes nothing. Only such an address's card names its repository as GitHub's: any other's names
+  its host first, as the browser would open it, so a host made to look like GitHub's
+  (`github-com.pr-review.example`) does not pass for it. Pelican runs no git that changes anything:
+  Commit changes and Create PR are requests to Claude, which runs git and gh under your permission
+  rules. The demo asks nothing of GitHub.
 - Updating from Settings takes a request from Pelican's own page, signed in, as every change does,
   one at a time, and never in either demo; it installs nothing but pelican-cc, at the newest version
   npm's registry names, which the request must name exactly, with npm's integrity checks and no
@@ -406,6 +411,30 @@ settings; and updates from Settings.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.
+- A folder nobody trusted whose Claude Code settings pick a model, an effort, fast mode, Ultracode
+  or a mode, Plan too, is asked about before its first session, with those listed beside its
+  programs: a folder's settings count only once it is trusted, as in Claude Code. Before, they
+  applied with no question where the folder brought nothing else, so a cloned repository could turn
+  on Ultracode and fast mode.
+- More of what a folder's git config makes git run is asked about, and turned off with your
+  settings only: an external diff, a diff driver's command and text converter, a pager, the program
+  SSH runs as, a password prompt, credential helpers, a signing program and aliases (a `!` one is
+  a shell command, and any can give git a setting with `-c`), and hooks that came in the folder's
+  own hooks folder, as a tarball's `.git` brings them. With your settings only, each gets your own setting, from your
+  system and global git config, or one that runs nothing of the folder's: `git diff` there stops
+  rather than run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the
+  file as it is, and credential helpers are yours alone. Changes' own git runs none of them either,
+  and fetches nothing, not even a partial clone's missing files, whose fetch ran a program the
+  repository's remote named. Before, only filters, the file-system monitor and `core.hooksPath`
+  were listed and turned off.
+- A branch of a side chat is a side chat of its own, marked as one: it stays read-only, with the
+  reading tools alone and no MCP servers, when the side chat it came from is deleted, cleaned up by
+  Claude Code after `cleanupPeriodDays`, or more than eight branches back. Before, it then resumed
+  as a session with every tool, its MCP servers and its mode, and could be rewound.
+- Signing out signs that browser out on the computer too: its cookie, and every renewal of it, is
+  refused until it would have expired, also after Pelican restarts, and its terminals and live
+  updates close at once, in every tab. Before, only the browser forgot the cookie: a terminal open
+  in another tab kept taking keys, and the cookie, copied, still signed in.
 - Run in terminal reads a command as an approval does: it is offered, and the server runs it, only
   for one with no control character a shell takes as a key and nothing an approval would write out,
   such as a character that hides or turns text around, or a space other than a plain one where a

@@ -28,7 +28,13 @@ can read your sessions and have Claude run commands as you, so treat access to i
   stored as a scrypt hash in `~/.config/pelican/auth.json`. While one is set, it replaces the token.
 - **Sign-in cookies** are `HttpOnly` and `SameSite=Strict`, and signed with a secret that belongs
   to the token or the password: changing either signs every browser out. A cookie in use is
-  renewed, so a browser stays signed in until it goes 30 days unused. Failed sign-ins are limited
+  renewed, so a browser stays signed in until it goes 30 days unused. Signing out signs that
+  browser out on the computer too: its cookie, and every renewal of it, is refused from then on,
+  until the last could have expired, and what that browser has open, its live updates and its
+  terminals, closes at once, in every tab. Pelican keeps such sign-ins in its state folder (a hash
+  of each one's id, never its cookie), so a restart or an update keeps them refused, at most 256 of
+  them: past that, the oldest make room, and every cookie no newer than theirs is refused with
+  them. Failed sign-ins are limited
   to 10 per address and 30 in all every 10 minutes, counted before the check, so requests sent
   together cannot slip past. `X-Forwarded-For` is believed only with `PELICAN_TRUSTED_PROXY=1`,
   for a proxy on the same computer.
@@ -82,10 +88,18 @@ can read your sessions and have Claude run commands as you, so treat access to i
   no sniffing and no scripts, and anything but an image downloads.
 - **Folders run nothing of their own until you trust them.** A folder can bring programs: hooks,
   helper commands and environment variables in its Claude Code settings, servers in its `.mcp.json`,
-  slash commands, skills and agents that run a shell or tools without asking, filters in its git
-  config. Claude Code asks before it runs them in a terminal, but never in a session started through
-  its SDK, so Pelican asks. Before Claude Code first starts in a folder nobody has trusted that
-  brings any of these, Pelican lists them, read from the folder's files as Claude Code reads them
+  slash commands, skills and agents that run a shell or tools without asking, and in its git config
+  what git runs on its own or for a command run there: filters, a file-system monitor, a hooks
+  folder, an external diff, a diff driver's command and text converter, a pager, the program SSH
+  runs as, a password prompt, credential helpers, a signing program and aliases (which `!` makes a
+  shell command, and `-c` can give any setting), and hooks its own hooks folder came with (a
+  tarball's `.git` keeps them). Claude Code asks before it runs them in a terminal, but never in a
+  session started through its SDK, so Pelican asks. Its Claude Code settings can also pick what a
+  session starts with and what it costs, a model, an effort, fast mode, Ultracode or a mode (Plan
+  too), which count only once the folder is trusted, as in Claude Code: until then a new session's
+  model and mode sheets say they wait, and they are asked about with its programs. Before Claude
+  Code first starts in a folder nobody has trusted that brings any of these, Pelican lists them,
+  read from the folder's files as Claude Code reads them
   (those of the folder and its parents up to the repository's top, and the `.mcp.json` of each
   folder above it but your home folder and those that hold it; a skill's `SKILL.md` in any case, as
   a Mac finds it, and commands and agents at any depth, a folder of them nested more than ten deep
@@ -118,23 +132,32 @@ can read your sessions and have Claude run commands as you, so treat access to i
   read. A file that another program writes by itself (`sed`'s `w`, `sort -o`, `split`, perl, python,
   awk) is not read as a script, nor is a string that a program runs in a shell of its own (python's
   `os.system`, `make`) followed. With your settings only, Claude Code loads just your user settings,
-  and git runs none of the repository's filters, its file-system monitor or its hooks folder; a
+  and git runs none of the repository's programs: Claude Code, and every git it starts, gets git
+  settings (`GIT_CONFIG_*`) that give each setting of the repository's that names one your own
+  value, from your system and global git config, or else one that runs nothing of the folder's: no
+  filter, file-system monitor or hooks, its own hooks folder's included; an external diff and a
+  diff driver's command of nothing, which git cannot be told to leave out, so `git diff` there stops
+  rather than run them (`git diff --no-ext-diff` shows the diff); `cat` as a text converter, which
+  shows a file as it is; the pager in `PAGER`, or less; `ssh`; no password prompt; the format's own
+  signing program; aliases of nothing; and its credential helpers emptied, then yours again. A
   folder whose git config git cannot read in full does not start that way. A folder is trusted when
   Claude Code's own record says so (its trust dialog, read and never written), when you trusted it
   in Pelican, when Pelican made it (a scratch folder), or when Claude Code has worked there before,
   unless you chose your settings only for it. Listing a folder's slash commands or MCP servers
   starts Claude Code with hooks off and, in a folder nobody trusted, from your home folder with your
   settings only; git does not run there at all. In a trusted folder, git runs for the Changes panel
-  with hooks, the file-system monitor, external diffs and text converters off, reads paths
-  literally, refuses `..`, and shows nothing of a work tree outside the folder.
+  with hooks, the file-system monitor, external diffs, diff drivers, text converters and the pager
+  off, git's own commands only (no alias), and no transport at all, so no SSH command, credential
+  helper or password prompt, and nothing fetched for a partial clone's missing files; it reads
+  paths literally, refuses `..`, and shows nothing of a work tree outside the folder.
 - **A terminal is your shell, as you, with the same doors.** A terminal runs your login shell on
   this computer, in the folder a request names (in the app, the session's), and can do there
   whatever you can in a terminal. Its socket opens only as Pelican's other one does: a signed-in
   browser, on Pelican's own page (its `Origin`), under a host name Pelican answers to; it closes
   within a second once that browser is signed out, and takes nothing more from it; and it runs in a
   folder as Claude Code does, so a folder nobody trusted that brings programs is asked about first,
-  and in one kept to your settings only, git runs none of the repository's filters, file-system
-  monitor or hooks folder (the settings Claude Code and `!` commands get there). The shell's
+  and in one kept to your settings only, git runs none of the repository's programs (the settings
+  Claude Code and `!` commands get there, as above). The shell's
   environment has none of Pelican's settings (`PELICAN_*`), npm's (`npm_*`), Claude Code's mark
   (`CLAUDECODE`) or the Agent SDK's (`CLAUDE_AGENT_SDK_*`), nor what describes the terminal or
   service Pelican runs in. At most 10 terminals run at once, each shown on at most 8 pages, and a
@@ -184,16 +207,21 @@ can read your sessions and have Claude run commands as you, so treat access to i
   never a path, from that session's own `tool-results` folder, or, for a record a branch copied,
   from that of the session its row says it came from, when the record's path names that session:
   a regular file reached through no link and with no other name (no hard link).
-- **Pelican changes nothing in git, and asks GitHub only about a pull request Claude named.**
-  Commit changes and Create PR, in Changes, are requests to Claude, in Claude Desktop's words: Claude
-  runs git and gh, under your permission rules and hooks, as for any request; Pelican has no Push.
-  A pull request's card, for the address Claude named in Desktop's `<pr-created>` tag, asks the
-  GitHub CLI as you, where it is installed and signed in: `gh pr view <address> --json
+- **Pelican changes nothing in git, and asks GitHub only about a pull request Claude named.** Commit
+  changes and Create PR, in Changes, are requests to Claude, in Claude Desktop's words: Claude runs
+  git and gh, under your permission rules and hooks, as for any request; Pelican has no Push. A pull
+  request's card, for the address Claude named in Desktop's `<pr-created>` tag, asks the GitHub CLI
+  as you, where it is installed and signed in: `gh pr view <address> --json
   number,title,state,isDraft,headRefName,baseRefName,statusCheckRollup`, run directly (never through
   a shell), only for an address of the form `https://github.com/<owner>/<repo>/pull/<n>`, from the
-  system's temporary folder (no repository), with gh's prompts off and none of Pelican's settings in
-  its environment, within 10 seconds, and at most every 30 seconds for one pull request, whatever
-  pages ask. It reads; it changes nothing. The demo asks nothing.
+  system's temporary folder (no repository, nor one Pelican's environment names), with gh's prompts
+  off and none of Pelican's settings in its environment, within 10 seconds, at most four at once,
+  and at most every 30 seconds for one pull request, whatever pages ask: an answer is kept for 30
+  seconds, for at most 256 pull requests, and one asked about past them gets no status until an
+  answer is that old. A reply has at most five cards. It reads; it changes nothing. The demo asks
+  nothing. Only such an address's card names a repository as GitHub's: a card for any other names
+  its host first, whole, as the browser would open it (a name in another script as its punycode,
+  without a user name), so a host made to look like GitHub's reads as what it is.
 - **Only the files Claude sent are shown, and only as files.** In the sessions Pelican runs,
   Pelican tells Claude Code it shows the files Claude sends (`CLAUDE_CODE_ATTACHMENTS_BY_PATH`, set
   for Claude Code alone, never for a `!` command), which turns on SendUserFile and nothing else. In
@@ -226,8 +254,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
   pictures are left out.
 - **Of Claude Code's settings, Pelican writes four keys of one file, when you pick them.** What
   new sessions start with is Claude Code's own settings: Pelican reads them through the Agent SDK's
-  `resolveSettings`, the user's, a folder's (only once the folder is trusted, as a session there
-  would) and managed ones, which runs nothing. Settings › New sessions start with, and a model, an
+  `resolveSettings`, the user's, a folder's (only once the folder is trusted, as in Claude Code, and
+  never where you kept it to your settings) and managed ones, which runs nothing. Settings › New sessions start with, and a model, an
   effort or fast mode picked in a session's model sheet, change Claude Code's user settings file
   (`settings.json` in `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json`) as Claude Code's own
   `/model`, `/effort`, `/fast` and `/config` do, and nothing else: `model`,
@@ -238,7 +266,9 @@ can read your sessions and have Claude run commands as you, so treat access to i
   neither reads nor writes the file. The file is read, the change merged in with every other key
   kept as it was, and the whole written as Claude Code writes it (two-space JSON and a newline): to
   a temporary file beside it with its permissions, synced, then renamed over it, so no program
-  ever reads half a file; a symlinked file is written at its target, the link kept. Just before
+  ever reads half a file; a symlinked file is written at its real path, every link on the way
+  kept, also a link to a link (Claude Code's own writer follows one link, and would put a file in
+  place of the second). Just before
   the rename the file is read again: if it changed meanwhile (Claude Code saving `/model`), the
   change is made again on top of what is there, never over it, and after five tries Pelican gives
   up and says so. A file that is not valid JSON, holds no object or is larger than 2 MB is left as
@@ -249,7 +279,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   Code.
 - **A side chat only reads.** It runs with Read, Grep and Glob alone, no MCP servers, in Don't ask
   mode with every other request refused, takes no `/` or `!` commands, and stays that way whenever
-  Pelican resumes it or a branch of it.
+  Pelican resumes it or a branch of it. Each branch Pelican makes of a side chat is marked as a side
+  chat of its own (Claude Desktop's "Side chat" title under its own id, its name kept after it), so
+  it stays one when the side chat it came from is deleted, cleaned up by Claude Code, or many
+  branches back.
 - **What gets installed is what was tested.** The packages Pelican's server uses are built into
   it, as CI tested them, and npm installs two: the Agent SDK, pinned to one version, with the
   Claude Code it bundles for your computer, and the terminal's optional PTY, `@lydell/node-pty`,
@@ -305,7 +338,8 @@ can read your sessions and have Claude run commands as you, so treat access to i
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them, and saves a `!` command's output too long for the conversation where Claude Code saves
 one, in the session's `tool-results` folder, readable only by you. It stores uploads, push
-notification keys and subscriptions, the folders you trusted or kept to your settings, which
+notification keys and subscriptions, the sign-ins signed out until their cookies would have
+expired, the folders you trusted or kept to your settings, which
 sessions you pinned or archived (their ids), the usage figures it counted from the transcripts
 (token counts, times, models and folders, no conversation text) with the sessions it ran and how
 long they waited for you, a note of the running server, and what the last look for an update found,

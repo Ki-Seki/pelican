@@ -14,7 +14,7 @@ import {
 } from '../shared/terminal.js';
 import { guardOutput } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
-import { refreshAuth } from './auth.js';
+import { onSignOut, refreshAuth } from './auth.js';
 import { config } from './config.js';
 import { heartbeat } from './heartbeat.js';
 import { loadPty, ptyFailure, ptyMissing, type Pty } from './pty.js';
@@ -778,10 +778,15 @@ let sweeping: NodeJS.Timeout | undefined;
 /**
  * A page's socket lives on after the request that opened it: every second, while any page shows a
  * terminal, the pages whose sign-in signs nobody in any more (a new token or password, which
- * Pelican notices within a second, or a cookie that expired) are let go.
+ * Pelican notices within a second, a cookie that expired, or one signed out in another Pelican
+ * sharing the state folder) are let go; those of a browser signed out here, at once.
  */
 const SIGN_IN_CHECK_MS = 1000;
 let checkingSignIns: NodeJS.Timeout | undefined;
+
+onSignOut(() => {
+  for (const term of terminals.values()) term.letGoOfSignedOut();
+});
 
 function checkSignIns(): void {
   if (checkingSignIns) return;

@@ -103,11 +103,12 @@ describe('signing in', () => {
     expect((await ask('/?token=nope', { headers: { cookie: `${cookie.name}=${cookie.value}` } }, false)).headers.get('location')).toBe('./');
   });
 
-  it('use keeps a browser signed in: an older cookie is renewed', async () => {
+  it('use keeps a browser signed in: an older cookie is renewed, as the same sign-in', async () => {
     const old = newSessionCookie(Date.now() - 3 * 86_400_000);
     const response = await ask('/api/info', { headers: { cookie: `${old.name}=${old.value}` } }, false);
     expect(response.status).toBe(200);
-    expect(response.headers.get('set-cookie')).toMatch(new RegExp(`^${old.name}=\\d+\\.[\\w-]+; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`));
+    const id = old.value.split('.')[1]!;
+    expect(response.headers.get('set-cookie')).toMatch(new RegExp(`^${old.name}=\\d+\\.${id}\\.[\\w-]+; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict`));
     const fresh = newSessionCookie();
     expect((await ask('/api/info', { headers: { cookie: `${fresh.name}=${fresh.value}` } }, false)).headers.get('set-cookie')).toBeNull();
   });

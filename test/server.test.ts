@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
+import { SIGNED_OUT_CLOSE } from '../src/shared/protocol';
 import { accessToken, cookieName, newSessionCookie } from '../src/server/auth';
 import { config } from '../src/server/config';
 import { startServer } from '../src/server/server';
@@ -94,5 +95,55 @@ describe('the live socket', () => {
       { type: 'run', sessionId: id, state: null }, { type: 'shells', sessionId: id, shells: [] },
       { type: 'run', sessionId: id, state: null }, { type: 'shells', sessionId: id, shells: [] },
     ]);
+  });
+});
+
+describe('signing out', () => {
+  /** Signs a browser in with the token, as the sign-in page does: its cookie. */
+  async function signIn(): Promise<string> {
+    const response = await fetch(`${base}api/auth/login`, {
+      method: 'POST',
+      headers: { 'X-Pelican': '1', 'content-type': 'application/json', origin: base.slice(0, -1) },
+      body: JSON.stringify({ token: accessToken() }),
+    });
+    expect(response.status).toBe(200);
+    return response.headers.get('set-cookie')!.split(';')[0]!;
+  }
+  const asks = async (cookie: string) => (await fetch(`${base}api/sessions`, { headers: { 'X-Pelican': '1', cookie } })).status;
+  /** The live socket of a page signed in with this cookie, and how it closed, once it has. */
+  async function live(cookie: string): Promise<{ ws: WebSocket; closed: () => number | undefined }> {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { headers: { ...page, cookie } });
+    let code: number | undefined;
+    ws.on('close', (closed) => {
+      code = closed;
+    });
+    await new Promise((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    return { ws, closed: () => code };
+  }
+
+  it('signs that browser’s cookie out: its live socket closes within a second, and a new one, or a request, is refused', async () => {
+    const browser = await signIn();
+    const other = await signIn();
+    const mine = await live(browser);
+    const theirs = await live(other);
+    expect(await asks(browser)).toBe(200);
+
+    const response = await fetch(`${base}api/auth/logout`, { method: 'POST', headers: { 'X-Pelican': '1', origin: base.slice(0, -1), cookie: browser } });
+    expect(response.status).toBe(200);
+    const at = Date.now();
+    for (; mine.closed() === undefined && Date.now() - at < 1000;) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mine.closed()).toBe(SIGNED_OUT_CLOSE);
+
+    // The cookie, kept by the browser or copied elsewhere, gets nowhere now.
+    expect(await asks(browser)).toBe(401);
+    expect(await open({ ...page, cookie: browser })).toBe(false);
+    // Another browser stays signed in, its socket open.
+    expect(await asks(other)).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(theirs.closed()).toBeUndefined();
+    theirs.ws.close();
   });
 });

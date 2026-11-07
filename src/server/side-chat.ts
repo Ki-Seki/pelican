@@ -79,7 +79,9 @@ const COPIES_FOLLOWED = 8;
  * starts as a copy of another session (transcripts.ts, firstTurnSession) and was titled "Side
  * chat" under its own id, wherever in the file: after it, Claude Code writes the title it resumed
  * with, the session's own, when its Claude exits, as it does in most of Claude Desktop's. A copy
- * of a side chat (a branch from one of its questions) is a side chat of the same session.
+ * of a side chat (a branch from one of its questions) is a side chat of the same session, and
+ * Pelican marks each copy it makes as a side chat of its own (actions.ts, fork), so it stays one
+ * when the side chat it copies is gone, or more copies back than are followed.
  */
 export async function sideChatSource(file: string, followed = 0): Promise<string | undefined> {
   const from = await firstTurnSession(file);

@@ -49,7 +49,7 @@ export function TrustSheet({ ask, folder, home, onDone }: { ask?: TrustAsk; fold
     >
       <div className="px-3 pt-1 pb-2 text-[14px] leading-relaxed">
         {folder && <div className="truncate font-mono text-[12.5px] text-muted" title={folder}>{shortPath(folder, home)}</div>}
-        <p className="mt-1">Claude Code will run what it brings:</p>
+        <p className="mt-1">Claude Code will use what it brings:</p>
         {more.length > 0 && (
           <div className="mt-2 flex items-start gap-1.5 text-[12.5px] leading-snug text-danger">
             <TriangleAlert className="mt-px size-3.5 shrink-0" />

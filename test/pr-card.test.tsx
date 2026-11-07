@@ -70,6 +70,19 @@ describe('the pull request Claude made', () => {
     expect(document.body.textContent).not.toContain('<pr-created>');
   });
 
+  it('on another host, even one made to look like GitHub’s, names the host and asks GitHub nothing', async () => {
+    const asked = vi.spyOn(api, 'pr').mockResolvedValue({ live: true, number: 128, title: 'Not what it seems', state: 'open', draft: false });
+    const url = 'https://github-com.pr-review.example/acme/acme-web/pull/128';
+    conversation([reply('a1', `Opened.\n<pr-created>${url}</pr-created>`, at)]);
+    const card = document.querySelector('[data-pr-card]') as HTMLElement;
+    expect(card.querySelector('[data-pr-host]')?.textContent).toBe('github-com.pr-review.example/acme/acme-web');
+    expect(within(card).getByRole('link', { name: /View PR/ }).getAttribute('href')).toBe(url);
+    expect(within(card).getByText('#128')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(asked).not.toHaveBeenCalled();
+    expect(card.textContent).not.toContain('Not what it seems');
+  });
+
   it('shows its live status where gh can read it: its title, open or a draft, its branches and its checks', async () => {
     const status: PrStatus = { live: true, number: 128, title: 'Add a dark theme to the settings page', state: 'open', draft: false, head: 'feat/dark-theme', base: 'main', checks: 'running' };
     vi.spyOn(api, 'pr').mockResolvedValue(status);

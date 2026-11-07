@@ -1,5 +1,5 @@
 import type { GitStatus } from '../../shared/protocol';
-import { COMMIT_REQUEST, createPrRequest } from '../../shared/requests';
+import { COMMIT_REQUEST, createPrRequest, GITHUB_PULL } from '../../shared/requests';
 
 export { COMMIT_REQUEST, createPrRequest, prBase, type PrTarget } from '../../shared/requests';
 
@@ -39,17 +39,35 @@ export function requestsFor(git: Repository, cwd?: string): Requests {
 
 /* ---------- a pull request Claude made ---------- */
 
-/** A pull request a reply names in Desktop's `<pr-created>` tag. */
-export type PrCreated = { url: string; host: string; repo: string; number: number };
+/**
+ * A pull request a reply names in Desktop's `<pr-created>` tag: its host as the address reaches
+ * it, and `github` for a github.com pull request's address exactly (GITHUB_PULL), the only one whose
+ * card names its repository as GitHub's and asks what GitHub says of it.
+ */
+export type PrCreated = { url: string; host: string; repo: string; number: number; github: boolean };
 
 const TAG = /<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>/gi;
-const PULL = /https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/;
+/** The path of a pull request's address: `/owner/name/pull/n`, and perhaps more after it (`/files`). */
+const PULL_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d{1,10})(?:\/|$)/;
 const WORD = /[A-Za-z0-9_-]/;
 
-/** A pull request's address, read as Desktop reads one: its host, `owner/name` and number. */
+/** At most this many cards for one reply: the tags past them stay as their addresses. */
+export const PR_CARDS = 5;
+
+/**
+ * A pull request's address, read as the browser that opens it reads it: its host (a name in
+ * another script as its punycode, without a user name or password), `owner/name` and number.
+ */
 export function pullOf(url: string): PrCreated | undefined {
-  const found = PULL.exec(url);
-  return found ? { url, host: found[1]!, repo: `${found[2]}/${found[3]}`, number: Number(found[4]) } : undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const found = PULL_PATH.exec(parsed.pathname);
+  if (!/^https?:$/.test(parsed.protocol) || !parsed.host || !found) return undefined;
+  return { url, host: parsed.host, repo: `${found[1]}/${found[2]}`, number: Number(found[3]), github: GITHUB_PULL.test(url) };
 }
 
 /**
@@ -61,18 +79,25 @@ export function pullOf(url: string): PrCreated | undefined {
 export function readPrCreated(text: string, streaming = false): { text: string; prs: PrCreated[] } {
   if (!text.includes('<pr-created>')) return { text, prs: [] };
   const prs: PrCreated[] = [];
-  let out = text.replace(/^[ \t]*<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>[ \t]*(?:\r?\n|$)/gim, (_whole, url: string) => {
+  /** The pull request a tag names, for a card: none once the reply has as many as it may have. */
+  const card = (url: string) => {
     const pr = pullOf(url);
-    if (pr) prs.push(pr);
-    return pr ? '' : url;
+    if (!pr) return undefined;
+    if (!prs.some((other) => other.url === pr.url)) {
+      if (prs.length >= PR_CARDS) return undefined;
+      prs.push(pr);
+    }
+    return pr;
+  };
+  let out = text.replace(/^[ \t]*<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>[ \t]*(?:\r?\n|$)/gim, (whole: string, url: string) => {
+    if (card(url)) return '';
+    return whole.endsWith('\n') ? `${url}\n` : url;
   });
   out = out.replace(TAG, (whole, url: string, at: number, all: string) => {
-    const pr = pullOf(url);
-    if (pr) prs.push(pr);
+    card(url);
     const next = all[at + whole.length];
     return next !== undefined && WORD.test(next) && WORD.test(url.at(-1) ?? '') ? `${url} ` : url;
   });
   if (streaming) out = out.replace(/<pr-created>[^<]*$/i, '');
-  const seen = new Set<string>();
-  return { text: out.replace(/\n+$/, (end) => (text.endsWith('\n') ? end : '')), prs: prs.filter((pr) => !seen.has(pr.url) && Boolean(seen.add(pr.url))) };
+  return { text: out.replace(/\n+$/, (end) => (text.endsWith('\n') ? end : '')), prs };
 }

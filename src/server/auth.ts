@@ -22,7 +22,9 @@ import { config } from './config.js';
  * the password and changes with it, so resetting either signs every browser out.
  * The running server notices a change made with `pelican token --reset` or
  * `pelican password` within a second; no restart is needed. A cookie in use is
- * renewed, so a browser stays signed in until it goes unused for 30 days.
+ * renewed, so a browser stays signed in until it goes unused for 30 days. Each
+ * sign-in has an id its renewed cookies keep: signing out refuses all of them,
+ * kept in the state folder until the last could have expired (signOut).
  */
 export type AuthMode = 'none' | 'password' | 'token';
 
@@ -31,7 +33,9 @@ type Token = { version: 1; token: string; secret: string };
 
 const passwordFile = () => path.join(config.configDir, 'auth.json');
 const tokenFile = () => path.join(config.configDir, 'token.json');
+const signedOutFile = () => path.join(config.stateDir, 'signed-out.json');
 const SESSION_DAYS = 30;
+const SESSION_MS = SESSION_DAYS * 24 * 3600_000;
 /** A cookie with less than this left is replaced by a fresh one when it is used. */
 const RENEW_BELOW_MS = (SESSION_DAYS - 1) * 24 * 3600_000;
 const PARAMS = { N: 16384, r: 8, p: 1 };
@@ -69,6 +73,12 @@ const readJsonSync = <T>(file: string): T | undefined => {
 export function refreshAuth(now = Date.now(), force = false): void {
   if (!loaded || (!force && now - checkedAt < 1000)) return;
   checkedAt = now;
+  // Signed out in another Pelican that shares the state folder (and the secret): refused here too.
+  const out = signature(signedOutFile());
+  if (out !== signedOut.seen) {
+    signedOut.seen = out;
+    mergeSignedOut(readJsonSync(signedOutFile()));
+  }
   const current = filesSignature();
   if (current === seen) return;
   seen = current;
@@ -109,7 +119,7 @@ const readJson = async <T>(file: string): Promise<T | undefined> => {
   }
 };
 
-/** Reads the password and the access token, making the token on first use. */
+/** Reads the password and the access token, making the token on first use, and the sign-ins signed out. */
 export async function loadAuth(): Promise<void> {
   if (loaded) return;
   password = await readJson<Password>(passwordFile());
@@ -117,6 +127,8 @@ export async function loadAuth(): Promise<void> {
     token = await readJson<Token>(tokenFile());
     if (!token?.token || !token.secret) await resetToken();
   }
+  signedOut.seen = signature(signedOutFile());
+  mergeSignedOut(await readJson(signedOutFile()));
   seen = filesSignature();
   checkedAt = Date.now();
   loaded = true;
@@ -185,14 +197,23 @@ export function cookieName(): string {
   return `pelican_${value ? createHash('sha256').update(value).digest('hex').slice(0, 8) : 'none'}`;
 }
 
-function sign(expires: number): string {
-  return createHmac('sha256', Buffer.from(secret() ?? '', 'base64')).update(String(expires)).digest('base64url');
+/**
+ * A cookie's signature: over when it expires and the id of the sign-in it belongs to. A cookie made
+ * before sign-ins had ids (0.4) has its expiry alone signed, and its signature is its sign-in's id.
+ */
+function sign(expires: number, id?: string): string {
+  return createHmac('sha256', Buffer.from(secret() ?? '', 'base64')).update(id === undefined ? String(expires) : `${expires}.${id}`).digest('base64url');
 }
 
-export function newSessionCookie(now = Date.now()): { name: string; value: string; maxAge: number } {
+/** A sign-in's id: new for each sign-in, kept by the cookies that renew it. */
+const SIGN_IN_ID = /^[A-Za-z0-9_-]{16,64}$/;
+
+/** A cookie that signs a browser in for 30 days, for a new sign-in, or (`id`) one that goes on. */
+export function newSessionCookie(now = Date.now(), id = randomBytes(16).toString('base64url')): { name: string; value: string; maxAge: number } {
   const maxAge = SESSION_DAYS * 24 * 3600;
-  const expires = now + maxAge * 1000;
-  return { name: cookieName(), value: `${expires}.${sign(expires)}`, maxAge };
+  // Later than any cookie refused for its age alone (prune), however soon after it was said.
+  const expires = Math.max(now + maxAge * 1000, signedOut.floor + 1);
+  return { name: cookieName(), value: `${expires}.${id}.${sign(expires, id)}`, maxAge };
 }
 
 /**
@@ -245,30 +266,124 @@ export function signedIn(cookieHeader: string | undefined, authorization?: strin
   const mode = authMode();
   if (mode === 'none') return true;
   if (mode === 'token' && authorization?.startsWith('Bearer ') && checkToken(authorization.slice(7).trim())) return true;
-  return cookieExpiry(cookieHeader) !== undefined;
+  return cookieSignIn(cookieHeader) !== undefined;
 }
 
-/** When the request's sign-in cookie expires, if it carries a valid one. */
-function cookieExpiry(cookieHeader: string | undefined, now = Date.now()): number | undefined {
+/**
+ * The sign-in the request's cookie carries, if it is valid: signed with the secret in use, not
+ * expired, and not signed out. `id`: the sign-in's, which its renewed cookies keep.
+ */
+function cookieSignIn(cookieHeader: string | undefined, now = Date.now()): { expires: number; id: string } | undefined {
   if (!secret()) return undefined;
   const value = cookieValue(cookieHeader, cookieName());
   if (!value) return undefined;
-  const [expires, mac, ...rest] = value.split('.');
+  const parts = value.split('.');
+  if (parts.length !== 2 && parts.length !== 3) return undefined;
+  const [expires, ...rest] = parts;
+  const mac = rest.at(-1)!;
+  const id = parts.length === 3 ? rest[0]! : undefined;
   const when = Number(expires);
-  if (!mac || rest.length > 0 || !Number.isFinite(when) || when < now) return undefined;
-  const expected = Buffer.from(sign(when));
+  if (!/^\d{1,15}$/.test(expires!) || !mac || (id !== undefined && !SIGN_IN_ID.test(id)) || when < now) return undefined;
+  const expected = Buffer.from(sign(when, id));
   const given = Buffer.from(mac);
-  return expected.length === given.length && timingSafeEqual(expected, given) ? when : undefined;
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return undefined;
+  const signIn = { expires: when, id: id ?? mac };
+  return isSignedOut(signIn) ? undefined : signIn;
 }
 
 /**
  * A fresh cookie for a browser whose cookie is valid but no longer new, so that using Pelican keeps
- * it signed in; undefined when there is nothing to renew.
+ * it signed in, as the same sign-in; undefined when there is nothing to renew.
  */
 export function renewedCookie(cookieHeader: string | undefined, now = Date.now()): ReturnType<typeof newSessionCookie> | undefined {
   if (authMode() === 'none') return undefined;
-  const expires = cookieExpiry(cookieHeader, now);
-  return expires !== undefined && expires - now < RENEW_BELOW_MS ? newSessionCookie(now) : undefined;
+  const signIn = cookieSignIn(cookieHeader, now);
+  return signIn && signIn.expires - now < RENEW_BELOW_MS ? newSessionCookie(now, signIn.id) : undefined;
+}
+
+/**
+ * Sign-ins signed out: each by a hash of its id (the file holds nothing that signs anyone in),
+ * kept until every cookie it had could have expired, 30 days after it was signed out (or its
+ * cookie's own end, should the clock have gone back meanwhile). At most MAX_SIGNED_OUT of them:
+ * past that, those signed out longest ago make room, and every cookie that ends no later than
+ * theirs could is refused from then on (`floor`), so none of their cookies comes back; a
+ * browser in use since has a newer one. Kept in the state folder, so a restart or an update
+ * keeps them refused, and read again when another Pelican there changes it.
+ */
+const MAX_SIGNED_OUT = 256;
+const signedOut: { ids: Map<string, number>; floor: number; seen?: string } = { ids: new Map(), floor: 0 };
+
+const signInKey = (id: string) => createHash('sha256').update(`pelican sign-in\n${id}`).digest('base64url').slice(0, 32);
+
+function isSignedOut({ expires, id }: { expires: number; id: string }): boolean {
+  return expires <= signedOut.floor || signedOut.ids.has(signInKey(id));
+}
+
+/** Takes in a signed-out list as read from the file: what either holds stays refused. */
+function mergeSignedOut(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const { floor, signedOut: ids } = value as { floor?: unknown; signedOut?: unknown };
+  // No cookie ends later than 30 days from now: a floor past that is no sign-out's (a file written by hand).
+  if (typeof floor === 'number' && Number.isFinite(floor)) signedOut.floor = Math.max(signedOut.floor, Math.min(floor, Date.now() + SESSION_MS));
+  if (!ids || typeof ids !== 'object') return;
+  for (const [key, until] of Object.entries(ids)) {
+    if (typeof until !== 'number' || !Number.isFinite(until)) continue;
+    signedOut.ids.set(key, Math.max(signedOut.ids.get(key) ?? 0, until));
+  }
+  pruneSignedOut();
+}
+
+/** Lets go of sign-ins whose every cookie has expired, and keeps the list within its bound. */
+function pruneSignedOut(now = Date.now()): void {
+  for (const [key, until] of signedOut.ids) if (until < now) signedOut.ids.delete(key);
+  if (signedOut.ids.size <= MAX_SIGNED_OUT) return;
+  const oldest = [...signedOut.ids].sort((a, b) => a[1] - b[1]).slice(0, signedOut.ids.size - MAX_SIGNED_OUT);
+  for (const [key, until] of oldest) {
+    signedOut.ids.delete(key);
+    signedOut.floor = Math.max(signedOut.floor, until);
+  }
+}
+
+const signOutListeners = new Set<() => void>();
+
+/** Called once a browser is signed out, to let go of what it has open (its sockets) at once. */
+export function onSignOut(listener: () => void): () => void {
+  signOutListeners.add(listener);
+  return () => signOutListeners.delete(listener);
+}
+
+/**
+ * Signs out the browser whose cookie this is: its cookie, and every one of the same sign-in
+ * (renewed, or copied elsewhere), is refused from now on, and what it has open is let go of
+ * (onSignOut). Saved before it returns; a save that fails keeps the sign-out until Pelican stops.
+ * False when the cookie signs nobody in.
+ */
+export async function signOut(cookieHeader: string | undefined, now = Date.now()): Promise<boolean> {
+  const signIn = cookieSignIn(cookieHeader, now);
+  if (!signIn) return false;
+  const key = signInKey(signIn.id);
+  signedOut.ids.set(key, Math.max(signedOut.ids.get(key) ?? 0, now + SESSION_MS, signIn.expires));
+  pruneSignedOut(now);
+  for (const listener of signOutListeners) listener();
+  await saveSignedOut();
+  return true;
+}
+
+/** Saves of the list, one at a time, each with all that is known by then. */
+let saving: Promise<void> = Promise.resolve();
+
+function saveSignedOut(): Promise<void> {
+  saving = saving.then(async () => {
+    try {
+      // What another Pelican added meanwhile is kept.
+      mergeSignedOut(await readJson(signedOutFile()));
+      await writePrivate(signedOutFile(), { version: 1, floor: signedOut.floor, signedOut: Object.fromEntries(signedOut.ids) });
+      signedOut.seen = signature(signedOutFile());
+    } catch (error) {
+      console.warn('[pelican] could not keep the sign-out on disk; it holds until Pelican stops:', (error as Error).message);
+    }
+  });
+  return saving;
 }
 
 // Failed sign-ins: at most 10 per client and 30 in all every 10 minutes, so neither

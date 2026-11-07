@@ -79,6 +79,14 @@ describe('where the values come from, said where it is not plain', () => {
     expect(modelNote(with_({ ultracode: { value: true, source: 'user', workflows: true } }), MODELS)).toBe('Your Claude Code settings turn Ultracode on for every session.');
   });
 
+  it('says what of a folder’s own settings waits for it to be trusted, each in its sheet', () => {
+    const waiting = with_({ waiting: ['model', 'fast', 'ultracode', 'mode'] });
+    expect(modelNote(waiting, MODELS)).toBe('This folder’s own settings for the model, fast mode and Ultracode wait until you trust the folder, which Pelican asks before the session starts.');
+    expect(modeNote(waiting, MODELS[0])).toBe('This folder’s own settings for the mode wait until you trust the folder, which Pelican asks before the session starts.');
+    expect(modelNote(with_({ waiting: ['mode'] }), MODELS)).toBeUndefined();
+    expect(modeNote(with_({ waiting: ['effort'] }), MODELS[0])).toBeUndefined();
+  });
+
   it('says plainly when new sessions start in Bypass, and when a folder asks for a mode Claude Code does not take from it', () => {
     expect(modeNote(BUILT_IN, MODELS[0])).toBeUndefined();
     expect(modeNote(with_({ permissionMode: { value: 'bypassPermissions', source: 'user' } }), MODELS[0]))

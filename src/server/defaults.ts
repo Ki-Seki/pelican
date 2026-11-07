@@ -6,14 +6,15 @@ import path from 'node:path';
 import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
 
 import {
-  type DefaultChange, type DefaultSource, type EffortDefault, effortFor, type EffortTable, isSavedEffort, modelKey, type StartDefaults, type UserSettingsFile,
+  type DefaultChange, type DefaultSource, type EffortDefault, effortFor, type EffortTable, type FolderSetting, isSavedEffort, modelKey, type StartDefaults,
+  type UserSettingsFile,
 } from '../shared/defaults.js';
 import { pickerValue } from '../shared/model-names.js';
 import { isPermissionMode, type PermissionMode, START_MODES } from '../shared/modes.js';
 import type { ModelOption, RunSettings } from '../shared/protocol.js';
 import { config } from './config.js';
 import { knownModels, listModels } from './models.js';
-import { launchFor, NeedsTrust, type SettingSource } from './trust.js';
+import { folderTrusted, type Launch, launchFor, NeedsTrust, type SettingSource } from './trust.js';
 
 /**
  * Claude Code's own settings decide what a new session starts with: its model, effort, fast mode,
@@ -186,16 +187,37 @@ async function readUserFile(): Promise<Read> {
   return { file: { path: file, state: 'ok' }, text, json };
 }
 
-/** The settings files a session in `dir` reads, as it would start there (trust.ts): a folder's own only where it may. */
-async function sourcesFor(dir: string | undefined): Promise<SettingSource[]> {
-  if (!dir) return ['user'];
+/**
+ * The settings files what a new session in `dir` starts with is read from: a folder's own only once
+ * the folder is trusted, as in Claude Code (trust.ts), and never where the user kept it to their
+ * own settings. `waits`: the folder's own wait for it to be trusted.
+ */
+async function sourcesFor(dir: string | undefined): Promise<{ sources: SettingSource[]; waits: boolean }> {
+  if (!dir) return { sources: ['user'], waits: false };
+  let launch: Launch | undefined;
   try {
-    return (await launchFor(dir)).settingSources;
+    launch = await launchFor(dir);
   } catch (error) {
-    // Until the folder is trusted, nothing of its own is read.
-    if (error instanceof NeedsTrust) return ['user'];
-    throw error;
+    if (!(error instanceof NeedsTrust)) throw error;
   }
+  if (launch && (await folderTrusted(dir))) return { sources: launch.settingSources, waits: false };
+  return { sources: ['user'], waits: !launch || launch.settingSources.includes('project') };
+}
+
+/** What a folder's own settings files set for a new session (fromSettings in trust.ts lists the same, to ask about it). */
+async function folderSets(dir: string): Promise<FolderSetting[]> {
+  const resolved = await resolveSettings({ cwd: dir, settingSources: ['project', 'local'] }).catch(() => undefined);
+  const set = new Set<FolderSetting>();
+  for (const { source, settings } of resolved?.sources ?? []) {
+    if (source !== 'project' && source !== 'local') continue;
+    const s = settings as Settings;
+    if (typeof s.model === 'string' && s.model.trim()) set.add('model');
+    if (typeof s.effortLevel === 'string' || Object.values(isObject(s.modelSettings) ? s.modelSettings : {}).some((entry) => isObject(entry) && typeof entry.effortLevel === 'string')) set.add('effort');
+    if (typeof s.fastMode === 'boolean') set.add('fast');
+    if (typeof s.ultracode === 'boolean') set.add('ultracode');
+    if (isObject(s.permissions) && typeof s.permissions.defaultMode === 'string') set.add('mode');
+  }
+  return (['model', 'effort', 'fast', 'ultracode', 'mode'] as const).filter((what) => set.has(what));
 }
 
 /** The demo's own: Claude Code's defaults, from no file at all. */
@@ -212,7 +234,8 @@ export const DEMO_DEFAULTS: StartDefaults = {
 export async function readDefaults(cwd?: string): Promise<StartDefaults> {
   if (config.demo) return DEMO_DEFAULTS;
   const dir = cwd ? await realpath(cwd).catch(() => undefined) : undefined;
-  const settingSources = await sourcesFor(dir);
+  const { sources: settingSources, waits } = await sourcesFor(dir);
+  const waiting = dir && waits ? await folderSets(dir) : [];
   const read = await readUserFile();
   // Claude Code's own merge of the files; should it fail, the user's file as read here.
   const layers: Layer[] = await resolveSettings({ cwd: dir ?? os.homedir(), settingSources })
@@ -223,7 +246,7 @@ export async function readDefaults(cwd?: string): Promise<StartDefaults> {
   const file: UserSettingsFile = skipped
     ? { ...read.file, state: 'skipped', problem: 'Claude Code skips it: a value in it is not one Claude Code reads.' }
     : read.file;
-  return startDefaults(layers, process.env, file);
+  return { ...startDefaults(layers, process.env, file), ...(waiting.length > 0 ? { waiting } : {}) };
 }
 
 /** Why a change was not made: said to the page as it is. */
@@ -280,15 +303,36 @@ async function patchFor(change: DefaultChange, models: () => Promise<ModelOption
 }
 
 /**
+ * Where a write of `file` lands: its real path, every link on the way followed, so that each link
+ * stays a link (a dotfiles manager may link a link). Claude Code 2.1.318's own writer reads one
+ * link, and would put a file in place of a second one. A link to a file not there yet leads to
+ * where the file is to be, following the links as far as they go.
+ */
+async function writeTarget(file: string): Promise<string> {
+  try {
+    return await realpath(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let target = file;
+  // As far as the system follows links; one that leads in a circle realpath has refused already.
+  for (let hops = 0; hops < 40; hops += 1) {
+    const link = await lstat(target).catch(() => undefined);
+    if (!link?.isSymbolicLink()) break;
+    const from = await realpath(path.dirname(target)).catch(() => path.dirname(target));
+    target = path.resolve(from, await readlink(target));
+  }
+  return target;
+}
+
+/**
  * Writes `text` in place of `file` as Claude Code writes its settings: to a temporary file beside
- * the file (through a symlinked file, beside its target), with the old file's permissions, synced,
- * then renamed over it. `before` is what the change was made from: when the file holds anything
- * else by then, someone changed it meanwhile, and nothing is written.
+ * the file (through a symlinked file, beside its real path: writeTarget), with the old file's
+ * permissions, synced, then renamed over it. `before` is what the change was made from: when the
+ * file holds anything else by then, someone changed it meanwhile, and nothing is written.
  */
 async function writeOver(file: string, text: string, before: string | null): Promise<boolean> {
-  let target = file;
-  const link = await lstat(file).catch(() => undefined);
-  if (link?.isSymbolicLink()) target = path.resolve(path.dirname(file), await readlink(file));
+  const target = await writeTarget(file);
   await mkdir(path.dirname(target), { recursive: true });
   const old = await stat(target).catch(() => undefined);
   const temp = `${target}.tmp.${process.pid}.${randomBytes(6).toString('hex')}`;

@@ -80,7 +80,7 @@ describe('a pull request Claude made', () => {
   it('reads Desktop’s <pr-created> tag: a card for each, and the reply’s words without it', () => {
     const read = readPrCreated('The pull request is open.\n<pr-created>https://github.com/acme/web/pull/128</pr-created>');
     expect(read.text).toBe('The pull request is open.');
-    expect(read.prs).toEqual([{ url: 'https://github.com/acme/web/pull/128', host: 'github.com', repo: 'acme/web', number: 128 }]);
+    expect(read.prs).toEqual([{ url: 'https://github.com/acme/web/pull/128', host: 'github.com', repo: 'acme/web', number: 128, github: true }]);
     // Among words, the address stays, as Desktop leaves it, apart from the next word.
     expect(readPrCreated('See <pr-created> https://github.com/acme/web/pull/7 </pr-created>now').text).toBe('See https://github.com/acme/web/pull/7 now');
     // Named twice, one card; a tag on an address that is no pull request, its address only.
@@ -88,6 +88,31 @@ describe('a pull request Claude made', () => {
     expect(readPrCreated('<pr-created>https://example.com/x</pr-created>')).toEqual({ text: 'https://example.com/x', prs: [] });
     // A reply that names none is as it was.
     expect(readPrCreated('No PR here.')).toEqual({ text: 'No PR here.', prs: [] });
+  });
+
+  it('takes only a github.com pull request’s address for GitHub’s, and names any other by the host a browser would open', () => {
+    const pr = (url: string) => readPrCreated(`<pr-created>${url}</pr-created>`).prs[0];
+    expect(pr('https://github.com/acme/web/pull/128')).toMatchObject({ host: 'github.com', repo: 'acme/web', github: true });
+    // A host made to look like GitHub's, or GitHub's name where a user name goes.
+    expect(pr('https://github-com.pr-review.example/acme/acme-web/pull/128')).toEqual({
+      url: 'https://github-com.pr-review.example/acme/acme-web/pull/128', host: 'github-com.pr-review.example', repo: 'acme/acme-web', number: 128, github: false,
+    });
+    expect(pr('https://github.com.evil.example/acme/web/pull/1')).toMatchObject({ host: 'github.com.evil.example', github: false });
+    expect(pr('https://github.com@evil.example/acme/web/pull/1')).toMatchObject({ host: 'evil.example', github: false });
+    // A name in another script, as the browser reaches it: its punycode.
+    expect(pr('https://g\u0456thub.com/acme/web/pull/1')).toMatchObject({ host: 'xn--gthub-n2e.com', github: false });
+    // GitHub's own, but not a pull request's address as GitHub gives one: no status asked, the host said.
+    expect(pr('http://github.com/acme/web/pull/2')).toMatchObject({ host: 'github.com', github: false });
+    expect(pr('https://github.com/acme/web/pull/2/files')).toMatchObject({ host: 'github.com', number: 2, github: false });
+    // A pull request's address only further along another's is none.
+    expect(pr('https://evil.example/go?to=https://github.com/acme/web/pull/1')).toBeUndefined();
+  });
+
+  it('makes at most five cards for a reply: the tags past them stay as their addresses', () => {
+    const urls = Array.from({ length: 7 }, (_, i) => `https://github.com/acme/web/pull/${i + 1}`);
+    const read = readPrCreated(`Opened them all.\n${urls.map((url) => `<pr-created>${url}</pr-created>`).join('\n')}\nDone.`);
+    expect(read.prs.map((pr) => pr.number)).toEqual([1, 2, 3, 4, 5]);
+    expect(read.text).toBe(`Opened them all.\n${urls.slice(5).join('\n')}\nDone.`);
   });
 
   it('leaves a tag still being written out until it is whole', () => {
