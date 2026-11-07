@@ -19,6 +19,7 @@ import { askedBySystemd, LAUNCHD_EXIT_TIMEOUT_S, launchdExitTimeout, launchdJob,
 import { hurryShells, runningShells, shellsEvent, shutdownGrace, stopAllShells } from './shell-runs.js';
 import { RunChannel } from './stream.js';
 import { attachTerminal, closeAllTerminals } from './terminals.js';
+import { servedBy } from './update.js';
 import { watchWaiting } from './waiting.js';
 
 const SESSION_ID = /^[\w-]{1,100}$/;
@@ -278,5 +279,26 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     terminalSockets.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };
+  // An update that starts the new version in this process's place (update.ts) first ends what
+  // runs, as a stop does, `!` commands given their time, and stops serving; should starting in
+  // place fail, this version serves again.
+  servedBy({
+    stop: async () => {
+      stopping = true;
+      const shells = stopAllShells(shutdownGrace(exitTimeout));
+      closeAllTerminals();
+      closeAll();
+      await shells;
+      const closed = close();
+      // A page's connection kept open for its next request goes too.
+      setTimeout(() => (server as { closeAllConnections?: () => void }).closeAllConnections?.(), 2000).unref();
+      await closed;
+      // A terminal's PTY is let go a moment after its shell is hung up (terminals.ts).
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    },
+    again: async () => {
+      await startServer();
+    },
+  });
   return { url, close };
 }
