@@ -3,7 +3,7 @@ import {
   Activity, Archive, ArchiveRestore, BarChart3, CheckCircle2, ChevronDown, ChevronLeft, ChevronUp, Circle, CircleDot, Clock, CornerDownRight, Cpu, Download, FileDiff, Folder,
   Gauge, GitBranch, GitFork, Info, ListChecks, Loader2, type LucideIcon, MessagesSquare, Pencil, Pin, PinOff, Plug, Plus, ShieldCheck, SquareTerminal, TriangleAlert, X, Zap,
 } from 'lucide-react';
-import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
@@ -985,6 +985,27 @@ export function Chat({
   // Esc stops Claude, as in Claude Code, when nothing else takes it: an open sheet, the / list,
   // a field of its own (the reason for a Deny), or a part of the page outside this chat.
   const root = useRef<HTMLDivElement>(null);
+  // The message box's height, for a card's foot to stay just above it where the whole chat scrolls
+  // (a phone on its side, PermissionCard); and there, a card that comes is scrolled to, its foot in
+  // view, as it is anywhere else at once.
+  useLayoutEffect(() => {
+    const el = root.current;
+    const box = el?.querySelector<HTMLElement>(':scope > [data-composer]');
+    if (!el || !box || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => el.style.setProperty('--composer-h', `${box.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  const asking = request?.id;
+  useEffect(() => {
+    const el = root.current;
+    if (!asking || !el || !window.matchMedia('(max-height: 380px)').matches) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [asking]);
   useEffect(() => {
     if (!busy || !sessionId) return undefined;
     const onKey = (e: KeyboardEvent) => {
@@ -1333,14 +1354,19 @@ export function Chat({
         )}
       </div>
 
-      {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view. */}
-      <div className="max-h-[55%] shrink-0 overflow-y-auto overscroll-contain px-3 [@media(max-height:600px)]:max-h-[40%] [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:overflow-visible">
+      {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view;
+          where the screen is short (a phone's keyboard up), shorter still, unless Claude waits for an
+          answer, which then takes the room it needs. It gives way before the message box does, Claude's
+          card first, whose foot stays in view (PermissionCard). On a phone on its side the whole chat
+          scrolls instead, the message box at its foot. */}
+      <div data-dock className={`flex max-h-[55%] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
-          <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
-            {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
+          <section aria-label={askedFor(request, cwd, true)} className="mx-auto flex min-h-0 w-full max-w-3xl flex-col">
+            {permissions.length > 1 && <div className="shrink-0 px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
             <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
           </section>
         )}
+        <div className="shrink-0">
         {showTasks && <TasksBar tasks={tasks} />}
         {sessionId && ((view.run?.tasks?.length ?? 0) + (view.run?.scheduled?.length ?? 0)) > 0 && (
           <BackgroundTasks
@@ -1399,6 +1425,7 @@ export function Chat({
             }, () => undefined)}
           />
         )}
+        </div>
       </div>
 
       <Composer
