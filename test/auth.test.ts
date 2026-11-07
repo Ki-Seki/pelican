@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -306,6 +306,8 @@ describe('signing out', () => {
   });
 
   it('lets go of sign-ins whose cookies have all expired', async () => {
+    // As a Pelican that signed out before left it, whichever test ran first (none may have made the folder).
+    await mkdir(path.dirname(signedOutFile()), { recursive: true });
     await writeFile(signedOutFile(), JSON.stringify({ version: 1, floor: 0, signedOut: { gone: Date.now() - 1000, kept: Date.now() + 86_400_000 } }));
     const restarted = await freshAuth();
     await restarted.signOut(header(newSessionCookie()));

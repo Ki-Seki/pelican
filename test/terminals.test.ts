@@ -880,13 +880,19 @@ describe('output that works over the whole screen', () => {
     // A page that acknowledges what it gets at once, drawing nothing: only the server's copy works.
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?id=${terminal.id}&cols=500&rows=300`, { headers: signedIn() });
     let output = '';
+    // The screen it is sent first: a prompt the shell printed before the page came is there, not in the output.
+    let screen = '';
     ws.on('message', (data, binary) => {
-      if (!binary) return;
+      if (!binary) {
+        const message = JSON.parse(String(data)) as { type: string; snapshot?: string };
+        if (message.type === 'ready') screen += message.snapshot ?? '';
+        return;
+      }
       output += String(data);
       ws.send(JSON.stringify({ type: 'ack', bytes: (data as Buffer).length }));
     });
     try {
-      await until(() => output.includes('PROMPT$'), 10_000, 'the prompt');
+      await until(() => output.includes('PROMPT$') || screen.includes('PROMPT$'), 10_000, 'the prompt');
       // Each line scrolls the whole screen by its rows: a few KB of them is seconds of work at this size.
       ws.send(Buffer.from("yes $'\\e[300S' | head -c 3000000; echo FLOOD-$((40 + 2))\r"));
       await until(() => terminalState(terminal.id)?.paused === true, 30_000, 'the shell to wait');
