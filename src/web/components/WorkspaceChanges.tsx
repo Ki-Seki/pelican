@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
-import { type MouseEvent, useRef, useState } from 'react';
+import { type MouseEvent, useEffect, useRef, useState } from 'react';
 
 import type { GitFile, GitStatus, QueuedPrompt, SessionChanges, TurnChanges } from '../../shared/protocol';
 import { entries, type MenuEntry, PATH_ACTIONS, PROMPT_ACTIONS, type PathTarget } from '../lib/actions';
@@ -131,18 +131,32 @@ function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
   const commitPress = useLongPress<HTMLButtonElement>(() => commit && onRequest(commit, 'box'), { enabled: Boolean(commit) });
   const prPress = useLongPress<HTMLButtonElement>(() => prText && onRequest(prText, 'box'), { enabled: Boolean(prText) });
   // A request on its way, and a moment after it lands, while its button says it is queued: a
-  // second tap (a double tap, a tap before the button changes) sends nothing more.
+  // second tap (a double tap, a tap before the button changes) sends nothing more. That moment's
+  // timer goes with the foot, and none starts once the foot has gone.
   const [going, setGoing] = useState<string>();
   const goingNow = useRef<string>(undefined);
+  const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const shown = useRef(false);
+  useEffect(() => {
+    shown.current = true;
+    return () => {
+      shown.current = false;
+      clearTimeout(settling.current);
+    };
+  }, []);
   const send = (text: string) => {
     if (goingNow.current === text) return;
     goingNow.current = text;
     setGoing(text);
-    void Promise.resolve(onRequest(text, 'send')).finally(() => setTimeout(() => {
-      if (goingNow.current !== text) return;
-      goingNow.current = undefined;
-      setGoing(undefined);
-    }, SETTLING_MS));
+    void Promise.resolve(onRequest(text, 'send')).finally(() => {
+      if (!shown.current) return;
+      clearTimeout(settling.current);
+      settling.current = setTimeout(() => {
+        if (goingNow.current !== text) return;
+        goingNow.current = undefined;
+        setGoing(undefined);
+      }, SETTLING_MS);
+    });
   };
   const click = (text: string) => (e: MouseEvent) => (e.metaKey || e.ctrlKey ? void onRequest(text, 'box') : send(text));
   // Its menu is the button's own: a right-click on it opens none of the page's.
