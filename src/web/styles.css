@@ -147,14 +147,17 @@ body {
 
 /* Typing in the terminal's line on a phone on its side, its keyboard up (data-keyboard,
    lib/viewport): the line saying Claude waits, and what waits for the next message, give way to the
-   screen and the line, and come back with the keyboard down. Where under the screen there is room
-   for the line alone (66 px left in Chrome on a Pixel 7: data-short tiny), the keys and the line sit
-   beside the screen instead, the keys over the line, each as tall as that room allows, up to a
-   finger's 44 px, and the screen keeps three rows (WorkspaceTerminal). */
-@media (orientation: landscape) and (pointer: coarse) {
+   screen and the line, and come back with the keyboard down; a tablet's keyboard leaves room for
+   them, and they stay. Where under the screen there is room for the line alone (66 px left in
+   Chrome on a Pixel 7: data-short tiny), the keys and the line sit beside the screen instead, the
+   keys over the line, each as tall as that room allows, up to a finger's 44 px, and the screen
+   keeps three rows (WorkspaceTerminal). */
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 500px) {
   :root[data-keyboard] [data-workspace]:has([data-terminal-line]:focus) [data-gives-way] {
     display: none;
   }
+}
+@media (orientation: landscape) and (pointer: coarse) {
   :root[data-short='tiny'] [data-workspace]:has([data-terminal-line]:focus) {
     --key-h: clamp(28px, calc((var(--app-h, 66px) - 6px) / 2), 44px);
   }
