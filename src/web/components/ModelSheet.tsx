@@ -18,6 +18,9 @@ export const modelOf = (models: ModelOption[] | undefined, settings: RunSettings
 /** The model in a few words: its name, the effort, and icons for Ultracode and fast mode. */
 export function ModelSummary({ settings, models }: { settings: RunSettings; models: ModelOption[] | undefined }) {
   const model = modelOf(models, settings);
+  // Until Claude Code has said which models there are, the chip waits, quietly, rather than reading
+  // "Model High": the model's name comes with its effort.
+  if (!models) return <span aria-hidden className="block h-3 w-20 animate-pulse rounded-full bg-chip motion-reduce:animate-none" />;
   return (
     <>
       <span className="max-w-32 truncate">{model?.value === 'default' ? 'Default' : (model?.label ?? 'Model')}</span>
