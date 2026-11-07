@@ -73,10 +73,11 @@ The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelic
   sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
   Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
   anything else to download.
-- **Changes, files and a terminal, as in Claude Desktop.** What each turn changed, what is
-  uncommitted, or everything since your branch split, with diffs. Search and read the folder; a
-  path in a reply opens the file at its line. Comment on a line or quote it, and Create PR asks
-  Claude. Your own shell sits beside them, with a line field and a key row on a phone.
+- **Changes, files and a terminal, as in Claude Desktop.** All changes, as Claude Code's `/diff`
+  counts them, what is uncommitted, or what each turn changed, with diffs. Search and read the
+  folder; a path in a reply opens the file at its line. Comment on lines or quote them; Commit
+  changes and Create PR send Desktop's own requests to Claude, and the pull request it opens shows
+  as a card. Your own shell sits beside them, with a line field and a key row on a phone.
 - **Your usage, from every app.** Tokens, sessions and streaks by project, model and app, with your
   plan's limits, or the cost Claude Code estimates on an API key.
 - **Made for a phone, good on a computer.** One hand, dictation, a notification when Claude needs

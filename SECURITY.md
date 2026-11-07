@@ -181,6 +181,16 @@ can read your sessions and have Claude run commands as you, so treat access to i
   never a path, from that session's own `tool-results` folder, or, for a record a branch copied,
   from that of the session its row says it came from, when the record's path names that session:
   a regular file reached through no link and with no other name (no hard link).
+- **Pelican changes nothing in git, and asks GitHub only about a pull request Claude named.**
+  Commit changes and Create PR, in Changes, are requests to Claude, in Claude Desktop's words: Claude
+  runs git and gh, under your permission rules and hooks, as for any request; Pelican has no Push.
+  A pull request's card, for the address Claude named in Desktop's `<pr-created>` tag, asks the
+  GitHub CLI as you, where it is installed and signed in: `gh pr view <address> --json
+  number,title,state,isDraft,headRefName,baseRefName,statusCheckRollup`, run directly (never through
+  a shell), only for an address of the form `https://github.com/<owner>/<repo>/pull/<n>`, from the
+  system's temporary folder (no repository), with gh's prompts off and none of Pelican's settings in
+  its environment, within 10 seconds, and at most every 30 seconds for one pull request, whatever
+  pages ask. It reads; it changes nothing. The demo asks nothing.
 - **Only the files Claude sent are shown, and only as files.** In the sessions Pelican runs,
   Pelican tells Claude Code it shows the files Claude sends (`CLAUDE_CODE_ATTACHMENTS_BY_PATH`, set
   for Claude Code alone, never for a `!` command), which turns on SendUserFile and nothing else. In
