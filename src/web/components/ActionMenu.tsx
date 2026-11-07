@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -264,10 +264,16 @@ export function ActionMenu({
 const ICON = (danger?: boolean) => `grid size-4 shrink-0 place-items-center ${danger ? '' : 'text-faint'}`;
 const ROW = 'flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13.5px] outline-none focus:bg-hover';
 
-/** A row's key, faint, once it works. */
+/** A row's key, faint, once it works; or its hint, where it has one. */
 function KeyHint({ entry, keys }: { entry: MenuEntry; keys: boolean }) {
-  const text = keys && entry.key ? keyText(entry.key) : undefined;
+  const text = (keys && entry.key ? keyText(entry.key) : undefined) ?? entry.hint;
   return text ? <span className="shrink-0 pl-3 font-sans text-[12px] tracking-wide text-faint tabular-nums">{text}</span> : null;
+}
+
+/** A row's icon, or, for one of a few to pick from, its check. */
+function EntryIcon({ entry, className }: { entry: MenuEntry; className: string }) {
+  if (entry.checked !== undefined && !entry.icon) return entry.checked ? <Check className={className} /> : null;
+  return entry.icon ? <entry.icon className={className} /> : null;
 }
 
 /** The menu on a computer, and the one submenu it may have open. */
@@ -357,6 +363,7 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
         {entries.map((entry, i) => (
           <div key={entry.id}>
             {entry.rule && <div className="mx-2.5 my-1 h-px bg-line" />}
+            {entry.heading && <div className="px-2.5 pt-1.5 pb-1 text-[12px] text-faint">{entry.heading}</div>}
             {'choice' in entry ? (
               <div>
                 <div className="flex h-8 items-center gap-2.5 px-2.5 text-[13.5px]">
@@ -369,7 +376,8 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
             ) : (
               <button
                 type="button"
-                role="menuitem"
+                role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                {...(entry.checked === undefined ? {} : { 'aria-checked': entry.checked })}
                 data-entry={entry.id}
                 {...(focusFirst && i === 0 ? { 'data-autofocus': true } : {})}
                 {...('items' in entry ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': sub?.id === entry.id } : {})}
@@ -386,7 +394,7 @@ function PointerMenu({ label, entries, at, keys, focusFirst, header, footer, onC
                 }}
                 className={`${ROW} ${entry.danger ? 'text-danger' : ''} ${sub?.id === entry.id ? 'bg-hover' : ''}`}
               >
-                <span className={ICON(entry.danger)}>{entry.icon && <entry.icon className="size-3.5" />}</span>
+                <span className={entry.checked === undefined ? ICON(entry.danger) : 'grid size-4 shrink-0 place-items-center'}><EntryIcon entry={entry} className="size-3.5" /></span>
                 <span className="min-w-0 flex-1 truncate">{entry.label}{entry.detail && <span className="ml-2 text-faint">{entry.detail}</span>}</span>
                 <KeyHint entry={entry} keys={keys} />
                 {('items' in entry || entry.opens) && <ChevronRight className="size-3.5 shrink-0 text-faint" />}
@@ -443,7 +451,10 @@ function SheetEntry({ entry, pick }: { entry: MenuEntry; pick: (run: () => void)
       </div>
     );
   }
-  const icon = entry.icon && <span className={`grid size-5 shrink-0 place-items-center ${entry.danger ? '' : 'text-muted'}`}><entry.icon className="size-4" /></span>;
+  const icon = (entry.icon || entry.checked !== undefined) && (
+    <span className={`grid size-5 shrink-0 place-items-center ${entry.danger || entry.checked !== undefined ? '' : 'text-muted'}`}><EntryIcon entry={entry} className="size-4" /></span>
+  );
+  const heading = entry.heading && <div className="px-3 pt-3 pb-1 text-[12.5px] text-faint">{entry.heading}</div>;
   if ('items' in entry) {
     return (
       <div>
@@ -465,10 +476,20 @@ function SheetEntry({ entry, pick }: { entry: MenuEntry; pick: (run: () => void)
     );
   }
   return (
-    <button type="button" role="menuitem" onClick={() => 'run' in entry && pick(entry.run)} className={`${SHEET_ROW} ${entry.danger ? 'text-danger' : ''}`}>
-      {icon}
-      <span className="min-w-0 flex-1">{entry.label}{entry.detail && <span className="ml-2 text-[14px] text-faint">{entry.detail}</span>}</span>
-      {entry.opens && <ChevronRight className="size-4 shrink-0 text-faint" />}
-    </button>
+    <>
+      {heading}
+      <button
+        type="button"
+        role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'}
+        {...(entry.checked === undefined ? {} : { 'aria-checked': entry.checked })}
+        onClick={() => 'run' in entry && pick(entry.run)}
+        className={`${SHEET_ROW} ${entry.danger ? 'text-danger' : ''}`}
+      >
+        {icon}
+        <span className="min-w-0 flex-1">{entry.label}{entry.detail && <span className="ml-2 text-[14px] text-faint">{entry.detail}</span>}</span>
+        {entry.hint && <span className="shrink-0 pl-2 text-[13.5px] text-faint">{entry.hint}</span>}
+        {entry.opens && <ChevronRight className="size-4 shrink-0 text-faint" />}
+      </button>
+    </>
   );
 }

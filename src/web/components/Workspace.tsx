@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import type { GitFile } from '../../shared/protocol';
 import { api, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useWaiting } from '../lib/drafts';
 import { baseName } from '../lib/format';
@@ -17,7 +18,6 @@ import { SendComments } from './Comments';
 import { SelectionFoot, type SelectionFootAt } from './FileViewer';
 import { PathLabel } from './PathLabel';
 import type { RewindPoint } from './Rewind';
-import { Segmented } from './Sheet';
 import { waitingCount } from './WaitingItems';
 import { WorkspaceChanges, WorkspaceFiles, WorkspaceTerminal } from './WorkspaceTabs';
 
@@ -45,6 +45,47 @@ let asked = false;
 export function forgetLastTab(): void {
   lastTab = 'changes';
   asked = false;
+}
+
+/** The lines a list of changed files adds and removes, as the header's Changes counts them: "+31 −2". */
+export function lineCount(files: readonly GitFile[]): { added: number; removed: number } {
+  return { added: files.reduce((sum, f) => sum + (f.added ?? 0), 0), removed: files.reduce((sum, f) => sum + (f.removed ?? 0), 0) };
+}
+
+/** "+31 −2", in the add and delete colors; nothing for no lines. */
+export function LineCount({ added, removed }: { added: number; removed: number }) {
+  if (added === 0 && removed === 0) return null;
+  return (
+    <span className="font-mono text-[12px] tabular-nums">
+      {added > 0 && <span className="text-add">+{added}</span>}
+      {added > 0 && removed > 0 && ' '}
+      {removed > 0 && <span className="text-del">−{removed}</span>}
+    </span>
+  );
+}
+
+/**
+ * Changes, Files and Terminal, the view's tabs: a light track with the one shown raised, so the
+ * only black on the screen is its one action; Changes with its lines, as the header counts them.
+ */
+function PaneTabs({ tab, onChange, lines }: { tab: WorkspaceTab; onChange: (tab: WorkspaceTab) => void; lines: { added: number; removed: number } | undefined }) {
+  const options: Array<{ value: WorkspaceTab; label: string }> = [{ value: 'changes', label: 'Changes' }, { value: 'files', label: 'Files' }, { value: 'terminal', label: 'Terminal' }];
+  return (
+    <div className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-full bg-chip p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={option.value === tab}
+          onClick={() => onChange(option.value)}
+          className={`flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-full px-2 text-[14px] pointer-fine:h-8 pointer-fine:text-[13.5px] ${option.value === tab ? 'bg-panel font-medium text-fg shadow-[0_1px_3px_rgba(0,0,0,0.10)]' : 'text-muted hover:text-fg'}`}
+        >
+          <span className="truncate">{option.label}</span>
+          {option.value === 'changes' && lines && <span className="shrink-0 font-normal"><LineCount {...lines} /></span>}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** Without a trust sheet to ask with, a folder that needs trusting starts no terminal. */
@@ -134,7 +175,7 @@ function useCovering(active: boolean, view: React.RefObject<HTMLElement | null>)
  * Read only: comment on the changes, or ask Claude to change things. On a phone a view of its own
  * over the conversation, each step in the address; on a computer (`docked`) a pane beside it.
  */
-export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onAddToMessage, onSendComments, askTrust = noTrust, onQuote }: {
+export function Workspace({ open, docked = false, busy = false, needsYou, onClose, cwd, sessionId, onRewind, requests = true, onRequest, onAddToMessage, onSendComments, askTrust = noTrust, onQuote }: {
   open: boolean;
   docked?: boolean;
   /** Claude is at work in the session, not waiting for an answer: what it changes shows within seconds. */
@@ -147,8 +188,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   sessionId?: string;
   /** Rewind to here, on a turn's prompt (the chat asks first). */
   onRewind?: (point: RewindPoint) => void;
-  /** Commit, Push and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
+  /** Commit changes and Create PR, as requests to Claude; none for a side chat, whose Claude only reads. */
   requests?: boolean;
+  /** A request to Claude from Changes' foot: sent now, or put in the message box first (⌘-click, a long press). */
+  onRequest?: (text: string, how: 'send' | 'box') => void;
   /** Adds text to the message being written: a file to mention; `block`, on lines of its own (a quote, a request). */
   /** `block`: on lines of its own (a request); `quote`: a quote, which waits above the message box. */
   onAddToMessage: (text: string, how?: 'block' | 'quote') => void;
@@ -196,7 +239,10 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
   // each read costs about a second of the computer's time; the conversation reads the same status
   // once more as each turn ends, for the count on its button.
   const looking = open && tab === 'changes';
-  const status = useQuery({ queryKey: ['git', cwd], queryFn: () => api.git(cwd), enabled: open, refetchInterval: looking && !step.scope ? (busy ? 5_000 : 30_000) : false });
+  // All of the changes, by Claude Code's /diff (the header's count is the same): the branch, the
+  // default list, and what the foot offers.
+  const allShown = !step.scope || step.scope === 'base';
+  const status = useQuery({ queryKey: ['git', cwd, 'base'], queryFn: () => api.git(cwd, 'base'), enabled: open, refetchInterval: looking && allShown ? (busy ? 5_000 : 30_000) : false });
   const turns = useQuery({ queryKey: ['changes', sessionId], queryFn: () => api.changes(sessionId!), enabled: open && Boolean(sessionId), staleTime: 30_000 });
   const git = status.data?.repo ? status.data : undefined;
 
@@ -234,15 +280,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           <div className="min-w-0 flex-1"><PathLabel path={shown.path} /></div>
         </div>
       ) : (
-        <Segmented<WorkspaceTab>
-          value={tab}
-          onChange={switchTab}
-          options={[
-            { value: 'changes', label: git && git.files.length > 0 ? `Changes · ${git.files.length}` : 'Changes' },
-            { value: 'files', label: 'Files' },
-            { value: 'terminal', label: 'Terminal' },
-          ]}
-        />
+        <PaneTabs tab={tab} onChange={switchTab} lines={git && lineCount(git.files)} />
       )}
     </div>
   );
@@ -261,7 +299,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           go={go}
           setScope={(to) => goTo(to, false)}
           {...(onRewind ? { onRewind } : {})}
-          {...(requests ? { onRequest: (text: string) => onAddToMessage(text, 'block') } : {})}
+          {...(requests && onRequest ? { onRequest } : {})}
         />
       )}
       {tab === 'files' && <WorkspaceFiles cwd={cwd} step={step} open={open} go={go} up={up} onAddToMessage={onAddToMessage} />}

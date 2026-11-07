@@ -200,11 +200,31 @@ export function readPrompt(text: string): PromptPart[] {
 /** Whether a prompt holds anything but words: a quote, a comment or a file. */
 export const hasQuotes = (parts: readonly PromptPart[]): boolean => parts.some((part) => part.kind !== 'text');
 
+/** Claude Desktop's Create PR request is wrapped in this tag, whole; it shows as /create-pr. */
+export const CREATE_PR_OPEN = '<create-pr-command>';
+export const CREATE_PR_CLOSE = '</create-pr-command>';
+/** What a Create draft PR request holds and a Create PR one does not. */
+export const CREATE_PR_DRAFT = '`gh pr create --draft`';
+
 /**
- * A prompt in a few words, for a title or a one-line preview: what was typed, or else the first
- * note, the first quote, or the files.
+ * A request Claude Desktop shows as a command, as it shows it: Create PR as `/create-pr`, Create
+ * draft PR as `/create-pr --draft`; none for any other message. Only the text decides, as in Desktop.
+ */
+export function requestShown(text: string): string | undefined {
+  const whole = text.trim();
+  if (!whole.startsWith(CREATE_PR_OPEN) || !whole.endsWith(CREATE_PR_CLOSE)) return undefined;
+  const inside = whole.slice(CREATE_PR_OPEN.length, whole.length - CREATE_PR_CLOSE.length);
+  if (inside.includes(CREATE_PR_OPEN) || inside.includes(CREATE_PR_CLOSE)) return undefined;
+  return whole.includes(CREATE_PR_DRAFT) ? '/create-pr --draft' : '/create-pr';
+}
+
+/**
+ * A prompt in a few words, for a title or a one-line preview: a request Desktop shows as a command
+ * as that command; what was typed, or else the first note, the first quote, or the files.
  */
 export function promptGist(text: string): string {
+  const shown = requestShown(text);
+  if (shown) return shown;
   const parts = readPrompt(text);
   if (!hasQuotes(parts)) return text;
   const typed = parts.filter((part) => part.kind === 'text').map((part) => (part.kind === 'text' ? part.text : '')).join('\n\n');

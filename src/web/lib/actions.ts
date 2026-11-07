@@ -116,6 +116,12 @@ export type MenuEntry = {
   danger?: boolean;
   /** The first of its part, after another part: under a rule on a computer. */
   rule?: boolean;
+  /** One of a few to pick from, as a radio is: whether it is the one picked, a check beside it. */
+  checked?: boolean;
+  /** A word or two at its end, faintly, where a key would be: "vs main", "3 files". */
+  hint?: string;
+  /** The name of the part it starts, over it: "Turns". */
+  heading?: string;
 } & ({ run: () => void } | { items: MenuEntry[] } | { choice: Choice });
 
 const shown = <T, V>(value: Shown<T, V>, target: T): V => (typeof value === 'function' ? (value as (t: T) => V)(target) : value);

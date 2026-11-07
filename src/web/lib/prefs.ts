@@ -100,11 +100,13 @@ export type Prefs = {
   sidebar: 'shown' | 'hidden';
   /** The terminal's font size, its one setting: set with a pinch on the terminal, or Ctrl and the wheel. */
   terminalFontSize: number;
+  /** What Changes' Create PR does, as picked under its ▾ (Desktop keeps it so too): a pull request ready for review, or a draft. */
+  prKind: 'ready' | 'draft';
 };
 
 const DEFAULT_PREFS: Prefs = {
   theme: 'system', enterToSend: 'auto', view: 'normal', showTemporary: false, showSideChats: false, listGroup: 'time', listDensity: 'detailed',
-  sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false, sidebar: 'shown', terminalFontSize: 13,
+  sendWhileBusy: 'steer', suggestions: true, sessionViews: {}, workspacePane: false, sidebar: 'shown', terminalFontSize: 13, prKind: 'ready',
 };
 
 /**

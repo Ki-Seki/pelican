@@ -66,7 +66,7 @@ import { Sheet } from './Sheet';
 import { SideChat, useSideChat, useSideChatAsked } from './SideChat';
 import { TodoList } from './ToolCall';
 import { type TrustAsk, TrustSheet } from './TrustSheet';
-import { shownTab, useWorkspacePane, Workspace } from './Workspace';
+import { lineCount, shownTab, useWorkspacePane, Workspace } from './Workspace';
 import type { WorkspaceTab } from '../lib/workspace-route';
 import { usePlanLimits } from './PlanLimits';
 import { prefetchWorkspace } from './WorkspaceTabs';
@@ -1038,12 +1038,7 @@ export function Chat({
   // By Send once a turn has run, as in Desktop: on a phone faint and without its number below 60%.
   const ring = context && sessionId ? <ContextRing context={context} quiet={!wide && context.percent < 60} onClick={(at) => setContextAt(at)} /> : undefined;
   // What git counts as changed in the folder, in lines: the Changes button's "+31 −2".
-  const lines = useMemo(() => {
-    if (!git?.repo) return undefined;
-    const added = git.files.reduce((sum, f) => sum + (f.added ?? 0), 0);
-    const removed = git.files.reduce((sum, f) => sum + (f.removed ?? 0), 0);
-    return { added, removed, files: git.files.length };
-  }, [git]);
+  const lines = useMemo(() => (git?.repo ? { ...lineCount(git.files), files: git.files.length } : undefined), [git]);
   const showPane = (tab: WorkspaceTab) => {
     if (tab === 'terminal') wantTerminalFocus();
     makeWay(() => showWorkspace({ tab }));
@@ -1426,6 +1421,16 @@ export function Chat({
           onClose={() => workspace.setOpen(false)}
           cwd={cwd}
           {...(sessionId ? { sessionId, ...(sideChat ? { requests: false } : { onRewind: requestRewind }) } : {})}
+          {...(sessionId && !sideChat ? {
+            // Commit changes and Create PR: sent at once, as Desktop sends them (a steer or queued while
+            // Claude works, as Settings says), or put in the message box first; on a phone the
+            // conversation comes back to show it.
+            onRequest: (text: string, how: 'send' | 'box') => {
+              if (!workspace.docked) workspace.setOpen(false);
+              if (how === 'box') setDraftText({ text, key: Date.now(), append: true, block: true });
+              else void send(text, [], prefs.sendWhileBusy, 'chat');
+            },
+          } : {})}
           onAddToMessage={(text, how) => {
             if (!workspace.docked) workspace.setOpen(false);
             // A quote from a file waits above the message box, as one from a reply does; a request goes in the box.

@@ -10,8 +10,9 @@ const server = vi.hoisted(() => ({ asked: [] as string[], diff: '', /** A folder
 
 vi.mock('../src/web/lib/api', async (original) => {
   const actual = await original<typeof import('../src/web/lib/api')>();
-  const status: GitStatus = { repo: true, branch: 'feat/x', base: 'main', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 1 }] };
-  const since: GitStatus = { ...status, files: [...status.files, { path: 'README.md', status: 'modified', added: 2, removed: 0 }] };
+  // A branch with a commit of its own beyond main, and a file not committed yet; origin on GitHub.
+  const status: GitStatus = { repo: true, branch: 'feat/x', base: 'main', split: true, remote: true, github: 'acme/app', files: [{ path: 'src/a.ts', status: 'modified', added: 1, removed: 1 }] };
+  const since: GitStatus = { ...status, uncommitted: 1, files: [...status.files, { path: 'README.md', status: 'modified', added: 2, removed: 0, committed: true }] };
   const changes: SessionChanges = {
     turns: [
       { uuid: 'p1', n: 1, text: 'Add a dark theme', files: [{ path: 'src/theme.css', added: 7, removed: 0 }], checkpoint: true },
@@ -57,6 +58,8 @@ const { Workspace } = await import('../src/web/components/Workspace');
 const { UnifiedDiff } = await import('../src/web/components/UnifiedDiff');
 const { WorkspaceChanges } = await import('../src/web/components/WorkspaceChanges');
 const { setComments } = await import('../src/web/lib/review');
+const { COMMIT_REQUEST, createPrRequest } = await import('../src/web/lib/requests');
+const { setPrefs } = await import('../src/web/lib/prefs');
 
 afterEach(() => {
   cleanup();
@@ -72,18 +75,29 @@ const wrap = (node: React.ReactNode) => render(<QueryClientProvider client={new 
 const LAZY = { timeout: 5000 };
 
 describe('what Changes shows', () => {
-  it('offers Uncommitted, since the branch split and each turn, and a turn ends with its prompt’s Rewind to here', async () => {
+  it('shows All changes vs main first, as Desktop names it, then Uncommitted changes and the turns under their own heading; a turn ends with its prompt’s Rewind to here', async () => {
     history.replaceState(null, '', '/?s=s1&w=changes');
     const onRewind = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onRewind={onRewind} onClose={() => {}} onAddToMessage={() => {}} />);
-    fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }, LAZY));
-    const sheet = screen.getAllByRole('dialog').at(-1)!;
-    await waitFor(() => expect(within(sheet).getByText('Since main')).toBeTruthy());
-    // The newest turn first, as the list of turns reads back from now.
-    const labels = within(sheet).getAllByRole('button').map((b) => b.textContent);
-    expect(labels.filter((l) => l?.startsWith('T'))).toEqual(['T2 · Fix the toggle1 file', 'T1 · Add a dark theme1 file']);
-    fireEvent.click(within(sheet).getByText('T1 · Add a dark theme'));
-    expect(location.search).toBe('?s=s1&w=changes&t=p1');
+    const show = await screen.findByRole('button', { name: /^Show:/ }, LAZY);
+    expect(show.textContent).toBe('Show:All changesvs main');
+    // All of it, by /diff's rule: the branch's commit too, the file not committed first.
+    await waitFor(() => expect(screen.getAllByText(/^(a\.ts|README\.md)$/).map((name) => name.textContent)).toEqual(['a.ts', 'README.md']));
+    fireEvent.click(show);
+    const sheet = screen.getByRole('dialog', { name: 'Show' });
+    const rows = within(sheet).getAllByRole('menuitemradio');
+    expect(rows.map((row) => row.textContent)).toEqual(['All changesvs main', 'Uncommitted changes1 file', 'Fix the toggle1 file', 'Add a dark theme1 file']);
+    expect(rows.map((row) => row.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false']);
+    // The turns are Pelican's, under their own heading, the newest first.
+    expect(within(sheet).getByText('Turns')).toBeTruthy();
+    fireEvent.click(within(sheet).getByText('Uncommitted changes'));
+    await waitFor(() => expect(location.search).toBe('?s=s1&w=changes&t=uncommitted'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Show:/ }).textContent).toBe('Show:Uncommitted changes'));
+    expect(server.asked).toContain('git ');
+    await waitFor(() => expect(screen.queryByText('README.md')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /^Show:/ }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Show' })).getByText('Add a dark theme'));
+    await waitFor(() => expect(location.search).toBe('?s=s1&w=changes&t=p1'));
     fireEvent.click(await screen.findByText('theme.css'));
     await waitFor(() => expect(server.asked).toContain('turn p1 src/theme.css'));
     expect(location.search).toBe('?s=s1&w=changes&p=src%2Ftheme.css&t=p1');
@@ -98,8 +112,8 @@ describe('what Changes shows', () => {
     const onClose = vi.fn();
     wrap(<Workspace open cwd={CWD} sessionId="s1" onClose={onClose} onAddToMessage={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Show:/ }, LAZY));
-    const sheet = screen.getAllByRole('dialog').at(-1)!;
-    fireEvent.keyDown(within(sheet).getAllByRole('button')[0]!, { key: 'Escape' });
+    const sheet = screen.getByRole('dialog', { name: 'Show' });
+    fireEvent.keyDown(within(sheet).getAllByRole('menuitemradio')[0]!, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.keyDown(screen.getByRole('region', { name: 'Changes and files' }), { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
@@ -143,6 +157,97 @@ describe('what Changes shows', () => {
     expect(onClose).toHaveBeenCalled();
     // What is behind the view takes nothing while it is open.
     expect(screen.getByRole('region', { name: 'Changes and files' }).closest('#root')).toBeNull();
+  });
+});
+
+describe('Commit changes and Create PR, at the foot of Changes', () => {
+  const PR = { repo: 'acme/app', branch: 'feat/x', baseBranch: 'main', cwd: CWD };
+  afterEach(() => setPrefs({ prKind: 'ready' }));
+
+  it('send Desktop’s requests at once on a tap, and offer no Push', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    const onRequest = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onRequest={onRequest} onClose={() => {}} onAddToMessage={() => {}} />);
+    const commit = await screen.findByRole('button', { name: 'Commit changes' }, LAZY);
+    // At the foot, after the files.
+    const foot = commit.closest('[data-requests]')!;
+    expect(screen.getByText('README.md').compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(commit);
+    expect(onRequest).toHaveBeenLastCalledWith(COMMIT_REQUEST, 'send');
+    fireEvent.click(screen.getByRole('button', { name: 'Create PR' }));
+    expect(onRequest).toHaveBeenLastCalledWith(createPrRequest({ ...PR, draft: false }), 'send');
+    expect(screen.queryByRole('button', { name: /push/i })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/\bPush\b/);
+  });
+
+  it('put a request in the message box first on ⌘-click (Ctrl-click), and on a long press under a finger', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    const onRequest = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onRequest={onRequest} onClose={() => {}} onAddToMessage={() => {}} />);
+    const commit = await screen.findByRole('button', { name: 'Commit changes' }, LAZY);
+    fireEvent.click(commit, { metaKey: true });
+    expect(onRequest).toHaveBeenLastCalledWith(COMMIT_REQUEST, 'box');
+    fireEvent.click(screen.getByRole('button', { name: 'Create PR' }), { ctrlKey: true });
+    expect(onRequest).toHaveBeenLastCalledWith(createPrRequest({ ...PR, draft: false }), 'box');
+    onRequest.mockClear();
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(commit, { pointerType: 'touch', isPrimary: true, pointerId: 4, clientX: 40, clientY: 40 });
+      act(() => vi.advanceTimersByTime(510));
+      fireEvent.pointerUp(commit, { pointerType: 'touch', isPrimary: true, pointerId: 4 });
+      // The finger lifting is the press's, not a tap that would send it.
+      fireEvent.click(commit);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(onRequest.mock.calls).toEqual([[COMMIT_REQUEST, 'box']]);
+  });
+
+  it('pick Create draft PR under Create PR’s ▾, remembered for the button, as Desktop does', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    const onRequest = vi.fn();
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onRequest={onRequest} onClose={() => {}} onAddToMessage={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create PR or Create draft PR' }, LAZY));
+    const menu = screen.getByRole('dialog', { name: 'Create PR' });
+    expect(within(menu).getAllByRole('menuitemradio').map((item) => [item.textContent, item.getAttribute('aria-checked')])).toEqual([['Create PR', 'true'], ['Create draft PR', 'false']]);
+    // Picking one picks the button's kind; the button sends it.
+    fireEvent.click(within(menu).getByText('Create draft PR'));
+    expect(onRequest).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Create draft PR' }));
+    expect(onRequest).toHaveBeenLastCalledWith(createPrRequest({ ...PR, draft: true }), 'send');
+  });
+
+  it('are not offered in a side chat, nor in a turn’s changes', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    const view = wrap(<Workspace open cwd={CWD} sessionId="s1" requests={false} onRequest={() => {}} onClose={() => {}} onAddToMessage={() => {}} />);
+    await screen.findByText('README.md', {}, LAZY);
+    expect(screen.queryByRole('button', { name: 'Commit changes' })).toBeNull();
+    view.unmount();
+    history.replaceState(null, '', '/?s=s1&w=changes&t=p1');
+    wrap(<Workspace open cwd={CWD} sessionId="s1" onRequest={() => {}} onClose={() => {}} onAddToMessage={() => {}} />);
+    await screen.findByText('theme.css', {}, LAZY);
+    expect(screen.queryByRole('button', { name: 'Commit changes' })).toBeNull();
+  });
+
+  it('end the view with what waits on a phone, and with Send now alone beside the conversation', async () => {
+    history.replaceState(null, '', '/?s=s1&w=changes');
+    act(() => setComments(CWD, [{ id: 'c1', path: 'src/a.ts', kind: 'same', line: 2, code: 'const b = 2;', note: 'Rename b' }]));
+    const client = new QueryClient();
+    const at = (node: React.ReactNode) => <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+    const onSend = vi.fn();
+    const view = render(at(<Workspace open cwd={CWD} sessionId="s1" onRequest={() => {}} onSendComments={onSend} onClose={() => {}} onAddToMessage={() => {}} />));
+    await screen.findByRole('button', { name: 'Commit changes' }, LAZY);
+    const send = screen.getByRole('button', { name: 'Send now' });
+    expect(send.parentElement!.textContent).toBe('1 comment waits for your next messageSend now');
+    // The requests are part of the list; what waits ends the view, under them.
+    expect(screen.getByRole('button', { name: 'Commit changes' }).compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    view.rerender(at(<Workspace open docked cwd={CWD} sessionId="s1" onRequest={() => {}} onSendComments={onSend} onClose={() => {}} onAddToMessage={() => {}} />));
+    const beside = await screen.findByRole('button', { name: 'Send now' });
+    expect(beside.parentElement!.textContent).toMatch(/^Send now/);
+    expect(beside.parentElement!.textContent).not.toContain('waits');
+    expect(screen.getByRole('button', { name: 'Commit changes' })).toBeTruthy();
+    fireEvent.click(beside);
+    expect(onSend).toHaveBeenCalled();
   });
 });
 

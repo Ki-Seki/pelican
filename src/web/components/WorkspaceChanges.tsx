@@ -1,15 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, GitBranch, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
+import { type MouseEvent, useState } from 'react';
 
 import type { GitFile, GitStatus, SessionChanges, TurnChanges } from '../../shared/protocol';
-import { entries, PROMPT_ACTIONS } from '../lib/actions';
+import { entries, type MenuEntry, PATH_ACTIONS, PROMPT_ACTIONS, type PathTarget } from '../lib/actions';
+import { announce } from '../lib/announce';
 import { api } from '../lib/api';
+import { addWaiting } from '../lib/drafts';
+import { baseName } from '../lib/format';
+import { hasKeyboard, MOD } from '../lib/keyboard';
+import { setPrefs, usePrefs } from '../lib/prefs';
+import { type Press, useLongPress } from '../lib/press';
+import { fileItem } from '../lib/quote';
 import { requestsFor } from '../lib/requests';
+import { useCommentsChat } from '../lib/review';
 import type { WorkspaceStep } from '../lib/workspace-route';
+import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { PathLabel } from './PathLabel';
+import { downloadFile } from './PathMenu';
 import type { RewindPoint } from './Rewind';
-import { Sheet, SheetOption } from './Sheet';
 import { UnifiedDiff } from './UnifiedDiff';
 
 const LETTER: Record<GitFile['status'], string> = { modified: 'M', added: 'A', deleted: 'D', renamed: 'R', untracked: 'U', conflicted: '!' };
@@ -18,20 +27,22 @@ const TONE: Record<GitFile['status'], string> = {
 };
 
 /**
- * What Changes shows, in the words of Claude Code's /diff: what is not committed yet (the
- * default), everything since the branch split from the default branch, or one turn's edits.
+ * What Changes shows, in Claude Desktop's words: All changes (the default, by Claude Code's /diff:
+ * the branch against where it split from the default branch when it has commits beyond it, else
+ * what is not committed), Uncommitted changes (offered where that differs), or one turn's edits,
+ * Pelican's own, under their own heading.
  */
-export type Scope = { kind: 'uncommitted' } | { kind: 'base' } | { kind: 'turn'; uuid: string };
+export type Scope = { kind: 'all' } | { kind: 'uncommitted' } | { kind: 'turn'; uuid: string };
 
+/** The address's `t`: none (or `base`, as 0.4 wrote it) for All changes, `uncommitted`, or a turn's prompt. */
 export const scopeOf = (step: WorkspaceStep): Scope =>
-  !step.scope ? { kind: 'uncommitted' } : step.scope === 'base' ? { kind: 'base' } : { kind: 'turn', uuid: step.scope };
+  (!step.scope || step.scope === 'base' ? { kind: 'all' } : step.scope === 'uncommitted' ? { kind: 'uncommitted' } : { kind: 'turn', uuid: step.scope });
 
-const scopeParam = (scope: Scope) => (scope.kind === 'uncommitted' ? {} : { scope: scope.kind === 'base' ? 'base' : scope.uuid });
+const scopeParam = (scope: Scope) => (scope.kind === 'all' ? {} : { scope: scope.kind === 'uncommitted' ? 'uncommitted' : scope.uuid });
 
 const files = (n: number) => (n === 1 ? '1 file' : `${n} files`);
-const turnLabel = (turn: TurnChanges) => `T${turn.n} · ${turn.text}`;
 
-/** The turns that changed files, newest first, as the Show list offers them. */
+/** The turns that changed files, newest first, as Show offers them. */
 const newestFirst = (changes: SessionChanges | undefined) => [...(changes?.turns ?? [])].reverse();
 
 function useTurns(sessionId: string | undefined, refresh: number | false) {
@@ -44,10 +55,19 @@ function useTurns(sessionId: string | undefined, refresh: number | false) {
   });
 }
 
-/** One changed file in a list: its kind, its name, its comments and its lines. */
-function FileRow({ file, comments, onOpen }: { file: { path: string; status: GitFile['status']; added?: number; removed?: number }; comments?: number; onOpen: () => void }) {
+type Row = { path: string; status: GitFile['status']; added?: number; removed?: number };
+
+/** Where a row's menu opens: under a finger, raised over the dim; at the pointer; or under the row from the keyboard. */
+type MenuAt = { path: string; status: GitFile['status']; at: MenuAnchor; lift?: Element; keys?: boolean };
+type Where = Omit<MenuAt, 'path' | 'status'>;
+
+const menuAt = (p: Press): Where => (p.pointerType === 'touch' || p.pointerType === 'pen' ? { at: p.element, lift: p.element } : p.pointerType === 'keyboard' ? { at: p.element, keys: true } : { at: { x: p.x, y: p.y } });
+
+/** One changed file: its kind, its name, its comments and its lines; a long press or a right-click opens its path's menu. */
+function FileRow({ file, comments, onOpen, onMenu }: { file: Row; comments?: number; onOpen: () => void; onMenu: (at: Where) => void }) {
+  const press = useLongPress<HTMLButtonElement>((p) => onMenu(menuAt(p)));
   return (
-    <button type="button" onClick={onOpen} className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-hover pointer-fine:min-h-10">
+    <button type="button" onClick={onOpen} {...press} className={`flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-hover pointer-fine:min-h-10 ${press.className}`}>
       <span className={`w-3 shrink-0 text-center font-mono text-[12px] font-semibold ${TONE[file.status]}`} title={file.status}>{LETTER[file.status]}</span>
       <PathLabel path={file.path} />
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 font-mono text-[11.5px]">
@@ -63,45 +83,67 @@ function FileRow({ file, comments, onOpen }: { file: { path: string; status: Git
   );
 }
 
-/** Choosing what Changes shows, as /diff's source picker: Uncommitted, since the split, or a turn. */
-function ShowSheet({ open, onClose, scope, status, base, turns, onPick }: {
-  open: boolean;
-  onClose: () => void;
-  scope: Scope;
-  status: GitStatus | undefined;
-  base: GitStatus | undefined;
-  turns: TurnChanges[];
-  onPick: (scope: Scope) => void;
-}) {
-  const git = status?.repo ? status : undefined;
-  const count = (value: GitStatus | undefined) => (value?.repo ? <span className="shrink-0 text-[12.5px] text-faint">{files(value.files.length)}</span> : undefined);
-  const pick = (next: Scope) => {
-    onPick(next);
-    onClose();
-  };
+/**
+ * Commit changes and Create PR at the foot of Changes, as Claude Desktop has them: requests to
+ * Claude in Desktop's words. A tap sends one at once (a steer or queued while Claude works, as
+ * Settings says); ⌘-click (Ctrl-click), or a long press on a phone, puts it in the message box
+ * first. Create PR's ▾ picks Create PR or Create draft PR for the button, remembered here as
+ * Desktop remembers it. There is no Push: Create PR pushes.
+ */
+function RequestsFoot({ commit, pr, onRequest }: { commit?: string; pr?: { ready: string; draft: string }; onRequest: (text: string, how: 'send' | 'box') => void }) {
+  const { prKind } = usePrefs();
+  const [kinds, setKinds] = useState<{ at: MenuAnchor; keys: boolean }>();
+  const prText = pr && (prKind === 'draft' ? pr.draft : pr.ready);
+  const prLabel = prKind === 'draft' ? 'Create draft PR' : 'Create PR';
+  const commitPress = useLongPress<HTMLButtonElement>(() => commit && onRequest(commit, 'box'), { enabled: Boolean(commit) });
+  const prPress = useLongPress<HTMLButtonElement>(() => prText && onRequest(prText, 'box'), { enabled: Boolean(prText) });
+  const click = (text: string) => (e: MouseEvent) => onRequest(text, e.metaKey || e.ctrlKey ? 'box' : 'send');
+  // Its menu is the button's own: a right-click on it opens none of the page's.
+  const own = (e: MouseEvent) => e.stopPropagation();
+  const title = (label: string) => (hasKeyboard() ? `${label} (${MOD}-click: in the message box first)` : undefined);
+  const pill = 'flex h-11 items-center gap-2 rounded-full border border-line bg-bg text-[14px] text-fg hover:bg-hover pointer-fine:h-9 pointer-fine:text-[13.5px]';
+  const kindEntries: MenuEntry[] = [
+    { id: 'ready', label: 'Create PR', checked: prKind !== 'draft', run: () => setPrefs({ prKind: 'ready' }) },
+    { id: 'draft', label: 'Create draft PR', checked: prKind === 'draft', run: () => setPrefs({ prKind: 'draft' }) },
+  ];
+  if (!commit && !prText) return null;
   return (
-    <Sheet open={open} onClose={onClose} title="Show" done>
-      <SheetOption label="Uncommitted" selected={scope.kind === 'uncommitted'} onSelect={() => pick({ kind: 'uncommitted' })} trailing={count(status)} />
-      {git?.base && git.branch && git.branch !== git.base && (
-        <SheetOption label={`Since ${git.base}`} selected={scope.kind === 'base'} onSelect={() => pick({ kind: 'base' })} trailing={count(base) ?? <Loader2 className="size-3.5 shrink-0 animate-spin text-faint" />} />
+    <div data-requests className="mx-3 mt-2 flex flex-wrap gap-2 border-t border-line pt-3">
+      {commit && (
+        <button type="button" {...commitPress} onContextMenu={(e) => { commitPress.onContextMenu(e); own(e); }} onClick={click(commit)} title={title('Commit changes')} className={`${pill} px-4 ${commitPress.className}`}>
+          <GitCommitHorizontal className="size-4 shrink-0 text-muted" />
+          Commit changes
+        </button>
       )}
-      {turns.map((turn) => (
-        <SheetOption
-          key={turn.uuid}
-          label={<span className="line-clamp-2 break-words">{turnLabel(turn)}</span>}
-          selected={scope.kind === 'turn' && scope.uuid === turn.uuid}
-          onSelect={() => pick({ kind: 'turn', uuid: turn.uuid })}
-          trailing={<span className="shrink-0 text-[12.5px] text-faint">{files(turn.files.length)}</span>}
-        />
-      ))}
-    </Sheet>
+      {prText && (
+        <div className="flex h-11 items-center rounded-full border border-line bg-bg pointer-fine:h-9">
+          <button type="button" {...prPress} onContextMenu={(e) => { prPress.onContextMenu(e); own(e); }} onClick={click(prText)} title={title(prLabel)} className={`flex h-full items-center gap-2 rounded-l-full pr-3 pl-4 text-[14px] text-fg hover:bg-hover pointer-fine:text-[13.5px] ${prPress.className}`}>
+            <GitPullRequest className="size-4 shrink-0 text-muted" />
+            {prLabel}
+          </button>
+          <span aria-hidden className="h-5 w-px shrink-0 bg-line" />
+          <button
+            type="button"
+            aria-label="Create PR or Create draft PR"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(kinds)}
+            onClick={(e) => setKinds({ at: e.currentTarget, keys: e.detail === 0 })}
+            className="grid h-full w-11 place-items-center rounded-r-full text-muted hover:bg-hover hover:text-fg pointer-fine:w-9"
+          >
+            <ChevronDown className="size-4" />
+          </button>
+          <ActionMenu open={Boolean(kinds)} onClose={() => setKinds(undefined)} label="Create PR" title="Create PR" entries={kindEntries} at={kinds?.at ?? null} focusFirst={Boolean(kinds?.keys)} />
+        </div>
+      )}
+    </div>
   );
 }
 
 /**
- * The Changes tab: the branch, what Changes shows, and the changed files, each opening its diff.
- * Git only where it may run (the server says so); a turn's edits come from Claude Code's own
- * records and show in any folder. A turn ends with its prompt's Rewind to here.
+ * The Changes tab: the branch, what Changes shows, the changed files, each opening its diff, and
+ * at its foot Commit changes and Create PR. Git only where it may run (the server says so); a
+ * turn's edits come from Claude Code's own records and show in any folder. A turn ends with its
+ * prompt's Rewind to here. A file's row has its path's menu, as Desktop's diff file list does.
  */
 export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, commentsIn, go, setScope, onRewind, onRequest }: {
   cwd: string;
@@ -110,32 +152,35 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   /** The tab is on screen: what it shows is read again while it is. */
   looking: boolean;
   busy: boolean;
+  /** All of the changes, by /diff's rule (the `base` scope): the branch, and what the foot offers. */
   status: { data: GitStatus | undefined; isLoading: boolean; isFetching: boolean; refetch: () => unknown };
   commentsIn: Map<string, number>;
   go: (step: WorkspaceStep) => void;
   setScope: (step: WorkspaceStep) => void;
   /** Rewind to here, on the turn's prompt (Chat asks first). */
   onRewind?: (point: RewindPoint) => void;
-  /** Puts a request to Claude in the message box (Commit, Push, Create PR), to be sent from there. */
-  onRequest?: (text: string) => void;
+  /** A request to Claude (Commit changes, Create PR): sent now, or put in the message box first. */
+  onRequest?: (text: string, how: 'send' | 'box') => void;
 }) {
   const scope = scopeOf(step);
-  const [picking, setPicking] = useState(false);
+  const chat = useCommentsChat(cwd);
+  const [picking, setPicking] = useState<{ at: MenuAnchor; keys: boolean }>();
+  const [rowMenu, setRowMenu] = useState<MenuAt>();
   const turns = useTurns(sessionId, looking && busy && scope.kind === 'turn' ? 5_000 : false);
   const git = status.data?.repo ? status.data : undefined;
-  const offersBase = Boolean(git?.base && git.branch && git.branch !== git.base);
-  const base = useQuery({
-    queryKey: ['git', cwd, 'base'],
-    queryFn: () => api.git(cwd, 'base'),
-    enabled: offersBase && (scope.kind === 'base' || picking),
-    refetchInterval: looking && scope.kind === 'base' ? (busy ? 5_000 : 30_000) : false,
+  const uncommitted = useQuery({
+    queryKey: ['git', cwd],
+    queryFn: () => api.git(cwd),
+    enabled: scope.kind === 'uncommitted',
+    refetchInterval: looking && scope.kind === 'uncommitted' ? (busy ? 5_000 : 30_000) : false,
   });
   const turn = scope.kind === 'turn' ? turns.data?.turns.find((t) => t.uuid === scope.uuid) : undefined;
   const shown = step.path && !step.path.endsWith('/') ? step.path : undefined;
-  const renamedFrom = scope.kind === 'turn' ? undefined : [scope.kind === 'base' ? base.data : status.data].flatMap((s) => (s?.repo ? s.files : [])).find((f) => f.path === shown)?.from;
+  const gitList = scope.kind === 'all' ? status.data : scope.kind === 'uncommitted' ? uncommitted.data : undefined;
+  const renamedFrom = gitList?.repo ? gitList.files.find((f) => f.path === shown)?.from : undefined;
   const diff = useQuery({
     queryKey: ['diff', cwd, sessionId, step.scope ?? '', shown ?? '', renamedFrom ?? ''],
-    queryFn: () => (scope.kind === 'turn' ? api.turnDiff(sessionId!, scope.uuid, shown!) : api.gitDiff(cwd, shown!, scope.kind === 'base' ? 'base' : undefined, renamedFrom)),
+    queryFn: () => (scope.kind === 'turn' ? api.turnDiff(sessionId!, scope.uuid, shown!) : api.gitDiff(cwd, shown!, scope.kind === 'all' ? 'base' : undefined, renamedFrom)),
     enabled: Boolean(shown) && (scope.kind !== 'turn' || Boolean(sessionId)),
   });
 
@@ -148,16 +193,44 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
     );
   }
 
-  const choices = 1 + (offersBase ? 1 : 0) + (turns.data?.turns.length ?? 0);
-  const label = scope.kind === 'uncommitted' ? 'Uncommitted' : scope.kind === 'base' ? `Since ${git?.base ?? 'the branch split'}` : turn ? turnLabel(turn) : 'A turn';
+  const newest = newestFirst(turns.data);
+  const offersUncommitted = Boolean(git?.split);
+  const choices = 1 + (offersUncommitted ? 1 : 0) + newest.length;
+  const label = scope.kind === 'all' ? 'All changes' : scope.kind === 'uncommitted' ? 'Uncommitted changes' : turn?.text ?? 'A turn';
   const open = (path: string) => go({ tab: 'changes', path, ...scopeParam(scope) });
-  // Uncommitted, the files this session changed come first, as in Claude Code's diff panel.
+  // The files this session changed come first among those not committed, as in Claude Code's diff panel.
   const ours = new Set(turns.data?.turns.flatMap((t) => t.files.map((f) => f.path)) ?? []);
-  const oursFirst = (list: GitFile[]) => [...list.filter((f) => ours.has(f.path)), ...list.filter((f) => !ours.has(f.path))];
-  const list = scope.kind === 'turn'
+  const oursFirst = (list: GitFile[]) => [...list.filter((f) => !f.committed && ours.has(f.path)), ...list.filter((f) => !f.committed && !ours.has(f.path)), ...list.filter((f) => f.committed)];
+  const list: Row[] | undefined = scope.kind === 'turn'
     ? turn?.files.map((file) => ({ path: file.path, status: file.created ? 'added' as const : 'modified' as const, added: file.added, removed: file.removed }))
-    : scope.kind === 'base' ? (base.data?.repo ? base.data.files : undefined) : git && oursFirst(git.files);
-  const loading = scope.kind === 'turn' ? turns.isLoading : scope.kind === 'base' ? base.isLoading : status.isLoading;
+    : gitList?.repo ? oursFirst(gitList.files) : undefined;
+  const loading = scope.kind === 'turn' ? turns.isLoading : scope.kind === 'uncommitted' ? uncommitted.isLoading : status.isLoading;
+  const requests = git && onRequest && scope.kind !== 'turn' ? requestsFor(git, cwd) : undefined;
+  const pick = (next: Scope) => setScope({ tab: 'changes', ...scopeParam(next) });
+  const showEntries: MenuEntry[] = [
+    { id: 'all', label: 'All changes', checked: scope.kind === 'all', ...(git?.base ? { hint: `vs ${git.base}` } : {}), run: () => pick({ kind: 'all' }) },
+    ...(offersUncommitted ? [{ id: 'uncommitted', label: 'Uncommitted changes', checked: scope.kind === 'uncommitted', ...(git?.uncommitted !== undefined ? { hint: files(git.uncommitted) } : {}), run: () => pick({ kind: 'uncommitted' }) }] : []),
+    ...newest.map((t: TurnChanges, i): MenuEntry => ({
+      id: `turn-${t.uuid}`,
+      label: t.text,
+      checked: scope.kind === 'turn' && scope.uuid === t.uuid,
+      hint: files(t.files.length),
+      ...(i === 0 ? { heading: 'Turns', rule: true } : {}),
+      run: () => pick({ kind: 'turn', uuid: t.uuid }),
+    })),
+  ];
+  const deleted = (row: MenuAt) => row.status === 'deleted';
+  const pathTarget = (row: MenuAt): PathTarget => ({
+    path: row.path,
+    cwd,
+    ...(!deleted(row) ? {
+      attach: () => {
+        if (addWaiting(chat, fileItem(row.path))) announce(`${baseName(row.path)} goes with your message`);
+      },
+      openInFiles: () => go({ tab: 'files', path: row.path }),
+      download: () => downloadFile(cwd, row.path),
+    } : {}),
+  });
 
   return (
     <div>
@@ -172,36 +245,35 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
           </button>
         </div>
       )}
-      {git && onRequest && requestsFor(git).length > 0 && (
-        // Requests to Claude, as Claude Desktop's Create PR is: into the message box, sent from there.
-        <div className="flex flex-wrap gap-1.5 px-3 pt-0.5 pb-2">
-          {requestsFor(git).map((request) => (
-            <button key={request.label} type="button" title="Ask Claude to do it: the request goes into the message box" onClick={() => onRequest(request.text)} className="h-8 rounded-full border border-line px-3 text-[13px] text-muted hover:bg-hover hover:text-fg pointer-coarse:h-9">
-              {request.label}
-            </button>
-          ))}
-        </div>
-      )}
       {choices > 1 && (
-        <button type="button" onClick={() => setPicking(true)} aria-haspopup="dialog" className="mx-1 mb-1 flex min-h-10 max-w-[calc(100%-0.5rem)] items-center gap-1 rounded-lg px-2 text-left text-[13px] hover:bg-hover">
+        <button
+          type="button"
+          onClick={(e) => setPicking({ at: e.currentTarget, keys: e.detail === 0 })}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(picking)}
+          className="mx-1 mb-1 flex min-h-10 max-w-[calc(100%-0.5rem)] items-center gap-1 rounded-lg px-2 text-left text-[13px] hover:bg-hover"
+        >
           <span className="shrink-0 text-faint">Show:</span>
           <span className="min-w-0 truncate">{label}</span>
+          {scope.kind === 'all' && git?.base && <span className="shrink-0 text-faint">vs {git.base}</span>}
           <ChevronDown className="size-3.5 shrink-0 text-faint" />
         </button>
       )}
       {loading && <div className="flex justify-center py-10 text-faint"><Loader2 className="size-5 animate-spin" /></div>}
-      {scope.kind !== 'turn' && status.data && !status.data.repo && (
+      {scope.kind !== 'turn' && gitList && !gitList.repo && (
         <div className="px-3 py-10 text-center text-[13px] text-faint">
-          {status.data.untrusted ? 'Changes show once this folder is trusted.' : 'This folder is not a git repository'}
+          {gitList.untrusted ? 'Changes show once this folder is trusted.' : 'This folder is not a git repository'}
         </div>
       )}
       {list?.length === 0 && (
         <div className="px-3 py-8 text-center text-[13px] text-faint">
-          {scope.kind === 'base' ? `Nothing changed since the branch split from ${git?.base ?? 'the default branch'}` : 'Nothing changed since the last commit'}
+          {scope.kind === 'all' && git?.split ? `Nothing changed since the branch split from ${git.base}` : 'Nothing changed since the last commit'}
         </div>
       )}
       {scope.kind === 'turn' && !turns.isLoading && !turn && <div className="px-3 py-8 text-center text-[13px] text-faint">That turn changed no files</div>}
-      {list?.map((file) => <FileRow key={file.path} file={file} comments={commentsIn.get(file.path)} onOpen={() => open(file.path)} />)}
+      {list?.map((file) => (
+        <FileRow key={file.path} file={file} comments={commentsIn.get(file.path)} onOpen={() => open(file.path)} onMenu={(at) => setRowMenu({ path: file.path, status: file.status, ...at })} />
+      ))}
       {/* The turn's prompt's own Rewind to here (lib/actions): its dialog offers the code back where Claude Code kept a copy. */}
       {turn && onRewind && entries(PROMPT_ACTIONS, { text: turn.text, rewind: () => onRewind({ uuid: turn.uuid, text: turn.text, ...(turn.at ? { timestamp: turn.at } : {}) }) }, 'menu', 'touch')
         .filter((entry) => entry.id === 'rewind')
@@ -211,14 +283,25 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
             {entry.label}
           </button>
         ))}
-      <ShowSheet
-        open={picking}
-        onClose={() => setPicking(false)}
-        scope={scope}
-        status={status.data}
-        base={base.data}
-        turns={newestFirst(turns.data)}
-        onPick={(next) => setScope({ tab: 'changes', ...scopeParam(next) })}
+      {requests && onRequest && <RequestsFoot {...requests} onRequest={onRequest} />}
+      <ActionMenu
+        open={Boolean(picking)}
+        onClose={() => setPicking(undefined)}
+        label="Show"
+        title="Show"
+        entries={showEntries}
+        at={picking?.at ?? null}
+        focusFirst={Boolean(picking?.keys)}
+      />
+      <ActionMenu
+        open={Boolean(rowMenu)}
+        onClose={() => setRowMenu(undefined)}
+        label={rowMenu?.path ?? 'File'}
+        title={<span className="font-mono">{baseName(rowMenu?.path ?? '')}</span>}
+        entries={rowMenu ? entries(PATH_ACTIONS, pathTarget(rowMenu), 'menu', hasKeyboard() ? 'pointer' : 'touch') : []}
+        at={rowMenu?.at ?? null}
+        focusFirst={Boolean(rowMenu?.keys)}
+        {...(rowMenu?.lift ? { lift: rowMenu.lift } : {})}
       />
     </div>
   );
