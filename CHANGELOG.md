@@ -410,9 +410,9 @@ settings; and updates from Settings.
   on Ultracode and fast mode.
 - More of what a folder's git config makes git run is asked about, and turned off with your
   settings only: an external diff, a diff driver's command and text converter, a pager, the program
-  SSH runs as, a password prompt, credential helpers, a signing program and aliases (`!` ones, and
-  those that give a setting with `-c`), and hooks that came in the folder's own hooks folder, as a
-  tarball's `.git` brings them. With your settings only, each gets your own setting, from your
+  SSH runs as, a password prompt, credential helpers, a signing program and aliases (a `!` one is
+  a shell command, and any can give git a setting with `-c`), and hooks that came in the folder's
+  own hooks folder, as a tarball's `.git` brings them. With your settings only, each gets your own setting, from your
   system and global git config, or one that runs nothing of the folder's: `git diff` there stops
   rather than run an external diff (`git diff --no-ext-diff` shows it), a text converter shows the
   file as it is, and credential helpers are yours alone. Changes' own git runs none of them either,
