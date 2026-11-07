@@ -17,7 +17,7 @@ import { commandOf, SESSION_ACTIONS } from '../lib/actions';
 import { addWaiting, clearDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
-import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
+import { ariaKeys, closesPane, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
 import { type CommandItem, useCommandContext, useCommandPart } from '../lib/commands';
 import { changeListed } from '../lib/list-changes';
 import { retried } from '../lib/load';
@@ -969,6 +969,22 @@ export function Chat({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cwd, paneShown, paneTab, setPaneOpen, makeWay, showWorkspace]);
+  // Cmd/Ctrl+\ closes a pane beside the conversation from anywhere on the page, as ⌘/ lists it: the
+  // one it is pressed in (which closes itself), else the one asked for last of the side chat and
+  // Changes, Files or the Terminal.
+  const { docked: sideDocked, front: sideFront, close: closeSide } = side;
+  const paneDocked = workspace.docked && paneShown;
+  useEffect(() => {
+    if (!sideDocked && !paneDocked) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!closesPane(e) || e.repeat || e.defaultPrevented || composing(e) || document.querySelector('dialog[open]:not([data-closing])')) return;
+      e.preventDefault();
+      if (sideDocked && (!paneDocked || sideFront === 'side')) closeSide();
+      else setPaneOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sideDocked, paneDocked, sideFront, closeSide, setPaneOpen]);
   // Run in terminal, from a command in a reply: a new terminal in the session's folder runs it.
   const terminals = useTerminalsAvailable();
   const runInTerminal = useMemo(() => (cwd && terminals ? (command: string) => {

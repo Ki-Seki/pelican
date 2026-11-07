@@ -163,6 +163,8 @@ export type SideChatState = {
   hidesPane: boolean;
   /** Under 1280px, open but behind the pane asked for since, as it was: Cmd/Ctrl+; brings it forward. */
   behind: boolean;
+  /** Of the two beside the conversation, the one asked for last: what Cmd/Ctrl+\ closes from the conversation. */
+  front: 'side' | 'pane';
   /**
    * Opens it. Given a question, asks it there: in the side chat shown, or, when it was closed, in a
    * new one, from the session as it is now (as a question with /btw is asked).
@@ -294,7 +296,7 @@ export function useSideChat(sessionId: string | undefined, available: boolean, p
     if (!paneOpen) setPaneOpen(true);
   }, [paneOpen, tab, hidesPane, isOpen, beside, roomy, front, setPaneOpen]);
 
-  return { open: isOpen, docked, stacked, hidesPane, behind, show, start, close, makeWay, sheet, ...(question ? { question } : {}) };
+  return { open: isOpen, docked, stacked, hidesPane, behind, front, show, start, close, makeWay, sheet, ...(question ? { question } : {}) };
 }
 
 const pendingMessage = (uuid: string, text: string): ChatMessage => ({ uuid, role: 'user', blocks: [{ type: 'text', text }], timestamp: Date.now(), pending: true });

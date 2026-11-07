@@ -341,7 +341,7 @@ describe('the side chat', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Quote with a note' })).toBeNull());
   });
 
-  it('beside the conversation, closes with Cmd/Ctrl+\\ pressed in it, as Changes and files does; pressed in the conversation, it stays', async () => {
+  it('beside the conversation, closes with Cmd/Ctrl+\\ pressed in it, as Changes and files does, and pressed in the conversation too', async () => {
     computer(1280);
     session();
     await loaded();
@@ -349,7 +349,10 @@ describe('the side chat', () => {
       fireEvent.keyDown(window, { key: ';', ctrlKey: true });
     });
     fireEvent.keyDown(screen.getByLabelText('Message Claude'), { key: '\\', ctrlKey: true });
-    expect(pane()).not.toBeNull();
+    expect(pane()).toBeNull();
+    act(() => {
+      fireEvent.keyDown(window, { key: ';', ctrlKey: true });
+    });
     fireEvent.keyDown(screen.getByLabelText('Side question'), { key: '\\', metaKey: true });
     expect(pane()).toBeNull();
     act(() => {
@@ -359,6 +362,21 @@ describe('the side chat', () => {
     expect(pane()).not.toBeNull();
     fireEvent.keyDown(screen.getByLabelText('Side question'), { key: '\\', ctrlKey: true });
     expect(pane()).toBeNull();
+  });
+
+  it('stacked under Changes and files, closes first with Cmd/Ctrl+\\ in the conversation when asked for last, then the pane does', async () => {
+    computer(1440);
+    setPrefs({ workspacePane: true });
+    session();
+    await loaded();
+    await waitFor(() => expect(changesPane()).not.toBeNull());
+    toggle();
+    expect(pane()).not.toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Message Claude'), { key: '\\', ctrlKey: true });
+    expect(pane()).toBeNull();
+    expect(changesPane()).not.toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Message Claude'), { key: '\\', ctrlKey: true });
+    expect(changesPane()).toBeNull();
   });
 
   it('from 1280px, sits under an open pane in one column, the height shared with a handle, which the keys move and this browser remembers', async () => {
