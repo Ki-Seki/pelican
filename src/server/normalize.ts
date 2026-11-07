@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type { Block, ChatMessage, DeliveredFile, Delivery, ImageBlock, TextBlock, ToolResultBlock, WorkflowLaunch } from '../shared/protocol.js';
+import type { AgentLaunch, Block, ChatMessage, DeliveredFile, Delivery, Handback, ImageBlock, TextBlock, ToolResultBlock, WorkflowLaunch } from '../shared/protocol.js';
 import { RUN_ID } from '../shared/workflows.js';
 
 const MAX_TEXT = 60_000;
@@ -177,6 +177,63 @@ function workflowLaunch(output: Raw): WorkflowLaunch | undefined {
   };
 }
 
+/** A subagent's id, as Claude Code names its transcript and its task (`agent-<id>.jsonl`). */
+const AGENT = /^[\w-]{1,80}$/;
+
+/**
+ * What an Agent call that does not wait for its agent began, from what Claude Code records of its
+ * result: an agent in the background here (`async_launched`), one in a cloud session
+ * (`remote_launched`), or a teammate (`teammate_spawned`). The text Claude Code gives Claude for it
+ * is for the model alone; what a page shows of it comes from here.
+ */
+function agentLaunch(output: Raw): AgentLaunch | undefined {
+  const id = (value: unknown) => (typeof value === 'string' && AGENT.test(value) ? value : undefined);
+  // A Workflow call's launch says which kind of task it registered; an Agent call's does not.
+  if (output.taskType !== undefined) return undefined;
+  if (output.status === 'async_launched' && id(output.agentId)) return { mode: 'background', agentId: id(output.agentId)! };
+  if (output.status === 'remote_launched') {
+    const url = typeof output.sessionUrl === 'string' && output.sessionUrl.length <= 2000 && /^https:\/\//.test(output.sessionUrl) ? output.sessionUrl : undefined;
+    return { mode: 'cloud', ...(url ? { sessionUrl: url } : {}) };
+  }
+  if (output.status === 'teammate_spawned') {
+    const agentId = id(output.agent_id) ?? id(output.agentId);
+    const name = typeof output.name === 'string' && output.name.trim() ? output.name.trim().slice(0, 64) : undefined;
+    return { mode: 'teammate', ...(agentId ? { agentId } : {}), ...(name ? { name } : {}) };
+  }
+  return undefined;
+}
+
+/** Where the frame Claude Code puts around a handed-back report ends, and the report, each line of it indented, begins. */
+const FRAME = '[Subagent hand-back]';
+const FOLLOWS = 'The report follows:\n';
+
+/** The report inside Claude Code's hand-back frame, its lines as the subagent wrote them: undefined if there is no frame. */
+function framedReport(text: string): string | undefined {
+  const frame = text.indexOf(FRAME);
+  const start = frame < 0 ? -1 : text.indexOf(FOLLOWS, frame);
+  if (start < 0) return undefined;
+  const rest = text.slice(start + FOLLOWS.length);
+  const end = rest.lastIndexOf('\n</agent-message>');
+  return (end < 0 ? rest : rest.slice(0, end)).split('\n').map((line) => (line.startsWith('  ') ? line.slice(2) : line.trimStart())).join('\n').trimEnd();
+}
+
+/**
+ * A subagent's final report, handed back to its session (its SubagentHandback call): Claude Code
+ * delivers it as a message of its own, from that agent, marked as one (`origin`), framed for the
+ * model. Which agent, and the report as the agent wrote it: Claude Code's copy of it where it keeps
+ * one, else read out of the frame.
+ */
+export function handbackOf(raw: Raw, text: string): Handback | undefined {
+  const origin = isRecord(raw.origin) ? raw.origin : undefined;
+  if (origin?.kind !== 'peer') return undefined;
+  const body = typeof origin.body === 'string' ? origin.body : '';
+  if (origin.handback !== true && !body.includes(FRAME) && !text.includes(FRAME)) return undefined;
+  const from = [origin.senderTaskId, origin.from].find((value): value is string => typeof value === 'string' && AGENT.test(value));
+  const report = typeof origin.handbackReportText === 'string' ? origin.handbackReportText : framedReport(body) ?? framedReport(text);
+  if (!from || !report?.trim()) return undefined;
+  return { from, report: report.length > MAX_TEXT ? head(report, MAX_TEXT) : report };
+}
+
 /** Longer than any path a file system takes: a "path" past it is not one. */
 const MAX_PATH = 4096;
 const MEDIA_TYPE = /^[\w.+-]{1,60}\/[\w.+-]{1,100}$/;
@@ -245,6 +302,15 @@ export function toChatMessage(raw: Raw, address?: ImageAddress | 'omit'): ChatMe
   // Text Claude Code adds itself (an image's scale note, skill text) is meta in the transcript
   // and synthetic in the live stream; either way it is not something you typed.
   if (raw.is_meta === true || raw.isMeta === true || raw.isSynthetic === true) out.meta = true;
+  // A subagent's report handed back is Claude Code's message to the model, not one you typed: its
+  // agent's card shows the report.
+  if (type === 'user') {
+    const handback = handbackOf(raw, out.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+    if (handback) {
+      out.handback = handback;
+      out.meta = true;
+    }
+  }
   if (raw.isCompactSummary === true) out.compactSummary = true;
   // A `!` command's output row is read by the Claude Code that wrote it (ChatMessage.version).
   if (type === 'user' && typeof raw.version === 'string' && raw.version.length <= 32 && out.blocks.some((b) => b.type === 'text' && /^\s*<bash-std(?:out|err)>/.test(b.text))) out.version = raw.version;
@@ -261,6 +327,8 @@ export function toChatMessage(raw: Raw, address?: ImageAddress | 'omit'): ChatMe
     if (launch) only.workflow = launch;
     const delivered = only.is_error ? undefined : deliveryOf(output);
     if (delivered) only.delivered = delivered;
+    const agent = only.is_error ? undefined : agentLaunch(output);
+    if (agent) only.agent = agent;
   }
   return out;
 }

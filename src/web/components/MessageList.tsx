@@ -21,7 +21,7 @@ import { markStopping, useLiveShells } from '../lib/shells';
 import { loadOlder, type SessionView } from '../lib/store';
 import { InReply } from '../lib/terminals';
 import { describeTool } from '../lib/tools';
-import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, type SentFile } from '../lib/turns';
+import { buildItems, cleanOutput, filesChangedUnder, type Item, type Part, runsInBackground, type SentFile } from '../lib/turns';
 import { openImage } from './Lightbox';
 import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { loadsInPlace, Markdown, RemoteImage } from './Markdown';
@@ -29,7 +29,7 @@ import { PrCard } from './PrCard';
 import { PromptBody, QuoteTargetContext, SelectionActions, SwipeQuote } from './Quotes';
 import { type RewindPoint, RewoundMarker } from './Rewind';
 import { StreamingMarkdown } from './StreamingMarkdown';
-import { sentFilesOf, ToolCallView, ToolTarget, useCommandTarget } from './ToolCall';
+import { AgentEnded, sentFilesOf, ToolCallView, ToolTarget, useCommandTarget } from './ToolCall';
 import { WorkflowEnded } from './WorkflowCard';
 
 const imageSrc = (image: ImageBlock) => (image.source.type === 'base64' ? `data:${image.source.media_type};base64,${image.source.data}` : image.source.url);
@@ -58,20 +58,23 @@ function Thinking({ text, live, defaultOpen = false }: { text: string; live?: bo
   );
 }
 
-type Segment = { kind: 'steps'; key: string; parts: Part[] } | Extract<Part, { kind: 'text' | 'image' }> | { kind: 'card'; key: string; part: Extract<Part, { kind: 'tool' }> };
+type Segment = { kind: 'steps'; key: string; parts: Part[]; alone?: true } | Extract<Part, { kind: 'text' | 'image' }> | { kind: 'card'; key: string; part: Extract<Part, { kind: 'tool' }> };
 
 /**
  * Runs of tool calls and thinking become one block of steps between Claude's prose. A workflow,
- * and the files Claude sent, are cards of their own, never folded away among the steps.
+ * and the files Claude sent, are cards of their own, never folded away among the steps; so is an
+ * agent Claude left working in the background, a step of its own, where the line about its end leads.
  */
 function segment(parts: Part[]): Segment[] {
   const out: Segment[] = [];
   for (const part of parts) {
     if (part.kind === 'tool' && (part.call.name === 'Workflow' || sentFilesOf(part.call).length > 0)) {
       out.push({ kind: 'card', key: part.key, part });
+    } else if (part.kind === 'tool' && runsInBackground(part.call)) {
+      out.push({ kind: 'steps', key: part.key, parts: [part], alone: true });
     } else if (part.kind === 'tool' || part.kind === 'thinking') {
       const last = out.at(-1);
-      if (last?.kind === 'steps') last.parts.push(part);
+      if (last?.kind === 'steps' && !last.alone) last.parts.push(part);
       else out.push({ kind: 'steps', key: part.key, parts: [part] });
     } else {
       out.push(part);
@@ -533,6 +536,7 @@ const UserBubble = memo(function UserBubble({
 function Notice({ item, onNext }: { item: Extract<Item, { kind: 'notice' }>; onNext?: () => void }) {
   const [open, setOpen] = useState(false);
   if (item.workflow) return <WorkflowEnded {...item.workflow} />;
+  if (item.agent) return <AgentEnded {...item.agent} />;
   if (item.tone === 'interrupt') {
     return <div className="flex items-center gap-2 text-[12px] text-faint"><span className="h-px flex-1 bg-line" />Interrupted<span className="h-px flex-1 bg-line" /></div>;
   }
@@ -1022,15 +1026,16 @@ export function MessageList({
   return (
     <SessionContext.Provider value={sessionId}>
     <div ref={frame} className="relative min-h-0 flex-1">
-      {/* Opening or closing something (a step, a long output) is reading, not following: what
-          arrives next must not pull it away. A tap that opens nothing (selecting text, a link,
-          Copy) leaves following as it was. Scrolling back down to the end follows again. */}
+      {/* Opening or closing something (a step, a long output), or going to it from the line about
+          its end, is reading, not following: what arrives next must not pull it away. A tap that
+          opens nothing (selecting text, a link, Copy) leaves following as it was. Scrolling back
+          down to the end follows again. */}
       <div
         ref={scroller}
         data-conversation
         onScroll={onScroll}
         onClickCapture={(e) => {
-          if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary')) atBottom.current = false;
+          if ((e.target as Element).closest?.('[aria-expanded], [aria-pressed], summary, [data-reveals]')) atBottom.current = false;
         }}
         onTouchStart={() => { touching.current = true; }}
         // A tap's own click comes after its finger lifts: a list that moved then would take it

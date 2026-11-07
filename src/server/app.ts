@@ -1055,15 +1055,22 @@ export function byteRange(header: string | undefined, size: number): { start: nu
 
 /**
  * A page of an Agent call's subagent's own transcript, as a workflow agent's comes: its last
- * messages by default, `before` for earlier ones, each one and the page bounded.
+ * messages by default, `before` for earlier ones, `after` for those since (what a card asks while
+ * its agent works in the background), each one and the page bounded.
  */
 app.get('/api/sessions/:id/agents/:agent', async (c) => {
   const id = uuidOf(c.req.param('id'));
-  const value = c.req.query('before');
-  const before = value === undefined ? undefined : Number(value);
-  if (!id || (before !== undefined && !(Number.isSafeInteger(before) && before >= 0))) return c.json({ error: 'No such agent' }, 404);
+  const position = (name: string) => {
+    const value = c.req.query(name);
+    if (value === undefined) return undefined;
+    const n = Number(value);
+    return Number.isSafeInteger(n) && n >= 0 ? n : NaN;
+  };
+  const before = position('before');
+  const after = position('after');
+  if (!id || Number.isNaN(before) || Number.isNaN(after) || (before !== undefined && after !== undefined)) return c.json({ error: 'No such agent' }, 404);
   const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 60) || 60, 1), 300);
-  const page = await subagentPage(id, c.req.param('agent'), { ...(before !== undefined ? { before } : {}), limit });
+  const page = await subagentPage(id, c.req.param('agent'), { ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), limit });
   return page ? c.json(page) : c.json({ error: 'No such agent' }, 404);
 });
 

@@ -1,10 +1,11 @@
-import { CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2, MoreHorizontal, TriangleAlert } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, Bot, CheckCircle2, ChevronRight, Circle, CircleDot, Download, Loader2, MoreHorizontal, TriangleAlert } from 'lucide-react';
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { revealHidden } from '../../shared/hidden';
 import { commandRunnable, TERMINAL_LIMITS } from '../../shared/terminal';
-import type { ChatMessage, DeliveredFile } from '../../shared/protocol';
+import type { BackgroundTask, ChatMessage, DeliveredFile, MessagesPage, TaskProgress } from '../../shared/protocol';
+import { durationText, type TaskNotice, tokensText } from '../../shared/workflows';
 import { entries, PATH_ACTIONS, STEP_ACTIONS, type StepTarget } from '../lib/actions';
 import { announce } from '../lib/announce';
 import { api, ApiError, type SentState } from '../lib/api';
@@ -19,7 +20,10 @@ import { useSessionId } from '../lib/session-context';
 import { STATIC_DEMO } from '../lib/static-demo';
 import { useSessionView } from '../lib/store';
 import { describeTool, todosOf, type ToolSummary } from '../lib/tools';
-import { answersOf, buildItems, cleanOutput, type Outcome, outcomeOf, resultImages, resultText, type ToolCall } from '../lib/turns';
+import {
+  agentOf, type AgentNotice, type AgentRun, answersOf, buildItems, cleanOutput, HANDED_BACK, type Outcome, outcomeOf, resultImages, resultText, runsInBackground, type ToolCall,
+} from '../lib/turns';
+import { revealWorkflow, useOnScreen, useRevealed } from '../lib/workflows';
 import { Diff, diffStats } from './Diff';
 import { openImage } from './Lightbox';
 import { PreviewCard } from './Preview';
@@ -28,7 +32,7 @@ import { ActionMenu, type MenuAnchor } from './ActionMenu';
 import { STEP_LINK } from './PathLink';
 import { usePathTarget } from './PathMenu';
 import { QuoteTargetContext, SwipeQuote } from './Quotes';
-import { WorkflowCard } from './WorkflowCard';
+import { joinedPage, WorkflowCard } from './WorkflowCard';
 
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
@@ -459,22 +463,74 @@ function SentFiles({ call }: { call: ToolCall }) {
   );
 }
 
+type SubagentKey = readonly ['subagent', string, string];
+
+/**
+ * A subagent's messages since its steps were opened, read again while it works: only what is new
+ * since the last one held (that one again, as it may have changed), joined to what is held, so the
+ * earlier pages shown stay joined to it (as a workflow agent's are, WorkflowCard's newSteps).
+ */
+async function newSubagentSteps(client: QueryClient, key: SubagentKey, sessionId: string, agentId: string): Promise<MessagesPage> {
+  const newest = () => api.subagent(sessionId, agentId);
+  let held = client.getQueryData<MessagesPage>(key);
+  if (!held) return newest();
+  // A page at a time, as far as the end; a long way behind, it starts again from the newest.
+  for (let i = 0; i < 5; i += 1) {
+    const end = held.offset + held.messages.length;
+    const page = await api.subagent(sessionId, agentId, undefined, Math.max(0, end - 1));
+    const next = joinedPage(held, page);
+    if (!next) return newest();
+    held = next;
+    if (held.offset + held.messages.length >= held.total) return held;
+  }
+  return newest();
+}
+
+/** How often an open agent's steps are read again: while it works here, and, slowing down while nothing comes, while another app may run it. */
+const LIVE_STEPS_MS = 3000;
+const WATCHED_STEPS_MS = 5000;
+const WATCHED_STEPS_MAX_MS = 60_000;
+
 /**
  * What a subagent did, from its own transcript: its tool calls, opened on request. A page at a
  * time, the newest first, as a workflow agent's: a long one is tens of megabytes. A page with no
  * step in it (a long answer at the end, a step too large to share a page) is read past, at first
  * and at each Show earlier, so the count is always of steps shown: its last ones, all of them, or
- * none, once its start says so.
+ * none, once its start says so. While the agent works (`live`: in this Pelican's Claude), they are
+ * read again every few seconds while open and on screen, and once more when it ends; `watch`: one
+ * another app may be running, read again less and less often while nothing new comes.
  */
-function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
+function AgentSteps({ agentId, cwd, live = false, watch = false, startOpen = false }: { agentId: string; cwd?: string; live?: boolean; watch?: boolean; startOpen?: boolean }) {
   const sessionId = useSessionId();
-  const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['subagent', sessionId, agentId],
-    queryFn: () => api.subagent(sessionId!, agentId),
+  const client = useQueryClient();
+  const [open, setOpen] = useState(startOpen);
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const onScreen = useOnScreen(element);
+  // Reads in a row that brought nothing new, for the slowing down.
+  const [quiet, setQuiet] = useState(0);
+  const following = live || watch;
+  const key = useMemo((): SubagentKey => ['subagent', sessionId ?? '', agentId], [sessionId, agentId]);
+  const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
+    queryKey: key,
+    queryFn: () => (following ? newSubagentSteps(client, key, sessionId!, agentId) : api.subagent(sessionId!, agentId)),
     enabled: open && Boolean(sessionId),
-    staleTime: 60_000,
+    staleTime: following ? 0 : 60_000,
+    refetchInterval: open && onScreen ? (live ? LIVE_STEPS_MS : watch ? Math.min(WATCHED_STEPS_MAX_MS, WATCHED_STEPS_MS * 2 ** quiet) : false) : false,
   });
+  // Nothing new since the last read: the next one waits longer. Something new: at once again.
+  const seen = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!data) return;
+    const total = data.total;
+    if (seen.current !== undefined) setQuiet((n) => (total === seen.current ? Math.min(n + 1, 8) : 0));
+    seen.current = total;
+  }, [data, dataUpdatedAt]);
+  // It just ended: what it did in its last seconds, once.
+  const wasFollowing = useRef(following);
+  useEffect(() => {
+    if (wasFollowing.current && !following && open) void refetch();
+    wasFollowing.current = following;
+  }, [following, open, refetch]);
   // Earlier pages, asked for one at a time, up to where the newest begins; let go if it was read again.
   const [earlier, setEarlier] = useState<{ messages: ChatMessage[]; offset: number; joins: number }>();
   const [loading, setLoading] = useState(false);
@@ -509,11 +565,11 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
   // Nothing to count yet, with more to read: no number until there is one.
   const counted = open && data && !(steps.length === 0 && offset > 0);
   return (
-    <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px]">
+    <div ref={setElement} className="rounded-lg border border-line bg-panel px-3 py-1.5 text-[13px]">
       <div className="flex min-h-7 items-center gap-3">
         <button type="button" className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left text-faint hover:text-fg" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
           <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-          {counted ? `${offset > 0 ? 'Last ' : ''}${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : 'Steps it took'}
+          {counted ? `${offset > 0 ? 'Last ' : ''}${steps.length} ${steps.length === 1 ? 'step' : 'steps'}` : following ? 'Steps so far' : 'Steps it took'}
           {open && (isLoading || loading) && <Loader2 className="size-3.5 shrink-0 animate-spin" />}
         </button>
         {open && offset > 0 && (steps.length > 0 || failed) && (
@@ -530,8 +586,9 @@ function AgentSteps({ agentId, cwd }: { agentId: string; cwd?: string }) {
         )}
       </div>
       {open && (error || failed) && <div className="py-1 text-[12px] text-danger">{((error ?? failed) as Error).message}</div>}
-      {open && data && steps.length === 0 && offset === 0 && <div className="py-1 text-[12px] text-faint">No steps were recorded.</div>}
-      {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={false} /> : null))}
+      {open && data && steps.length === 0 && offset === 0 && <div className="py-1 text-[12px] text-faint">{following ? 'No steps yet.' : 'No steps were recorded.'}</div>}
+      {/* At work, its last step may be running still. */}
+      {open && steps.map((part) => (part.kind === 'tool' ? <ToolCallView key={part.key} call={part.call} cwd={cwd} running={live} /> : null))}
     </div>
   );
 }
@@ -546,10 +603,173 @@ function AgentProgress({ toolUseId }: { toolUseId: string }) {
   return <div className="-mt-1 mb-1 ml-5.5 truncate text-[12px] text-faint">{parts.join(' · ')}</div>;
 }
 
+/**
+ * A background agent as its card tells it: at work in this Pelican's Claude (`task`, which Stop
+ * ends, and what it last reported), ended as Claude Code said in the conversation, or neither
+ * known: launched in a session another app runs (`elsewhere`), whose transcript says only its end.
+ */
+type AgentState = {
+  run: AgentRun;
+  phase: 'running' | 'ended' | 'unknown';
+  task?: BackgroundTask;
+  progress?: TaskProgress;
+  ended?: TaskNotice;
+  elsewhere: boolean;
+};
+
+/**
+ * How long an agent this Pelican's Claude stopped listing shows as at work still: Claude Code's
+ * word of its end is in the conversation a moment later.
+ */
+const ENDING_MS = 15_000;
+
+function useBackgroundAgent(call: ToolCall): AgentState {
+  const run = useSessionView(useSessionId()).run;
+  const agent = useMemo(() => agentOf(call), [call]);
+  const task = run?.tasks?.find((t) => t.toolUseId === call.id || (agent.agentId !== undefined && t.id === agent.agentId));
+  const progress = run?.progress?.[call.id];
+  const ended = call.ended;
+  const live = !ended && Boolean(task || progress);
+  const last = useRef<{ progress?: TaskProgress; at: number } | undefined>(undefined);
+  if (live) last.current = { ...((progress ?? last.current?.progress) ? { progress: progress ?? last.current!.progress } : {}), at: Date.now() };
+  const ending = !ended && !live && last.current !== undefined && Date.now() - last.current.at < ENDING_MS;
+  const [, wake] = useState(0);
+  useEffect(() => {
+    if (!ending) return undefined;
+    const timer = setTimeout(() => wake((n) => n + 1), ENDING_MS);
+    return () => clearTimeout(timer);
+  }, [ending]);
+  const reported = live || ending ? progress ?? last.current?.progress : undefined;
+  const phase = ended ? 'ended' : live || ending ? 'running' : 'unknown';
+  const shown = live ? task : undefined;
+  // The same state while what it says stays the same: the run's report comes anew many times a
+  // second while Claude writes, and the step need not be drawn again for it.
+  const said = JSON.stringify([phase, shown, reported, !run]);
+  return useMemo(() => ({
+    run: agent,
+    phase,
+    ...(shown ? { task: shown } : {}),
+    ...(reported ? { progress: reported } : {}),
+    ...(ended ? { ended } : {}),
+    elsewhere: !run,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [agent, ended, said]);
+}
+
+/** Where an agent that Claude did not wait for runs, in Claude Desktop's words: in background, or elsewhere. */
+const WHERE: Record<NonNullable<AgentRun['mode']>, string> = { background: 'in background', cloud: 'in a cloud session', teammate: 'as a teammate' };
+
+const stepsText = (n: number) => `${n} ${n === 1 ? 'step' : 'steps'}`;
+
+/**
+ * The line under a background agent's step, in Claude Desktop's words for work in the background:
+ * Running in background (with its steps, its time and what it is doing), Finished, Failed or
+ * Stopped in background (with its steps, tokens and time, as Claude Code's notice of its end
+ * gives them), and Started in background while neither is known.
+ */
+function agentLine(state: Pick<AgentState, 'run' | 'phase' | 'progress' | 'ended'>): { words: string; danger?: true; parts: string[] } {
+  const where = WHERE[state.run.mode ?? 'background'];
+  const known = (parts: Array<string | undefined>) => parts.filter((part): part is string => Boolean(part));
+  if (state.phase === 'running') {
+    const p = state.progress;
+    // What it is doing last: on a phone, the line gives way there first.
+    return { words: `Running ${where}`, parts: known([p?.toolUses ? stepsText(p.toolUses) : undefined, p?.durationMs ? durationText(p.durationMs) : undefined, p?.summary ?? p?.lastTool]) };
+  }
+  const ended = state.phase === 'ended' ? state.ended : undefined;
+  if (!ended) return { words: `Started ${where}`, parts: [] };
+  const usage = ended.usage;
+  const parts = known([usage?.toolUses ? stepsText(usage.toolUses) : undefined, usage?.tokens ? `${tokensText(usage.tokens)} tokens` : undefined, usage?.durationMs !== undefined ? durationText(usage.durationMs) : undefined]);
+  if (ended.status === 'failed') return { words: `Failed ${where}`, danger: true, parts };
+  if (ended.status === 'killed' || ended.status === 'stopped' || ended.orphan) return { words: `Stopped ${where}`, parts };
+  // Claude Code's other words for an end that is not quite one.
+  const limit = / stopped at its (\d+)-turn limit/.exec(ended.summary)?.[1];
+  if (limit) return { words: `Stopped at its ${limit}-turn limit`, parts };
+  if (/ is waiting on its own background work/.test(ended.summary)) return { words: 'Waiting on its own background work', parts };
+  return { words: `Finished ${where}`, parts };
+}
+
+function AgentLine({ state }: { state: AgentState }) {
+  const line = agentLine(state);
+  return <div className={`-mt-1 mb-1 ml-5.5 truncate text-[12px] ${line.danger ? 'text-danger' : 'text-faint'}`}>{[line.words, ...line.parts].join(' · ')}</div>;
+}
+
+/** What Claude asked the agent to do, folded. */
+function Instructions({ prompt }: { prompt: string }) {
+  return (
+    <details className="rounded-lg border border-line bg-panel px-3 py-2 text-[13px]">
+      <summary className="cursor-pointer text-faint">Instructions</summary>
+      <Markdown text={prompt} className="mt-2 text-[13px]" />
+    </details>
+  );
+}
+
+/**
+ * A background agent opened: what it was asked, its steps (read again while it works), what it
+ * returned or why it failed once Claude Code said it ended, and Stop while it works in this
+ * Pelican's Claude, as Claude Code's background tasks offer it. Never Claude Code's words to
+ * Claude for its launch.
+ */
+function BackgroundAgentDetail({ call, cwd, state }: { call: ToolCall; cwd?: string; state: AgentState }) {
+  const sessionId = useSessionId();
+  const [stopping, setStopping] = useState(false);
+  const { run: agent, phase, task, ended } = state;
+  useEffect(() => {
+    if (phase !== 'running') setStopping(false);
+  }, [phase]);
+  const prompt = str(call.input.prompt);
+  // Its report, handed back to the session or in the notice of its end; never Claude Code's pointer to it.
+  const report = call.report ?? (ended?.result && !HANDED_BACK.test(ended.result) ? ended.result : undefined);
+  const stop = () => {
+    if (!sessionId || !task) return;
+    setStopping(true);
+    api.stopTask(sessionId, task.id).catch(() => setStopping(false));
+  };
+  return (
+    <div className="space-y-2">
+      {prompt && <Instructions prompt={prompt} />}
+      {/* At work, opened to its steps, as they come. */}
+      {agent.agentId && agent.mode !== 'cloud' && (
+        <AgentSteps agentId={agent.agentId} cwd={cwd} live={phase === 'running' && !state.elsewhere} watch={phase === 'unknown' && state.elsewhere} startOpen={phase === 'running'} />
+      )}
+      {agent.sessionUrl && (
+        <a href={agent.sessionUrl} target="_blank" rel="noreferrer" className="inline-flex text-[12.5px] text-muted underline decoration-faint underline-offset-2 hover:text-fg">Open the cloud session</a>
+      )}
+      {ended?.status === 'failed' && ended.error && <div className="rounded-lg bg-chip px-3 py-2 font-mono text-[12px] whitespace-pre-wrap break-words text-danger">{ended.error}</div>}
+      {report && <Markdown text={report} className="text-[14px]" />}
+      {phase === 'running' && task && sessionId && (
+        <div className="flex justify-end">
+          <button type="button" aria-label="Stop this agent" disabled={stopping} onClick={stop} className="relative h-8 shrink-0 rounded-full px-3 text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:bg-hover hover:text-fg disabled:opacity-50">
+            {stopping ? 'Stopping…' : 'Stop'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A background agent's end, in the conversation where Claude Code said it: a line naming the agent
+ * in Claude Code's words ("Agent Review the checkout finished · 2m 10s") that leads to its card,
+ * where its result is.
+ */
+export function AgentEnded({ toolUseId, description, status, words, durationMs }: AgentNotice) {
+  return (
+    <button type="button" data-reveals onClick={() => revealWorkflow(toolUseId)} title="Show the agent" className="flex min-h-7 max-w-full items-center gap-2 text-left text-[13px] leading-snug text-muted hover:text-fg">
+      <Bot className="size-3.5 shrink-0" aria-hidden />
+      {/* On a phone it takes two lines rather than lose how it ended. */}
+      <span className="line-clamp-2 min-w-0 break-words">
+        Agent {description && <span className="text-fg/85">{description}</span>} <span className={status === 'failed' ? 'text-danger' : ''}>{words}</span>
+        {durationMs !== undefined && <>{' '}<span className="whitespace-nowrap text-faint tabular-nums">· {durationText(durationMs)}</span></>}
+      </span>
+      <ArrowUp className="size-3.5 shrink-0 text-faint" aria-hidden />
+    </button>
+  );
+}
+
 /** A page or a picture Claude wrote, worth seeing rendered rather than as code. */
 const PREVIEWABLE = /\.(html?|svg)$/i;
 
-function Detail({ call, cwd, outcome }: { call: ToolCall; cwd?: string; outcome: Outcome }) {
+function Detail({ call, cwd, outcome, agent }: { call: ToolCall; cwd?: string; outcome: Outcome; agent?: AgentState }) {
   // A call that never ran (refused) or was cut short gave back only a note to Claude, which the
   // row already shows: what is left to see is what it would have done.
   const ran = outcome.kind === 'done' || outcome.kind === 'failed';
@@ -584,17 +804,17 @@ function Detail({ call, cwd, outcome }: { call: ToolCall; cwd?: string; outcome:
       );
     case 'Agent':
     case 'Task': {
+      if (agent) return <BackgroundAgentDetail call={call} cwd={cwd} state={agent} />;
       const agentId = output.match(/agentId:\s*([\w-]+)/)?.[1];
+      // What it returned, without Claude Code's trailer for the model; where Claude Code handed its
+      // report back to the session instead, that report, never the pointer to it.
+      const said = output.replace(/\n*agentId:[\s\S]*$/, '');
+      const shown = HANDED_BACK.test(said) ? call.report ?? '' : agentOf(call).background ? '' : said;
       return (
         <div className="space-y-2">
-          {str(call.input.prompt) && (
-            <details className="rounded-lg border border-line bg-panel px-3 py-2 text-[13px]">
-              <summary className="cursor-pointer text-faint">Instructions</summary>
-              <Markdown text={str(call.input.prompt)} className="mt-2 text-[13px]" />
-            </details>
-          )}
+          {str(call.input.prompt) && <Instructions prompt={str(call.input.prompt)} />}
           {agentId && <AgentSteps agentId={agentId} cwd={cwd} />}
-          {ran && <Markdown text={output.replace(/\n*agentId:[\s\S]*$/, '')} className="text-[14px]" />}
+          {ran && shown && <Markdown text={shown} className="text-[14px]" />}
         </div>
       );
     }
@@ -759,9 +979,40 @@ export function useCommandTarget(command: string, output: string, key: string): 
 /** A step's menu, open: where, and the row a finger raised. */
 type StepMenuAt = { at: MenuAnchor; lift?: Element; keys?: boolean };
 
-export const ToolCallView = memo(function ToolCallView({ call, cwd, running, defaultOpen = false }: { call: ToolCall; cwd?: string; running: boolean; defaultOpen?: boolean }) {
+type StepProps = { call: ToolCall; cwd?: string; running: boolean; defaultOpen?: boolean };
+
+/** A tool call, as a step; an agent Claude did not wait for, as how that agent stands. */
+export const ToolCallView = memo(function ToolCallView(props: StepProps) {
+  return runsInBackground(props.call) ? <BackgroundAgentStep {...props} /> : <Step {...props} />;
+});
+
+/** A background agent's step, following its agent: in this Pelican's Claude, and in the conversation. */
+function BackgroundAgentStep(props: StepProps) {
+  const state = useBackgroundAgent(props.call);
+  // Until Claude Code says it began it, it is a step on its way like any other.
+  return <AgentStep {...props} {...(state.run.background ? { agent: state } : {})} />;
+}
+
+/** Drawn again only when what a background agent's step shows changed. */
+const AgentStep = memo(function AgentStep(props: StepProps & { agent?: AgentState }) {
+  return <Step {...props} />;
+});
+
+function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { agent?: AgentState }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => setOpen(defaultOpen), [defaultOpen]);
+  // The line about an agent's end leads here: the step opens, comes into view and takes the focus.
+  const root = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const reveal = useCallback(() => {
+    setOpen(true);
+    const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(() => {
+      root.current?.scrollIntoView?.({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+      toggle.current?.focus({ preventScroll: true });
+    });
+  }, []);
+  useRevealed(call.name === 'Agent' || call.name === 'Task' ? call.id : '', reveal);
   const summary = describeTool(call.name, call.input, cwd);
   const outcome = outcomeOf(call);
   const fileLink = useStepFile(call);
@@ -820,7 +1071,9 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   const Icon = summary.icon;
   // Claude Code ran it and delivered none of its files (one now leads elsewhere): no better than failing.
   const undelivered = ran && call.result?.delivered?.files.length === 0;
-  const failed = outcome.kind === 'failed' || undelivered;
+  // A background agent's own end, as Claude Code said it: its launch went well whatever followed.
+  const agentEnd = agent?.phase === 'ended' ? agent.ended?.status : undefined;
+  const failed = outcome.kind === 'failed' || undelivered || agentEnd === 'failed';
   // A tool with words of its own for a step at work and one that failed says them, as Claude Desktop does.
   const verb = outcome.kind === 'pending' && running ? summary.running ?? summary.verb : failed ? summary.failed ?? summary.verb : summary.verb;
   // A refused or interrupted edit changed nothing, whatever it meant to change.
@@ -837,10 +1090,11 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-        {outcome.kind === 'pending' && running && <Loader2 className="size-3.5 animate-spin text-faint" />}
+        {((outcome.kind === 'pending' && running) || agent?.phase === 'running') && <Loader2 className="size-3.5 animate-spin text-faint" />}
         {failed && !summary.failed && <span className="text-[11px] text-danger">failed</span>}
         {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
         {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
+        {(agentEnd === 'killed' || agentEnd === 'stopped') && <span className="text-[11px] text-faint">stopped</span>}
         <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
       </span>
     </>
@@ -861,7 +1115,8 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
           e.stopPropagation();
         },
       } : {})}
-      className={`group/step relative ${hasMenu ? press.className : ''}`}
+      ref={root}
+      className={`relative scroll-mt-3 ${hasMenu ? press.className : ''}`}
     >
       {hasMenu && (
         // With a pointer, ⋯ beside the chevron on hover, or reached with the keyboard.
@@ -871,7 +1126,8 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
           aria-haspopup="menu"
           aria-expanded={Boolean(menu)}
           onClick={(e) => setMenu({ at: e.currentTarget, ...(e.detail === 0 ? { keys: true } : {}) })}
-          className={`absolute top-0.5 right-5 z-[2] hidden size-7 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover/step:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
+          // Its own step's: an agent's steps, opened inside its step, keep theirs until pointed at.
+          className={`absolute top-0.5 right-5 z-[2] hidden size-7 place-items-center rounded-md text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 [[data-step]:hover>&]:opacity-100 pointer-fine:grid ${menu ? 'opacity-100' : ''}`}
         >
           <MoreHorizontal className="size-3.5" />
         </button>
@@ -902,6 +1158,7 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
         </div>
       ) : (
         <button
+          ref={toggle}
           type="button"
           onClick={() => setOpen((v) => !v)}
           className="group flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-left text-[13px] text-muted hover:text-fg"
@@ -910,12 +1167,12 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
           {row(summary.target && <ToolTarget summary={summary} />)}
         </button>
       )}
-      {outcome.kind === 'pending' && running && (call.name === 'Agent' || call.name === 'Task') && <AgentProgress toolUseId={call.id} />}
+      {agent ? <AgentLine state={agent} /> : outcome.kind === 'pending' && running && (call.name === 'Agent' || call.name === 'Task') && <AgentProgress toolUseId={call.id} />}
       {outcome.kind === 'denied' && outcome.note && <div className="mb-1.5 ml-5.5"><Note text={outcome.note} /></div>}
       {open && (
         <div className="animate-fade mt-1 mb-2 ml-5.5">
           {summary.note && <div className="mb-1.5 text-[12px] text-faint">{summary.note}</div>}
-          <Detail call={call} cwd={cwd} outcome={outcome} />
+          <Detail call={call} cwd={cwd} outcome={outcome} {...(agent ? { agent } : {})} />
         </div>
       )}
     </div>
@@ -924,4 +1181,4 @@ export const ToolCallView = memo(function ToolCallView({ call, cwd, running, def
   const output = cleanOutput(resultText(call.result)).trim();
   if (!output) return step;
   return <SwipeQuote whole={{ text: () => output, from: () => ({ what: 'step', key: call.id }) }}>{step}</SwipeQuote>;
-});
+}

@@ -88,6 +88,8 @@ for (const session of sessions) {
     for (const file of block.type === 'tool_result' ? block.delivered?.files ?? [] : []) await save(`sessions/${q(session.id)}/sent?path=${q(file.path)}`);
     // A pull request Claude named in Desktop's <pr-created> tag: its card's status, made up by the demo.
     for (const [, url] of block.type === 'text' ? block.text.matchAll(/<pr-created>\s*(https?:\/\/\S+?)\s*<\/pr-created>/gi) : []) await save(`pr?url=${q(url)}`);
+    // The newest steps of each agent Claude left working in the background, as its card asks for them.
+    if (block.type === 'tool_result' && block.agent?.agentId) await save(`sessions/${q(session.id)}/agents/${q(block.agent.agentId)}`);
   }
   await save(`sessions/${q(session.id)}/mcp`);
   // What each turn changed, and each turn's diff of each of its files.

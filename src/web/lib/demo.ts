@@ -7,6 +7,7 @@ import type {
   SessionChanges, SessionStatus, SessionSummary, Workflow,
 } from '../../shared/protocol';
 import { COMMIT_REQUEST, requestShown } from '../../shared/requests';
+import { AGENTS_SESSION, agentNotice, type DemoAgent, handbackText, LICENSES, OUTDATED, OUTDATED_FINISHES_MS } from '../../shared/demo-agents';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
@@ -353,6 +354,48 @@ function interrupt(sessionId: string): { ok: boolean } {
   return { ok: true };
 }
 
+/** The run without a task Claude left running, and without what that task last reported. */
+function without(run: RunState, taskId: string): RunState {
+  const { tasks = [], progress, ...rest } = run;
+  const task = tasks.find((t) => t.id === taskId);
+  const left = tasks.filter((t) => t !== task);
+  const reports = progress && Object.fromEntries(Object.entries(progress).filter(([call]) => call !== task?.toolUseId));
+  return { ...rest, ...(left.length > 0 ? { tasks: left } : {}), ...(reports && Object.keys(reports).length > 0 ? { progress: reports } : {}) };
+}
+
+const DEMO_AGENTS: DemoAgent[] = [LICENSES, OUTDATED];
+
+/** How long the demo's agent has been at work: since Claude Code said it began it, in the conversation. */
+function ranFor(sessionId: string, agent: DemoAgent): number {
+  const launched = getView(sessionId).messages.find((m) => m.blocks.some((b) => b.type === 'tool_result' && b.tool_use_id === agent.call))?.timestamp;
+  return launched ? Math.max(0, Date.now() - launched) : 0;
+}
+
+/**
+ * The demo's agent still at work finishes a while after its session is first opened, as Claude Code
+ * tells it: its report handed back, the notice of its end, and Claude's answer to it. Not once it
+ * was stopped.
+ */
+let agentFinishing: ReturnType<typeof setTimeout> | undefined;
+function finishAgentLater(): void {
+  agentFinishing ??= setTimeout(() => {
+    const sessionId = AGENTS_SESSION;
+    const run = currentRun(sessionId);
+    const task = run?.tasks?.find((t) => t.toolUseId === OUTDATED.call);
+    // Its session let go of meanwhile: when it is opened again. Stopped: never.
+    if (!run) agentFinishing = undefined;
+    if (!run || !task) return;
+    say(sessionId, user([{ type: 'text', text: handbackText(OUTDATED) }], { meta: true, handback: { from: OUTDATED.agentId, report: OUTDATED.report } }));
+    say(sessionId, user([{ type: 'text', text: agentNotice(OUTDATED, 'completed', { ...OUTDATED.usage, durationMs: ranFor(sessionId, OUTDATED) }) }]));
+    // Claude takes the notice in, as a turn of its own.
+    runAs(sessionId, { ...without(run, task.id), busy: true, permissions: [], partial: [] });
+    later(sessionId, 1600, () => {
+      say(sessionId, assistant([{ type: 'text', text: OUTDATED.reply }]));
+      finish(sessionId, 1600);
+    });
+  }, OUTDATED_FINISHES_MS);
+}
+
 /** A workflow stopped as Claude Code stops one: the agents still at work stop with it. */
 const stopped = (workflow: Workflow): Workflow => ({
   ...workflow,
@@ -361,14 +404,19 @@ const stopped = (workflow: Workflow): Workflow => ({
   agents: workflow.agents.map((a) => (a.state === 'start' || a.state === 'progress' ? { ...a, state: 'error', error: 'Stopped because the workflow was stopped' } : a)),
 });
 
-/** Stop on a command or a workflow Claude left running: it ends, and the session has nothing left at work. */
+/**
+ * Stop on a command, a workflow or an agent Claude left running: it ends, and the session has
+ * nothing left at work. An agent's end is said in the conversation, as Claude Code says it.
+ */
 function stopTask(sessionId: string, taskId: string): { ok: boolean } {
   const run = currentRun(sessionId);
-  if (!run?.tasks?.some((t) => t.id === taskId)) return { ok: true };
-  const { tasks, ...rest } = run;
-  const left = tasks.filter((t) => t.id !== taskId);
+  const task = run?.tasks?.find((t) => t.id === taskId);
+  if (!run || !task) return { ok: true };
+  const rest = without(run, taskId);
   const workflows = rest.workflows && Object.fromEntries(Object.entries(rest.workflows).map(([call, w]) => [call, w.taskId === taskId && isLive(w.status) ? stopped(w) : w]));
-  runAs(sessionId, { ...(left.length > 0 ? { ...rest, tasks: left } : rest), ...(workflows ? { workflows } : {}) });
+  runAs(sessionId, { ...rest, ...(workflows ? { workflows } : {}) });
+  const agent = DEMO_AGENTS.find((a) => a.call === task.toolUseId);
+  if (agent) say(sessionId, user([{ type: 'text', text: agentNotice(agent, 'killed') }]));
   return { ok: true };
 }
 
@@ -598,6 +646,8 @@ function adjust(path: string, data: unknown): unknown {
     return { sessions: [...started, ...sessions].map(summarize).sort((a, b) => b.lastActivity - a.lastActivity) };
   }
   const match = sessionPath.exec(path);
+  // Its agent at work finishes a while after the session is first opened.
+  if (match && decodeURIComponent(match[1]!) === AGENTS_SESSION && !match[2]) finishAgentLater();
   const story = match ? stories.get(decodeURIComponent(match[1]!)) : undefined;
   if (!story) return data;
   const rest = match![2] ?? '';

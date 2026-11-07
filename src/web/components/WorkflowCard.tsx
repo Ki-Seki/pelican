@@ -223,7 +223,7 @@ type AgentKey = readonly ['workflow-agent', string, string, string];
  * there on. Undefined where they cannot be joined (the transcript was cut short or begun again,
  * or the page does not reach back to what is held): the newest is read again then.
  */
-function joinedPage(held: WorkflowAgentPage, page: WorkflowAgentPage): WorkflowAgentPage | undefined {
+export function joinedPage(held: WorkflowAgentPage, page: WorkflowAgentPage): WorkflowAgentPage | undefined {
   const end = held.offset + held.messages.length;
   if (page.total < end || page.offset > end) return undefined;
   if (page.offset <= held.offset) return page;
@@ -731,7 +731,7 @@ export function WorkflowCard({ call, cwd, running, defaultOpen = false }: { call
 export function WorkflowEnded({ toolUseId, name, status, durationMs }: { toolUseId: string; name?: string; status?: TaskNotice['status']; durationMs?: number }) {
   const word = status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'stopped';
   return (
-    <button type="button" onClick={() => revealWorkflow(toolUseId)} title="Show the workflow" className="flex min-h-7 max-w-full items-center gap-2 text-left text-[13px] text-muted hover:text-fg">
+    <button type="button" data-reveals onClick={() => revealWorkflow(toolUseId)} title="Show the workflow" className="flex min-h-7 max-w-full items-center gap-2 text-left text-[13px] text-muted hover:text-fg">
       <WorkflowIcon className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">
         Workflow {name && <span className="font-mono text-[12px]">{name}</span>} <span className={status === 'failed' ? 'text-danger' : ''}>{word}</span>

@@ -155,11 +155,13 @@ function note(recorded: RecordedSettings, row: Record<string, unknown>): void {
  * was taken in, not as a user row.
  */
 function steeredMessage(row: Record<string, unknown>, uuid: string, address: ImageAddress | undefined): ChatMessage | undefined {
-  const attachment = row.attachment as { type?: string; prompt?: unknown; source_uuid?: unknown; commandMode?: unknown } | undefined;
+  const attachment = row.attachment as { type?: string; prompt?: unknown; source_uuid?: unknown; commandMode?: unknown; origin?: unknown } | undefined;
   if (row.type !== 'attachment' || attachment?.type !== 'queued_command') return undefined;
   if (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') return undefined;
-  const message = toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, message: { role: 'user', content: attachment.prompt } }, address);
+  const message = toChatMessage({ type: 'user', uuid, timestamp: row.timestamp, origin: attachment.origin, message: { role: 'user', content: attachment.prompt } }, address);
   if (!message) return undefined;
+  // A subagent's report handed back while Claude worked comes the same way: Claude Code's, not yours.
+  if (message.handback) return message;
   const source = str(attachment.source_uuid);
   return { ...message, steered: true, ...(source ? { sourceUuid: source } : {}) };
 }
