@@ -322,9 +322,12 @@ describe('what new sessions start with', () => {
   const settingsFile = () => path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json');
   const save = (body: unknown, headers: Record<string, string> = {}, signedIn = true) =>
     ask('/api/defaults', { method: 'POST', body: JSON.stringify(body), headers: { ...json, ...headers } }, signedIn);
+  // Claude Code's folder, there whichever of these runs first.
+  beforeAll(async () => {
+    await mkdir(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  });
 
   it('changes Claude Code’s user settings only for a signed-in request from Pelican’s page, and never in the demo', async () => {
-    await mkdir(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
     await writeFile(settingsFile(), '{"theme":"dark"}');
     expect((await save({ permissionMode: 'plan' }, {}, false)).status).toBe(401);
     expect((await save({ permissionMode: 'plan' }, { 'x-pelican': '' })).status).toBe(403);
