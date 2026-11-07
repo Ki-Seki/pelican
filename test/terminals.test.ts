@@ -384,14 +384,21 @@ describe('Clear terminal', () => {
     const terminal = await open();
     const shown = await atPrompt(terminal.id);
     // A full-screen program that draws its screen when told the window changed, as vim and htop do.
-    shown.type(`node -e "process.stdout.write('\\u001b[?1049h\\u001b[HFIRST'); process.on('SIGWINCH', () => process.stdout.write('\\u001b[H\\u001b[2JDRAWN AGAIN')); process.stdin.on('data', (d) => process.stdout.write(' typed ' + JSON.stringify(String(d)))); setInterval(() => {}, 1000)"\r`);
-    await shown.sees(/FIRST/);
+    // What it prints is spelled in escapes, so the shell's echo of the command line holds none of
+    // it: only the program's output meets the waits below, and only a key typed into it prints
+    // " typed ". The line is typed in two parts, so its echo comes in two, as a busy computer's can.
+    const program = `node -e "process.stdout.write('\\u001b[?1049h\\u001b[H\\x46IRST'); process.on('SIGWINCH', () => process.stdout.write('\\u001b[H\\u001b[2J\\x44RAWN AGAIN')); process.stdin.on('data', (d) => process.stdout.write(' \\x74yped ' + JSON.stringify(String(d)))); setInterval(() => {}, 1000)"\r`;
+    const half = program.indexOf('process.stdin');
+    shown.type(program.slice(0, half));
+    await pause(300);
+    shown.type(program.slice(half));
+    await shown.sees(/\u001b\[\?1049h\u001b\[HFIRST/);
     const from = shown.output.length;
     shown.send({ type: 'clear' });
-    await shown.sees(/DRAWN AGAIN/, 10_000, from);
+    await shown.sees(/\u001b\[2JDRAWN AGAIN/, 10_000, from);
     // Nothing was typed into it: Ctrl+L would have been, a form feed in vim's insert mode.
     await pause(200);
-    expect(shown.output.slice(from)).not.toMatch(/typed/);
+    expect(shown.output).not.toMatch(/ typed /);
     const back = page(terminal.id);
     await back.readied();
     await until(() => back.screen.buffer.active.type === 'alternate' && written(back)[0] === 'DRAWN AGAIN', 5000, 'the program’s screen');
@@ -509,9 +516,10 @@ describe('a page that comes back', () => {
     terminalTiming.cutMs = 30;
     const terminal = await open();
     const first = await atPrompt(terminal.id);
-    // A title begun and never ended, as `cat` of a binary file can leave one, then quiet.
+    // A title begun and never ended, as `cat` of a binary file can leave one, then quiet: waited
+    // for as printed (ESC ]), not as the echo of the command line writes it.
     first.type(`printf 'A\\033]0;never ended'; sleep 60\r`);
-    await first.sees(/never ended/);
+    await first.sees(/A\u001b\]0;never ended/);
     const realNow = Date.now;
     try {
       for (let join = 0; join < 12; join += 1) {
