@@ -1407,8 +1407,10 @@ describe('what runs in a terminal', () => {
       daemon = Number(/STARTED (\d+)/.exec(shown.output)![1]);
       await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
       // What it left: the daemon and its watcher in the group of the subshell that started them,
-      // on the terminal, the system's once that subshell ended; none of them the shell's.
-      await until(() => [...table().values()].filter((row) => row.pgid === daemon).length >= 3, 10_000, 'the daemon and its watcher');
+      // on the terminal, the system's once that subshell ended; none of them the shell's. zsh 5.9
+      // runs the daemon under a subshell of its own, for its `always` block; zsh 5.8 (Ubuntu
+      // 22.04's) runs it in that subshell's place.
+      await until(() => [...table().values()].filter((row) => row.pgid === daemon).length >= 2, 10_000, 'the daemon and its watcher');
       const processes = table();
       const tty = processes.get(shell)!.tty;
       for (const [pid, row] of processes) {
