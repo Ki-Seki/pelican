@@ -207,21 +207,34 @@ const npmSays = async (args: string[]): Promise<string | undefined> => {
 };
 
 /**
+ * pnpm's store, where pnpm 11 keeps what it installs globally and what pnpm dlx runs, each started
+ * from there (v11/links/@/pelican-cc/<version>/<hash>/node_modules/pelican-cc).
+ */
+const PNPM_STORE = /[\\/]v\d+[\\/]links[\\/]@[^\\/]*[\\/]pelican-cc[\\/]/;
+
+/**
  * Programs that run a package from a cache of their own, which they fill again: asked for a
  * version by number, each starts that one, which is how such a Pelican updates.
  */
 const RUNNERS: Array<{ test: (folder: string) => boolean; name: string; run: string[] }> = [
   { test: (folder) => folder.split(path.sep).includes('_npx'), name: 'npx', run: ['npx'] },
-  // pnpm dlx (and pnpx): in its cache's dlx folder (a dlx-<pid> one before pnpm 9), in pnpm's own layout.
-  { test: (folder) => /[\\/]dlx(-\d+)?[\\/](.*[\\/])?node_modules[\\/]\.pnpm[\\/]/.test(folder), name: 'pnpm dlx', run: ['pnpm', 'dlx'] },
-  // bunx: in the temporary folder, as bunx-<uid>-<package>@<version>.
-  { test: (folder) => /[\\/]bunx-(\d+-)?[^\\/]+[\\/]node_modules[\\/]/.test(folder), name: 'bunx', run: ['bunx'] },
+  // pnpm dlx (and pnpx): in its cache's dlx folder (a dlx-<pid> one before pnpm 9), in pnpm's own
+  // layout; from pnpm 11, in pnpm's store, as a global install is, but started by pnpm, which says so.
+  {
+    test: (folder) => /[\\/]dlx(-\d+)?[\\/](.*[\\/])?node_modules[\\/]\.pnpm[\\/]/.test(folder)
+      || (PNPM_STORE.test(folder) && /^pnpm\//.test(ctx().env.npm_config_user_agent ?? '')),
+    name: 'pnpm dlx',
+    run: ['pnpm', 'dlx'],
+  },
+  // bunx: in the temporary folder, as bunx-<uid>-pelican-cc@<version>.
+  { test: (folder) => /[\\/]bunx-(\d+-)?pelican-cc@[^\\/]*[\\/]node_modules[\\/]/.test(folder), name: 'bunx', run: ['bunx'] },
 ];
 
 /** Other tools that install packages globally, each keeping the versions it installed. */
 const TOOLS: Array<{ test: RegExp; name: string; command: (version: string) => string }> = [
   { test: /[\\/]\.volta[\\/]/, name: 'Volta', command: (v) => command('volta', 'install', `${PACKAGE_NAME}@${v}`) },
-  { test: /[\\/](\.pnpm|pnpm[\\/]global)[\\/]/, name: 'pnpm', command: (v) => command('pnpm', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
+  // Before pnpm 11, its global folder's own layout; from pnpm 11, its store (PNPM_STORE).
+  { test: /[\\/](\.pnpm|pnpm[\\/]global)[\\/]|[\\/]v\d+[\\/]links[\\/]@[^\\/]*[\\/]pelican-cc[\\/]/, name: 'pnpm', command: (v) => command('pnpm', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
   { test: /[\\/]\.?yarn[\\/](global|berry)[\\/]/, name: 'Yarn', command: (v) => command('yarn', 'global', 'add', `${PACKAGE_NAME}@${v}`) },
   { test: /[\\/]\.bun[\\/]install[\\/]global[\\/]/, name: 'Bun', command: (v) => command('bun', 'add', '--global', `${PACKAGE_NAME}@${v}`) },
   { test: /^\/nix\/store\//, name: 'Nix', command: () => 'nix profile upgrade --all' },

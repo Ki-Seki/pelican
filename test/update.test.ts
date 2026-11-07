@@ -566,15 +566,18 @@ describe('how Pelican was installed, and what Settings offers', () => {
   }, 30_000);
 
   it('says to start pnpm dlx and bunx with the new version, as npx, since each runs the copy in its cache', async () => {
-    const cases: Array<[string, string, RegExp]> = [
-      // pnpm 9 and later, then before: the cache's dlx folder, in pnpm's own layout.
+    // As pnpm 11.9.0 starts what pnpm dlx runs: from its store, saying it is pnpm.
+    const byPnpm = { env: { ...context('').env, npm_config_user_agent: 'pnpm/11.9.0 npm/? node/v24.22.1 darwin arm64' } };
+    const cases: Array<[string, string, RegExp, object?]> = [
+      // pnpm 9 and 10, then before: the cache's dlx folder, in pnpm's own layout; pnpm 11: its store.
       ['Library/Caches/pnpm/dlx/abc123/19a0c1e0d4b-1f2e/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
       ['tmp/dlx-4242/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
+      ['Library/pnpm/store/v11/links/@/pelican-cc/0.5.0/367149aba2e7/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/, byPnpm],
       ['tmp/bunx-501-pelican-cc@latest/node_modules/pelican-cc', `bunx pelican-cc@${NEXT} --port 7860`, /bunx’s cache/],
     ];
-    for (const [where, command, why] of cases) {
+    for (const [where, command, why, more] of cases) {
       await forget();
-      const install = await offered(await pelicanAt(path.join(dir, 'home', where)));
+      const install = await offered(await pelicanAt(path.join(dir, 'home', where)), more);
       expect(install, where).toMatchObject({ kind: 'npx', self: false, command });
       expect(install.why, where).toMatch(why);
     }
@@ -585,6 +588,10 @@ describe('how Pelican was installed, and what Settings offers', () => {
       ['project/node_modules/pelican-cc', /package of ~\/project/, `cd ~/project && npm install pelican-cc@${NEXT}`],
       ['.volta/tools/image/packages/pelican-cc/lib/node_modules/pelican-cc', /Volta/, `volta install pelican-cc@${NEXT}`],
       ['Library/pnpm/global/5/node_modules/pelican-cc', /pnpm/, `pnpm add --global pelican-cc@${NEXT}`],
+      // pnpm 11 keeps a global install in its store too, but its command is started from your shell, not by pnpm.
+      ['Library/pnpm/store/v11/links/@/pelican-cc/0.5.0/3613aebac74c/node_modules/pelican-cc', /pnpm/, `pnpm add --global pelican-cc@${NEXT}`],
+      // A project whose folder starts as bunx's do.
+      ['projects/bunx-demo/node_modules/pelican-cc', /package of ~\/projects\/bunx-demo/, `cd ~/projects/bunx-demo && npm install pelican-cc@${NEXT}`],
       ['.config/yarn/global/node_modules/pelican-cc', /Yarn/, `yarn global add pelican-cc@${NEXT}`],
       ['.bun/install/global/node_modules/pelican-cc', /Bun/, `bun add --global pelican-cc@${NEXT}`],
     ];
