@@ -75,8 +75,11 @@ afterAll(async () => {
 });
 
 describe('a new session, in the Claude Code the Agent SDK bundles', () => {
+  // Claude Code's settings as someone keeps them: a theme, and a model with its effort.
+  const kept = () => writeFileSync(userFile(), JSON.stringify({ theme: 'dark', model: 'sonnet', modelSettings: { 'claude-sonnet-5-5': { effortLevel: 'low' } }, permissions: { defaultMode: 'plan' } }));
+
   it('starts with the model, effort and mode of Claude Code’s settings, as Claude Code itself starts', async () => {
-    writeFileSync(userFile(), JSON.stringify({ theme: 'dark', model: 'sonnet', modelSettings: { 'claude-sonnet-5-5': { effortLevel: 'low' } }, permissions: { defaultMode: 'plan' } }));
+    kept();
     const run = await start('First, from the settings');
     expect(turnFor('First, from the settings')?.model).toBe('claude-sonnet-5-5');
     expect(effortOf(turnFor('First, from the settings'))).toBe('low');
@@ -89,6 +92,8 @@ describe('a new session, in the Claude Code the Agent SDK bundles', () => {
       { value: 'default', label: 'Default', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, supportsAuto: true, resolvedModel: 'claude-opus-5-5' },
       { value: 'haiku', label: 'Haiku', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: false, supportsAuto: true, resolvedModel: 'claude-haiku-5-5' },
     ];
+    // What Settings saves goes in beside what the file holds, whichever test ran before.
+    kept();
     await saveDefault({ model: 'haiku' }, async () => listed);
     await saveDefault({ effort: { model: 'haiku', level: 'high' } }, async () => listed);
     await saveDefault({ permissionMode: 'acceptEdits' }, async () => listed);
