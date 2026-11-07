@@ -3,12 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { DefaultChange, StartDefaults } from '../src/shared/defaults';
+import { type DefaultChange, OWN_EFFORT, type StartDefaults } from '../src/shared/defaults';
 import type { ModelOption, RunSettings } from '../src/shared/protocol';
 import { BUILT_IN } from './start-defaults';
 
 const models: ModelOption[] = [
   { value: 'default', label: 'Default (recommended)', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, supportsAuto: true, resolvedModel: 'claude-opus-5-5' },
+  { value: 'opus', label: 'Opus', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: true, supportsAuto: true, resolvedModel: 'claude-opus-5-5' },
   { value: 'sonnet', label: 'Sonnet', description: '', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFast: false, supportsAuto: true, resolvedModel: 'claude-sonnet-5-5' },
   { value: 'haiku', label: 'Haiku', description: '', efforts: [], supportsFast: false, supportsAuto: false, resolvedModel: 'claude-haiku-5-5' },
 ];
@@ -146,6 +147,30 @@ describe('Settings › New sessions start with', () => {
     await waitFor(() => expect(rows.model().textContent).toContain('Sonnet'));
   });
 
+  it('shows the effort new sessions start with as Claude Code works it out: by an alias of the model, and no more than maxEffortLevel', async () => {
+    // A model's own effort under its alias, as the server reads it before it knows the list.
+    claudeCode.byFolder.set('', said({ effort: { byModel: { opus: { level: 'high', source: 'user' } } } }));
+    const rows = settings();
+    await waitFor(() => expect(rows.model().textContent).toBe('ModelYour Claude Code settingsDefaultHigh'));
+    cleanup();
+    claudeCode.byFolder.set('', said({ effort: { byModel: { 'claude-opus-5-5': { level: 'high', source: 'user' } }, caps: [{ top: 'low' }] } }));
+    const capped = settings();
+    await waitFor(() => expect(capped.model().textContent).toBe('ModelYour Claude Code settingsDefaultLow'));
+  });
+
+  it('shows a model Claude Code’s settings name that its list does not offer as itself, and saves an effort for it', async () => {
+    claudeCode.byFolder.set('', said({ model: { value: 'opus[1m]', source: 'user' }, effort: { byModel: { 'claude-opus-5-5': { level: 'high', source: 'user' } } } }));
+    const rows = settings();
+    await waitFor(() => expect(rows.model().textContent).toBe('ModelYour Claude Code settingsOpus (1M context)High'));
+    fireEvent.click(rows.model());
+    const sheet = lastSheet();
+    const picked = within(sheet).getByText('Opus (1M context)').closest('button')!;
+    expect(picked.getAttribute('aria-pressed') ?? picked.getAttribute('aria-checked') ?? picked.getAttribute('aria-selected')).toBe('true');
+    expect(within(sheet).getByText('Custom model (opus[1m])')).toBeTruthy();
+    fireEvent.click(within(sheet).getByText('Med'));
+    await waitFor(() => expect(claudeCode.saved).toEqual([{ change: { effort: { model: 'opus[1m]', level: 'medium' } } }]));
+  });
+
   it('offers Manual, Accept edits, Plan and Auto as the mode, never Bypass, and saves the one picked', async () => {
     const rows = settings();
     await waitFor(() => expect(rows.mode().textContent).toContain('Auto'));
@@ -245,6 +270,26 @@ describe('a new session', () => {
     fireEvent.click(within(lastSheet()).getByText('Done'));
     await send('Two');
     await waitFor(() => expect(calls.created.at(-1)?.settings).toEqual({ model: 'haiku' }));
+  });
+
+  it('sends Default, picked where Claude Code’s settings give another model or effort, as Claude Code’s own: /model default and /effort auto', async () => {
+    claudeCode.byFolder.set('/code/app', said({ model: { value: 'sonnet', source: 'project' }, effort: { byModel: { 'claude-sonnet-5-5': { level: 'low', source: 'project' } } } }));
+    chat();
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('SonnetLow'));
+    fireEvent.click(screen.getByLabelText('Model, effort and speed'));
+    fireEvent.click(within(lastSheet()).getByText('Default'));
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('Sonnet'));
+    fireEvent.click(within(lastSheet()).getByText('Done'));
+    await send('Three');
+    await waitFor(() => expect(calls.created.at(-1)?.settings).toEqual({ effort: OWN_EFFORT }));
+    cleanup();
+    chat();
+    await waitFor(() => expect(screen.getByLabelText('Model, effort and speed').textContent).toBe('SonnetLow'));
+    fireEvent.click(screen.getByLabelText('Model, effort and speed'));
+    fireEvent.click(within(lastSheet()).getByText('Default (recommended)'));
+    fireEvent.click(within(lastSheet()).getByText('Done'));
+    await send('Four');
+    await waitFor(() => expect(calls.created.at(-1)?.settings).toMatchObject({ model: 'default' }));
   });
 
   it('says plainly when Claude Code’s settings start it in Bypass', async () => {

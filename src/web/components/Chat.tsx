@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { startModeFor } from '../../shared/defaults';
+import { OWN_EFFORT, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO } from '../../shared/modes';
 import { shortTitle } from '../../shared/titles';
@@ -14,7 +14,7 @@ import { announce, announcement, askedFor, type ChatMoment } from '../lib/announ
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
 import { commandOf, SESSION_ACTIONS } from '../lib/actions';
-import { addWaiting, clearDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
+import { addWaiting, clearDraft, loadDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
 import { ariaKeys, composing, hasKeyboard, isKey, type KeyId, withKey } from '../lib/keyboard';
@@ -577,7 +577,7 @@ export function Chat({
    * the whole message already), which waits again if it does not go; or the chat itself (Retry,
    * Compact, Cancel on a check-in), which leaves the box and what waits as they are.
    */
-  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat' | { reply: WaitingItem }, trust?: TrustChoice) => {
+  const send = async (text: string, attachments: Attachment[], mode: SendMode, from: 'box' | 'comments' | 'chat' | 'request' | { reply: WaitingItem }, trust?: TrustChoice) => {
     setSendError(undefined);
     setNote(undefined);
     dismissDemoNote();
@@ -606,9 +606,13 @@ export function Chat({
       // An effort the model does not offer (High on a model without efforts) is not sent. A new
       // session sends what was picked for it; Claude Code's settings give the rest, on the server.
       const offered = modelOf(models, shown);
-      const fit = (picked: RunSettings) => (picked.effort && offered && !offered.efforts.includes(picked.effort) ? { ...picked, effort: undefined } : picked);
-      const sent = fit(settings);
-      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy ? { mode } : {}), ...(trust ? { trust } : {}) };
+      const fit = (picked: RunSettings) => (picked.effort && picked.effort !== OWN_EFFORT && offered && !offered.efforts.includes(picked.effort) ? { ...picked, effort: undefined } : picked);
+      // A new session's Default effort, picked where Claude Code's settings give another, is said as
+      // Claude Code says it: its own for the model, as /effort auto gives it.
+      const sent = fit(!sessionId && Object.hasOwn(settings, 'effort') && settings.effort === undefined ? { ...settings, effort: OWN_EFFORT } : settings);
+      // A request from Changes says it waits for a turn the server may have under way that this
+      // page has not heard of yet: never steered into it.
+      const body = { text: said, attachments: attachments.map((a) => a.id), settings: sent, uuid, ...(busy || from === 'request' ? { mode } : {}), ...(trust ? { trust } : {}) };
       if (sessionId) {
         await api.send(sessionId, body);
         saveSessionChoice(sessionId, sent);
@@ -1127,7 +1131,10 @@ export function Chat({
       .then(async ({ sessionId: id, prompt: back }) => {
         const { items: waiting, text } = readMessage(back.text);
         const fill = (view: string) => {
-          saveDraft(view, text, back.attachments);
+          // What was typed there and not sent stays, the prompt's words after it, as words added to a box go.
+          const kept = loadDraft(view);
+          const words = kept?.text.trim() ? `${kept.text.replace(/\s+$/, '')}\n\n${text}` : text;
+          saveDraft(view, words, [...(kept?.attachments ?? []), ...back.attachments], kept?.held ?? []);
           putBackWaiting(view, waiting);
         };
         const next = await branchSettings();
@@ -1469,10 +1476,10 @@ export function Chat({
             // box first; on a phone the conversation comes back to show it. While Claude works a
             // request waits for the end of the turn, as a queued message, whatever Settings says for
             // what is typed: never steered into the work at hand. Its button says so, with Take back.
-            onRequest: (text: string, how: 'send' | 'box') => {
+            onRequest: async (text: string, how: 'send' | 'box') => {
               if (!workspace.docked) workspace.setOpen(false);
               if (how === 'box') setDraftText({ text, key: Date.now(), append: true, block: true });
-              else void send(text, [], 'queue', 'chat');
+              else await send(text, [], 'queue', 'request');
             },
             queued: view.run?.queued ?? [],
             onUnqueue: (uuid: string) => void api.unqueue(sessionId, uuid).catch(() => undefined),

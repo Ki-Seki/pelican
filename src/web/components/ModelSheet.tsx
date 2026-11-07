@@ -2,6 +2,7 @@ import { Loader2, Sparkles, Zap } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { effortOf, isSavedEffort, type StartDefaults } from '../../shared/defaults';
+import { unlistedModel } from '../../shared/model-names';
 import { MODE_INFO, type PermissionMode } from '../../shared/modes';
 import type { ModelOption, RunSettings } from '../../shared/protocol';
 import { EFFORT_LABELS, EFFORT_SHORT } from '../lib/prefs';
@@ -12,8 +13,11 @@ export const SheetNote = ({ children, tone = 'plain' }: { children: ReactNode; t
   <p className={`px-3 pt-2 text-[12px] leading-snug ${tone === 'warn' ? 'text-wait' : 'text-faint'}`}>{children}</p>
 );
 
-export const modelOf = (models: ModelOption[] | undefined, settings: RunSettings): ModelOption | undefined =>
-  models?.find((m) => m.value === (settings.model ?? 'default')) ?? models?.[0];
+/** The model picked, as the picker lists it: one it does not list (opus[1m], from a settings file) as one of its own. */
+export const modelOf = (models: ModelOption[] | undefined, settings: RunSettings): ModelOption | undefined => {
+  const value = settings.model ?? 'default';
+  return models?.find((m) => m.value === value) ?? (models && value !== 'default' ? unlistedModel(value, models) : models?.[0]);
+};
 
 /** The model in a few words: its name, the effort, and icons for Ultracode and fast mode. */
 export function ModelSummary({ settings, models }: { settings: RunSettings; models: ModelOption[] | undefined }) {
@@ -70,7 +74,7 @@ export function ModelSheet({
       {/* The model first: the effort levels, fast mode and Ultracode depend on it, as in Claude Code's /model. */}
       <SheetHeading>Model</SheetHeading>
       {!models && <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-faint" /></div>}
-      {models?.map((m) => (
+      {models && [...models, ...(model && !models.includes(model) ? [model] : [])].map((m) => (
         <SheetOption
           key={m.value}
           label={m.label}

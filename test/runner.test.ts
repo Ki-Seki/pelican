@@ -5,6 +5,7 @@ import type { Options, PermissionResult, SDKUserMessage } from '@anthropic-ai/cl
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, RunState, ServerEvent } from '../src/shared/protocol';
+import { COMMIT_REQUEST, createPrRequest } from '../src/shared/requests';
 
 // Nothing here may read or write the real ~/.claude or ~/.config/pelican: everything points at a
 // folder of its own before any module reads its configuration.
@@ -288,6 +289,8 @@ describe('starting Claude', () => {
     expect(claude.options.env?.CLAUDE_CODE_ENTRYPOINT).toBe(process.env.CLAUDE_CODE_ENTRYPOINT);
     // Pelican's own environment, which its `!` commands get, stays without it.
     expect(process.env.CLAUDE_CODE_ATTACHMENTS_BY_PATH).toBeUndefined();
+    // A session of its own is no copy whose source goes on, as a side chat is.
+    expect(claude.options.env).not.toHaveProperty('CLAUDE_CODE_RESUME_SOURCE_ALIVE');
     run.close();
     await settle();
     await sendMessage({ sessionId, cwd: folder }, { text: 'Send me the report', attachments: [], settings: {} });
@@ -373,6 +376,31 @@ describe('a message while Claude works', () => {
     await vi.waitFor(() => expect(run.busy).toBe(false));
     expect(state().startedAt).toBeUndefined();
     expect(notices.map((n) => n.body)).toEqual(['Step 2 done.']);
+  });
+
+  it('a request of Desktop’s goes as a message of its own, each when the turn before it ends, as Desktop sends them', async () => {
+    const { run, claude, state } = await start();
+    const pr = createPrRequest({ repo: 'acme/web', branch: 'feat/x', baseBranch: 'main', draft: false });
+    await run.send({ text: 'Tidy the imports', attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000f1' });
+    await run.send({ text: COMMIT_REQUEST, attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000f2' });
+    await run.send({ text: pr, attachments: [], settings: {}, mode: 'queue', uuid: '00000000-0000-4000-8000-0000000000f3' });
+    const turnEnds = async (prompts: number, uuid?: string) => {
+      claude.say(reply('Done.'));
+      claude.say(result(uuid ? { user_message_uuid: uuid, user_message_uuids: [uuid] } : {}));
+      await vi.waitFor(() => expect(claude.prompts).toHaveLength(prompts));
+      await settle();
+    };
+    // What was typed goes first; the requests wait for it, then each for the one before.
+    await turnEnds(2);
+    expect(textOf(claude.prompts[1]!)).toBe('Tidy the imports');
+    expect(state().queued?.map((q) => q.uuid)).toEqual(['00000000-0000-4000-8000-0000000000f2', '00000000-0000-4000-8000-0000000000f3']);
+    await turnEnds(3, '00000000-0000-4000-8000-0000000000f1');
+    expect(textOf(claude.prompts[2]!)).toBe(COMMIT_REQUEST);
+    expect(state().queued?.map((q) => q.uuid)).toEqual(['00000000-0000-4000-8000-0000000000f3']);
+    await turnEnds(4, '00000000-0000-4000-8000-0000000000f2');
+    expect(textOf(claude.prompts[3]!)).toBe(pr);
+    expect(state().queued).toBeUndefined();
+    expect(run.busy).toBe(true);
   });
 
   it('a queued prompt taken back is never sent', async () => {
@@ -1120,6 +1148,8 @@ describe('side chats', () => {
       effort: 'high',
     });
     expect(claude.options.settings).toBeUndefined();
+    // Told that the session it copies goes on: work that session left running is not the copy's.
+    expect(claude.options.env?.CLAUDE_CODE_RESUME_SOURCE_ALIVE).toBe('1');
     // The session's own system prompt; the note that it is a side chat goes with each question.
     expect(claude.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
     await settle();

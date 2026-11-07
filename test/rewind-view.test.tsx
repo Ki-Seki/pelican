@@ -356,4 +356,15 @@ describe('Fork from here', () => {
     await waitFor(() => expect(onStartIn).toHaveBeenCalledWith({ cwd: CWD }, true));
     expect(loadDraft(`new:${CWD}`)).toMatchObject({ text: 'Add a dark theme to the settings page', attachments: [FILE] });
   });
+
+  it('on the first prompt keeps what was typed for a new session in the folder, the prompt’s words after it', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    const typed: Attachment = { id: 'up-2', name: 'plan.md', mime: 'text/markdown', size: 9, path: '/uploads/up-2/plan.md' };
+    saveDraft(`new:${CWD}`, 'My half-written idea for a new session', [typed]);
+    open();
+    await loaded();
+    fireEvent.click(within(screen.getByText('Add a dark theme to the settings page', { selector: 'div' }).closest('.group\\/user') as HTMLElement).getByRole('button', { name: 'Fork from here' }));
+    await waitFor(() => expect(onStartIn).toHaveBeenCalledWith({ cwd: CWD }, true));
+    expect(loadDraft(`new:${CWD}`)).toMatchObject({ text: 'My half-written idea for a new session\n\nAdd a dark theme to the settings page', attachments: [typed, FILE] });
+  });
 });

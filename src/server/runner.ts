@@ -16,6 +16,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { OWN_EFFORT } from '../shared/defaults.js';
 import { plainError } from '../shared/errors.js';
 import { pickerValue } from '../shared/model-names.js';
 import type { PermissionMode } from '../shared/modes.js';
@@ -40,6 +41,7 @@ import type {
   WorkflowPhase,
   WorkflowStatus,
 } from '../shared/protocol.js';
+import { isRequest } from '../shared/requests.js';
 import { REWIND_BUSY } from '../shared/rewind.js';
 import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
 import { fork, remove } from './actions.js';
@@ -57,7 +59,7 @@ import { answerable, notify, oneLine } from './push.js';
 import { liveCut, spendCut } from './rewound.js';
 import { sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
-import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
+import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_ENV, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
 import { lastTurnTime, refreshTranscriptIndex, transcriptPath } from './transcripts.js';
 import { FULL_SETTINGS, type Launch, launchFor } from './trust.js';
 import { recordLimit } from './usage.js';
@@ -409,6 +411,14 @@ export class SessionRun {
   });
   // Most callers never wait for it: a failure here must not count as unhandled.
   private readonly readyHandled = this.ready.catch(() => undefined);
+  private endedNow!: () => void;
+  /**
+   * Settles once its process has ended and what it writes as it exits is written: Claude Code
+   * records the prompt it last had (its `last-prompt` row), which names the session.
+   */
+  readonly ended = new Promise<void>((resolve) => {
+    this.endedNow = resolve;
+  });
   /** Claude Code said something: it started, and the session is there to resume. */
   private began = false;
   private suggestion?: string;
@@ -528,9 +538,18 @@ export class SessionRun {
    */
   given?: RunSettings;
 
+  /** Settings Claude Code gets before the first message: until then, that message waits. */
+  private beforeFirst?: Promise<void>;
+
   start(): void {
     const settings = this.given ?? this.settings;
     const ultracodeOff = this.given?.ultracode === false;
+    // A new session is given its model as picked: Default, picked where a file or the environment
+    // names another, starts on Claude Code's own default, as /model default does there.
+    const model = this.given ? this.given.model : sdkModel(settings.model);
+    // Default effort picked where a file sets one: Claude Code's own for the model, as /effort auto
+    // makes it, which only its session settings can say (null over the files' level).
+    const ownEffort = settings.effort === OWN_EFFORT;
     const options: Options = {
       cwd: this.cwd,
       ...(this.resume ? { resume: this.sessionId } : { sessionId: this.sessionId }),
@@ -541,8 +560,8 @@ export class SessionRun {
         resumeSessionAt: this.resumeAt.entry,
         ...(this.resumeAt.dropsTurn ? { resumeDropsTurn: this.resumeAt.dropsTurn } : {}),
       } : {}),
-      ...(sdkModel(settings.model) ? { model: sdkModel(settings.model) } : {}),
-      ...(settings.effort ? { effort: settings.effort as EffortLevel } : {}),
+      ...(model ? { model } : {}),
+      ...(settings.effort && !ownEffort ? { effort: settings.effort as EffortLevel } : {}),
       permissionMode: settings.permissionMode ?? 'default',
       allowDangerouslySkipPermissions: true,
       ...(settings.fast || settings.ultracode || ultracodeOff ? {
@@ -563,7 +582,7 @@ export class SessionRun {
       perTaskStopAffordance: true,
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       settingSources: this.launch.settingSources,
-      env: claudeEnv(this.launch),
+      env: { ...claudeEnv(this.launch), ...(this.sideChat ? SIDE_CHAT_ENV : {}) },
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
@@ -576,6 +595,11 @@ export class SessionRun {
       ...(this.sideChat ? sideChatOptions() : {}),
     };
     this.q = query({ prompt: this.input, options });
+    if (ownEffort) {
+      this.beforeFirst = this.q.applyFlagSettings({ effortLevel: null }).catch((error: Error) => {
+        console.warn('[pelican] could not start on Claude Code’s own effort', error.message);
+      });
+    }
     void this.pump();
     void sessionInfo(this.sessionId).then((info) => {
       if (info) this.title = sessionTitle(info) ?? '';
@@ -799,6 +823,7 @@ export class SessionRun {
     if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
     if (this.sideChat && SIDE_CHAT_COMMAND.test(input.text.trim())) throw new Error('A side chat takes questions, not / commands.');
     await this.applySettings(input.settings);
+    await this.beforeFirst;
     // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
     if (this.closed) throw new RunClosed();
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
@@ -838,6 +863,12 @@ export class SessionRun {
     if (this.closed) throw new RunClosed();
     this.leaveCut();
     this.input.push(message);
+  }
+
+  /** What goes when a turn ends: the prompts that waited, up to a request of Desktop's, which goes alone. */
+  private nextWaiting(): Prompt[] {
+    const alone = this.queued.findIndex((prompt) => isRequest(prompt.text));
+    return this.queued.splice(0, alone === 0 ? 1 : alone > 0 ? alone : this.queued.length);
   }
 
   /** Takes a queued prompt back before Claude gets it; false when it is not waiting any more. */
@@ -1448,8 +1479,10 @@ export class SessionRun {
             if (this.unanswered.size === before) this.unanswered.clear();
             // What waited for this turn goes out now, each prompt as it was typed, as Claude Code takes
             // what is typed while it works: plain prompts together, a command as a command. Joined
-            // into one text, a command would take the prompts after it as its arguments.
-            const waiting = this.queued.splice(0);
+            // into one text, a command would take the prompts after it as its arguments. A request
+            // of Desktop's (Commit changes, Create PR) goes as a message of its own, as Desktop sends
+            // each, never read together with another: what waits after it goes when its turn ends.
+            const waiting = this.nextWaiting();
             if (waiting.length > 0) {
               this.continuing = true;
               // A turn of its own: its time counts from now, not from the turn that just ended.
@@ -1487,6 +1520,7 @@ export class SessionRun {
         console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
       }
     } finally {
+      this.endedNow();
       // Closed here (idle, replaced, Pelican shutting down), or ended on its own: a crash, a kill.
       const closedHere = this.closed;
       this.closed = true;
@@ -1551,6 +1585,28 @@ async function sendLeftovers(sessionId: string, cwd: string, settings: RunSettin
 }
 
 const runs = new Map<string, SessionRun>();
+
+/**
+ * What changes a session's Claude goes one at a time, each once the one before is done: a message
+ * (sendMessage), a `!` command's record, a rewind, Undo rewind, Claude started again. So a message
+ * sent from another page while a rewind starts Claude again reaches the Claude the rewind leaves,
+ * after the cut, as the pages then show it, and two rewinds never start two Claudes at once.
+ */
+const turns = new Map<string, Promise<unknown>>();
+
+/** Runs `work` once nothing else changes the session's Claude, and holds it until `work` is done. */
+export function oneAtATime<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  const mine = (turns.get(sessionId) ?? Promise.resolve()).then(work);
+  const done = mine.then(() => undefined, () => undefined);
+  turns.set(sessionId, done);
+  void done.then(() => {
+    if (turns.get(sessionId) === done) turns.delete(sessionId);
+  });
+  return mine;
+}
+
+/** Whether something is changing the session's Claude now, or waits to: a rewind, a message on its way. */
+export const changing = (sessionId: string): boolean => turns.has(sessionId);
 
 export function getRun(sessionId: string): SessionRun | undefined {
   const run = runs.get(sessionId);
@@ -1626,26 +1682,8 @@ async function sentTo(run: SessionRun, input: SendInput): Promise<boolean> {
 export async function sendMessage(target: { sessionId?: string; cwd?: string; sideChat?: boolean }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
-  if (target.sessionId) {
-    const existing = await currentRun(target.sessionId);
-    if (existing && (await sentTo(existing, input))) return existing.sessionId;
-    const info = await sessionInfo(target.sessionId);
-    const cwd = info?.cwd ?? target.cwd;
-    if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
-    const launch = await launchFor(cwd);
-    // A side chat goes on as one, whichever app made it and wherever it is continued from.
-    const side = target.sideChat === true || (await isSideChat(target.sessionId));
-    // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
-    const at = await resumePoint(target.sessionId);
-    // Another request may have started one while this one looked the folder up.
-    const started = getRun(target.sessionId);
-    if (started && (await sentTo(started, input))) return started.sessionId;
-    const run = new SessionRun(target.sessionId, cwd, input.settings, true, at, launch, side);
-    runs.set(run.sessionId, run);
-    run.start();
-    await run.send(input);
-    return run.sessionId;
-  }
+  const sessionId = target.sessionId;
+  if (sessionId) return oneAtATime(sessionId, () => sendTo(sessionId, target, input));
   const cwd = target.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`Not a folder: ${cwd ?? '(none)'}`);
   const launch = await launchFor(cwd);
@@ -1659,6 +1697,31 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
   return run.sessionId;
 }
 
+/** A message to a session there is: to its Claude, or to one started (resumed) for it. */
+async function sendTo(sessionId: string, target: { cwd?: string; sideChat?: boolean }, sent: SendInput): Promise<string> {
+  // A session's own Default effort is no effort at all (applySettings): OWN_EFFORT is a new session's word.
+  const { effort, ...settings } = sent.settings;
+  const input = effort === OWN_EFFORT ? { ...sent, settings } : sent;
+  const existing = await currentRun(sessionId);
+  if (existing && (await sentTo(existing, input))) return sessionId;
+  const info = await sessionInfo(sessionId);
+  const cwd = info?.cwd ?? target.cwd;
+  if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const launch = await launchFor(cwd);
+  // A side chat goes on as one, whichever app made it and wherever it is continued from.
+  const side = target.sideChat === true || (await isSideChat(sessionId));
+  // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
+  const at = await resumePoint(sessionId);
+  // Another request may have started one while this one looked the folder up.
+  const started = getRun(sessionId);
+  if (started && (await sentTo(started, input))) return sessionId;
+  const run = new SessionRun(sessionId, cwd, input.settings, true, at, launch, side);
+  runs.set(run.sessionId, run);
+  run.start();
+  await run.send(input);
+  return run.sessionId;
+}
+
 /** Where a Claude started for the session resumes: up to the cut, while its conversation is rewound (rewound.ts). */
 async function resumePoint(sessionId: string): Promise<{ entry: string } | undefined> {
   const cut = await liveCut(sessionId);
@@ -1669,10 +1732,11 @@ async function resumePoint(sessionId: string): Promise<{ entry: string } | undef
  * Starts the session's Claude again, to wait for the next message: resumed up to `at.entry`,
  * leaving out all that follows (rewind.ts), or, without `at`, whole (Undo rewind). Leaving out one
  * prompt's turn (`at.dropsTurn`), Claude Code first checks that nothing else would go with it; if
- * it refuses, the Claude started is the session's whole, as the Agent SDK asks, and this gives
- * none. Not while Claude is at work in the session.
+ * it refuses, the Claude started is the session's as it reads now (up to `now`, an earlier cut,
+ * or whole), as the Agent SDK asks, and this gives none. Not while Claude is at work in the
+ * session; called while holding it (oneAtATime).
  */
-export async function restartAt(sessionId: string, at?: { entry: string; dropsTurn?: string }): Promise<SessionRun | undefined> {
+export async function restartAt(sessionId: string, at?: { entry: string; dropsTurn?: string }, now?: { entry: string }): Promise<SessionRun | undefined> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error(REWIND_BUSY);
@@ -1695,7 +1759,7 @@ export async function restartAt(sessionId: string, at?: { entry: string; dropsTu
   };
   const run = begin(at);
   if (await run.resumed()) return run;
-  await begin().resumed();
+  await begin(now).resumed();
   return undefined;
 }
 

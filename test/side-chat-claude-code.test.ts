@@ -53,6 +53,10 @@ beforeAll(async () => {
   mkdirSync(config.claudeHome, { recursive: true });
   writeFileSync(path.join(config.claudeHome, 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(touch:*)', 'Write'] } }));
   api = await standInApi((request) => {
+    // Work the session leaves running between turns: a command in the background.
+    const last = request.messages?.at(-1);
+    const answered = Array.isArray(last?.content) && last.content.some((block) => block.type === 'tool_result');
+    if (!answered && textOf(last?.content).trim().endsWith('Start the watcher')) return { tool: 'Bash', input: { command: 'sleep 60', description: 'Watch', run_in_background: true } };
     // In the copy, Claude tries to run a command, then answers.
     if (againTurns().includes(request)) {
       return resultsAfterQuestion(request, AGAIN).length === 0 ? { tool: 'Bash', input: { command: `touch ${folder}/made-by-copy`, description: 'Make a file' } } : 'A class would do too.';
@@ -135,4 +139,25 @@ describe('a side chat, in the Claude Code the Agent SDK bundles', () => {
     expect(bash!.is_error).toBe(true);
     expect(existsSync(path.join(folder, 'made-by-copy'))).toBe(false);
   }, 120_000);
+});
+
+describe('a side chat of a session with work it left running', () => {
+  it('is not told that work failed: it is the session’s, which goes on, not the copy’s', async () => {
+    const working = await sendMessage({ cwd: folder }, { text: 'Watch the build', attachments: [], settings: { permissionMode: 'bypassPermissions' } });
+    await until(() => getRun(working)?.busy === false, 90_000, 'the first turn');
+    await sendMessage({ sessionId: working }, { text: 'Start the watcher', attachments: [], settings: { permissionMode: 'bypassPermissions' } });
+    await until(() => getRun(working)?.hasBackgroundTasks === true && getRun(working)?.busy === false, 90_000, 'the watcher');
+    const asked = 'What is still running?';
+    const copy = await startSideChat(working, { text: asked, settings: {} });
+    await until(() => getRun(copy)?.busy === false && turns().some((request) => JSON.stringify(request.messages ?? []).includes(asked)), 90_000, 'the side chat’s answer');
+    // What the copy's Claude is told, in its conversation.
+    const told = turns().filter((request) => JSON.stringify(request.messages ?? []).includes(asked)).map((request) => JSON.stringify(request.messages)).join('\n');
+    expect(told).toContain(asked);
+    expect(told).not.toContain('<task-notification>');
+    expect(told).not.toContain('didn’t finish');
+    expect(told).not.toContain("didn't finish");
+    // The session's own Claude still has it running.
+    expect(getRun(working)!.hasBackgroundTasks).toBe(true);
+    for (const task of getRun(working)!.state().tasks ?? []) await getRun(working)!.stopTask(task.id);
+  }, 200_000);
 });

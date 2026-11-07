@@ -269,6 +269,21 @@ describe('the demo, a message queued while Claude works', () => {
     expect(getView(SESSION).run?.queued).toBeUndefined();
   });
 
+  it('goes, where a request of Desktop’s is among it, as your own Pelican sends it: each request on its own, the next when its turn ends', async () => {
+    setRun(SESSION, waiting);
+    const pr = createPrRequest({ repo: 'acme/acme-web', branch: 'feat/dark-theme', baseBranch: 'main', cwd: CWD, draft: false });
+    await queue('q6', COMMIT_REQUEST);
+    await queue('q7', pr);
+    await endTurn();
+    // The commit went alone; Create PR waits for its turn to end, which the demo plays out.
+    expect(said('q6')).toMatchObject({ role: 'user', blocks: [{ type: 'text', text: COMMIT_REQUEST }] });
+    vi.runAllTimers();
+    expect(said('q7')).toMatchObject({ role: 'user', blocks: [{ type: 'text', text: pr }] });
+    vi.runAllTimers();
+    expect(getView(SESSION).run?.queued).toBeUndefined();
+    expect(getView(SESSION).run?.busy).toBe(false);
+  });
+
   it('still goes after Stop, as in your own Pelican', async () => {
     setRun(SESSION, waiting);
     await queue('q3', 'Then run the tests');

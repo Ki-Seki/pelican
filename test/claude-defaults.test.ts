@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DefaultSource, StartDefaults } from '../src/shared/defaults';
-import { effortFor, modelKey, startModeFor } from '../src/shared/defaults';
+import { effortFor, effortOf, modelKey, OWN_EFFORT, startModeFor } from '../src/shared/defaults';
 import type { ModelOption } from '../src/shared/protocol';
 
 // Claude Code's settings are a folder of the test's own (test/setup.ts), never ~/.claude.
@@ -76,6 +76,41 @@ describe('which file wins, as in Claude Code: user, then project, then local, th
     expect(effortFor(folder, 'claude-haiku-5-5')).toEqual({ level: 'medium', source: 'project' });
     // A folder's own for one model beats the folder's top-level one.
     expect(effortFor(at(layer('project', { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } })).effort, 'claude-opus-5-5').level).toBe('high');
+  });
+
+  it('keys a model’s own effort named by an alias by the model it stands for, as Claude Code does, the model’s own key first', () => {
+    const atAll = (...layers: Array<ReturnType<typeof layer>>) => startDefaults(layers, {}, FILE, MODELS);
+    const alias = atAll(layer('user', { modelSettings: { opus: { effortLevel: 'medium' }, sonnet: { effortLevel: 'low' } } })).effort;
+    expect(effortFor(alias, modelKey('default', MODELS))).toEqual({ level: 'medium', source: 'user' });
+    expect(effortFor(alias, modelKey('opus', MODELS))).toEqual({ level: 'medium', source: 'user' });
+    expect(effortFor(alias, modelKey('sonnet', MODELS))).toEqual({ level: 'low', source: 'user' });
+    // In one file the model's own key wins over an alias of it; a file of higher precedence wins over both.
+    const both = atAll(layer('user', { modelSettings: { opus: { effortLevel: 'high' }, 'claude-opus-5-5': { effortLevel: 'xhigh' } } }));
+    expect(effortFor(both.effort, 'claude-opus-5-5').level).toBe('xhigh');
+    expect(effortFor(atAll(layer('user', { modelSettings: { 'claude-opus-5-5': { effortLevel: 'xhigh' } } }), layer('project', { modelSettings: { opus: { effortLevel: 'low' } } })).effort, 'claude-opus-5-5'))
+      .toEqual({ level: 'low', source: 'project' });
+    // Read before the list of models was known, the page still finds it under the alias.
+    const unknown = startDefaults([layer('user', { modelSettings: { opus: { effortLevel: 'medium' } } })], {}, FILE);
+    expect(effortOf(unknown, 'default', MODELS)).toEqual({ level: 'medium', source: 'user' });
+    expect(effortOf(unknown, 'opus[1m]', MODELS)).toEqual({ level: 'medium', source: 'user' });
+  });
+
+  it('keeps every effort to the files’ maxEffortLevel, the lowest of them, a model’s own in place of its file’s', () => {
+    const at2 = (...layers: Array<ReturnType<typeof layer>>) => startDefaults(layers, {}, FILE, MODELS).effort;
+    expect(effortFor(at2(layer('user', { maxEffortLevel: 'low', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } })), 'claude-opus-5-5'))
+      .toEqual({ level: 'low', source: 'user' });
+    // A model's own cap, named by an alias too, for that model alone.
+    const own = at2(layer('user', { modelSettings: { opus: { maxEffortLevel: 'medium' }, 'claude-opus-5-5': { effortLevel: 'xhigh' }, 'claude-sonnet-5-5': { effortLevel: 'xhigh' } } }));
+    expect(effortFor(own, 'claude-opus-5-5').level).toBe('medium');
+    expect(effortFor(own, 'claude-sonnet-5-5').level).toBe('xhigh');
+    // A model's own Max takes its file's cap away for it; another file's cap still counts, the lowest first.
+    const max = at2(layer('user', { maxEffortLevel: 'low', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high', maxEffortLevel: 'max' } } }));
+    expect(effortFor(max, 'claude-opus-5-5').level).toBe('high');
+    expect(effortFor(at2(layer('user', { maxEffortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'xhigh' } } }), layer('managed', { maxEffortLevel: 'medium' })), 'claude-opus-5-5').level).toBe('medium');
+    // Below the cap, and Claude Code's own default, stay as they are; the environment's level is capped too.
+    expect(effortFor(at2(layer('user', { maxEffortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'low' } } })), 'claude-opus-5-5').level).toBe('low');
+    expect(effortFor(at2(layer('user', { maxEffortLevel: 'high' })), 'claude-opus-5-5')).toEqual({ source: 'built-in' });
+    expect(effortFor(startDefaults([layer('user', { maxEffortLevel: 'medium' })], { CLAUDE_CODE_EFFORT_LEVEL: 'xhigh' }, FILE).effort, 'claude-opus-5-5')).toEqual({ level: 'medium', source: 'env' });
   });
 
   it('gives the user’s old top-level effortLevel to older models only, as Claude Code 2.1.318 does', () => {
@@ -187,6 +222,28 @@ describe('reading Claude Code’s files', () => {
     expect(picked.given).toEqual({ model: 'sonnet', permissionMode: 'acceptEdits' });
     expect((await newSessionSettings(project, { model: 'default' }, models)).given).toEqual({ model: 'default', permissionMode: 'plan', fast: true });
   });
+
+  it('gives Default, picked for a new session where a file names a model or an effort, as Claude Code’s own: its /model default and /effort auto', async () => {
+    await writeFile(path.join(project, '.claude', 'settings.json'), JSON.stringify({ model: 'haiku', effortLevel: 'low' }));
+    trusted.add(project);
+    expect((await newSessionSettings(project, {}, models)).shown).toMatchObject({ model: 'haiku' });
+    // Default: Claude Code's own model, with the effort the files keep for it.
+    const model = await newSessionSettings(project, { model: 'default' }, models);
+    expect(model.given.model).toBe('default');
+    expect(model.shown).toMatchObject({ model: 'default', effort: 'low' });
+    // Default effort: none of the files' own, as /effort auto, and so said to Claude Code.
+    const effort = await newSessionSettings(project, { model: 'sonnet', effort: OWN_EFFORT }, models);
+    expect(effort.given).toMatchObject({ model: 'sonnet', effort: OWN_EFFORT });
+    expect(effort.shown.effort).toBeUndefined();
+    expect((await newSessionSettings(project, { model: 'sonnet' }, models)).shown.effort).toBe('low');
+    // CLAUDE_CODE_EFFORT_LEVEL still comes first, as it does over /effort auto in Claude Code.
+    process.env.CLAUDE_CODE_EFFORT_LEVEL = 'high';
+    try {
+      expect((await newSessionSettings(project, { model: 'sonnet', effort: OWN_EFFORT }, models)).shown.effort).toBe('high');
+    } finally {
+      delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    }
+  });
 });
 
 describe('writing Claude Code’s user settings, as its commands do', () => {
@@ -210,6 +267,14 @@ describe('writing Claude Code’s user settings, as its commands do', () => {
     // As /effort auto leaves it.
     expect(JSON.parse(await file())).toEqual({ modelSettings: { 'claude-opus-5-5': {}, 'claude-sonnet-5-5': { effortLevel: 'low' } } });
     await expect(saveDefault({ effort: { model: 'opus', level: 'max' as never } }, models)).rejects.toThrow(/Max is for one session/);
+  });
+
+  it('saves effort for a model a settings file names that the list does not offer, under its key, as /effort does', async () => {
+    await writeFile(userFile(), JSON.stringify({ model: 'opus[1m]' }));
+    await saveDefault({ effort: { model: 'opus[1m]', level: 'high' } }, models);
+    expect(JSON.parse(await file())).toEqual({ model: 'opus[1m]', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } });
+    expect(modelKey('opus[1m]', MODELS)).toBe('claude-opus-5-5');
+    await expect(saveDefault({ effort: { model: '', level: 'high' } }, models)).rejects.toThrow(/No such model/);
   });
 
   it('saves fast mode as /fast does, and nothing where each session starts without it', async () => {

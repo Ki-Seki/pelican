@@ -106,6 +106,15 @@ describe('a quote, prepared as Claude Desktop prepares one', () => {
   });
 
   // Desktop's outputs (its ME, shared-m-1) for each of these, as the expected values.
+  it('masks the secrets in what is quoted: words of the conversation, lines of a file and a terminal’s output alike', () => {
+    const github = fake('gh', 'p_', 'x'.repeat(36));
+    const masked = `${github.slice(0, 8)}${'\u2022'.repeat(github.length - 8)}`;
+    expect(preparePassage(`  The token is ${github}.  `)).toBe(`The token is ${masked}.`);
+    expect(preparePassage(`\n    const token = '${github}';\n`, true)).toBe(`    const token = '${masked}';`);
+    expect(quoteItem(`export GITHUB_TOKEN=${github}`, from)?.text).toBe(`export GITHUB_TOKEN=${masked}`);
+    expect(quoteItem(`$ echo ${github}   \n${github}`, { what: 'terminal' }, { tab: '2' })?.text).toBe(`$ echo ${masked}\n${masked}`);
+  });
+
   it('masks a token right after an escape, as in JSON or a URL, and after a lone hyphen', () => {
     const anthropic = fake('sk-', 'ant-', 'api03-', 'A'.repeat(30));
     const github = fake('gh', 'p_', 'x'.repeat(36));

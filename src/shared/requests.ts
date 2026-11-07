@@ -30,8 +30,27 @@ export function requestShown(text: string): string | undefined {
   return whole.includes(CREATE_PR_DRAFT) ? '/create-pr --draft' : '/create-pr';
 }
 
+/**
+ * A message Claude Code made of prompts taken together (queued while Claude worked, then read as
+ * one), as Desktop shows its parts: each Create PR request in it, whole on lines of its own, as the
+ * command it shows, the rest as typed. None where no part is one.
+ */
+export function partsShown(text: string): string | undefined {
+  let found = false;
+  const shown = text.replace(/(^|\n)([ \t]*<create-pr-command>[\s\S]*?<\/create-pr-command>[ \t]*)(?=\n|$)/g, (whole, start: string, part: string) => {
+    const command = requestShown(part);
+    if (!command) return whole;
+    found = true;
+    return `${start}${command}`;
+  });
+  return found ? shown.replace(/\n{3,}/g, '\n\n') : undefined;
+}
+
 /** Desktop's Commit changes. */
 export const COMMIT_REQUEST = 'Commit the working tree changes with a sensible message.';
+
+/** One of Desktop's requests, as sent from Changes: a message of its own, as Desktop sends each. */
+export const isRequest = (text: string): boolean => text === COMMIT_REQUEST || requestShown(text) !== undefined;
 
 /** Desktop's Create PR, ready for review, and Create draft PR: what step 3 says to open the PR with. */
 const OPEN_READY = 'Open the PR with `gh pr create`. Do not pass `--draft`: the user chose “Create PR”, not “Create draft PR”, for this request, and that explicit choice overrides any saved memory, standing instruction, or earlier plan to open it as a draft.';

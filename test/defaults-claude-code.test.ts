@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { config } from '../src/server/config';
 import { saveDefault } from '../src/server/defaults';
 import { closeAll, getRun, sendMessage } from '../src/server/runner';
+import { OWN_EFFORT } from '../src/shared/defaults';
 import type { ModelOption } from '../src/shared/protocol';
 import { type MessagesRequest, type StandIn, standInApi, until } from './stand-in-api';
 
@@ -108,6 +109,29 @@ describe('a new session, in the Claude Code the Agent SDK bundles', () => {
     expect(effortOf(turnFor('Second, after Settings'))).toBe('high');
     expect(run.state().settings).toMatchObject({ model: 'haiku', effort: 'high', permissionMode: 'acceptEdits' });
     expect(await bare()).toEqual({ model: 'claude-haiku-5-5', permissionMode: 'acceptEdits', effort: 'high' });
+  }, 150_000);
+
+  it('starts on Claude Code’s own model where Default is picked and a file names another, as /model default makes it', async () => {
+    writeFileSync(userFile(), JSON.stringify({ model: 'haiku', modelSettings: { 'claude-opus-5-5': { effortLevel: 'low' } } }));
+    const id = await sendMessage({ cwd: folder }, { text: 'Fourth, Default picked', attachments: [], settings: { model: 'default' } });
+    await until(() => Boolean(turnFor('Fourth, Default picked')) && getRun(id)?.busy === false, 90_000, 'the turn');
+    expect(turnFor('Fourth, Default picked')?.model).toBe('claude-opus-5-5');
+    // The effort the files keep for that model goes with it, as with /model default.
+    expect(effortOf(turnFor('Fourth, Default picked'))).toBe('low');
+    expect(getRun(id)!.state().settings.model).toBe('default');
+  }, 150_000);
+
+  it('starts on Claude Code’s own effort for the model where Default effort is picked and a file names another, as /effort auto makes it', async () => {
+    writeFileSync(userFile(), JSON.stringify({ model: 'haiku', modelSettings: { 'claude-haiku-5-5': { effortLevel: 'low' } } }));
+    const id = await sendMessage({ cwd: folder }, { text: 'Fifth, Default effort', attachments: [], settings: { effort: OWN_EFFORT } });
+    await until(() => Boolean(turnFor('Fifth, Default effort')) && getRun(id)?.busy === false, 90_000, 'the turn');
+    const request = turnFor('Fifth, Default effort');
+    expect(request?.model).toBe('claude-haiku-5-5');
+    expect(effortOf(request)).not.toBe('low');
+    expect(effortOf(request)).toBeDefined();
+    // Never said as a level: what the session runs with is Claude Code's word on it.
+    await until(() => getRun(id)?.state().settings.effort !== undefined, 10_000, 'the applied effort');
+    expect(getRun(id)!.state().settings.effort).toBe(effortOf(request));
   }, 150_000);
 
   it('starts in Auto where no file names a mode, as the terminal does, with Claude Code’s own effort', async () => {

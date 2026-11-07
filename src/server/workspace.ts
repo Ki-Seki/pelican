@@ -231,7 +231,9 @@ export async function gitStatus(cwd: string, scope: 'uncommitted' | 'base' = 'un
     for (let i = 0; i < fields.length; i += 1) {
       const field = fields[i]!;
       if (!field) continue;
-      const [added, removed, name] = field.split('\t');
+      // The counts, then the path, which may hold a tab of its own.
+      const [added, removed] = field.split('\t', 2);
+      const name = field.split('\t').slice(2).join('\t');
       // A rename lists its old and new paths in the next two fields.
       const file = name === '' ? fields[(i += 2)] : name;
       if (!file) continue;

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, GitBranch, GitCommitHorizontal, GitPullRequest, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
-import { type MouseEvent, useState } from 'react';
+import { type MouseEvent, useRef, useState } from 'react';
 
 import type { GitFile, GitStatus, QueuedPrompt, SessionChanges, TurnChanges } from '../../shared/protocol';
 import { entries, type MenuEntry, PATH_ACTIONS, PROMPT_ACTIONS, type PathTarget } from '../lib/actions';
@@ -41,6 +41,9 @@ export const scopeOf = (step: WorkspaceStep): Scope =>
 const scopeParam = (scope: Scope) => (scope.kind === 'all' ? {} : { scope: scope.kind === 'uncommitted' ? 'uncommitted' : scope.uuid });
 
 const files = (n: number) => (n === 1 ? '1 file' : `${n} files`);
+
+/** How long a request's button stays still after the request landed: until its queued state has come. */
+const SETTLING_MS = 1000;
 
 /** The turns that changed files, newest first, as Show offers them. */
 const newestFirst = (changes: SessionChanges | undefined) => [...(changes?.turns ?? [])].reverse();
@@ -112,7 +115,7 @@ function QueuedRequest({ icon: Icon, label, onTakeBack }: { icon: typeof GitComm
 function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
   commit?: string;
   pr?: { ready: string; draft: string };
-  onRequest: (text: string, how: 'send' | 'box') => void;
+  onRequest: (text: string, how: 'send' | 'box') => Promise<void> | void;
   /** What waits for the end of Claude's turn, a request among it. */
   queued?: QueuedPrompt[];
   onUnqueue?: (uuid: string) => void;
@@ -127,7 +130,21 @@ function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
   const prQueued = pr && (waiting(pr.ready) ?? waiting(pr.draft));
   const commitPress = useLongPress<HTMLButtonElement>(() => commit && onRequest(commit, 'box'), { enabled: Boolean(commit) });
   const prPress = useLongPress<HTMLButtonElement>(() => prText && onRequest(prText, 'box'), { enabled: Boolean(prText) });
-  const click = (text: string) => (e: MouseEvent) => onRequest(text, e.metaKey || e.ctrlKey ? 'box' : 'send');
+  // A request on its way, and a moment after it lands, while its button says it is queued: a
+  // second tap (a double tap, a tap before the button changes) sends nothing more.
+  const [going, setGoing] = useState<string>();
+  const goingNow = useRef<string>(undefined);
+  const send = (text: string) => {
+    if (goingNow.current === text) return;
+    goingNow.current = text;
+    setGoing(text);
+    void Promise.resolve(onRequest(text, 'send')).finally(() => setTimeout(() => {
+      if (goingNow.current !== text) return;
+      goingNow.current = undefined;
+      setGoing(undefined);
+    }, SETTLING_MS));
+  };
+  const click = (text: string) => (e: MouseEvent) => (e.metaKey || e.ctrlKey ? void onRequest(text, 'box') : send(text));
   // Its menu is the button's own: a right-click on it opens none of the page's.
   const own = (e: MouseEvent) => e.stopPropagation();
   const title = (label: string) => (hasKeyboard() ? `${label} (${MOD}-click: in the message box first)` : undefined);
@@ -142,7 +159,7 @@ function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
     <div data-requests className="mx-3 mt-2 flex flex-wrap gap-2.5 border-t border-line px-px pt-3">
       {commit && commitQueued && onUnqueue && <QueuedRequest icon={GitCommitHorizontal} label="Commit changes" onTakeBack={() => onUnqueue(commitQueued.uuid)} />}
       {commit && !(commitQueued && onUnqueue) && (
-        <button type="button" {...commitPress} onContextMenu={(e) => { commitPress.onContextMenu(e); own(e); }} onClick={click(commit)} title={title('Commit changes')} className={`${pill} px-4 ${commitPress.className}`}>
+        <button type="button" {...commitPress} onContextMenu={(e) => { commitPress.onContextMenu(e); own(e); }} onClick={click(commit)} disabled={going === commit} title={title('Commit changes')} className={`${pill} px-4 disabled:opacity-60 ${commitPress.className}`}>
           <GitCommitHorizontal className="size-4 shrink-0 text-muted" />
           Commit changes
         </button>
@@ -152,7 +169,7 @@ function RequestsFoot({ commit, pr, onRequest, queued = [], onUnqueue }: {
       )}
       {prText && !(prQueued && onUnqueue) && (
         <div className="flex h-11 items-center rounded-full bg-bg ring-1 ring-line pointer-fine:h-9">
-          <button type="button" {...prPress} onContextMenu={(e) => { prPress.onContextMenu(e); own(e); }} onClick={click(prText)} title={title(prLabel)} className={`flex h-full items-center gap-2 rounded-l-full pr-3 pl-4 text-[14px] text-fg hover:bg-hover pointer-fine:text-[13.5px] ${prPress.className}`}>
+          <button type="button" {...prPress} onContextMenu={(e) => { prPress.onContextMenu(e); own(e); }} onClick={click(prText)} disabled={going === pr.ready || going === pr.draft} title={title(prLabel)} className={`flex h-full items-center gap-2 rounded-l-full pr-3 pl-4 text-[14px] text-fg hover:bg-hover disabled:opacity-60 pointer-fine:text-[13.5px] ${prPress.className}`}>
             <GitPullRequest className="size-4 shrink-0 text-muted" />
             {prLabel}
           </button>
@@ -195,7 +212,7 @@ export function WorkspaceChanges({ cwd, sessionId, step, looking, busy, status, 
   /** Rewind to here, on the turn's prompt (Chat asks first). */
   onRewind?: (point: RewindPoint) => void;
   /** A request to Claude (Commit changes, Create PR): sent now, or put in the message box first. */
-  onRequest?: (text: string, how: 'send' | 'box') => void;
+  onRequest?: (text: string, how: 'send' | 'box') => Promise<void> | void;
   /** What waits for the end of Claude's turn, and taking one out of the queue: a request queued shows on its button. */
   queued?: QueuedPrompt[];
   onUnqueue?: (uuid: string) => void;

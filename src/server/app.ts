@@ -48,9 +48,9 @@ import { sessionChanges, turnDiff } from './changes.js';
 import { readStatsCache, refreshUsage, sessionFiles, sessionUsage, summarize } from './stats.js';
 import { hostAllowed, isLoopback, originAllowed } from './security.js';
 import { listSummaries, loadPage, recordedSettings, renameSessionTitle, sentFiles, sessionInfo, sessionSummary, shownMessages } from './sessions.js';
-import { transcriptImage } from './history.js';
+import { entryBefore, transcriptImage } from './history.js';
 import { instance } from './running.js';
-import { rawEntry, transcriptPath } from './transcripts.js';
+import { transcriptPath } from './transcripts.js';
 import { folderTrusted, launchFor, NeedsTrust, rememberChoice, type TrustChoice, trustQuestion } from './trust.js';
 import { updateRoutes, whileUpdating } from './update.js';
 import { AGENT_ID, CALL_ID, subagentPage, workflowAgentPage, workflowCalls, workflowView } from './workflows.js';
@@ -397,11 +397,12 @@ app.post('/api/sessions/:id/fork', async (c) => {
     const before = uuidOf(body.before);
     const file = await transcriptPath(id);
     if (!before || !file || !shown(before)) return c.json({ error: 'That message is not in this conversation.' }, 404);
-    // Where the conversation goes back to before the prompt: the entry just before it, as a rewind resumes.
-    const entry = (await rawEntry(file, before))?.parentUuid ?? null;
+    // Where the conversation goes back to before the prompt: the entry just before it, as a rewind
+    // resumes, none for the conversation's first (a SessionStart hook's context is no conversation).
+    const entry = (await entryBefore(file, before))?.entry;
     const prompt = await promptBack(file, before);
     const back = { text: prompt.text, attachments: prompt.attachments };
-    return c.json({ sessionId: entry === null ? null : await fork(id, entry, title), prompt: back });
+    return c.json({ sessionId: entry === undefined ? null : await fork(id, entry, title), prompt: back });
   }
   const upTo = body.upTo === undefined ? (await liveCut(id))?.entry : uuidOf(body.upTo);
   if (body.upTo !== undefined && (!upTo || !shown(upTo))) return c.json({ error: 'That message is not in this conversation.' }, 404);

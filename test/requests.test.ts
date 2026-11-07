@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { GitStatus } from '../src/shared/protocol';
 import { promptGist } from '../src/shared/quoted';
-import { requestShown } from '../src/shared/requests';
+import { isRequest, partsShown, requestShown } from '../src/shared/requests';
 import { COMMIT_REQUEST, createPrRequest, prBase, readPrCreated, requestsFor } from '../src/web/lib/requests';
 
 // Claude Desktop's own texts (its Code tab's cached build, 2026-11: chunk c17fc4411 for Commit
@@ -46,6 +46,19 @@ describe('Desktop’s requests, byte for byte', () => {
     expect(requestShown(`Please: ${DESKTOP_READY}`)).toBeUndefined();
     expect(requestShown('<create-pr-command>a<create-pr-command>b</create-pr-command></create-pr-command>')).toBeUndefined();
     expect(requestShown(COMMIT_REQUEST)).toBeUndefined();
+  });
+
+  it('shows the parts of a message Claude Code made of several prompts, a Create PR among them as Desktop shows it', () => {
+    const merged = `${COMMIT_REQUEST}\n\n\n${DESKTOP_READY}`;
+    expect(requestShown(merged)).toBeUndefined();
+    expect(partsShown(merged)).toBe(`${COMMIT_REQUEST}\n\n/create-pr`);
+    expect(partsShown(`Fix the lint first.\n\n${createPrRequest({ ...target, draft: true })}\n\nThanks`)).toBe('Fix the lint first.\n\n/create-pr --draft\n\nThanks');
+    expect(promptGist(merged)).toBe(`${COMMIT_REQUEST}\n\n/create-pr`);
+    // Words around it on its own lines are no request of Desktop's: as it reads.
+    expect(partsShown(`Please: ${DESKTOP_READY}`)).toBeUndefined();
+    expect(partsShown(COMMIT_REQUEST)).toBeUndefined();
+    expect(isRequest(COMMIT_REQUEST) && isRequest(DESKTOP_READY)).toBe(true);
+    expect(isRequest(merged)).toBe(false);
   });
 });
 

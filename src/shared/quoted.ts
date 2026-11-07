@@ -1,4 +1,4 @@
-import { requestShown } from './requests.js';
+import { partsShown, requestShown } from './requests.js';
 
 /**
  * A prompt as Claude Desktop writes one, read back: the files it attached (`@"path"` on its first
@@ -207,7 +207,7 @@ export const hasQuotes = (parts: readonly PromptPart[]): boolean => parts.some((
  * as that command; what was typed, or else the first note, the first quote, or the files.
  */
 export function promptGist(text: string): string {
-  const shown = requestShown(text);
+  const shown = requestShown(text) ?? partsShown(text);
   if (shown) return shown;
   const parts = readPrompt(text);
   if (!hasQuotes(parts)) return text;

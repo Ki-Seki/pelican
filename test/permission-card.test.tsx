@@ -135,6 +135,56 @@ describe('Claude’s questions', () => {
     expect(screen.getByRole('button', { name: /^SQLite/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('of one choice take a pick or words of one’s own, never both: a letter after a number answers with the words, a number after words with the pick', () => {
+    computer(true);
+    const decide = vi.spyOn(api, 'decide').mockResolvedValue({ ok: true } as never);
+    const ONE = [{ question: 'Which theme?', options: [{ label: 'Light' }, { label: 'Dark' }, { label: 'System' }] }];
+    render(<PermissionCard sessionId="s1" request={asked(ONE)} />);
+    const card = screen.getByRole('group', { name: 'Claude’s question' });
+    const other = screen.getByPlaceholderText('Other…') as HTMLInputElement;
+    const system = () => screen.getByRole('button', { name: /^System/ });
+    fireEvent.keyDown(card, { key: '3' });
+    expect(system().getAttribute('aria-pressed')).toBe('true');
+    fireEvent.keyDown(card, { key: 'h' });
+    expect(other.value).toBe('h');
+    expect(system().getAttribute('aria-pressed')).toBe('false');
+    fireEvent.change(other, { target: { value: 'high contrast' } });
+    // Clicks on an approval count once it has been there a moment.
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 1000);
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }));
+    expect(decide).toHaveBeenLastCalledWith('s1', 'q1', { behavior: 'allow', updatedInput: { questions: ONE, answers: { 'Which theme?': 'high contrast' } } });
+    // The other way round: a pick, by its number or a tap, takes the words out.
+    cleanup();
+    render(<PermissionCard sessionId="s1" request={asked(ONE)} />);
+    const again = screen.getByPlaceholderText('Other…') as HTMLInputElement;
+    fireEvent.change(again, { target: { value: 'sepia' } });
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Claude’s question' }), { key: '2' });
+    expect(again.value).toBe('');
+    expect(screen.getByRole('button', { name: /^Dark/ }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.change(again, { target: { value: 'sepia' } });
+    expect(screen.getByRole('button', { name: /^Dark/ }).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: /^Light/ }));
+    expect(again.value).toBe('');
+    clock.mockReturnValue(performance.now() + 1000);
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }));
+    expect(decide).toHaveBeenLastCalledWith('s1', 'q1', { behavior: 'allow', updatedInput: { questions: ONE, answers: { 'Which theme?': 'Light' } } });
+  });
+
+  it('where several may be picked, take picks and words together', () => {
+    computer(true);
+    const decide = vi.spyOn(api, 'decide').mockResolvedValue({ ok: true } as never);
+    render(<PermissionCard sessionId="s1" request={asked([QUESTIONS[1]!])} />);
+    const card = screen.getByRole('group', { name: 'Claude’s question' });
+    fireEvent.keyDown(card, { key: '1' });
+    fireEvent.keyDown(card, { key: 'q' });
+    const other = screen.getByPlaceholderText('Other…') as HTMLInputElement;
+    fireEvent.change(other, { target: { value: 'qa' } });
+    fireEvent.keyDown(card, { key: '2' });
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 1000);
+    fireEvent.click(screen.getByRole('button', { name: 'Answer' }));
+    expect(decide).toHaveBeenCalledWith('s1', 'q1', { behavior: 'allow', updatedInput: { questions: [QUESTIONS[1]], answers: { 'Which environments?': 'dev, staging, qa' } } });
+  });
+
   it('leave the keys where something is being typed, and show no numbers on a phone', () => {
     computer(true);
     const box = document.createElement('textarea');

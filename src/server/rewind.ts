@@ -1,14 +1,17 @@
+import { appendFile } from 'node:fs/promises';
+
 import type { RewindFilesResult } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Attachment, RewindCheck, RewindDone, RewindRestore } from '../shared/protocol.js';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../shared/rewind.js';
 import { splitFiles } from '../web/lib/turns.js';
+import { sessionsChanged } from './feed.js';
 import { findUpload, removeUpload, saveUpload } from './files.js';
 import { type PromptPlace, promptPlace } from './history.js';
 import { liveProcesses } from './live.js';
-import { cutOf, endCut, keepCut } from './rewound.js';
-import { ensureRun, getRun, restartAt, type SessionRun } from './runner.js';
-import { shownMessages } from './sessions.js';
+import { cutOf, endCut, keepCut, liveCut } from './rewound.js';
+import { changing, ensureRun, getRun, oneAtATime, restartAt, type SessionRun } from './runner.js';
+import { sessionInfo, shownMessages } from './sessions.js';
 import { isSideChat } from './side-chat.js';
 import { rawEntry, rawImages, transcriptPath } from './transcripts.js';
 
@@ -64,21 +67,36 @@ const codeOf = (result: RewindFilesResult): Pick<RewindDone, 'files' | 'insertio
 async function restoreCode(run: SessionRun, prompt: string): Promise<RewindDone> {
   const check = await run.rewindFiles(prompt, true);
   if (!check.canRewind) throw new RewindRefusal(notRestored(check.error), 409);
-  const result = await run.rewindFiles(prompt, false);
+  // Its dry run may say yes where the copy is gone since (Claude Code clears old ones): then it throws.
+  const result = await run.rewindFiles(prompt, false).catch((error: Error) => {
+    throw new RewindRefusal(notRestored(error.message), 409);
+  });
   if (!result.canRewind) throw new RewindRefusal(notRestored(result.error), 409);
   return { ...codeOf(check), ...(result.skippedLinks ? { skipped: result.skippedLinks } : {}) };
 }
 
+/**
+ * A rewind, its check, or Undo rewind, once nothing else changes the session's Claude (runner.ts,
+ * oneAtATime): while a message is on its way or another rewind is under way, Desktop's words, as
+ * while Claude works.
+ */
+function alone<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  if (changing(sessionId)) return Promise.reject(new RewindRefusal(REWIND_BUSY, 409));
+  return oneAtATime(sessionId, work);
+}
+
 /** What Rewind to here can put back for this prompt: the files, by Claude Code's dry run, and whether the conversation can go back too. */
-export async function checkRewind(sessionId: string, prompt: string): Promise<RewindCheck> {
-  const { place } = await located(sessionId, prompt);
-  const stays = await conversationStays(sessionId, place);
-  const run = await ensureRun(sessionId);
-  if (run.busy) throw new RewindRefusal(REWIND_BUSY, 409);
-  const result = await run.rewindFiles(prompt, true);
-  // No copy kept of the files before it (another app wrote the turn without checkpoints): only the conversation.
-  const code = result.canRewind ? codeOf(result) : { files: [], insertions: 0, deletions: 0 };
-  return { files: code.files ?? [], insertions: code.insertions ?? 0, deletions: code.deletions ?? 0, ...(stays ? { conversationStays: stays } : {}) };
+export function checkRewind(sessionId: string, prompt: string): Promise<RewindCheck> {
+  return alone(sessionId, async () => {
+    const { place } = await located(sessionId, prompt);
+    const stays = await conversationStays(sessionId, place);
+    const run = await ensureRun(sessionId);
+    if (run.busy) throw new RewindRefusal(REWIND_BUSY, 409);
+    const result = await run.rewindFiles(prompt, true);
+    // No copy kept of the files before it (another app wrote the turn without checkpoints): only the conversation.
+    const code = result.canRewind ? codeOf(result) : { files: [], insertions: 0, deletions: 0 };
+    return { files: code.files ?? [], insertions: code.insertions ?? 0, deletions: code.deletions ?? 0, ...(stays ? { conversationStays: stays } : {}) };
+  });
 }
 
 /** A prompt as it goes back to the message box; `saved`, the uploads made for it (its pictures, saved again). */
@@ -111,6 +129,26 @@ export async function promptBack(file: string, uuid: string): Promise<Back> {
 /** The pictures saved again for a prompt that does not go back to the box after all. */
 const discard = (back: Back) => Promise.all(back.saved.map((a) => removeUpload(a.id).catch(() => undefined)));
 
+/** How long the Claude a rewind replaced is waited for to end, writing what it writes as it does. */
+const ENDING_MS = 5_000;
+
+/**
+ * Keeps the name a session had (`name`, the Agent SDK's: a title it was given, else the last prompt
+ * Claude Code recorded, else the first) when a rewind starts its Claude again. The Claude it
+ * replaced records, as it ends, the last prompt it had (Claude Code's `last-prompt` row), which
+ * names the session where no title does, and may be one the rewind took out: once it has ended,
+ * the name is recorded back the same way, so a rewind renames nothing, and Undo rewind has no name
+ * to give back.
+ */
+async function keepName(sessionId: string, name: string | undefined, replaced: SessionRun | undefined): Promise<void> {
+  if (!name || !replaced?.closed) return;
+  await Promise.race([replaced.ended, new Promise((resolve) => setTimeout(resolve, ENDING_MS).unref())]);
+  const [now, file] = await Promise.all([sessionInfo(sessionId), transcriptPath(sessionId)]);
+  if (!file || !now || now.summary === name) return;
+  await appendFile(file, `${JSON.stringify({ type: 'last-prompt', lastPrompt: name, sessionId })}\n`);
+  sessionsChanged();
+}
+
 /**
  * Rewind to here, as Claude Code's /rewind and Claude Desktop's do it: back to before one of your
  * prompts, with its three choices (Desktop's words; the CLI says Restore code and conversation,
@@ -124,11 +162,19 @@ const discard = (back: Back) => Promise.all(back.saved.map((a) => removeUpload(a
  *   Claude Code. Claude Code writes nothing of it until the next message, so the transcript stays
  *   whole and Undo rewind resumes it whole again until then (rewound.ts keeps the cut). Dropping
  *   one turn, Claude Code checks that nothing else would go with it (resumeDropsTurn); when it
- *   refuses, the session's Claude is resumed whole, as the Agent SDK asks, and nothing is rewound.
+ *   refuses, the session's Claude is resumed as the conversation read before, as the Agent SDK
+ *   asks, and nothing is rewound.
  * - Both: the conversation first, then the code; should the code not go back, the conversation is
- *   whole again, so a rewind is all or nothing.
+ *   as it was again (whole, or at an earlier rewind's cut), so a rewind is all or nothing.
+ *
+ * One at a time with what else changes the session's Claude: a message sent meanwhile from another
+ * page goes to the Claude the rewind leaves, once it is done.
  */
-export async function rewindTo(sessionId: string, prompt: string, choice: RewindRestore): Promise<RewindDone> {
+export function rewindTo(sessionId: string, prompt: string, choice: RewindRestore): Promise<RewindDone> {
+  return alone(sessionId, () => rewind(sessionId, prompt, choice));
+}
+
+async function rewind(sessionId: string, prompt: string, choice: RewindRestore): Promise<RewindDone> {
   const { file, place } = await located(sessionId, prompt);
   if (choice === 'code') {
     const run = await ensureRun(sessionId);
@@ -137,47 +183,59 @@ export async function rewindTo(sessionId: string, prompt: string, choice: Rewind
   }
   const stays = await conversationStays(sessionId, place);
   if (stays) throw new RewindRefusal(stays, 409);
-  // Read before anything changes: what goes back in the box.
+  // The conversation as it reads now, which a rewind that does not happen leaves as it is: up to an
+  // earlier rewind's cut, or whole.
+  const earlier = await liveCut(sessionId);
+  const now = earlier ? { entry: earlier.entry } : undefined;
+  // Read before anything changes: what goes back in the box, and what the session is called.
   const back = await promptBack(file, prompt);
+  const name = (await sessionInfo(sessionId))?.summary;
+  const replaced = getRun(sessionId);
   // Only the prompt's own turn goes: Claude Code checks that, so nothing it did not show goes too.
   const at = { entry: place.before!, ...(place.later === 0 ? { dropsTurn: prompt } : {}) };
-  let run;
   try {
-    run = await restartAt(sessionId, at);
-  } catch (error) {
-    await discard(back);
-    throw error;
-  }
-  if (!run) {
-    await discard(back);
-    throw new RewindRefusal(CHANGED, 409);
-  }
-  let code: RewindDone = {};
-  if (choice === 'both') {
+    let run;
     try {
-      code = await restoreCode(run, prompt);
+      run = await restartAt(sessionId, at, now);
     } catch (error) {
-      // Nothing is rewound: the session's Claude has the whole conversation again.
-      await restartAt(sessionId).catch(() => undefined);
       await discard(back);
-      throw error instanceof RewindRefusal ? error : new RewindRefusal(notRestored((error as Error).message), 409);
+      throw error;
     }
+    if (!run) {
+      await discard(back);
+      throw new RewindRefusal(CHANGED, 409);
+    }
+    let code: RewindDone = {};
+    if (choice === 'both') {
+      try {
+        code = await restoreCode(run, prompt);
+      } catch (error) {
+        // Nothing is rewound: the session's Claude has the conversation as it read before again.
+        await restartAt(sessionId, now).catch(() => undefined);
+        await discard(back);
+        throw error instanceof RewindRefusal ? error : new RewindRefusal(notRestored((error as Error).message), 409);
+      }
+    }
+    await keepCut(sessionId, { prompt, entry: at.entry, end: place.end, at: Date.now() });
+    return { ...code, prompt: { text: back.text, attachments: back.attachments } };
+  } finally {
+    await keepName(sessionId, name, replaced);
   }
-  await keepCut(sessionId, { prompt, entry: at.entry, end: place.end, at: Date.now() });
-  return { ...code, prompt: { text: back.text, attachments: back.attachments } };
 }
 
 /**
  * Undo rewind: the messages the rewind took out come back, the session's Claude resumed whole (the
  * files stay as they are), until the next message, as in Claude Desktop.
  */
-export async function undoRewind(sessionId: string): Promise<void> {
-  const cut = await cutOf(sessionId);
-  if (!cut || cut.spent) throw new RewindRefusal(NOTHING_TO_UNDO, 409);
-  const run = getRun(sessionId);
-  if (run?.busy) throw new RewindRefusal(REWIND_BUSY, 409);
-  // A Claude resumed at the cut would carry the next message on from there: it starts again, whole,
-  // before the pages are told, so nothing sent meanwhile goes after the cut.
-  if (run) await restartAt(sessionId);
-  await endCut(sessionId);
+export function undoRewind(sessionId: string): Promise<void> {
+  return alone(sessionId, async () => {
+    const cut = await cutOf(sessionId);
+    if (!cut || cut.spent) throw new RewindRefusal(NOTHING_TO_UNDO, 409);
+    const run = getRun(sessionId);
+    if (run?.busy) throw new RewindRefusal(REWIND_BUSY, 409);
+    // A Claude resumed at the cut would carry the next message on from there: it starts again, whole,
+    // before the pages are told, so nothing sent meanwhile goes after the cut.
+    if (run) await restartAt(sessionId);
+    await endCut(sessionId);
+  });
 }
