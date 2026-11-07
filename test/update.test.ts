@@ -1084,6 +1084,13 @@ describe('who may update, and to what', () => {
     expect(await npmRuns()).toEqual([]);
   }, 30_000);
 
+  it('takes no request past 1 MB, as no other route does', async () => {
+    const big = { version: NEXT, when: 'now', padding: 'x'.repeat(2 * 1024 * 1024) };
+    for (const where of ['/api/update', '/api/update/cancel']) expect((await api('POST', where, big)).status, where).toBe(413);
+    expect(await npmRuns()).toEqual([]);
+    expect((await api('GET', '/api/update')).body.state).toBeUndefined();
+  }, 30_000);
+
   it('takes nothing where Pelican cannot update itself, nor twice at once', async () => {
     useUpdateContext(context(await globalInstall(path.join(dir, 'home', '.local')), { global: prefix() }));
     expect((await api('GET', '/api/update?check=1')).body.install.self).toBe(false);
