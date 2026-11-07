@@ -18,7 +18,7 @@ export type InstallKind =
   | 'npm'
   /** `npm install -g`, into a global folder another account owns (root's, with sudo). */
   | 'npm-elsewhere-owned'
-  /** npx's cache: npx fetches a new version when asked for it. */
+  /** A cache of npx, pnpm dlx or bunx: each fetches a new version when asked for it. */
   | 'npx'
   /** A source checkout (git), built and started from there, or linked with `npm link`. */
   | 'source'

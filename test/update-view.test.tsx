@@ -123,6 +123,21 @@ describe('Settings › About, of updates', () => {
     await waitFor(() => expect(server.started).toEqual([['0.5.1', 'idle'], ['0.5.1', 'now', true]]));
   });
 
+  it('says to stop Pelican and start it with the new version where npx, pnpm dlx or bunx runs it', async () => {
+    server.info = {
+      ...NEWER,
+      install: {
+        kind: 'npx', folder: '/Users/me/.npm/_npx/6c0de8e1/node_modules/pelican-cc', self: false, restart: 'in-place',
+        command: 'npx pelican-cc@0.5.1 --port 7860',
+        why: 'This Pelican runs from npx’s cache, which npx fills again: it starts the new version when asked for it by number.',
+      },
+    };
+    render(<UpdateSection open />, { wrapper });
+    expect(await screen.findByText('npx pelican-cc@0.5.1 --port 7860')).toBeTruthy();
+    expect(screen.getByText('To update, stop Pelican, then start it with:')).toBeTruthy();
+    expect(screen.queryByText(/run this in a terminal/)).toBeNull();
+  });
+
   it('shows the command to run, and why, where Pelican cannot update itself', async () => {
     server.info = {
       ...NEWER,

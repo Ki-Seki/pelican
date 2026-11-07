@@ -187,7 +187,11 @@ export function UpdateSection({ open, demo }: { open: boolean; demo?: boolean })
                 )
               ) : info.install?.command ? (
                 <div className="mt-2">
-                  <div>To update, run this in a terminal{info.install.restart === 'launchd' || info.install.restart === 'systemd' ? ', then pelican service restart' : ', then restart Pelican'}:</div>
+                  <div>
+                    {info.install.kind === 'npx'
+                      ? 'To update, stop Pelican, then start it with:'
+                      : `To update, run this in a terminal${info.install.restart === 'launchd' || info.install.restart === 'systemd' ? ', then pelican service restart' : ', then restart Pelican'}:`}
+                  </div>
                   <div className="mt-1 flex items-start gap-1 rounded-lg bg-chip py-1 pr-1 pl-2.5">
                     <code className="min-w-0 flex-1 py-0.5 font-mono text-[12px] break-all text-fg">{info.install.command}</code>
                     <CopyButton text={info.install.command} />

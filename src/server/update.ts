@@ -192,6 +192,18 @@ const npmSays = async (args: string[]): Promise<string | undefined> => {
   return ran.code === 0 ? ran.stdout.trim().split('\n').at(-1)?.trim() || undefined : undefined;
 };
 
+/**
+ * Programs that run a package from a cache of their own, which they fill again: asked for a
+ * version by number, each starts that one, which is how such a Pelican updates.
+ */
+const RUNNERS: Array<{ test: (folder: string) => boolean; name: string; run: string[] }> = [
+  { test: (folder) => folder.split(path.sep).includes('_npx'), name: 'npx', run: ['npx'] },
+  // pnpm dlx (and pnpx): in its cache's dlx folder (a dlx-<pid> one before pnpm 9), in pnpm's own layout.
+  { test: (folder) => /[\\/]dlx(-\d+)?[\\/](.*[\\/])?node_modules[\\/]\.pnpm[\\/]/.test(folder), name: 'pnpm dlx', run: ['pnpm', 'dlx'] },
+  // bunx: in the temporary folder, as bunx-<uid>-<package>@<version>.
+  { test: (folder) => /[\\/]bunx-(\d+-)?[^\\/]+[\\/]node_modules[\\/]/.test(folder), name: 'bunx', run: ['bunx'] },
+];
+
 /** Other tools that install packages globally, each keeping the versions it installed. */
 const TOOLS: Array<{ test: RegExp; name: string; command: (version: string) => string }> = [
   { test: /[\\/]\.volta[\\/]/, name: 'Volta', command: (v) => command('volta', 'install', `${PACKAGE_NAME}@${v}`) },
@@ -247,11 +259,12 @@ async function findInstall(): Promise<Install> {
       commandFor: () => `cd ${shellWord(where)} && git pull && npm ci && npm run build`,
     };
   }
-  if (folder.split(path.sep).includes('_npx')) {
+  const runner = RUNNERS.find((each) => each.test(folder));
+  if (runner) {
     return {
       kind: 'npx', folder, self: false, restart, scriptIn,
-      why: 'This Pelican runs from npx’s cache, which npx fills again: it starts the new version when asked for it by number.',
-      commandFor: (v) => command('npx', `${PACKAGE_NAME}@${v}`, ...ctx().args),
+      why: `This Pelican runs from ${runner.name}’s cache, which ${runner.name} fills again: it starts the new version when asked for it by number.`,
+      commandFor: (v) => command(...runner.run, `${PACKAGE_NAME}@${v}`, ...ctx().args),
     };
   }
   if (platform === 'win32') return managed('Pelican cannot replace itself while it runs on Windows.', (v) => command('npm', 'install', '--global', `${PACKAGE_NAME}@${v}`));

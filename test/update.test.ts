@@ -522,6 +522,21 @@ describe('how Pelican was installed, and what Settings offers', () => {
     for (const shell of shells) expect(await said(shell, `cd ${word}`), shell).toBe(prefix);
   }, 30_000);
 
+  it('says to start pnpm dlx and bunx with the new version, as npx, since each runs the copy in its cache', async () => {
+    const cases: Array<[string, string, RegExp]> = [
+      // pnpm 9 and later, then before: the cache's dlx folder, in pnpm's own layout.
+      ['Library/Caches/pnpm/dlx/abc123/19a0c1e0d4b-1f2e/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
+      ['tmp/dlx-4242/node_modules/.pnpm/pelican-cc@0.5.0/node_modules/pelican-cc', `pnpm dlx pelican-cc@${NEXT} --port 7860`, /pnpm dlx’s cache/],
+      ['tmp/bunx-501-pelican-cc@latest/node_modules/pelican-cc', `bunx pelican-cc@${NEXT} --port 7860`, /bunx’s cache/],
+    ];
+    for (const [where, command, why] of cases) {
+      await forget();
+      const install = await offered(await pelicanAt(path.join(dir, 'home', where)));
+      expect(install, where).toMatchObject({ kind: 'npx', self: false, command });
+      expect(install.why, where).toMatch(why);
+    }
+  }, 30_000);
+
   it('leaves a project’s package, Volta’s, pnpm’s, Yarn’s and Bun’s to them', async () => {
     const cases: Array<[string, RegExp, string]> = [
       ['project/node_modules/pelican-cc', /package of ~\/project/, `cd ~/project && npm install pelican-cc@${NEXT}`],
