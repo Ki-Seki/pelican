@@ -8,7 +8,7 @@ import type { ChatMessage, MessagesPage, RecordedSettings, Rewound, SessionStatu
 import { promptGist } from '../shared/quoted.js';
 import { shortTitle } from '../shared/titles.js';
 import { config } from './config.js';
-import { folderKind } from './folders.js';
+import { folderKind, pickedFolders } from './folders.js';
 import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
@@ -40,7 +40,7 @@ export function sessionTitle(info: SDKSessionInfo, summarized = false): string |
 
 /** `fresh`: the transcript as the list stat'ed it just now; otherwise it is looked at here. */
 async function summarize(
-  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, { archived, pinned }: Kept, fresh?: Seen,
+  info: SDKSessionInfo, status: StatusSource, tasks: TaskSource, live: Map<string, LiveProcess>, { archived, pinned }: Kept, picked: ReadonlySet<string>, fresh?: Seen,
 ): Promise<SessionSummary> {
   const file = fresh?.file ?? await transcriptPath(info.sessionId);
   const times = file ? await lastTurnTime(file, fresh) : undefined;
@@ -79,8 +79,8 @@ async function summarize(
     ...(info.createdAt ? { createdAt: info.createdAt } : {}),
     status: state,
     ...(info.fileSize ? { sizeBytes: info.fileSize } : {}),
-    ...(cwd && folderKind(cwd) === 'scratch' ? { scratch: true } : {}),
-    ...(cwd && folderKind(cwd) === 'temp' ? { temp: true } : {}),
+    ...(cwd && folderKind(cwd, picked) === 'scratch' ? { scratch: true } : {}),
+    ...(cwd && folderKind(cwd, picked) === 'temp' ? { temp: true } : {}),
     ...(runningIn ? { runningIn } : {}),
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(working > 0 ? { tasks: working } : {}),
@@ -169,8 +169,8 @@ function sessionInfos(): Promise<SDKSessionInfo[]> {
 /** Every session on this machine, newest activity first. */
 export async function listSummaries(status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary[]> {
   const infos = await sessionInfos();
-  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
-  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, ours, files.get(info.sessionId))));
+  const [live, ours, picked] = await Promise.all([liveProcesses(), kept(), pickedFolders()]);
+  const summaries = await Promise.all(infos.map((info) => summarize(infoCache.get(info.sessionId) ?? info, status, tasks, live, ours, picked, files.get(info.sessionId))));
   return summaries.sort((a, b) => b.lastActivity - a.lastActivity);
 }
 
@@ -195,8 +195,8 @@ export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | u
 export async function sessionSummary(sessionId: string, status: StatusSource, tasks: TaskSource = () => 0): Promise<SessionSummary | undefined> {
   const info = await sessionInfo(sessionId);
   if (!info) return undefined;
-  const [live, ours] = await Promise.all([liveProcesses(), kept()]);
-  return summarize(info, status, tasks, live, ours);
+  const [live, ours, picked] = await Promise.all([liveProcesses(), kept(), pickedFolders()]);
+  return summarize(info, status, tasks, live, ours, picked);
 }
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {

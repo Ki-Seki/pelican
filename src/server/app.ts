@@ -25,7 +25,7 @@ import { demoRunState, demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, saveUpload } from './files.js';
 import { claudeCodeInfo, newerClaude } from './claude-code.js';
-import { createScratchFolder, isDirectory } from './folders.js';
+import { createScratchFolder, isDirectory, pickFolder } from './folders.js';
 import { readDefaults, saveDefault, SettingsRefused } from './defaults.js';
 import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
 import { searchFiles } from './project-files.js';
@@ -312,6 +312,9 @@ app.post('/api/sessions', async (c) => {
     settings: cleanSettings(body.settings),
     ...(uuid ? { uuid } : {}),
   });
+  // A folder in the temp folder picked for it is no throwaway one: the session is listed, and the
+  // folder offered again for new sessions, as a project's are.
+  if (!body.scratch) await pickFolder(cwd).catch(() => undefined);
   return c.json({ sessionId });
 });
 
@@ -1084,9 +1087,10 @@ app.get('/api/files', async (c) => {
 });
 
 /**
- * Folders to start a new session in: those of recent sessions, without temp
- * and scratch folders and without folders that are gone. Two folders with the
- * same name are told apart by their parent.
+ * Folders to start a new session in: those of recent sessions, without scratch
+ * folders, temp folders nobody started a session in here (folders.ts), and
+ * folders that are gone. Two folders with the same name are told apart by their
+ * parent.
  */
 app.get('/api/projects', async (c) => {
   const seen = new Map<string, { path: string; name: string; lastActivity: number; sessions: number }>();
