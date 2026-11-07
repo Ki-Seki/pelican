@@ -8,7 +8,7 @@ import { ArrowDown, Check, Copy, Loader2, TextQuote } from 'lucide-react';
 import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 
 import { type TerminalColors, TERMINAL_LIMITS, type TerminalExit } from '../../shared/terminal';
-import { guardOutput } from '../../shared/terminal-guards';
+import { dropPendingOutput, guardOutput, outputPieces } from '../../shared/terminal-guards';
 import { loadWidths } from '../../shared/terminal-widths';
 import { announce } from '../lib/announce';
 import { api, checkSignedIn } from '../lib/api';
@@ -403,6 +403,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       connection.current?.stop();
       connection.current = undefined;
       term.current = undefined;
+      // What it had yet to draw goes with it: xterm would go on taking it in, disposed.
+      dropPendingOutput(t);
       t.dispose();
     };
     // Made once; what changes reaches it through refs.
@@ -446,7 +448,12 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
           events.current.onProgram(id, screen.program);
           if (screen.exit) ended(screen.exit);
         },
-        output: (data, written) => t.write(data, written),
+        // In pieces of bounded work (outputPieces): xterm takes each whole, and the page's taps and
+        // keys are answered between them, however hard the output is to draw.
+        output: (data, written) => {
+          const pieces = outputPieces(data, t.cols, t.rows);
+          pieces.forEach((piece, at) => t.write(piece.data, at === pieces.length - 1 ? written : undefined));
+        },
         // Cleared here or on another page: once what came before it is on the screen.
         clear: () => t.write('', () => t.clear()),
         // Another page's size, or this one's said back as the shell took it on showing again.
@@ -498,6 +505,8 @@ export const TerminalScreen = memo(forwardRef<ScreenHandle, {
       window.removeEventListener('online', comeBack);
       c.stop();
       if (connection.current === c) connection.current = undefined;
+      // What this terminal's output had yet to draw goes: the next one shown starts from its own screen.
+      if (term.current === t) dropPendingOutput(t);
       // A link of this terminal's no longer shows, nor is asked about.
       setLink(undefined);
       // Taken away with the screen, the terminal is gone already.

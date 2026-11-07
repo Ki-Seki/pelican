@@ -407,10 +407,16 @@ settings; and updates from Settings.
   still draws whole; the latest 2,048 links (the computer keeps none), no title, and at most 20
   lines' worth of output for a screen reader to read out, also of output with no line feed in it; a
   sequence that repeats a character, scrolls, inserts or deletes lines or moves by tab stops does so
-  at most a screen's worth of times (REP a line's), however large a count it gives, and the
-  computer's copy takes output in a little at a time; so no output grows Pelican's memory, or a
-  page's, without bound, or holds the rest of Pelican up for more than a moment; and output xterm
-  throws on stops neither Pelican nor a page's screen.
+  at most a screen's worth of times (REP a line's), however large a count it gives; the computer's
+  copy, and a page's screen, take output in pieces of bounded work, at most 512 characters and at
+  most as many sequences that work over the whole screen (a reset, DECALN, erasing it, scrolling it,
+  inserting or deleting lines or columns, the alternate screen) as cost about the same at its size,
+  a reset right after a reset not done again, and the shell waits while the computer's copy has more
+  than a quarter of a second of such work before it; a terminal closed takes nothing more in. So no
+  output grows Pelican's memory, or a page's, without bound, or holds the rest of Pelican, or a
+  page, up for more than a moment: 100 KB of resets at 500x300 held requests up for a third of a
+  second, and kept Pelican busy for 15 seconds after the terminal was closed. Output xterm throws on
+  stops neither Pelican nor a page's screen.
 - A new token or password (`pelican token --reset`, `pelican password`) signs out what a browser
   has open too: its terminals and its live updates close within a second, and nothing it sends
   after reaches a shell. Before, a page that had a connection open kept it.

@@ -151,43 +151,49 @@ can read your sessions and have Claude run commands as you, so treat access to i
   characters, none on the server, no title, and at most 20 lines' worth of output for a screen
   reader to read out, also of output with no line feed in it. A sequence that repeats a character
   (REP), scrolls, inserts or deletes lines, or moves by tab stops does so at most a screen's worth
-  of times (REP a line's), whatever count it gives, as more changes nothing; and the server's copy
-  takes output in a piece at a time, so the rest of Pelican is answered in between, also while a
-  program floods the screen. Output xterm throws on stops neither Pelican nor a page's screen. A
-  terminal lives in memory only: one unused for 12 hours with nothing running in it is closed,
-  closing one hangs up its shell (SIGHUP, as closing a window does), and all end with Pelican.
-  Clear terminal sends the shell nothing: Pelican clears its copy and the pages, then tells the
-  program in front of the shell, found with `ps`, that the window changed (SIGWINCH, as a resize
-  does), so it draws its screen again, or, where that group is not this account's to signal,
+  of times (REP a line's), whatever count it gives, as more changes nothing. The server's copy, and
+  a page's screen, take output in pieces of bounded work, each at most 512 characters and at most as
+  many sequences that work over the whole screen (a reset, DECALN, erasing it, scrolling it,
+  inserting or deleting lines or columns, the alternate screen) as cost about the same at its size,
+  a few at 500x300, where one costs up to a millisecond or two; a reset right after a reset is not
+  done again; the shell waits while the server's copy has more than a quarter of a second of such
+  work before it, as it does for a megabyte of output; and a terminal closed takes nothing more in.
+  So the rest of Pelican, and a page's taps, are answered in between, also while a program floods
+  the screen with them, as `cat` of a hostile file can. Output xterm throws on stops neither Pelican
+  nor a page's screen. A terminal lives in memory only: one unused for 12 hours with nothing running
+  in it is closed, closing one hangs up its shell (SIGHUP, as closing a window does), and all end
+  with Pelican. Clear terminal sends the shell nothing: Pelican clears its copy and the pages, then
+  tells the program in front of the shell, found with `ps`, that the window changed (SIGWINCH, as a
+  resize does), so it draws its screen again, or, where that group is not this account's to signal,
   changes the terminal's size by a row and back. Nothing runs in a terminal without you: the page
-  sends its shell only what you type, paste or click, a paste without its control characters, so text copied from a web page cannot end the
-  shell's paste early and run (the server's copy answers what a program asks of the terminal, once,
-  a color too, from the colors the page says it draws in), and Run in terminal, on a shell command
-  in Claude's reply (never in a file, or a tool's or a subagent's output) or on a command Claude ran
-  or you ran with `!` (never one you denied, nor a subagent's or a workflow's step, and a PowerShell
-  one only where the terminal runs PowerShell), asks before it runs it, its question showing the
-  whole command, wrapped, its lines numbered and counted and its blanks drawn (· a space, → a tab),
-  never only what fits a block that scrolls sideways; and it is there only for a command that shows
-  all it holds: none with a control character a shell takes as a key, or anything an approval would
-  write out (a character that hides or turns text around, or a space other than a plain one where a
-  shell reads it as part of a word, read as above), nor one laid out to put part of itself out of
-  sight: a run of more than 16 blanks (as 300 spaces after `ls -la` hid a `; touch …` that ran),
-  more than 2 blank lines in a row, a line wider than 500 columns or more than 50 lines; all of
-  which the server refuses too, by the same reading. The command is not typed at the shell's prompt,
-  where bash, zsh and csh expand a `!` from the history first, double quotes and all, so
-  `echo "!?SECRET?"` would print a secret from your history file, or a `curl` send it off: the shell
-  reads it from a file of its own (`. file`, `source file`), in a folder only you can read, removed
-  with the terminal, and it runs as it reads. Claude sees nothing of a terminal unless you put it in
-  a message (Quote, at most its first 1,500 characters). A link in a terminal says where it goes
-  before it opens, as the browser would ask for it (an international name in its `xn--` form):
-  pointed at, at the foot of the screen, and tapped on a phone, in a question with Open, since a
-  program's link (OSC 8) can read as any words; it opens only with Cmd or Ctrl held, or once Open is
-  tapped, and only an `http` or `https` one, in a new tab with no way back to Pelican. The demo has
-  no terminal, and `--no-terminal` turns them off. The native part, `@lydell/node-pty`, is pinned to
-  one version, and CI checks that its files, for every platform, are those of Microsoft's node-pty
-  of that version, against the integrity the npm registry publishes for it; that the few lines of
-  its own, which pick the platform's files, are those read for that version; and that none of its
-  packages runs anything as npm installs it.
+  sends its shell only what you type, paste or click, a paste without its control characters, so
+  text copied from a web page cannot end the shell's paste early and run (the server's copy answers
+  what a program asks of the terminal, once, a color too, from the colors the page says it draws
+  in), and Run in terminal, on a shell command in Claude's reply (never in a file, or a tool's or a
+  subagent's output) or on a command Claude ran or you ran with `!` (never one you denied, nor a
+  subagent's or a workflow's step, and a PowerShell one only where the terminal runs PowerShell),
+  asks before it runs it, its question showing the whole command, wrapped, its lines numbered and
+  counted and its blanks drawn (· a space, → a tab), never only what fits a block that scrolls
+  sideways; and it is there only for a command that shows all it holds: none with a control
+  character a shell takes as a key, or anything an approval would write out (a character that hides
+  or turns text around, or a space other than a plain one where a shell reads it as part of a word,
+  read as above), nor one laid out to put part of itself out of sight: a run of more than 16 blanks
+  (as 300 spaces after `ls -la` hid a `; touch …` that ran), more than 2 blank lines in a row, a
+  line wider than 500 columns or more than 50 lines; all of which the server refuses too, by the
+  same reading. The command is not typed at the shell's prompt, where bash, zsh and csh expand a `!`
+  from the history first, double quotes and all, so `echo "!?SECRET?"` would print a secret from
+  your history file, or a `curl` send it off: the shell reads it from a file of its own (`. file`,
+  `source file`), in a folder only you can read, removed with the terminal, and it runs as it reads.
+  Claude sees nothing of a terminal unless you put it in a message (Quote, at most its first 1,500
+  characters). A link in a terminal says where it goes before it opens, as the browser would ask for
+  it (an international name in its `xn--` form): pointed at, at the foot of the screen, and tapped
+  on a phone, in a question with Open, since a program's link (OSC 8) can read as any words; it
+  opens only with Cmd or Ctrl held, or once Open is tapped, and only an `http` or `https` one, in a
+  new tab with no way back to Pelican. The demo has no terminal, and `--no-terminal` turns them off.
+  The native part, `@lydell/node-pty`, is pinned to one version, and CI checks that its files, for
+  every platform, are those of Microsoft's node-pty of that version, against the integrity the npm
+  registry publishes for it; that the few lines of its own, which pick the platform's files, are
+  those read for that version; and that none of its packages runs anything as npm installs it.
 - **Files stay in their folder.** Changes and files reads only regular files inside the folder a
   request names (in the app, the session's), by a relative path without `..` whose real path,
   links followed, is still inside it. It does not hold a signed-in browser to its sessions'

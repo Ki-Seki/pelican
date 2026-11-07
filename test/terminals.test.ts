@@ -661,6 +661,48 @@ describe('what a program asks of the terminal', () => {
   });
 });
 
+describe('output that works over the whole screen', () => {
+  it('has the shell wait for the copy of the screen by the time its work takes, not only its bytes, and none of it is taken in once the terminal is closed', async () => {
+    const terminal = await open(work(), { cols: 500, rows: 300 });
+    // A page that acknowledges what it gets at once, drawing nothing: only the server's copy works.
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/terminal?id=${terminal.id}&cols=500&rows=300`, { headers: signedIn() });
+    let output = '';
+    ws.on('message', (data, binary) => {
+      if (!binary) return;
+      output += String(data);
+      ws.send(JSON.stringify({ type: 'ack', bytes: (data as Buffer).length }));
+    });
+    try {
+      await until(() => output.includes('PROMPT$'), 10_000, 'the prompt');
+      // Each line scrolls the whole screen by its rows: a few KB of them is seconds of work at this size.
+      ws.send(Buffer.from("yes $'\\e[300S' | head -c 3000000; echo FLOOD-$((40 + 2))\r"));
+      await until(() => terminalState(terminal.id)?.paused === true, 30_000, 'the shell to wait');
+      const state = terminalState(terminal.id)!;
+      // It waits on the work, long before a megabyte of it lags, as it did.
+      expect(state.received - state.parsed).toBeLessThan(terminalTiming.copyHigh / 4);
+      // Pelican answers meanwhile.
+      const asked = performance.now();
+      expect((await api('GET', '/api/terminals')).status).toBe(200);
+      expect(performance.now() - asked).toBeLessThan(3000);
+      // Closed, the copy takes in nothing more of what it had been given.
+      const input = (state.copy as unknown as { _core: { _inputHandler: { parse: (...args: unknown[]) => unknown } } })._core._inputHandler;
+      const parse = input.parse.bind(input);
+      let parsedAfter = 0;
+      input.parse = (...args: unknown[]) => {
+        parsedAfter += 1;
+        return parse(...args);
+      };
+      expect((await api('DELETE', `/api/terminals/${terminal.id}`)).status).toBe(200);
+      parsedAfter = 0;
+      await pause(500);
+      expect(parsedAfter).toBe(0);
+      expect(output).not.toContain('FLOOD-42');
+    } finally {
+      ws.terminate();
+    }
+  }, 60_000);
+});
+
 describe('flow control', () => {
   it('pauses the shell while a page is far behind, so nothing piles up, and goes on when it catches up', async () => {
     terminalTiming.stallMs = 60_000;

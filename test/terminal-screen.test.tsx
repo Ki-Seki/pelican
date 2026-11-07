@@ -8,7 +8,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 /** The size the box fits, as xterm's fit addon proposes it. */
 let fits = { cols: 80, rows: 24 };
 /** The stand-in terminal, and what was asked of it. */
-let shown: { cols: number; rows: number; resized: Array<[number, number]> } | undefined;
+let shown: { cols: number; rows: number; resized: Array<[number, number]>; written: unknown[] } | undefined;
+/** Terminals whose output not yet taken in was let go. */
+const dropped: unknown[] = [];
 /** The connection's options (its events), and the sizes it told the shell. */
 let connection: { events: Record<string, (...args: any[]) => void> } | undefined;
 const told: unknown[][] = [];
@@ -26,6 +28,7 @@ vi.mock('@xterm/xterm', () => {
     parser = { registerCsiHandler: listen, registerDcsHandler: listen, registerOscHandler: listen };
     textarea = document.createElement('textarea');
     resized: Array<[number, number]> = [];
+    written: unknown[] = [];
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
       shown = this;
@@ -37,7 +40,8 @@ vi.mock('@xterm/xterm', () => {
       this.rows = rows;
       this.resized.push([cols, rows]);
     }
-    write(_data: unknown, done?: () => void) {
+    write(data: unknown, done?: () => void) {
+      this.written.push(data);
       done?.();
     }
     onData = listen;
@@ -68,7 +72,13 @@ vi.mock('@xterm/addon-web-links', () => ({
     }
   },
 }));
-vi.mock('../src/shared/terminal-guards', () => ({ guardOutput: () => undefined }));
+vi.mock('../src/shared/terminal-guards', async (original) => ({
+  ...(await original<typeof import('../src/shared/terminal-guards')>()),
+  guardOutput: () => undefined,
+  dropPendingOutput: (t: unknown) => {
+    dropped.push(t);
+  },
+}));
 vi.mock('../src/shared/terminal-widths', () => ({ loadWidths: () => undefined }));
 vi.mock('../src/web/lib/terminal-cursor', () => ({ showCursor: () => undefined }));
 vi.mock('../src/web/lib/terminal-input', async (original) => ({
@@ -167,6 +177,26 @@ describe('the size a page tells the shell', () => {
     await frame();
     expect(told).toEqual([[100, 30]]);
     expect(shown).toMatchObject({ cols: 100, rows: 30 });
+  });
+});
+
+describe('output on a page', () => {
+  it('is drawn in pieces of bounded work, acknowledged once all of it is, and let go with the screen', async () => {
+    const view = render(<TerminalScreen {...props} hidden={false} />);
+    act(() => connection!.events.ready!({ type: 'ready', id: 't1', cols: 500, rows: 300, snapshot: '', program: 'zsh' }));
+    shown!.written.length = 0;
+    // A frame of scrolls of the whole screen at 500 by 300, as a page gets it: 64 KB of UTF-8.
+    const frame = new TextEncoder().encode('\u001b[300S'.repeat(64 * 1024 / 7));
+    const written = vi.fn();
+    act(() => connection!.events.output!(frame, written));
+    const pieces = shown!.written as Uint8Array[];
+    const { outputPieces, wideMost } = await import('../src/shared/terminal-guards');
+    expect(pieces.length).toBeGreaterThan(frame.length / 512);
+    for (const piece of pieces) expect(outputPieces(piece, 500, 300).reduce((sum, p) => sum + p.wide, 0)).toBeLessThanOrEqual(wideMost(500, 300));
+    expect(Buffer.concat(pieces)).toEqual(Buffer.from(frame));
+    expect(written).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(dropped).toContain(shown);
   });
 });
 

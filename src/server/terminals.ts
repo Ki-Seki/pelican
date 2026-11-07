@@ -13,7 +13,7 @@ import {
   sizeAllowed, TERMINAL_CLOSE, TERMINAL_LIMITS, terminalClientMessage,
   type TerminalAvailability, type TerminalColors, type TerminalExit, type TerminalInfo, type TerminalRunning, type TerminalServerMessage, utf8Pieces,
 } from '../shared/terminal.js';
-import { guardOutput } from '../shared/terminal-guards.js';
+import { dropPendingOutput, guardOutput, outputPieces, screenWork } from '../shared/terminal-guards.js';
 import { loadWidths } from '../shared/terminal-widths.js';
 import { refreshAuth } from './auth.js';
 import { config } from './config.js';
@@ -53,6 +53,12 @@ export const terminalTiming = {
   /** The copy of the screen may fall this far behind the shell before the shell waits for it too, and goes on below the second. */
   copyHigh: 1024 * 1024,
   copyLow: 256 * 1024,
+  /**
+   * …and have this many milliseconds of work before it, as parseMs reckons it, before the shell
+   * waits for it, going on below a quarter of it: a few KB of sequences that work over the whole
+   * screen take seconds at 500 by 300, where a megabyte of text takes a moment.
+   */
+  copyMs: 250,
   /** A page that makes no progress this long while the shell waits for it is let go (TERMINAL_CLOSE.behind). */
   stallMs: 10_000,
   /** How long a page's first screen may wait for a place between two escape sequences to be cut at. */
@@ -75,11 +81,11 @@ const HANGUP_MS = 1000;
 const REDRAW_MS = 60;
 
 /**
- * The copy of the screen takes in output this many characters at a time: xterm takes in a piece
- * whole, and some output takes long (a screen's worth of scrolling for every few bytes), so
- * Pelican answers everything else between pieces, at most a tenth of a second apart.
+ * About how long the copy of the screen takes over a piece of output (outputPieces), in ms: a
+ * sequence that works over the whole screen, its screenWork at 2 ns a step, the worst of them
+ * (scrolling the screen by its rows), and a character 30 ns, as on a laptop.
  */
-const COPY_PIECE = 512;
+const parseMs = (characters: number, wide: number, cols: number, rows: number): number => (wide * screenWork(cols, rows, TERMINAL_LIMITS.scrollback) * 2 + characters * 30) / 1e6;
 
 /** Too many terminals run already (TERMINAL_LIMITS.terminals), and none of them has ended. */
 export class TooManyTerminals extends Error {}
@@ -270,6 +276,8 @@ class Term {
   /** Bytes the shell printed, and how many of them the copy has taken in. */
   private received = 0;
   private parsed = 0;
+  /** The work the copy has yet to do on what it was given, in ms as parseMs reckons it. */
+  private backlog = 0;
   /** A key came from a page: what the shell prints next (its echo) goes out at once. */
   private keyed = false;
   /** Output the copy could not take was said in the log, once. */
@@ -368,6 +376,9 @@ class Term {
       paused: this.paused,
       received: this.received,
       parsed: this.parsed,
+      backlog: this.backlog,
+      /** The copy of the screen itself. */
+      copy: this.screen,
       viewers: [...this.viewers].map((v) => ({ unacked: v.unacked, buffered: v.ws.bufferedAmount, joining: Boolean(v.joining) })),
     };
   }
@@ -377,13 +388,19 @@ class Term {
     this.lastActive = Date.now();
     const bytes = Buffer.from(text, 'utf8');
     this.received += bytes.length;
-    for (let at = 0; at < text.length; at += COPY_PIECE) {
-      const last = at + COPY_PIECE >= text.length;
-      this.screen.write(text.length <= COPY_PIECE ? text : text.slice(at, at + COPY_PIECE), last ? () => {
+    // The copy takes it in pieces of bounded work, so everything else is answered in between, and
+    // what it has yet to do is reckoned in time as well as in bytes (pressure).
+    const pieces = outputPieces(text, this.cols, this.rows);
+    pieces.forEach(({ data, wide }, at) => {
+      const ms = parseMs(data.length, wide, this.cols, this.rows);
+      this.backlog += ms;
+      this.screen.write(data, () => {
+        this.backlog -= ms;
+        if (at < pieces.length - 1) return;
         this.parsed += bytes.length;
         this.cut();
-      } : undefined);
-    }
+      });
+    });
     this.pending.push(bytes);
     this.pendingBytes += bytes.length;
     // The first output goes at once, and the first after a key, so typing never waits; what
@@ -395,7 +412,7 @@ class Term {
       this.flush();
       this.gathering = setTimeout(() => this.gathered(), terminalTiming.batchMs);
     }
-    if (this.received - this.parsed > terminalTiming.copyHigh) this.pressure();
+    if (this.received - this.parsed > terminalTiming.copyHigh || this.backlog > terminalTiming.copyMs) this.pressure();
     this.lookAtProgramSoon();
   }
 
@@ -444,16 +461,17 @@ class Term {
   /**
    * Flow control. The shell waits (its PTY is paused, so what it prints blocks) while a page owes
    * acknowledgements for, or has waiting in its socket, more than `high` bytes, or while the copy of
-   * the screen lags; it goes on once all are below `low`. A page that makes no progress at all for
-   * `stallMs` meanwhile (a phone asleep with its socket open) is let go, and repaints from the copy
-   * when it comes back, rather than holding up the shell and every other page.
+   * the screen lags, in bytes or in the time it will take (copyMs); it goes on once all are below
+   * `low`. A page that makes no progress at all for `stallMs` meanwhile (a phone asleep with its
+   * socket open) is let go, and repaints from the copy when it comes back, rather than holding up
+   * the shell and every other page.
    */
   private pressure(): void {
     if (this.closed) return;
     const now = Date.now();
     const lag = this.received - this.parsed;
-    let behind = lag > terminalTiming.copyHigh;
-    let caughtUp = lag < terminalTiming.copyLow;
+    let behind = lag > terminalTiming.copyHigh || this.backlog > terminalTiming.copyMs;
+    let caughtUp = lag < terminalTiming.copyLow && this.backlog < terminalTiming.copyMs / 4;
     for (const viewer of this.viewers) {
       const owed = viewer.unacked + (viewer.joining?.bytes ?? 0);
       const buffered = viewer.ws.bufferedAmount;
@@ -796,6 +814,10 @@ class Term {
     clearTimeout(this.gathering);
     clearInterval(this.watching);
     clearTimeout(this.programLook);
+    // What the copy of the screen had yet to take in goes, and the copy with it: a flood the shell
+    // printed keeps nobody busy once its terminal is closed.
+    dropPendingOutput(this.screen);
+    this.screen.dispose();
     if (this.runFile) void rm(this.runFile, { force: true }).catch(() => undefined);
     if (this.paused) this.pty.resume();
     if (this.exit) return;
