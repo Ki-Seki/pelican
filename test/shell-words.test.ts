@@ -29,7 +29,7 @@ const IN_WORDS = [
   // What a reader that stopped at what it took for a syntax error once missed: the shells read on.
   "w $'x\\c'•#b", "w ${x:-$'a\\c'}\nw a•#b", '(case x in a) w hi ;; esac)\nw a•#b', 'f() (case x in a) w hi ;; esac); f\nw a•#b',
   'case x in\n  a) w esac ;;\n  *) w a•#b\n  ;;\nesac', 'wi <<\\\nE\nbody\nE\nw a•#b', 'wi <<E\\\nF\nbody\nEF\nw a•#b',
-  'case x in (x) w a•b;; esac', 'w $(case x in (x) w a•b;; esac)', "w \"${•x}\"", "w $'\\c•'",
+  'case x in (x) w a•b;; esac', 'w $(case x in (x) w a•b;; esac)', "w $'\\c•'",
   // Handed to a shell.
   "bash -c 'w a•#b'", 'sh -c "w a•#b"', "bash <<'E'\nw a•#b\nE", "cat <<'E' | sh\nw a•#b\nE",
   "echo 'w a•#b' | sh", "bash <<< 'w a•#b'", "env X=1 bash -c 'w a•#b'", "bash -o pipefail -c 'w a•#b'", "echo \"w a'\" \"'•#b\" | sh",
@@ -53,6 +53,8 @@ const AS_TEXT = [
  * anything but a space, a tab or a newline), and runs what follows: only bash 3.2 shows the difference.
  */
 const IN_WORDS_BASH_32 = ['w $(wi <<E\n)\n(w a•#b\nE\n)', 'w $(w a;#x);(w•b\nw c)'];
+/** In a word too, though only a bash of 5.3 or later shows it: `${ x}` runs x there (a funsub), and is an error elsewhere. */
+const IN_WORDS_BASH_53 = ['w "${•x}"'];
 /** What shells read differently, or this does not follow: every space counts as in a word. */
 const LOST = [
   'w a(b•c)', 'w ${x:-{a}•b}', "w $'a\\'b'•c", 'w $[1]•c', 'w $(case x in x) w a;; esac)•c', 'w "$( #)"&•w',
@@ -97,7 +99,7 @@ describe('where a shell reads a look-alike space as part of a word', () => {
   for (const space of SPACES) {
     const name = `U+${space.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
     it(`finds each ${name} in a word, and none in quotes, a heredoc's body or a comment`, () => {
-      for (const template of [...IN_WORDS, ...AS_TEXT, ...IN_WORDS_BASH_32, ...ELSEWHERE.map(([command]) => command)]) {
+      for (const template of [...IN_WORDS, ...AS_TEXT, ...IN_WORDS_BASH_32, ...IN_WORDS_BASH_53, ...ELSEWHERE.map(([command]) => command)]) {
         const { command, words } = made(template, space);
         expect([...(inWords(command, isSpace) ?? ['lost'])].sort((a, b) => Number(a) - Number(b)), JSON.stringify(command)).toEqual(words);
       }
@@ -212,8 +214,9 @@ describe('against the shells themselves', () => {
     const misread: string[] = [];
     const needless: string[] = [];
     const bash32 = found.some(([name]) => /^\S+ 3\./.test(name));
+    const bash53 = found.some(([name]) => /^bash (?:5\.(?:[3-9]|\d{2,})|[6-9])/.test(name));
     // Every shell reads each of these spaces the same way (the cases above), so one does here.
-    const commands = [...IN_WORDS, ...AS_TEXT, ...LOST, ...IN_WORDS_BASH_32].map((template) => ({ template, ...made(template, '\u00a0') }));
+    const commands = [...IN_WORDS, ...AS_TEXT, ...LOST, ...IN_WORDS_BASH_32, ...IN_WORDS_BASH_53].map((template) => ({ template, ...made(template, '\u00a0') }));
     await each(commands, async ({ template, command }) => {
       const words = inWords(command, isSpace);
       // As read: each space the card leaves as it is, a plain one.
@@ -223,7 +226,7 @@ describe('against the shells themselves', () => {
         const reads = await run(shell, args(read));
         if (runs !== reads) misread.push(`${name}: ${JSON.stringify(command)} runs ${JSON.stringify(runs)}, reads ${JSON.stringify(reads)}`);
       }
-      if (words === undefined || (IN_WORDS_BASH_32.includes(template) && !bash32)) return;
+      if (words === undefined || (IN_WORDS_BASH_32.includes(template) && !bash32) || (IN_WORDS_BASH_53.includes(template) && !bash53)) return;
       for (const at of words) {
         const plain = `${command.slice(0, at)} ${command.slice(at + 1)}`;
         let differs = false;

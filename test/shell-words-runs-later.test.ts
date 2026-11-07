@@ -31,6 +31,8 @@ const SHELLS: Record<string, { file: string; args: (command: string) => string[]
     args: (command) => ['-c', `shopt -s expand_aliases && eval ${quoted(command)} < /dev/null`],
   },
 };
+/** This computer's /bin/sh is a bash, as macOS's is: the cases written for `sh` must show there. */
+const sameSh = spawnSync('/bin/sh', ['-c', 'echo "$BASH_VERSION"'], { encoding: 'utf8' }).stdout.trim() !== '';
 /** What `p` logged of the command, run in the shell. */
 function logged(shell: string, command: string): string {
   const dir = mkdtempSync(path.join(bin, 'run-'));
@@ -143,9 +145,15 @@ describe('quoted text a shell runs later', () => {
     // the file system takes no notice of case, as macOS's does.
     const missing = !existsSync(SHELLS[shell]!.file) || (command.includes('@P') && !/^(?:4\.[4-9]|[5-9])/.test(spawnSync(SHELLS[shell]!.file, ['-c', 'echo $BASH_VERSION'], { encoding: 'utf8' }).stdout))
       || (command.includes('READ') && !existsSync('/usr/bin/READ'));
-    it.skipIf(missing)(`${what}: the space changes what runs, in ${shell}`, () => {
-      expect(logged(shell, command)).toContain('PWNED');
-      expect(logged(shell, command.replaceAll(N, ' '))).not.toContain('PWNED');
+    // Shown in the shell named where it is the one written for (macOS's /bin/sh is bash 3.2); where
+    // it is not (Linux's sh is dash, with no zsh or ksh), in another shell here, if any shows it.
+    it.skipIf(missing)(`${what}: the space changes what runs, in ${shell}`, (context) => {
+      const shown = [shell, ...Object.keys(SHELLS).filter((other) => other !== shell)]
+        .filter((other) => existsSync(SHELLS[other]!.file))
+        .find((other) => logged(other, command).includes('PWNED'));
+      if (shown !== shell && sameSh) expect(shown).toBe(shell);
+      if (shown === undefined) return context.skip(`no shell here runs it as ${shell} does`);
+      expect(logged(shown, command.replaceAll(N, ' '))).not.toContain('PWNED');
     });
   }
 
