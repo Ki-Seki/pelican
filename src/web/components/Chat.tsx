@@ -264,7 +264,9 @@ function BackgroundTasks({ sessionId, tasks, scheduled, open, setOpen, onCancel,
       <div key={task.id} className="flex items-center gap-2 py-1 pr-1 pl-3 text-[12.5px] text-muted">
         <Pulse />
         {card ? (
-          <button type="button" onClick={() => revealWorkflow(card)} title={workflow ? 'Show the workflow' : 'Show the agent'} className="relative min-w-0 flex-1 truncate text-left after:absolute after:-inset-y-2 after:inset-x-0 hover:text-fg">{words}</button>
+          <button type="button" onClick={() => revealWorkflow(card)} title={workflow ? 'Show the workflow' : 'Show the agent'} className="relative flex min-w-0 flex-1 text-left after:absolute after:-inset-y-2 after:inset-x-0 hover:text-fg">
+            <span className="min-w-0 truncate">{words}</span>
+          </button>
         ) : <span className="min-w-0 flex-1 truncate">{words}</span>}
         {task.output && <button type="button" onClick={() => setReading(task)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Output</button>}
         {!workflow && <button type="button" onClick={() => stop(task.id)} className="relative h-7 shrink-0 rounded-full px-2.5 text-[12px] after:absolute after:-inset-y-2 after:inset-x-0 hover:bg-hover hover:text-fg">Stop</button>}
