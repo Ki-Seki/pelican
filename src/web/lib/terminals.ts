@@ -80,7 +80,27 @@ export function useTerminalsAvailable(): boolean {
   return info?.terminal?.available === true;
 }
 
-/** Runs a command in a new terminal in the conversation's folder (a code block's Run in terminal); none where there is no terminal. */
+/** The shell a terminal here runs, as a tab names it (zsh, pwsh), as far as the info says. */
+export function useTerminalShell(): string | undefined {
+  const { data: info } = useQuery({ queryKey: ['info'], queryFn: api.info, staleTime: Infinity });
+  return info?.terminal?.available ? info.terminal.shell : undefined;
+}
+
+/**
+ * The shell a terminal here runs (useTerminalShell), set with RunInTerminal around the
+ * conversation: a step's command runs in the shell it is written for (isPowerShell).
+ */
+export const TerminalShell = createContext<string | undefined>(undefined);
+
+/** Whether a shell, as a tab names it, is PowerShell, which takes a PowerShell step's command, and no other's. */
+export const isPowerShell = (shell: string | undefined): boolean => shell !== undefined && /^(pwsh|powershell)(\.exe)?$/i.test(shell);
+
+/**
+ * Runs a command in a new terminal in the conversation's folder: a code block's Run in terminal,
+ * and a step's, each once its question showed the whole command; none where there is no terminal.
+ * A subagent's and a workflow's steps are under none: those are not Claude's doing in this
+ * conversation to rerun, as a subagent's output offers none either.
+ */
 export const RunInTerminal = createContext<((command: string) => void) | undefined>(undefined);
 
 /**

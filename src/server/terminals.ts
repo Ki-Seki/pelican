@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { accessSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -146,6 +147,27 @@ export async function loginShell(env: NodeJS.ProcessEnv = process.env): Promise<
 
 /** For tests: a shell to start, with these arguments, instead of the user's login shell. */
 export const testShell: { file?: string; args?: string[] } = {};
+
+/** The shell a terminal starts, as loginShell finds it, without waiting: named for a page (TerminalAvailability.shell). */
+function shellNow(env: NodeJS.ProcessEnv = process.env): string {
+  if (testShell.file) return testShell.file;
+  let account: string | null | undefined;
+  try {
+    account = os.userInfo().shell;
+  } catch {
+    account = undefined;
+  }
+  for (const candidate of [env.SHELL, account]) {
+    if (!candidate || !path.isAbsolute(candidate)) continue;
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not there, or not to be run: the next.
+    }
+  }
+  return '/bin/sh';
+}
 
 /** A program's name as a tab shows it: `/usr/bin/vim` and a login shell's `-zsh` as vim and zsh. */
 const programName = (raw: string) => path.basename(raw.trim()).replace(/^-/, '').slice(0, 64);
@@ -820,10 +842,10 @@ function refusal(): string | undefined {
 /** Whether the refusal is this Pelican's own (403), rather than the computer's (503). */
 export const terminalsRefused = (): boolean => refusal() !== undefined;
 
-/** Whether terminals run here, and why not, found without loading anything (for /api/info). */
+/** Whether terminals run here, and why not, found without loading anything (for /api/info); the shell they run. */
 export function terminalAvailability(): TerminalAvailability {
   const reason = refusal() ?? ptyFailure() ?? ptyMissing();
-  return reason ? { available: false, reason } : { available: true };
+  return reason ? { available: false, reason } : { available: true, shell: programName(shellNow()) };
 }
 
 /** The same, for sure: the PTY is loaded, the first time a page asks for terminals. */
@@ -832,7 +854,7 @@ export async function terminalsReady(): Promise<TerminalAvailability> {
   if (refused) return { available: false, reason: refused };
   try {
     await loadPty();
-    return { available: true };
+    return { available: true, shell: programName(shellNow()) };
   } catch (error) {
     return { available: false, reason: (error as Error).message };
   }

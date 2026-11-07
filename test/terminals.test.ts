@@ -113,6 +113,9 @@ describe('a terminal', () => {
     expect(terminal).toMatchObject({ cwd: work(), program: 'bash', viewers: 0 });
     const listed = await api('GET', `/api/terminals?cwd=${encodeURIComponent(work())}`);
     expect(listed.body).toMatchObject({ available: true, terminals: [{ id: terminal.id, cwd: work() }] });
+    // Which shell a terminal runs, for Run in terminal to offer a step only to the shell it is written for.
+    expect(listed.body.shell).toBe('bash');
+    expect((await api('GET', '/api/info')).body.terminal).toEqual({ available: true, shell: 'bash' });
     expect((await api('GET', `/api/terminals?cwd=${encodeURIComponent(dir)}`)).body.terminals).toEqual([]);
 
     const shown = await atPrompt(terminal.id);

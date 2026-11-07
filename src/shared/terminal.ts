@@ -49,8 +49,12 @@ export type TerminalInfo = {
  */
 export type TerminalRunning = { terminal: TerminalInfo; running: boolean };
 
-/** Whether this Pelican runs terminals and, when it does not, why, in a sentence to show as it is. */
-export type TerminalAvailability = { available: boolean; reason?: string };
+/**
+ * Whether this Pelican runs terminals and, when it does not, why, in a sentence to show as it is;
+ * when it does, the shell a terminal runs, as a tab names it (zsh, bash, fish, pwsh): Run in
+ * terminal offers a step's command only to the shell it is written for, PowerShell's to PowerShell.
+ */
+export type TerminalAvailability = { available: boolean; reason?: string; shell?: string };
 
 /**
  * The colors a page draws a terminal in, each `#rrggbb`: its text, its background, its cursor,

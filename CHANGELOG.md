@@ -193,9 +193,12 @@ settings; and updates from Settings.
   side chat · Quote output; a file step and a path in a reply have Desktop's path menu: Attach as
   context · Copy ▸ (Absolute path, Relative path, Filename) · Open in Changes · Open in Files ·
   Download file, a folder Open in terminal. A `!` command in the conversation has a command step's
-  list, from a long press, a right-click or ⋯; Run in terminal, there and on a step, is offered for
-  a command that shows all it holds, as a code block's is. The rows of Files and of Changes have
-  their path's menu too, a folder's with Open in terminal.
+  list, from a long press, a right-click or ⋯; Run in terminal, there and on a step, asks first in
+  place, as a code block's does, showing the whole command, never the step's description of it, and
+  is offered for a command that shows all it holds, as a code block's is; not on a step you denied,
+  nor on the steps of a subagent or a workflow, and a PowerShell step's only where the terminal runs
+  PowerShell. The rows of Files and of Changes have their path's menu too, a folder's with Open in
+  terminal.
 - **What runs in the background, "1 in background".** Commands, agents and workflows Claude left
   running, and the checks it stays running for, read "2 in background" in the session list and under
   the title. ⌃B, as in Claude Desktop (Ctrl+Alt+B off a Mac, where Ctrl+B shows and hides the
@@ -415,7 +418,10 @@ settings; and updates from Settings.
   fits a block that scrolls sideways, and a command laid out to put part of it out of sight is
   neither offered nor run, by the page's reading and the server's alike: a run of more than 16
   blanks (300 spaces after `ls -la` hid a `; touch …` that ran), more than 2 blank lines in a row, a
-  line wider than 500 columns, or more than 50 lines.
+  line wider than 500 columns, or more than 50 lines. A step's Run in terminal, and a `!` command's,
+  asks the same question, the command itself shown rather than the step's description of it, and
+  is never offered on a step you denied, on a subagent's or a workflow's step, or for a PowerShell
+  step where the terminal's shell is not PowerShell.
 - The terminal's native part, `@lydell/node-pty`, pinned to one version, is Microsoft's node-pty,
   the one VS Code uses, file for file: CI checks every platform's against Microsoft's own package,
   the few lines of @lydell's own against those read for this version, that this version pins each

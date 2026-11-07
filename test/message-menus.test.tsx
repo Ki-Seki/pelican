@@ -23,7 +23,7 @@ beforeAll(() => {
 const { MessageList } = await import('../src/web/components/MessageList');
 const { QuoteTargetContext } = await import('../src/web/components/Quotes');
 const { forgetFound, PathLinksContext } = await import('../src/web/lib/path-links');
-const { RunInTerminal } = await import('../src/web/lib/terminals');
+const { RunInTerminal, TerminalShell } = await import('../src/web/lib/terminals');
 const { waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { api } = await import('../src/web/lib/api');
 
@@ -158,7 +158,14 @@ describe('a step', () => {
     fireEvent.contextMenu(step, { clientX: 100, clientY: 100 });
     expect(menuItems('Run Run the theme tests')).toEqual(['Copy command', 'Run in terminal', 'Copy output', 'Start a side chat', 'Quote output']);
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Run in terminal' }));
+    // It asks first, in place, showing the command itself, never the row's description of it.
+    expect(runInTerminal).not.toHaveBeenCalled();
+    const asked = screen.getByText('Run this line in a new terminal?').closest('[data-run-question]')! as HTMLElement;
+    expect(step.contains(asked)).toBe(true);
+    expect(within(asked).getByRole('group', { name: 'The command' }).textContent).toBe('1npm test -- theme');
+    fireEvent.click(within(asked).getByRole('button', { name: 'Run' }));
     expect(runInTerminal).toHaveBeenCalledWith('npm test -- theme');
+    expect(screen.queryByText('Run this line in a new terminal?')).toBeNull();
     // Its own list, not the reply's it is in.
     expect(screen.queryByRole('menu', { name: 'Claude’s reply' })).toBeNull();
     fireEvent.click(within(step as HTMLElement).getByRole('button', { name: /^More for Run/ }));
@@ -194,6 +201,68 @@ describe('a step', () => {
     // The step itself is raised over the dim, a copy that takes no taps.
     expect(sheet.querySelector('[inert] [data-step]')).not.toBeNull();
     expect(within(sheet).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy command', 'Run in terminal', 'Copy output', 'Start a side chat', 'Quote output']);
+  });
+});
+
+describe('a step’s Run in terminal', () => {
+  /** A conversation of one step, Claude's command with a description, its outcome as given. */
+  function step(input: Record<string, unknown>, result: { content: string; is_error?: boolean }, name = 'Bash', shell = 'zsh') {
+    const runInTerminal = vi.fn();
+    const messages: ChatMessage[] = [
+      { uuid: 'u1', role: 'user', blocks: [{ type: 'text', text: 'Clean up' }], timestamp: at },
+      { uuid: 'a1', role: 'assistant', model: 'claude-opus-5-5', timestamp: at + 1000, blocks: [{ type: 'tool_use', id: 't1', name, input }] },
+      { uuid: 'r1', role: 'user', blocks: [{ type: 'tool_result', tool_use_id: 't1', ...result }], timestamp: at + 2000 },
+    ];
+    render(
+      <RunInTerminal.Provider value={runInTerminal}>
+        <TerminalShell.Provider value={shell}>
+          <QuoteTargetContext.Provider value={{ chat: 'chat' }}>
+            <MessageList sessionId="s" view={{ messages, offset: 0, total: messages.length, loaded: true, loadingOlder: false }} cwd="/p" mode="normal" />
+          </QuoteTargetContext.Provider>
+        </TerminalShell.Provider>
+      </RunInTerminal.Provider>,
+    );
+    return runInTerminal;
+  }
+  const menuOf = (label: RegExp) => {
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    return within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
+  };
+
+  it('asks with the whole command, as it runs, wrapped and its blanks drawn, where the row says only Claude’s description', () => {
+    computer();
+    const command = `rm -rf build${'  '}&& npm run build\nls -la build`;
+    const runInTerminal = step({ command, description: 'Clean the build folder' }, { content: 'done' });
+    expect(menuOf(/^More for Run Clean the build folder/)).toContain('Run in terminal');
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Run in terminal' }));
+    expect(screen.getByText('Run these 2 lines in a new terminal?')).toBeTruthy();
+    const shown = screen.getByRole('group', { name: 'The command' });
+    expect([...shown.querySelectorAll('[data-line]')].map((line) => line.textContent)).toEqual(['rm -rf build\u00b7\u00b7&& npm run build', 'ls -la build']);
+    expect(shown.textContent).not.toContain('Clean the build folder');
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    expect(runInTerminal).toHaveBeenCalledWith(command);
+  });
+
+  it('is not offered on a step you denied', () => {
+    computer();
+    step({ command: 'ls -la && touch DENIED_STEP_RAN', description: 'Clean the build folder' }, {
+      content: 'The user doesn\'t want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.',
+      is_error: true,
+    });
+    expect(screen.getByText('denied')).toBeTruthy();
+    expect(menuOf(/^More for Run Clean the build folder/)).toEqual(['Copy command']);
+  });
+
+  it('is offered for PowerShell’s command only where the terminal runs PowerShell, and for a POSIX shell’s only where it does not', () => {
+    computer();
+    step({ command: 'Get-ChildItem', description: 'List the files' }, { content: 'README.md' }, 'PowerShell', 'zsh');
+    expect(menuOf(/^More for Run List the files/)).not.toContain('Run in terminal');
+    cleanup();
+    step({ command: 'Get-ChildItem', description: 'List the files' }, { content: 'README.md' }, 'PowerShell', 'pwsh');
+    expect(menuOf(/^More for Run List the files/)).toContain('Run in terminal');
+    cleanup();
+    step({ command: 'ls', description: 'List the files' }, { content: 'README.md' }, 'Bash', 'pwsh');
+    expect(menuOf(/^More for Run List the files/)).not.toContain('Run in terminal');
   });
 });
 
@@ -277,7 +346,12 @@ describe('a `!` command in the conversation', () => {
     const sheet = screen.getByRole('dialog', { name: 'Run · npm test -- theme' });
     expect(within(sheet).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Copy command', 'Run in terminal', 'Copy output', 'Quote output']);
     fireEvent.click(within(sheet).getByText('Run in terminal'));
-    expect(runInTerminal).toHaveBeenCalledWith('npm test -- theme');
+    // Asked first, the command shown whole; Cancel runs nothing.
+    expect(runInTerminal).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'The command' }).textContent).toBe('1npm test -- theme');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: 'The command' })).toBeNull();
+    expect(runInTerminal).not.toHaveBeenCalled();
   });
 
   it('with a pointer, under ⋯ or a right-click; a command that hides what it holds has no Run in terminal', () => {
