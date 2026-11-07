@@ -1392,17 +1392,16 @@ export function Chat({
 
       {/* Never taller than about half the screen, so the conversation, the composer and Stop stay in view;
           where the screen is short (a phone's keyboard up), shorter still, unless Claude waits for an
-          answer, which then takes the room it needs. It gives way before the message box does, Claude's
-          card first, whose foot stays in view (PermissionCard). On a phone on its side the whole chat
-          scrolls instead, the message box at its foot. */}
-      <div data-dock className={`flex max-h-[55%] min-h-0 flex-col overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
+          answer, which then takes the room it needs. It gives way before the message box does, and
+          scrolls, Claude's card keeping its head and its buttons in view (PermissionCard). On a phone
+          on its side the whole chat scrolls instead, the message box at its foot. */}
+      <div data-dock className={`max-h-[55%] min-h-0 overflow-y-auto overscroll-contain px-3 ${request ? '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[70%]' : '[@media(min-height:380.02px)_and_(max-height:600px)]:max-h-[40%]'} [@media(max-height:380px)]:max-h-none [@media(max-height:380px)]:shrink-0 [@media(max-height:380px)]:overflow-visible`}>
         {request && (
-          <section aria-label={askedFor(request, cwd, true)} className="mx-auto flex min-h-0 w-full max-w-3xl flex-col">
-            {permissions.length > 1 && <div className="shrink-0 px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
+          <section aria-label={askedFor(request, cwd, true)} className="mx-auto max-w-3xl">
+            {permissions.length > 1 && <div className="px-1 pb-1 text-right text-[11.5px] text-faint tabular-nums">1 of {permissions.length}</div>}
             <PermissionCard key={request.id} sessionId={sessionId!} request={request} cwd={cwd} />
           </section>
         )}
-        <div className="shrink-0">
         {folded ? (
           <FoldedBars tasks={showTasks ? tasks : []} background={inBackground(view.run?.tasks?.length ?? 0, view.run?.scheduled?.length ?? 0)} onUnfold={() => setUnfoldedFor(request?.id)} />
         ) : (
@@ -1467,7 +1466,6 @@ export function Chat({
             }, () => undefined)}
           />
         )}
-        </div>
       </div>
 
       <Composer

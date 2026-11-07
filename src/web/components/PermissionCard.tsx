@@ -15,18 +15,15 @@ import { Markdown } from './Markdown';
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
 /**
- * A card in three parts: what it is (its head), what it asks about (its body), and what to answer
- * (its foot). However little room the card has above the message box (Chat's dock), the body gives
- * way first and scrolls, and the foot stays in view: Allow, Answer, Approve are never under the box.
+ * A card in three parts: what it is (its head), what it asks about, and what to answer (its foot).
+ * Where the card has less room than it needs above the message box (Chat's dock, which scrolls),
+ * its head and foot stay at the top and bottom of what can be seen of it, and what it asks about
+ * scrolls between them: Allow, Answer, Approve are never under the box. On a phone on its side the
+ * whole chat scrolls instead, and the foot stays just above the message box at its foot
+ * (--composer-h, Chat).
  */
-const PARTS = 'flex min-h-0 flex-col';
-const BODY = 'min-h-0 shrink overflow-y-auto overscroll-contain';
-/**
- * Kept at the bottom of what can be seen of the card while the rest of it is scrolled: in the dock
- * when it has too little room for the card's head and foot, and on a phone on its side, where the
- * whole chat scrolls, just above the message box, which stays at its foot (--composer-h, Chat).
- */
-const FOOT = 'sticky bottom-0 shrink-0 bg-panel pb-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]';
+const HEAD = 'sticky top-0 z-[1] bg-panel pt-3';
+const FOOT = 'sticky bottom-0 z-[1] bg-panel pb-3 [@media(max-height:380px)]:bottom-[var(--composer-h,0px)]';
 
 /** The files a SendUserFile call names: a list, or one as a bare string, as Claude Code takes it. */
 const filesIn = (input: Record<string, unknown>): string[] =>
@@ -232,12 +229,12 @@ function ToolApproval({ sessionId, request, cwd }: { sessionId: string; request:
   const allow = <Button kind={request.defaultToNo ? 'secondary' : 'primary'} disabled={busy} onClick={() => decide({ behavior: 'allow' })}>Allow</Button>;
   const deny = <Button kind={request.defaultToNo ? 'primary' : 'quiet'} disabled={busy} onClick={() => setDenying(true)}>Deny</Button>;
   return (
-    <div className={PARTS}>
-      <div className="flex shrink-0 items-start gap-2 text-[13px] text-muted">
+    <div>
+      <div className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
         <ShieldQuestion className="mt-px size-4 shrink-0" />
         <span>{head!.text}</span>
       </div>
-      <div className={`max-h-[40dvh] ${BODY}`}>
+      <div>
       {agent && <div className="mt-0.5 text-[12.5px] break-words text-faint">From {request.agent === 'a subagent' ? 'a subagent' : `the ${agent.text} agent`}</div>}
       {server && <div className="mt-0.5 text-[12.5px] text-faint">A tool of the MCP server {server.text}</div>}
       {aboutShown && <div className="mt-1 text-[12.5px] leading-snug text-muted">{aboutShown.text}</div>}
@@ -309,6 +306,15 @@ type Question = { question: string; header?: string; multiSelect?: boolean; opti
 /** A field of its own, whose keys are its own: typed digits are words there, not picks. */
 const typingIn = (target: EventTarget | null) => target instanceof HTMLElement && target.matches('input, textarea, select, [contenteditable="true"]');
 
+/** What scrolls an element into view: the nearest of its containers that scrolls and has more than it shows. */
+function scrollerOf(el: HTMLElement): HTMLElement | undefined {
+  for (let at = el.parentElement; at; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && at.scrollHeight > at.clientHeight) return at;
+  }
+  return undefined;
+}
+
 /**
  * Claude's questions, as Claude Desktop asks them: options to pick (1 to 9 pick one by its number,
  * as in Desktop, shown faintly beside each on a computer), or words of your own under Other. On a
@@ -331,22 +337,23 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
     if (idle) card.current?.focus({ preventScroll: true });
   }, []);
 
-  const body = useRef<HTMLDivElement>(null);
   /**
-   * After a pick, the next question comes into view in the card, which scrolls on its own where it
-   * has not room for them all: the next number typed picks there, and on a phone it is the next tap.
+   * After a pick, the next question comes into view under the card's head, where the card has not
+   * room for them all: the next number typed picks there, and on a phone it is the next tap.
    */
   const showNext = (q: Question) => {
     const next = card.current?.querySelector<HTMLElement>(`[data-question="${questions.indexOf(q) + 1}"]`);
-    const scroller = body.current;
-    if (q.multiSelect || !next || !scroller) return;
+    if (q.multiSelect || !next) return;
     requestAnimationFrame(() => {
+      const scroller = scrollerOf(next);
+      const head = card.current?.firstElementChild?.getBoundingClientRect().height ?? 0;
+      const foot = card.current?.lastElementChild?.getBoundingClientRect().height ?? 0;
+      if (!scroller) return;
       const shown = scroller.getBoundingClientRect();
       const at = next.getBoundingClientRect();
-      if (at.top >= shown.top && at.bottom <= shown.bottom) return;
-      const top = scroller.scrollTop + at.top - shown.top;
-      if (typeof scroller.scrollTo !== 'function') scroller.scrollTop = top;
-      else scroller.scrollTo({ top, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      const by = at.top - (shown.top + head);
+      if (by >= 0 && at.bottom <= shown.bottom - foot) return;
+      scroller.scrollTo({ top: scroller.scrollTop + by, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     });
   };
   const toggle = (q: Question, label: string) => {
@@ -393,9 +400,9 @@ function Questions({ sessionId, request }: { sessionId: string; request: Permiss
   };
 
   return (
-    <div ref={card} role="group" aria-label={questions.length === 1 ? 'Claude’s question' : 'Claude’s questions'} tabIndex={-1} onKeyDown={onKeyDown} className={`${PARTS} outline-none`}>
-      <div className="flex shrink-0 items-center gap-2 text-[13px] text-muted"><CircleHelp className="size-4" />Claude has {questions.length === 1 ? 'a question' : 'questions'}</div>
-      <div ref={body} className={`mt-2 max-h-[46dvh] space-y-4 ${BODY}`}>
+    <div ref={card} role="group" aria-label={questions.length === 1 ? 'Claude’s question' : 'Claude’s questions'} tabIndex={-1} onKeyDown={onKeyDown} className="outline-none">
+      <div className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><CircleHelp className="size-4" />Claude has {questions.length === 1 ? 'a question' : 'questions'}</div>
+      <div className="mt-2 space-y-4">
         {questions.map((q, at) => {
           // What Claude drew for the option picked last (a mockup, some code), as Claude Code shows it beside the list.
           const preview = (q.options ?? []).find((o) => o.label === (picked[q.question] ?? []).at(-1))?.preview;
@@ -461,9 +468,9 @@ function PlanReview({ sessionId, request }: { sessionId: string; request: Permis
   const [revising, setRevising] = useState(false);
   const first: PermissionMode = request.plan?.before === 'bypassPermissions' ? 'bypassPermissions' : request.plan?.auto ? 'auto' : 'acceptEdits';
   return (
-    <div className={PARTS}>
-      <div className="flex shrink-0 items-center gap-2 text-[13px] text-muted"><ClipboardList className="size-4" />Claude's plan</div>
-      <div className={`mt-2 max-h-[42dvh] rounded-xl border border-line bg-bg px-3 py-2 ${BODY}`}>
+    <div>
+      <div className={`flex items-center gap-2 text-[13px] text-muted ${HEAD}`}><ClipboardList className="size-4" />Claude's plan</div>
+      <div className="mt-2 max-h-[42dvh] overflow-y-auto overscroll-contain rounded-xl border border-line bg-bg px-3 py-2">
         <Markdown text={str(request.input.plan)} className="text-[14px]" />
       </div>
       <div className={FOOT}>
@@ -567,12 +574,12 @@ function Elicitation({ sessionId, request }: { sessionId: string; request: Permi
   };
 
   return (
-    <div className={PARTS}>
-      <div className="flex shrink-0 items-start gap-2 text-[13px] text-muted">
+    <div>
+      <div className={`flex items-start gap-2 text-[13px] text-muted ${HEAD}`}>
         <Plug className="mt-px size-4 shrink-0" />
         <span>{request.title || `${asked.server} asks`}</span>
       </div>
-      <div className={`max-h-[46dvh] ${BODY}`}>
+      <div>
         {request.description && <div className="mt-1 text-[12.5px] leading-snug text-muted">{request.description}</div>}
         <div className="mt-1.5 text-[14.5px] leading-snug whitespace-pre-wrap">{asked.message}</div>
         {asked.mode === 'url' ? (
@@ -651,8 +658,8 @@ function Elicitation({ sessionId, request }: { sessionId: string; request: Permi
 
 export function PermissionCard({ sessionId, request, cwd }: { sessionId: string; request: PermissionRequest; cwd?: string }) {
   return (
-    // Its foot pads its own bottom, so it stays whole where it sticks.
-    <div className="animate-fade mx-auto mb-2 flex min-h-0 w-full max-w-3xl flex-col rounded-2xl border border-line bg-panel px-4 pt-3 shadow-[0_2px_16px_rgba(0,0,0,0.06)]">
+    // Its head and foot pad its top and bottom, so each stays whole where it sticks.
+    <div className="animate-fade mx-auto mb-2 max-w-3xl rounded-2xl border border-line bg-panel px-4 shadow-[0_2px_16px_rgba(0,0,0,0.06)]">
       {request.elicitation ? (
         <Elicitation sessionId={sessionId} request={request} />
       ) : request.toolName === 'AskUserQuestion' ? (
