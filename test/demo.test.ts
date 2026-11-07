@@ -4,7 +4,7 @@ import type { ChatMessage, RunState, ServerInfo } from '../src/shared/protocol';
 
 // The page's own address, as in a browser.
 Object.assign(globalThis, { location: new URL('http://localhost:7860/') });
-const { advance, DEMO_REPLY, DEMO_SIDE_REPLY, rewindPreview, startDemo } = await import('../src/web/lib/demo');
+const { advance, DEMO_REPLY, DEMO_SIDE_REPLY, rewindPreview, startDemo, THEME_QUESTION } = await import('../src/web/lib/demo');
 const { api, isDemoNote } = await import('../src/web/lib/api');
 const { addLocalMessage, getView, setRun } = await import('../src/web/lib/store');
 const { DEMO_NOTE } = await import('../src/web/lib/static-demo');
@@ -50,8 +50,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.runAllTimers());
 
+/** The question Claude asks once the edit is allowed, answered with the option of that name. */
+const answer = (picked: string) => {
+  const question = getView(SESSION).run?.permissions[0];
+  return api.decide(SESSION, 'demo-question', { behavior: 'allow', updatedInput: { ...question?.input, answers: { [THEME_QUESTION]: picked } } });
+};
+
+/** The turn under way played out: the edit allowed, Claude's question answered. */
+async function endTurn(): Promise<void> {
+  await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
+  vi.runAllTimers();
+  await answer('This browser');
+  vi.runAllTimers();
+}
+
 describe('the demo', () => {
-  it('plays Allow out: the edit lands, the next task starts, Claude says what it did, the turn ends', async () => {
+  it('plays Allow out: the edit lands, the next task starts, Claude says what it did and asks a question, whose answer ends the turn', async () => {
     await expect(api.decide(SESSION, 'demo-permission', { behavior: 'allow' })).resolves.toEqual({ ok: true });
     expect(getView(SESSION).run).toMatchObject({ busy: true, permissions: [] });
     vi.runAllTimers();
@@ -62,13 +76,25 @@ describe('the demo', () => {
     const update = blocks.findLast((b) => b.type === 'tool_use' && b.name === 'TodoWrite');
     expect(update?.type === 'tool_use' && update.input.todos).toEqual(advance(tasks));
     expect(view.messages.at(-1)?.blocks[0]).toMatchObject({ type: 'text', text: expect.stringContaining('The toggle is in place') });
-    expect(view.run).toMatchObject({ busy: false, permissions: [] });
+    // Claude asks, with options, as Claude Code does: the turn waits for the answer.
+    const question = view.run?.permissions[0];
+    expect(question).toMatchObject({ id: 'demo-question', toolName: 'AskUserQuestion' });
+    expect((question?.input.questions as Array<{ question: string; options: Array<{ label: string }> }>)[0]).toMatchObject({ question: THEME_QUESTION, options: [{ label: 'This browser' }, { label: 'The account' }, { label: 'Both' }] });
+    expect(view.run).toMatchObject({ busy: true });
+    await answer('The account');
+    vi.runAllTimers();
+    const after = getView(SESSION);
+    const answered = after.messages.flatMap((m) => m.blocks).find((b) => b.type === 'tool_result' && String(b.content).startsWith('User has answered'));
+    expect(answered).toMatchObject({ content: `User has answered your questions: "${THEME_QUESTION}"="The account". You can now continue with the user's answers in mind.` });
+    expect(after.messages.at(-1)?.blocks[0]).toMatchObject({ type: 'text', text: expect.stringContaining('with the account’s settings') });
+    const done = after.messages.flatMap((m) => m.blocks).findLast((b) => b.type === 'tool_use' && b.name === 'TodoWrite');
+    expect(done?.type === 'tool_use' && done.input.todos).toEqual(advance(advance(tasks)!));
+    expect(after.run).toMatchObject({ busy: false, permissions: [] });
   });
 
   it('answers a message with what Claude would do, and keeps it when the page is read again', async () => {
     // Once the turn under way has ended.
-    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
-    vi.runAllTimers();
+    await endTurn();
     await api.send(SESSION, { text: 'Use the system setting', attachments: [], settings: {}, uuid: 'mine' });
     vi.runAllTimers();
     const messages = getView(SESSION).messages;
@@ -78,8 +104,7 @@ describe('the demo', () => {
   });
 
   it('acts out Commit changes and Create PR as Claude would carry them out, the pull request a card it can read', async () => {
-    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
-    vi.runAllTimers();
+    await endTurn();
     await api.send(SESSION, { text: COMMIT_REQUEST, attachments: [], settings: {}, uuid: 'commit' });
     vi.runAllTimers();
     let blocks = getView(SESSION).messages.flatMap((m) => m.blocks);
@@ -107,8 +132,7 @@ describe('the demo', () => {
 
   it('shows what Rewind would put back, from the conversation', async () => {
     // The edit allowed, then a prompt that edits nothing.
-    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
-    vi.runAllTimers();
+    await endTurn();
     await api.send(SESSION, { text: 'Use the system setting', attachments: [], settings: {}, uuid: 'mine' });
     vi.runAllTimers();
     // The first message: only its code can go back, as nothing comes before it to start again from.
@@ -223,8 +247,7 @@ describe('the demo, a message queued while Claude works', () => {
     await queue('q2', 'And mention it in the README');
     expect(getView(SESSION).run?.queued).toEqual([{ uuid: 'q1', text: 'Also add a test for the toggle' }, { uuid: 'q2', text: 'And mention it in the README' }]);
     expect(said('q1')).toBeUndefined();
-    await api.decide(SESSION, 'demo-permission', { behavior: 'allow' });
-    vi.runAllTimers();
+    await endTurn();
     expect(said('q1')).toMatchObject({ role: 'user', blocks: [{ type: 'text', text: 'Also add a test for the toggle\n\nAnd mention it in the README' }] });
     expect(said('q2')).toBeUndefined();
     expect(getView(SESSION).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_REPLY });

@@ -22,8 +22,9 @@ import { splitFiles } from './turns';
 
 /**
  * The demo acts out the moments it exists to show, and says calmly what it cannot do. Allow on the
- * waiting edit plays out the rest of that step: the edit lands, the next task starts and Claude
- * says what it did. A message gets a reply that says what Claude would do with it. Rewind to here
+ * waiting edit plays out the rest of that step: the edit lands, the next task starts, and Claude
+ * asks where the choice is to be kept, a question with options, as Claude Code's are; the answer
+ * plays out the rest. A message gets a reply that says what Claude would do with it. Rewind to here
  * takes the conversation back (with Undo rewind) and Fork copies it, in the page. Anything else
  * that would change something gets the one demo note. Both demos run this: the site's, which has no
  * server, and `pelican --demo`, whose server runs nothing; nothing here leaves the page.
@@ -95,8 +96,44 @@ export const DEMO_SIDE_REPLY = STATIC_DEMO
 
 /** What Claude says after the step that was waiting for you, by request id (the server's demoRunState). */
 const AFTER: Record<string, string> = {
-  'demo-permission': 'The toggle is in place, next to the font size picker. Next I’d remember the choice, so the theme stays after a reload. The demo stops here.',
+  'demo-permission': 'The toggle is in place, next to the font size picker. Before I remember the choice, one question.',
 };
+
+/** Claude's question once the toggle is in, as Claude Code asks one: where the choice is kept. */
+export const THEME_QUESTION = 'Where should the theme choice be kept?';
+const KEPT_IN: Record<string, string> = {
+  'This browser': 'in this browser, in localStorage',
+  'The account': 'with the account’s settings, the same on every device',
+  Both: 'in this browser at once, and with the account’s settings once they load',
+};
+const themeQuestion = (sessionId: string): PermissionRequest => ({
+  id: 'demo-question',
+  sessionId,
+  toolName: 'AskUserQuestion',
+  input: {
+    questions: [{
+      question: THEME_QUESTION,
+      header: 'Theme',
+      multiSelect: false,
+      options: [
+        { label: 'This browser', description: 'In localStorage: each browser keeps its own' },
+        { label: 'The account', description: 'With the account’s settings, the same on every device' },
+        { label: 'Both', description: 'This browser at once, the account once it has loaded' },
+      ],
+    }],
+  },
+  createdAt: Date.now(),
+});
+
+/** What Claude says once you answered where the choice is kept. */
+function afterAnswer(decision: PermissionDecision): string {
+  const answers = (decision.behavior === 'allow' ? decision.updatedInput?.answers : undefined) as Record<string, string> | undefined;
+  const answer = answers?.[THEME_QUESTION]?.trim();
+  const kept = answer ? KEPT_IN[answer] ?? `as you said: ${answer}` : undefined;
+  return kept
+    ? `The choice is kept ${kept}, so the theme stays after a reload. In your own Pelican, Claude would run the theme tests next; the demo stops here.`
+    : 'Understood. In your own Pelican, Claude would carry on from here.';
+}
 
 const FILE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -227,7 +264,11 @@ function resultOf(request: PermissionRequest, decision: PermissionDecision): { c
     return { content: `The user doesn't want to proceed with this tool use. The tool use was rejected.${decision.message ? ` The user said: ${decision.message}` : ''}`, is_error: true };
   }
   if (request.toolName === 'ExitPlanMode') return { content: 'User has approved your plan. You can now start coding.' };
-  if (request.toolName === 'AskUserQuestion') return { content: 'The user answered your questions.' };
+  if (request.toolName === 'AskUserQuestion') {
+    // As Claude Code gives the answers back, so the step shows them.
+    const answers = Object.entries((decision.updatedInput?.answers ?? {}) as Record<string, string>).map(([question, answer]) => `"${question}"="${answer}"`);
+    return { content: `User has answered your questions: ${answers.join(', ')}. You can now continue with the user's answers in mind.` };
+  }
   if (FILE_TOOLS.has(request.toolName)) return { content: `The file ${str(request.input.file_path)} has been updated successfully.` };
   return { content: 'Done.' };
 }
@@ -257,12 +298,16 @@ function decide(sessionId: string, requestId: string, decision: PermissionDecisi
       say(sessionId, user([{ type: 'tool_result', tool_use_id: id, content: 'Todos have been modified successfully.' }]));
     });
   }
-  const words = !allowed
-    ? (decision.message ? 'Understood. I’ll leave it as it was and take your note into account.' : 'Understood, I won’t make that change. What should I do instead?')
-    : AFTER[request.id] ?? 'Done. In your own Pelican, Claude would carry on from here.';
+  const words = request.id === 'demo-question' ? afterAnswer(decision)
+    : !allowed
+      ? (decision.message ? 'Understood. I’ll leave it as it was and take your note into account.' : 'Understood, I won’t make that change. What should I do instead?')
+      : AFTER[request.id] ?? 'Done. In your own Pelican, Claude would carry on from here.';
+  // The toggle in, Claude asks where the choice is kept: the turn goes on, waiting for the answer.
+  const asks = allowed && request.id === 'demo-permission' ? themeQuestion(sessionId) : undefined;
   later(sessionId, tasks ? 2000 : 1300, () => {
     say(sessionId, assistant([{ type: 'text', text: words }]));
-    finish(sessionId, tasks ? 2000 : 1300);
+    if (asks) runAs(sessionId, { ...(currentRun(sessionId) ?? idleRun(sessionId)), busy: true, permissions: [asks] });
+    else finish(sessionId, tasks ? 2000 : 1300);
   });
   return { ok: true };
 }
