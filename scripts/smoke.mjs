@@ -1,7 +1,8 @@
 // Opens Pelican in a real browser and fails on any page error, console error, failed request or
 // HTTP error: the list, its sheets, a new session in another folder, and every session with its
-// sheets and the files Claude sent there, on a phone and wide, light and dark. Runs in CI after the build, and before the site is
-// published.
+// sheets and the files Claude sent there, on a phone and wide, light and dark; and the ways in to
+// every action (menus, swipes, long presses, right-clicks, ⌘K, the sidebar, Back on a phone). Runs
+// in CI after the build, and before the site is published.
 //   node scripts/smoke.mjs              the built app, through `pelican --demo`
 //   node scripts/smoke.mjs <site dir>   the site from scripts/site.mjs: its pages, then its live demo
 // CHROME=/path/to/chrome if it is not in the usual place; PELICAN_DEMO_PORT if 47863 is taken.
@@ -20,7 +21,11 @@ const SIZES = {
   wide: { viewport: { width: 1280, height: 800 } },
 };
 const LIST_BUTTONS = ['Settings', 'New session', 'List options'];
-const SESSION_BUTTONS = ['Session menu', 'Model, effort and speed', 'Permission mode', 'Changes and files'];
+// The message box's own; the title's menu and the panes' buttons are pressed by pressSession.
+const SESSION_BUTTONS = ['Add', 'Model, effort and speed', 'Permission mode'];
+/** The conversation's header (the list's has no h2), and its title, which opens the session's menu. */
+const CHAT_HEADER = 'header:has(> h2)';
+const TITLE = `${CHAT_HEADER} h2 > button`;
 
 const problems = [];
 const notes = [];
@@ -80,6 +85,33 @@ async function press(page, label, where) {
   await page.waitForTimeout(150);
 }
 
+/** Whether something shows within a while. */
+const shows = (locator, timeout = 3000) => locator.waitFor({ timeout }).then(() => true, () => false);
+
+/**
+ * The menu or sheet of actions on top, once it opens: its name, its entries as they read (with
+ * their keys and details), and all its words. Undefined if none opens.
+ */
+async function openMenu(page, timeout = 3000) {
+  const found = await page.waitForFunction(() => {
+    const dialog = [...document.querySelectorAll('dialog[open]:not([data-closing])')].at(-1);
+    const menu = dialog?.querySelector('[role="menu"]');
+    if (!menu) return false;
+    return {
+      name: menu.getAttribute('aria-label') ?? '',
+      entries: [...menu.querySelectorAll('[role="menuitem"]')].map((entry) => entry.textContent.trim()),
+      text: dialog.textContent ?? '',
+    };
+  }, undefined, { timeout, polling: 100 }).catch(() => undefined);
+  return found ? found.jsonValue() : undefined;
+}
+
+/** Whether every sheet and menu has gone, once it had time to. */
+const allClosed = (page, timeout = 3000) => page.waitForFunction(() => !document.querySelector('dialog[open]'), undefined, { timeout, polling: 100 }).then(() => true, () => false);
+
+/** The entries a menu should list and does not, each by its first words (a string) or a pattern. */
+const lacks = (menu, names) => names.filter((name) => !menu.entries.some((entry) => (typeof name === 'string' ? entry.startsWith(name) : name.test(entry))));
+
 /**
  * + and then a folder of the new session's own, through its folder sheet: Browse folders…, a
  * folder there, Start here. The empty chat then asks about a folder no session is in.
@@ -107,12 +139,60 @@ async function startElsewhere(page, where) {
   if (!(await page.locator('button[aria-label="Folder: ~/code"]').count())) problems.push(`${where}: the new session does not start in ~/code`);
 }
 
-/** Changes and files, open on a step (beside the conversation it opens from its button; the address names only the step). */
+/** The header's button for each of the view's tabs on a computer; a phone's header has one for all three. */
+const PANE_BUTTONS = { changes: 'Changes', files: 'Files', terminal: 'Terminal' };
+
+/**
+ * Changes and files, open on a step: beside the conversation, from the header's button for the
+ * step's tab (the address names only the step); on a phone the address opens it, else the
+ * header's one button does.
+ */
 async function openWorkspace(page, url) {
   const view = page.locator('[role="region"][aria-label="Changes and files"], aside[aria-label="Changes and files"]');
   await page.goto(url, { waitUntil: 'networkidle' });
-  if (!(await view.count())) await page.getByRole('button', { name: 'Changes and files', exact: true }).first().click();
+  if (!(await view.count())) {
+    const header = page.locator(CHAT_HEADER);
+    const tab = PANE_BUTTONS[new URL(url).searchParams.get('w')] ?? 'Changes';
+    await header.getByRole('button', { name: tab, exact: true }).or(header.getByRole('button', { name: /^Changes, / })).first().click();
+  }
   return (await view.waitFor({ timeout: 5000 }).then(() => true, () => false)) ? view : undefined;
+}
+
+/**
+ * A session's own buttons, each opened and closed again: the title's menu, the message box's,
+ * and Changes and files (beside the conversation its Changes button shows the pane and hides it
+ * again; on a phone the header's one button opens the view over it).
+ */
+async function pressSession(page, wide, where) {
+  const title = page.locator(TITLE);
+  if (await title.count()) {
+    await title.click();
+    if (!(await openMenu(page))) problems.push(`${where}: the title opens no menu`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+  } else notes.push(`${where}: no title`);
+  for (const label of SESSION_BUTTONS) await press(page, label, where);
+  const header = page.locator(CHAT_HEADER);
+  if (wide) {
+    const changes = header.getByRole('button', { name: 'Changes', exact: true });
+    if (!(await changes.count())) return;
+    const pane = page.locator('aside[aria-label="Changes and files"]');
+    // Open since a session before (it stays open from one to the next): the pressed button hides it.
+    if (await pane.isVisible()) {
+      const pressed = header.locator('button[aria-pressed="true"]');
+      if (!(await pressed.count())) problems.push(`${where}: Changes and files shows, and none of the header's buttons is pressed`);
+      else await pressed.first().click();
+      await pane.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
+    }
+    await changes.click();
+    if (!(await shows(pane))) problems.push(`${where}: Changes shows no pane`);
+    else if (await changes.getAttribute('aria-pressed') !== 'true') problems.push(`${where}: Changes is not pressed while its pane shows`);
+    await changes.click();
+    if (!(await pane.waitFor({ state: 'hidden', timeout: 3000 }).then(() => true, () => false))) problems.push(`${where}: Changes pressed again leaves its pane`);
+  } else {
+    const button = header.getByRole('button', { name: /^Changes, / });
+    if (await button.count()) await press(page, (await button.getAttribute('aria-label')) ?? '', where);
+  }
 }
 
 /**
@@ -312,10 +392,11 @@ async function walkable(sessions, answer) {
 
 /**
  * The Pinned group, grouped by time and then by project: it comes first and holds the pinned
- * sessions. Then a pinned row's Unpin, beside Archive: on a phone under a finger's short slide to
+ * sessions. Then a pinned row's Unpin: on a phone beside Archive, under a finger's short slide to
  * the left, which stops short of acting, Archive at the edge (a slide to the right, Safari's Back,
- * shows nothing and opens nothing); on a computer on hover, where it is not pressed; and there,
- * every row's buttons, which cut none of its words (see walkRowButtons).
+ * shows nothing and opens nothing); on a computer in the menu of its ⋯, which takes the place of
+ * its time as it is pointed at; and there, every row's ⋯, which cuts none of its words (see
+ * walkRowButtons).
  */
 async function walkPinned(page, sessions, size, where) {
   const pinned = sessions.filter((s) => s.pinned && !s.archived && s.title).map((s) => s.title);
@@ -380,9 +461,17 @@ async function walkPinned(page, sessions, size, where) {
     await cdp.detach();
   } else {
     await row.hover();
-    const unpin = page.getByRole('button', { name: /^Unpin: / }).first();
+    const more = page.locator('section').first().locator('button[data-row-menu]').first();
     await page.waitForTimeout(250);
-    if (!(await unpin.isVisible()) || !(await unpin.evaluate(shownOnScreen))) missing('pointing at a pinned row shows no Unpin');
+    if (!(await more.isVisible()) || !(await more.evaluate(shownOnScreen))) missing('pointing at a pinned row shows no ⋯');
+    else {
+      await more.click();
+      const menu = await openMenu(page);
+      if (!menu) missing('a pinned row’s ⋯ opens no menu');
+      else if (lacks(menu, ['Unpin']).length) missing(`a pinned row’s ⋯ lists no Unpin (${menu.entries.join(', ')})`);
+      await page.keyboard.press('Escape');
+      await allClosed(page);
+    }
     await walkRowButtons(page, where);
   }
   await page.waitForTimeout(250);
@@ -398,9 +487,9 @@ function shownOnScreen(el) {
 }
 
 /**
- * The words of a row, pointed at, that its buttons cut: words under a button, or under its icon
- * where the button is clear, unless they lie wholly under the row-coloured backdrop the buttons
- * stand on, which fades them out from before the first button. Runs in the page, on a row's link.
+ * The words of a row, pointed at, that its ⋯ cuts: words under the button, or under its icon where
+ * the button is clear. The row's time gives it its place, hidden while it shows, and is not cut.
+ * Runs in the page, on a row's link.
  */
 function wordsCut(link) {
   const shown = (el) => {
@@ -411,15 +500,10 @@ function wordsCut(link) {
     return true;
   };
   const row = link.closest('.group\\/row');
-  const buttons = [...row.querySelectorAll('button[data-row-action][aria-label]')].filter((button) => button.closest('.group\\/row') === row && shown(button));
-  if (buttons.length === 0) return ['(no button shows)'];
+  const button = row.querySelector('button[data-row-menu]');
+  if (!button || !shown(button)) return ['(no ⋯ shows)'];
   const clear = (color) => color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color);
-  const backdrop = buttons[0].parentElement;
-  const fades = getComputedStyle(backdrop).backgroundImage.includes('gradient');
-  const under = backdrop.getBoundingClientRect();
-  const first = Math.min(...buttons.map((button) => button.getBoundingClientRect().left));
-  const covers = buttons.map((button) => (clear(getComputedStyle(button).backgroundColor) ? button.querySelector('svg') ?? button : button).getBoundingClientRect());
-  if (fades) covers.push(under);
+  const cover = (clear(getComputedStyle(button).backgroundColor) ? button.querySelector('svg') ?? button : button).getBoundingClientRect();
   const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
   const cut = [];
   const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
@@ -436,9 +520,7 @@ function wordsCut(link) {
     range.selectNodeContents(node);
     for (const box of range.getClientRects()) {
       const line = { left: Math.max(box.left, clip.left), right: Math.min(box.right, clip.right), top: Math.max(box.top, clip.top), bottom: Math.min(box.bottom, clip.bottom) };
-      if (line.right <= line.left || line.bottom <= line.top || !covers.some((cover) => meet(line, cover))) continue;
-      const faded = fades && under.top <= line.top + 1 && under.bottom >= line.bottom - 1 && under.left <= first - 16;
-      if (!faded) cut.push(node.textContent.trim().slice(0, 40));
+      if (line.right > line.left && line.bottom > line.top && meet(line, cover)) cut.push(node.textContent.trim().slice(0, 40));
     }
   }
   return cut;
@@ -446,7 +528,7 @@ function wordsCut(link) {
 
 /**
  * On a computer, every row pointed at, compact and detailed, as wide as the window lets the list
- * be and on a tablet's width: its buttons show, and cut none of its words in two.
+ * be and on a tablet's width: its ⋯ shows in place of its time, and cuts none of its words.
  */
 async function walkRowButtons(page, where) {
   const viewport = page.viewportSize();
@@ -470,7 +552,7 @@ async function walkRowButtons(page, where) {
         await row.hover();
         await page.waitForTimeout(120);
         const title = (await row.getAttribute('aria-label'))?.split(', ')[0];
-        for (const words of await row.evaluate(wordsCut)) problems.push(`${where}, ${width}px, ${density.toLowerCase()}: pointed at, "${title}" has "${words}" cut by its buttons`);
+        for (const words of await row.evaluate(wordsCut)) problems.push(`${where}, ${width}px, ${density.toLowerCase()}: pointed at, "${title}" has "${words}" cut by its ⋯`);
       }
     }
   }
@@ -526,7 +608,7 @@ async function driveApp(browser, base, sessions, walked) {
         await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
         await page.waitForTimeout(300);
         if (session.title && !(await page.getByText(session.title).first().isVisible())) problems.push(`app, ${size}, ${scheme}: session ${session.id} does not show its title`);
-        for (const label of SESSION_BUTTONS) await press(page, label, `app, ${size}, session ${session.id}`);
+        await pressSession(page, size === 'wide', `app, ${size}, session ${session.id}`);
       }
       at = 'Changes and files';
       if (walked) await walkWorkspace(page, base, walked, `app, ${size}, ${scheme}`, (what) => { at = `session ${walked.id}, ${what}`; }, requested);
@@ -674,6 +756,517 @@ async function checkSideChat(browser, base, sessions) {
   await context.close();
 }
 
+/** What a session's menu lists from a row, and from the title (which has Transcript view and when it started too). */
+const ROW_MENU = ['Rename', /^(Pin|Unpin)/, 'Fork', 'Export', /^(Archive|Unarchive)/];
+const TITLE_MENU = ['Rename', 'Side chat', 'Fork', 'Export', /^(Archive|Unarchive)/];
+/** What the message box's + lists. */
+const ADD_MENU = ['Add files or photos', 'Commands', 'Files and agents', 'Shell command', 'MCP servers'];
+
+/**
+ * A session to walk the ways in through, idle, with a prompt, a reply and a step with a menu; and
+ * where some session has them, one with a path and one with a link in a reply.
+ */
+async function sessionsToWalk(page, base, sessions) {
+  const found = {};
+  for (const session of sessions.filter((s) => !s.sideChatOf && s.status === 'idle')) {
+    await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    const has = await page.evaluate(() => {
+      const seen = (el) => el.getClientRects().length > 0;
+      return {
+        conversation: Boolean(document.querySelector('[data-quote-what="prompt"]') && document.querySelector('[data-quote-what="reply"] [data-reply-text]')
+          && document.querySelector('[data-step] > button[aria-haspopup="menu"]')),
+        path: [...document.querySelectorAll('main [data-path-link]')].some(seen),
+        link: [...document.querySelectorAll('[data-reply-text] a[href]:not([data-path-link])')].some(seen),
+      };
+    });
+    for (const [part, there] of Object.entries(has)) if (there && !found[part]) found[part] = session;
+    if (found.conversation && found.path && found.link) break;
+  }
+  return found;
+}
+
+/** The first step with a menu of its own, as a locator. */
+async function stepWithMenu(page) {
+  const index = await page.evaluate(() => [...document.querySelectorAll('[data-step]')].findIndex((step) => step.querySelector(':scope > button[aria-haspopup="menu"]')));
+  return index >= 0 ? page.locator('[data-step]').nth(index) : undefined;
+}
+
+/**
+ * The ways in to every action, on a computer: a row's ⋯ in place of its time, and its right-click;
+ * the title's menu, with when the session started and its ID, and its Rename; the message box's +
+ * and its MCP servers; / and ⌘K with one list, Claude Code's commands in it, ⌘K finding a session
+ * by its name and opening it; a prompt's actions beside it as it is pointed at, and its
+ * right-click; a reply's row, in room kept for it, its ⋯, and a right-click on words selected in it
+ * that puts Copy first; a step's ⋯ and right-click; a path's right-click; a link's right-click, the
+ * browser's own; ⌘/; and the sidebar, hidden with its button and remembered, floating in at the
+ * window's left edge or its button and gone as the pointer leaves or with Esc, back with ⌘B, and
+ * between 1024 and 1279px hidden while a pane sits beside the conversation.
+ */
+async function waysInOnComputer(browser, base, sessions, where) {
+  const context = await browser.newContext({ ...SIZES.wide });
+  const page = await context.newPage();
+  let at = 'a session to walk';
+  watch(page, () => `${where}, ways in on a computer, ${at}`);
+  const missing = (what) => problems.push(`${where}, ways in on a computer, ${at}: ${what}`);
+  const found = await sessionsToWalk(page, base, sessions);
+  const session = found.conversation;
+  if (!session) {
+    problems.push(`${where}: no idle session has a prompt, a reply and a step to walk the ways in through`);
+    await context.close();
+    return found;
+  }
+  const url = `${base}?s=${encodeURIComponent(session.id)}`;
+  const close = async (what) => {
+    await page.keyboard.press('Escape');
+    if (!(await allClosed(page))) missing(`Esc leaves ${what} open`);
+  };
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+
+  at = 'a row';
+  const row = page.locator('aside[data-list] [data-session]').first();
+  const rowTitle = (await row.locator('a[aria-label]').first().getAttribute('aria-label'))?.split(', ')[0];
+  await row.hover();
+  await page.waitForTimeout(250);
+  const more = row.locator('button[data-row-menu]');
+  if (!(await more.evaluate(shownOnScreen))) missing('pointing at a row shows no ⋯');
+  await more.click();
+  let menu = await openMenu(page);
+  if (!menu) missing('a row’s ⋯ opens no menu');
+  else {
+    if (menu.name !== rowTitle) missing(`a row’s menu is named "${menu.name}", not "${rowTitle}"`);
+    const lacking = lacks(menu, ROW_MENU);
+    if (lacking.length) missing(`a row’s menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await close('a row’s menu');
+  }
+  await row.click({ button: 'right' });
+  menu = await openMenu(page);
+  if (!menu || menu.name !== rowTitle) missing('a right-click on a row opens no menu of its own');
+  else await close('a row’s menu');
+
+  at = 'the title’s menu';
+  await page.locator(TITLE).click();
+  menu = await openMenu(page);
+  if (!menu) missing('the title opens no menu');
+  else {
+    const lacking = lacks(menu, TITLE_MENU);
+    if (lacking.length) missing(`it lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    if (!menu.text.includes('Transcript view')) missing('it has no Transcript view');
+    if (!/ID [0-9a-f]{8}/.test(menu.text)) missing('it does not say the session’s ID');
+    await page.getByRole('menuitem', { name: /^Rename/ }).click();
+    if (!(await shows(page.getByRole('textbox', { name: 'Session title' })))) missing('its Rename opens no Rename sheet');
+    await close('the Rename sheet');
+  }
+
+  at = 'the message box’s +';
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  menu = await openMenu(page);
+  if (!menu) missing('+ opens no menu');
+  else {
+    const lacking = lacks(menu, ADD_MENU);
+    if (lacking.length) missing(`+ lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await page.getByRole('menuitem', { name: /^MCP servers/ }).click();
+    if (!(await shows(page.getByRole('dialog', { name: /^MCP servers/ })))) missing('its MCP servers opens nothing');
+    await close('MCP servers');
+  }
+
+  at = 'the message box’s /';
+  const box = page.getByLabel('Message Claude');
+  await box.click();
+  await page.keyboard.type('/');
+  const commands = page.getByRole('listbox', { name: 'Commands' });
+  if (!(await shows(commands))) missing('/ shows no list of commands');
+  else {
+    // Claude Code's own come once the session's list of them has.
+    await commands.getByRole('option').filter({ hasText: '/compact' }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    const options = await commands.getByRole('option').allTextContents();
+    for (const name of ['/rename', '/branch', '/compact']) if (!options.some((option) => option.includes(name))) missing(`it lists no ${name}`);
+    if (options.filter((option) => option.includes('/context')).length !== 1) missing('it lists /context other than once');
+  }
+  await box.fill('');
+  await page.keyboard.press('Escape');
+
+  at = '⌘K';
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press('ControlOrMeta+k');
+  const commandMenu = page.getByRole('dialog', { name: 'Command menu' });
+  if (!(await shows(commandMenu))) missing('⌘K opens no command menu');
+  else {
+    const field = commandMenu.getByRole('combobox', { name: 'Type a command or search' });
+    if (!(await field.evaluate((el) => el === document.activeElement))) missing('its field does not take the keys');
+    await commandMenu.getByRole('option').filter({ hasText: '/compact' }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    const options = await commandMenu.getByRole('option').allTextContents();
+    for (const name of ['Rename', 'New session', 'Settings']) if (!options.some((option) => option.startsWith(name))) missing(`it lists no ${name}`);
+    if (!options.some((option) => option.startsWith('/compact'))) missing('it lists none of Claude Code’s commands');
+    const other = sessions.find((s) => s.id !== session.id && !s.sideChatOf && s.title);
+    if (other) {
+      await field.fill(other.title);
+      const option = commandMenu.getByRole('option').filter({ hasText: other.title }).first();
+      if (!(await shows(option))) missing(`it does not find "${other.title}"`);
+      else {
+        await option.click();
+        if (!(await page.waitForURL((address) => address.searchParams.get('s') === other.id, { timeout: 5000 }).then(() => true, () => false))) missing(`picking "${other.title}" does not open it`);
+      }
+    }
+  }
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+
+  at = 'a prompt';
+  const prompt = page.locator('[data-quote-what="prompt"]').first();
+  await prompt.scrollIntoViewIfNeeded();
+  await prompt.hover();
+  await page.waitForTimeout(400);
+  const beside = await prompt.evaluate((el) => [...el.parentElement.querySelectorAll(':scope > div > button[aria-label]')]
+    .filter((button) => Number(getComputedStyle(button.parentElement).opacity) > 0.5).map((button) => button.getAttribute('aria-label')));
+  for (const name of ['Copy', 'Fork from here']) if (!beside.includes(name)) missing(`pointing at it shows no ${name} beside it (it shows ${beside.join(', ') || 'none'})`);
+  await prompt.click({ button: 'right' });
+  menu = await openMenu(page);
+  if (!menu) missing('a right-click on it opens no menu');
+  else {
+    const lacking = lacks(menu, ['Copy', 'Rewind to here', 'Fork from here']);
+    if (lacking.length) missing(`its menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await close('a prompt’s menu');
+  }
+
+  at = 'a reply';
+  const reply = page.locator('[data-quote-what="reply"]').filter({ has: page.locator('[data-reply-text]') }).last();
+  await reply.scrollIntoViewIfNeeded();
+  const replyMore = reply.getByRole('button', { name: 'More for Claude’s reply' });
+  await page.mouse.move(2, 2);
+  await page.waitForTimeout(300);
+  const before = await reply.boundingBox();
+  if (await replyMore.evaluate(shownOnScreen)) missing('its row shows before it is pointed at');
+  await reply.hover();
+  await page.waitForTimeout(400);
+  if (!(await replyMore.evaluate(shownOnScreen))) missing('pointing at it shows no row');
+  const after = await reply.boundingBox();
+  if (before && after && Math.abs(before.height - after.height) > 0.5) missing(`it grows ${Math.round(after.height - before.height)}px as its row shows`);
+  await replyMore.click();
+  menu = await openMenu(page);
+  if (!menu) missing('its ⋯ opens no menu');
+  else {
+    const lacking = lacks(menu, ['Copy message', 'Copy message as Markdown', 'Quote message', 'Fork from here']);
+    if (lacking.length) missing(`its menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await close('a reply’s menu');
+  }
+  const words = reply.locator('[data-reply-text] p').first();
+  if (await words.count()) {
+    await words.click({ clickCount: 3 });
+    await words.click({ button: 'right' });
+    menu = await openMenu(page);
+    if (!menu) missing('a right-click on words selected in it opens no menu');
+    else {
+      if (!/^Copy(?! message)/.test(menu.entries[0] ?? '')) missing(`a right-click on words selected in it does not put Copy first (it lists ${menu.entries.join(', ')})`);
+      if (lacks(menu, ['Quote selection']).length) missing('a right-click on words selected in it offers no Quote selection');
+      await close('a reply’s menu');
+    }
+  }
+
+  at = 'a step';
+  const step = await stepWithMenu(page);
+  if (step) {
+    await step.scrollIntoViewIfNeeded();
+    await step.hover({ position: { x: 40, y: 12 } });
+    await page.waitForTimeout(300);
+    const stepMore = step.locator('button[aria-haspopup="menu"]').first();
+    if (!(await stepMore.evaluate(shownOnScreen))) missing('pointing at it shows no ⋯');
+    await stepMore.click();
+    menu = await openMenu(page);
+    if (!menu?.entries.length) missing('its ⋯ opens no menu');
+    else await close('a step’s menu');
+    await step.click({ button: 'right', position: { x: 40, y: 12 } });
+    menu = await openMenu(page);
+    if (!menu?.entries.length) missing('a right-click on it opens no menu');
+    else await close('a step’s menu');
+  }
+
+  at = 'a path';
+  if (found.path) {
+    await page.goto(`${base}?s=${encodeURIComponent(found.path.id)}`, { waitUntil: 'networkidle' });
+    const path = page.locator('main [data-path-link]').filter({ visible: true }).first();
+    await path.scrollIntoViewIfNeeded();
+    await path.click({ button: 'right' });
+    menu = await openMenu(page);
+    if (!menu) missing('a right-click on a path opens no menu');
+    else {
+      const lacking = lacks(menu, ['Copy', /^Open in (Files|Changes)/]);
+      if (lacking.length) missing(`its menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+      await close('a path’s menu');
+    }
+  } else notes.push(`${where}: no session shows a path to right-click`);
+
+  at = 'a link';
+  if (found.link) {
+    await page.goto(`${base}?s=${encodeURIComponent(found.link.id)}`, { waitUntil: 'networkidle' });
+    const link = page.locator('[data-reply-text] a[href]:not([data-path-link])').filter({ visible: true }).first();
+    await link.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.addEventListener('contextmenu', (e) => {
+      window.smokeMenuTaken = e.defaultPrevented;
+    }, { once: true }));
+    await link.click({ button: 'right' });
+    if (await page.evaluate(() => window.smokeMenuTaken !== false)) missing('a right-click on a link in a reply does not leave the browser its own menu');
+    if (await openMenu(page, 600)) {
+      missing('a right-click on a link in a reply opens Pelican’s menu');
+      await close('a menu');
+    }
+  } else notes.push(`${where}: no reply has a link to right-click`);
+
+  at = '⌘/';
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.keyboard.press('ControlOrMeta+/');
+  const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  if (!(await shows(shortcuts))) missing('⌘/ opens no list of keys');
+  else {
+    const text = await shortcuts.textContent();
+    for (const name of ['Command menu', 'Search sessions', 'Show or hide the sidebar']) if (!text.includes(name)) missing(`it lists no ${name}`);
+    await close('Keyboard shortcuts');
+  }
+
+  at = 'the sidebar';
+  const list = page.locator('aside[data-list]');
+  const listShown = () => list.evaluate((el) => !el.hasAttribute('inert'));
+  const conversationLeft = async () => (await page.locator('main').boundingBox())?.x ?? 0;
+  const hide = list.getByRole('button', { name: 'Hide sidebar' });
+  if (!(await hide.count())) missing('the list has no Hide sidebar');
+  else {
+    await hide.click();
+    await page.waitForTimeout(300);
+    if (await listShown()) missing('Hide sidebar leaves the list');
+    const show = page.locator(CHAT_HEADER).getByRole('button', { name: 'Show sidebar' });
+    if (!(await show.count())) missing('hidden, the list leaves no Show sidebar in the conversation’s header');
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    if (await listShown()) missing('hidden, the list comes back on a reload');
+    await page.mouse.move(2, 400);
+    await page.waitForTimeout(400);
+    if (!(await listShown())) missing('the window’s left edge does not float the list in');
+    else {
+      if (await conversationLeft() > 1) missing('the list floating in moves the conversation over');
+      await page.mouse.move(900, 400);
+      await page.waitForTimeout(700);
+      if (await listShown()) missing('the list floating in stays once the pointer leaves it');
+    }
+    await show.hover();
+    await page.waitForTimeout(400);
+    if (!(await listShown())) missing('pointing at Show sidebar does not float the list in');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    if (await listShown()) missing('Esc leaves the list floating in');
+    await page.mouse.move(900, 400);
+    await page.keyboard.press('ControlOrMeta+b');
+    await page.waitForTimeout(300);
+    if (!(await listShown())) missing('⌘B does not bring the list back');
+    else if (await conversationLeft() < 100) missing('the list back sits over the conversation');
+  }
+  at = 'the sidebar at 1100px';
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  const files = page.locator(CHAT_HEADER).getByRole('button', { name: 'Files', exact: true });
+  if (!(await listShown())) missing('the list is hidden with no pane beside the conversation');
+  else if (await files.count()) {
+    await files.click();
+    await page.waitForTimeout(400);
+    if (await listShown()) missing('the list stays as Files comes beside the conversation');
+    await page.keyboard.press('ControlOrMeta+b');
+    await page.waitForTimeout(300);
+    if (!(await listShown())) missing('⌘B does not bring the list back beside a pane');
+    await files.click();
+    await page.waitForTimeout(400);
+    if (!(await listShown())) missing('the list does not stay once the pane goes');
+  }
+  await context.close();
+  return found;
+}
+
+/**
+ * The ways in on a phone: a row's long press, which opens it not; the title's sheet with the panes'
+ * tiles, and a tile; a prompt's tap and long press; a reply's row, there without a tap; a step's
+ * long press; +; /. Back closes each sheet with the page where it was, and a sheet closed by a tap
+ * outside leaves nothing in the history for Back to go through.
+ */
+async function waysInOnPhone(browser, base, session, where) {
+  const context = await browser.newContext({ ...SIZES.phone });
+  const page = await context.newPage();
+  let at = 'a row';
+  watch(page, () => `${where}, ways in on a phone, ${at}`);
+  const missing = (what) => problems.push(`${where}, ways in on a phone, ${at}: ${what}`);
+  const cdp = await context.newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+  // A finger held still on it, past the long press's half second.
+  const hold = async (locator) => {
+    await locator.scrollIntoViewIfNeeded();
+    const box = await locator.boundingBox();
+    if (!box) return;
+    const [x, y] = [box.x + Math.min(box.width / 2, 60), box.y + Math.min(box.height / 2, 20)];
+    await touch('touchStart', x, y);
+    await page.waitForTimeout(700);
+    await touch('touchEnd', x, y);
+    await page.waitForTimeout(300);
+  };
+  const address = () => new URL(page.url()).search;
+  // Back closes what is open and goes no further.
+  const backCloses = async (what) => {
+    const was = address();
+    await page.goBack();
+    if (!(await allClosed(page))) missing(`Back leaves ${what} open`);
+    else if (address() !== was) missing(`Back from ${what} goes to ${address() || 'the list'} as it closes it`);
+  };
+  const url = `${base}?s=${encodeURIComponent(session.id)}`;
+  const title = page.locator(TITLE);
+  // Into the session from its row, as a tap goes, so that Back has the list to go back to in the
+  // page (a page Back returns to from another is the browser's, kept as it was left).
+  const enter = async () => {
+    await page.goto(base, { waitUntil: 'networkidle' });
+    const link = page.locator(`[data-session="${session.id}"] a`).first();
+    if (!(await link.count())) {
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(300);
+      return false;
+    }
+    await link.scrollIntoViewIfNeeded();
+    await link.tap();
+    await page.waitForURL((address) => address.searchParams.get('s') === session.id, { timeout: 5000 }).catch(() => {});
+    await title.waitFor({ timeout: 5000 }).catch(() => {});
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(300);
+    return true;
+  };
+
+  await page.goto(base, { waitUntil: 'networkidle' });
+  const row = page.locator('[data-session]').first();
+  const rowTitle = (await row.locator('a[aria-label]').first().getAttribute('aria-label'))?.split(', ')[0];
+  await hold(row);
+  let menu = await openMenu(page);
+  if (!menu) missing('a long press on a row opens no menu');
+  else {
+    if (menu.name !== rowTitle) missing(`a row’s menu is named "${menu.name}", not "${rowTitle}"`);
+    const lacking = lacks(menu, ROW_MENU);
+    if (lacking.length) missing(`a row’s menu lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await backCloses('a row’s menu');
+  }
+  if (new URL(page.url()).searchParams.has('s')) missing('a long press on a row opens its session');
+
+  at = 'the title’s sheet';
+  let inPage = await enter();
+  await title.tap();
+  menu = await openMenu(page);
+  if (!menu) missing('a tap on the title opens no sheet');
+  else {
+    const tiles = await page.locator('dialog[open]').last().getByRole('button').allTextContents();
+    for (const tile of ['Changes', 'Files', 'Terminal']) if (!tiles.some((name) => name.startsWith(tile))) missing(`it has no ${tile} tile`);
+    const lacking = lacks(menu, TITLE_MENU);
+    if (lacking.length) missing(`it lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await backCloses('the title’s sheet');
+    if (inPage) {
+      await page.goBack();
+      await page.waitForTimeout(400);
+      if (new URL(page.url()).searchParams.has('s')) missing('Back once the sheet is closed does not go back to the list');
+    }
+  }
+
+  at = 'a tile';
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  await title.tap();
+  const files = page.locator('dialog[open]').last().getByRole('button', { name: 'Files', exact: true });
+  if (!(await openMenu(page)) || !(await files.count())) missing('the title’s sheet has no Files tile to tap');
+  else {
+    await files.tap();
+    const view = page.locator('[role="region"][aria-label="Changes and files"], aside[aria-label="Changes and files"]');
+    if (!(await shows(view))) missing('the Files tile opens no Files');
+    else {
+      await page.goBack();
+      if (!(await view.waitFor({ state: 'hidden', timeout: 3000 }).then(() => true, () => false))) missing('Back leaves Files open');
+      if (new URL(page.url()).searchParams.get('s') !== session.id) missing('Back from Files leaves the conversation');
+    }
+  }
+
+  at = 'a prompt';
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  const prompt = page.locator('[data-quote-what="prompt"]').first();
+  await prompt.scrollIntoViewIfNeeded();
+  await prompt.tap();
+  if (!(await shows(page.getByRole('button', { name: 'Fork from here', exact: true }).first(), 2000))) missing('a tap on it shows no Fork from here');
+  await hold(prompt);
+  menu = await openMenu(page);
+  if (!menu) missing('a long press on it opens no sheet');
+  else {
+    const lacking = lacks(menu, ['Copy', 'Rewind to here', 'Fork from here', 'Select text']);
+    if (lacking.length) missing(`its sheet lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await backCloses('a prompt’s sheet');
+  }
+
+  at = 'a reply';
+  const reply = page.locator('[data-quote-what="reply"]').filter({ has: page.locator('[data-reply-text]') }).last();
+  await reply.scrollIntoViewIfNeeded();
+  const replyMore = reply.getByRole('button', { name: 'More for Claude’s reply' });
+  if (!(await replyMore.count()) || !(await replyMore.evaluate(shownOnScreen))) missing('it shows no row of actions');
+  else {
+    await replyMore.tap();
+    menu = await openMenu(page);
+    if (!menu) missing('its ⋯ opens no sheet');
+    else {
+      const lacking = lacks(menu, ['Copy message', 'Copy message as Markdown', 'Quote message']);
+      if (lacking.length) missing(`its sheet lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+      await backCloses('a reply’s sheet');
+    }
+  }
+
+  at = 'a step';
+  const step = await stepWithMenu(page);
+  if (step) {
+    await hold(step);
+    menu = await openMenu(page);
+    if (!menu?.entries.length) missing('a long press on it opens no sheet');
+    else await backCloses('a step’s sheet');
+  }
+
+  at = 'the message box’s +';
+  await page.getByRole('button', { name: 'Add', exact: true }).tap();
+  menu = await openMenu(page);
+  if (!menu) missing('+ opens no sheet');
+  else {
+    const lacking = lacks(menu, ADD_MENU);
+    if (lacking.length) missing(`+ lacks ${lacking.join(', ')} (it lists ${menu.entries.join(', ')})`);
+    await backCloses('+');
+  }
+
+  at = 'the message box’s /';
+  const box = page.getByLabel('Message Claude');
+  await box.tap();
+  await page.keyboard.type('/');
+  if (!(await shows(page.getByRole('listbox', { name: 'Commands' })))) missing('/ shows no list of commands');
+  await box.fill('');
+
+  at = 'a sheet closed by a tap outside';
+  inPage = await enter();
+  await title.tap();
+  if (await openMenu(page)) {
+    await page.waitForTimeout(300);
+    await page.touchscreen.tap(195, 40);
+    if (!(await allClosed(page))) missing('a tap outside leaves the sheet open');
+    await page.waitForTimeout(300);
+    if (await page.evaluate(() => Boolean(history.state?.pelicanSheet))) missing('closed, the sheet leaves its place in the history');
+    else if (inPage) {
+      await page.goBack();
+      await page.waitForTimeout(400);
+      if (new URL(page.url()).searchParams.has('s')) missing('Back after it does not go back to the list');
+    }
+  } else missing('a tap on the title opens no sheet');
+  await cdp.detach();
+  await context.close();
+}
+
+/** The ways in to every action, on a computer and on a phone (see waysInOnComputer and waysInOnPhone). */
+async function checkWaysIn(browser, base, sessions, where) {
+  const found = await waysInOnComputer(browser, base, sessions, where);
+  if (found.conversation) await waysInOnPhone(browser, base, found.conversation, where);
+}
+
 /**
  * The files Claude sent, in the sessions where Claude Code recorded one delivered (`answer` asks the
  * demo for a session's messages, or reads the answer the site saved), on a phone and wide, light
@@ -725,8 +1318,8 @@ async function checkSentFiles(browser, base, sessions, answer) {
 }
 
 /**
- * Export as Markdown, from the session menu of a few sessions: a file of Markdown downloads, with
- * the conversation in it, on the site too, which saved each from the demo.
+ * Export, from the title's menu of a few sessions: a file of Markdown downloads, with the
+ * conversation in it, on the site too, which saved each from the demo.
  */
 async function checkExport(browser, base, sessions, where) {
   const context = await browser.newContext({ ...SIZES.wide, acceptDownloads: true });
@@ -736,9 +1329,9 @@ async function checkExport(browser, base, sessions, where) {
   for (const session of sessions.slice(0, 3)) {
     at = `session ${session.id}`;
     await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: 'Session menu', exact: true }).first().click();
+    await page.locator(TITLE).click();
     const downloaded = page.waitForEvent('download', { timeout: 10_000 }).catch(() => undefined);
-    await page.getByRole('dialog').getByRole('button', { name: /Export as Markdown/ }).click();
+    await page.getByRole('menu', { name: 'Session' }).getByRole('menuitem', { name: 'Export' }).click();
     const download = await downloaded;
     if (!download) {
       problems.push(`${where}, export, ${at}: nothing downloads`);
@@ -872,6 +1465,7 @@ try {
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
     await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
     await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
+    await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
     const demo = await startDemo({ port: Number(process.env.PELICAN_DEMO_PORT ?? 47863), name: 'smoke' });
@@ -883,6 +1477,7 @@ try {
     await driveApp(browser, demo.base, sessions ?? [], await walkable(sessions ?? [], asked));
     await checkDocked(browser, demo.base, sessions ?? []);
     await checkSideChat(browser, demo.base, sessions ?? []);
+    await checkWaysIn(browser, demo.base, sessions ?? [], 'app');
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkExport(browser, demo.base, sessions ?? [], 'app');
     await checkUsage(browser, demo.base);
