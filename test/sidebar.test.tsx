@@ -153,7 +153,7 @@ describe('the session list on a computer', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search sessions' })));
   });
 
-  it('between 1024 and 1279px, is hidden the same way while a pane sits beside the conversation, and ⌘B brings it back', async () => {
+  it('between 1024 and 1279px, is hidden the same way while a pane sits beside the conversation, and ⌘B or its button float it over the conversation, which keeps its room', async () => {
     computer(1100);
     await page();
     expect(listShown()).toBe(true);
@@ -163,9 +163,23 @@ describe('the session list on a computer', () => {
     await waitFor(() => expect(listShown()).toBe(false));
     // Not a choice to remember: the pane made the room.
     expect(getPrefs().sidebar).toBe('shown');
-    expect(within(document.querySelector('main header')!).getByRole('button', { name: 'Show sidebar' })).toBeTruthy();
+    const show = within(document.querySelector('main header')!).getByRole('button', { name: 'Show sidebar' });
     key({ key: 'b', code: 'KeyB', ctrlKey: true });
     expect(listShown()).toBe(true);
+    // Floating: the layout keeps the list out of the conversation's columns.
+    expect(document.querySelector('[data-layout]')!.getAttribute('data-sidebar')).toBe('hidden');
+    // It stays as the pointer moves over the conversation, until ⌘B again.
+    fireEvent.pointerMove(document.querySelector('main')!, { pointerType: 'mouse' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(listShown()).toBe(true);
+    key({ key: 'b', code: 'KeyB', ctrlKey: true });
+    expect(listShown()).toBe(false);
+    // Its button floats it too, and Esc puts it away.
+    fireEvent.click(show);
+    expect(listShown()).toBe(true);
+    expect(document.querySelector('[data-layout]')!.getAttribute('data-sidebar')).toBe('hidden');
+    key({ key: 'Escape' });
+    expect(listShown()).toBe(false);
     act(() => {
       delete document.documentElement.dataset.pane;
     });

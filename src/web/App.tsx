@@ -274,16 +274,15 @@ function Main() {
 
   // The session list on a computer: shown beside the conversation, or hidden (⌘B, its button),
   // remembered in this browser. Where a pane beside the conversation leaves too little room for it
-  // (under 1280px), it is hidden the same way until it is asked back. Hidden, it floats over the
-  // conversation while the pointer is at the window's left edge or on its button (`peek`), or from
-  // the keyboard (⇧⌘K), until the pointer leaves it, a session is picked, or Esc.
+  // (under 1280px), it is hidden the same way, and asked for (⌘B, its button) it floats over the
+  // conversation rather than taking the pane's room. Hidden, it floats while the pointer is at the
+  // window's left edge or on its button (`peek`), or from the keyboard (⇧⌘K, and ⌘B while a pane
+  // folds it), until the pointer leaves it, a session is picked, Esc, or ⌘B again.
   const prefs = usePrefs();
   const roomy = useMedia('(min-width: 1280px)');
   const paneDocked = usePaneDocked();
-  const [askedBack, setAskedBack] = useState(false);
   const folds = paneDocked && !roomy;
-  if (!folds && askedBack) setAskedBack(false);
-  const collapsed = wide && (prefs.sidebar === 'hidden' || (folds && !askedBack));
+  const collapsed = wide && (prefs.sidebar === 'hidden' || folds);
   const [peek, setPeek] = useState<'pointer' | 'keys'>();
   if (!collapsed && peek) setPeek(undefined);
   const leaving = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -298,16 +297,15 @@ function Main() {
   }, []);
   useEffect(() => () => clearTimeout(leaving.current), []);
   const toggleSidebar = useCallback(() => {
-    setPeek(undefined);
-    if (collapsed) {
-      if (prefs.sidebar === 'hidden') setPrefs({ sidebar: 'shown' });
-      if (folds) setAskedBack(true);
-    } else if (folds) {
-      setAskedBack(false);
-    } else {
-      setPrefs({ sidebar: 'hidden' });
+    if (folds) {
+      // Floats, and stays until put away; floating already under the pointer, it stays the same way.
+      clearTimeout(leaving.current);
+      setPeek((was) => (was === 'keys' ? undefined : 'keys'));
+      return;
     }
-  }, [collapsed, folds, prefs.sidebar]);
+    setPeek(undefined);
+    setPrefs({ sidebar: collapsed ? 'shown' : 'hidden' });
+  }, [collapsed, folds]);
   const aside = useRef<HTMLElement>(null);
   // Floating, Esc, a click outside it, or picking a session puts it away.
   useEffect(() => {
