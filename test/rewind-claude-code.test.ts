@@ -5,13 +5,15 @@
 // the next message; Claude at work gets 409; Claude Code's check refusing to drop more than the
 // prompt's turn (resumeDropsTurn) falls back to the whole session; the demo refuses; and Fork from
 // here copies up to just before a prompt (none before the first, also after a SessionStart hook's
-// context), or the end of a reply.
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+// context), or the end of a reply. Rewinds, Undo and messages go one at a time, and a failed rewind
+// leaves the conversation as it read.
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage, MessagesPage, RewindCheck, RewindDone } from '../src/shared/protocol';
+import { REWIND_BUSY } from '../src/shared/rewind';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
 import { saveUpload } from '../src/server/files';
@@ -20,6 +22,20 @@ import { loadMessages } from '../src/server/sessions';
 import { transcriptPath } from '../src/server/transcripts';
 import { rememberChoice } from '../src/server/trust';
 import { type MessagesRequest, type StandIn, standInApi, textOf, until } from './stand-in-api';
+
+// Looking a folder's trust up takes as long as a test asks (`slow.launch`, in ms): the moment a
+// rewind starts Claude again, which another page's message or rewind can land in.
+const slow = vi.hoisted(() => ({ launch: 0 }));
+vi.mock('../src/server/trust', async (original) => {
+  const actual = await original<typeof import('../src/server/trust')>();
+  return {
+    ...actual,
+    launchFor: async (folder: string) => {
+      if (slow.launch > 0) await new Promise((resolve) => setTimeout(resolve, slow.launch));
+      return actual.launchFor(folder);
+    },
+  };
+});
 
 const home = vi.hoisted(() => {
   // Nothing of a Claude Code this test may itself run under reaches the one it starts, and the
@@ -106,6 +122,8 @@ afterAll(async () => {
   closeAll();
   await api?.close();
 });
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('Rewind to here, in the Claude Code the Agent SDK bundles', () => {
   it('Code only: Claude Code’s dry run says what goes back, then rewindFiles puts the file back and the conversation stays', async () => {
@@ -321,5 +339,135 @@ describe('the conversation’s first prompt', () => {
     const copy = await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, { before: second }));
     expect(words(await loadMessages(copy.body.sessionId))).toContain('Hooked: First question');
   }, 240_000);
+});
+
+describe('Rewind to here, all or nothing', () => {
+  it('Code and conversation that fails on the code leaves an earlier rewind as it was, for Claude too', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Kept: Read the notes', 'Kept: Write the notes', 'Kept: Third question', 'Kept: Fourth question'], { permissionMode: 'acceptEdits' });
+    const fourth = await uuidOf(id, 'Kept: Fourth question');
+    const write = await uuidOf(id, 'Kept: Write the notes');
+    expect((await ask(`/api/sessions/${id}/rewind`, { uuid: fourth, restore: 'conversation' })).status).toBe(200);
+    // The file can't be written now: its code does not go back.
+    chmodSync(notes, 0o444);
+    let both;
+    try {
+      both = await json(await ask(`/api/sessions/${id}/rewind`, { uuid: write, restore: 'both' }));
+    } finally {
+      chmodSync(notes, 0o644);
+    }
+    expect(both.status).toBe(409);
+    expect(both.body.error).toMatch(/^Couldn’t restore the code from this point\./);
+    expect(readFileSync(notes, 'utf8')).toBe('Changed by Claude.\n');
+    // Still rewound before the fourth prompt, on the page and for Claude: the next turn has the third, not the fourth.
+    const shown = await page(id);
+    expect(shown.rewound).toMatchObject({ prompt: fourth });
+    expect(words(shown.messages)).toContain('Kept: Third question');
+    expect(words(shown.messages)).not.toContain('Kept: Fourth question');
+    await reply(id, 'Kept: After the failed rewind');
+    const request = JSON.stringify(turnOf('Kept: After the failed rewind')!.messages);
+    expect(request).toContain('Kept: Third question');
+    expect(request).not.toContain('Kept: Fourth question');
+    expect(words((await page(id)).messages)).not.toContain('Kept: Fourth question');
+  }, 240_000);
+
+  it('Code and conversation that fails on the code leaves the session’s Claude with the whole conversation', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Claude whole: Read the notes', 'Claude whole: Write the notes'], { permissionMode: 'acceptEdits' });
+    // A copy of a session has no copies of its files: its code cannot go back.
+    const copy = (await json<{ sessionId: string }>(await ask(`/api/sessions/${id}/fork`, {}))).body.sessionId;
+    const write = await uuidOf(copy, 'Claude whole: Write the notes');
+    expect((await ask(`/api/sessions/${copy}/rewind`, { uuid: write, restore: 'both' })).status).toBe(409);
+    await reply(copy, 'Claude whole: Next');
+    expect(JSON.stringify(turnOf('Claude whole: Next')!.messages)).toContain('Claude whole: Write the notes');
+  }, 240_000);
+
+  it('Code only whose copy Claude Code has let go since its check answers 409, in Desktop’s words', async () => {
+    writeFileSync(notes, ORIGINAL);
+    const id = await session(['Gone: Read the notes', 'Gone: Write the notes', 'Gone: Third question'], { permissionMode: 'acceptEdits' });
+    const write = await uuidOf(id, 'Gone: Write the notes');
+    // Claude Code clears its old copies of files: the dry run still says the file can go back.
+    rmSync(path.join(config.claudeHome, 'file-history', id), { recursive: true, force: true });
+    expect((await json<RewindCheck>(await ask(`/api/sessions/${id}/rewind`, { uuid: write, dryRun: true }))).body.files).toEqual([notes]);
+    const done = await json(await ask(`/api/sessions/${id}/rewind`, { uuid: write, restore: 'code' }));
+    expect(done.status).toBe(409);
+    expect(done.body.error).toMatch(/^Couldn’t restore the code from this point\. \S/);
+    expect(readFileSync(notes, 'utf8')).toBe('Changed by Claude.\n');
+  }, 240_000);
+});
+
+describe('Rewind to here, one at a time with what else changes the session’s Claude', () => {
+  it('a message sent from another page while a rewind starts Claude again goes after the cut, to Claude as on the pages', async () => {
+    const id = await session(['Race: First question', 'Race: Second question', 'Race: Third question']);
+    const second = await uuidOf(id, 'Race: Second question');
+    slow.launch = 400;
+    let rewound;
+    let sent;
+    try {
+      const rewinding = ask(`/api/sessions/${id}/rewind`, { uuid: second, restore: 'conversation' });
+      // While the rewind looks the folder up, before Claude starts again.
+      await pause(150);
+      const sending = ask(`/api/sessions/${id}/messages`, { text: 'Race: Meanwhile', settings: {} });
+      [rewound, sent] = await Promise.all([rewinding, sending]);
+    } finally {
+      slow.launch = 0;
+    }
+    expect(rewound.status).toBe(200);
+    expect(sent.status).toBe(200);
+    await until(() => getRun(id)?.busy === false && Boolean(turnOf('Race: Meanwhile')), 30_000, 'the message’s turn');
+    const request = JSON.stringify(turnOf('Race: Meanwhile')!.messages);
+    expect(request).toContain('Race: First question');
+    expect(request).not.toContain('Race: Second question');
+    const shown = words((await page(id)).messages);
+    expect(shown).toEqual(expect.arrayContaining(['Race: First question', 'Race: Meanwhile']));
+    expect(shown).not.toContain('Race: Second question');
+  }, 240_000);
+
+  it('two rewinds at once: one goes, the other is told Claude is busy, in Desktop’s words', async () => {
+    const id = await session(['Twice: First question', 'Twice: Second question', 'Twice: Third question']);
+    const [second, third] = [await uuidOf(id, 'Twice: Second question'), await uuidOf(id, 'Twice: Third question')];
+    slow.launch = 300;
+    let answers;
+    try {
+      answers = await Promise.all([
+        Promise.resolve(ask(`/api/sessions/${id}/rewind`, { uuid: second, restore: 'conversation' })).then((r) => json(r)),
+        Promise.resolve(ask(`/api/sessions/${id}/rewind`, { uuid: third, restore: 'conversation' })).then((r) => json(r)),
+      ]);
+    } finally {
+      slow.launch = 0;
+    }
+    expect(answers.map((a) => a.status)).toEqual([200, 409]);
+    expect(answers[1]!.body).toEqual({ error: REWIND_BUSY });
+    expect((await page(id)).rewound).toMatchObject({ prompt: second });
+    await reply(id, 'Twice: Instead');
+    const request = JSON.stringify(turnOf('Twice: Instead')!.messages);
+    expect(request).toContain('Twice: First question');
+    expect(request).not.toContain('Twice: Second question');
+  }, 240_000);
+
+  it('a rewind while a message is on its way is told Claude is busy, and the message is answered whole', async () => {
+    const id = await session(['Landing: First question', 'Landing: Second question']);
+    const second = await uuidOf(id, 'Landing: Second question');
+    // No Claude running: the message starts one, looking the folder up first.
+    closeAll();
+    await until(() => getRun(id) === undefined, 10_000, 'Claude to close');
+    slow.launch = 400;
+    let rewound;
+    let sent;
+    try {
+      const sending = ask(`/api/sessions/${id}/messages`, { text: 'Landing: Meanwhile', settings: {} });
+      await pause(150);
+      rewound = await json(await ask(`/api/sessions/${id}/rewind`, { uuid: second, restore: 'conversation' }));
+      sent = await sending;
+    } finally {
+      slow.launch = 0;
+    }
+    expect(rewound).toEqual({ status: 409, body: { error: REWIND_BUSY } });
+    expect(sent.status).toBe(200);
+    await until(() => getRun(id)?.busy === false && Boolean(turnOf('Landing: Meanwhile')), 30_000, 'the message’s turn');
+    expect(JSON.stringify(turnOf('Landing: Meanwhile')!.messages)).toContain('Landing: Second question');
+    expect((await page(id)).rewound).toBeUndefined();
+  }, 240_000);
+
 });
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { LiveShell, ServerEvent } from '../shared/protocol.js';
 import { feedFor } from './feed.js';
-import { ensureRun, getRun } from './runner.js';
+import { ensureRun, getRun, oneAtATime } from './runner.js';
 import { bashModeSettings, type CommandRun, forClaude, MAX_OUTPUT, type ShellResult, startCommand } from './shell.js';
 
 /**
@@ -88,9 +88,12 @@ async function record(sessionId: string, cwd: string, id: string, result: ShellR
     const settings = await bashModeSettings(cwd);
     const respond = result.endedBy === undefined && settings.respond;
     const toClaude = await forClaude(sessionId, result, settings);
-    const run = await ensureRun(sessionId);
-    // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
-    await run.appendShell(toClaude, respond && !run.busy, id);
+    // As a message goes: never to a Claude a rewind is replacing.
+    await oneAtATime(sessionId, async () => {
+      const run = await ensureRun(sessionId);
+      // It may have started a turn while the settings were read: then the record waits no more, and Claude reads it later.
+      await run.appendShell(toClaude, respond && !run.busy, id);
+    });
   } finally {
     // What was kept of its output past the start (a file with no name) goes once it is recorded.
     result.output.release();

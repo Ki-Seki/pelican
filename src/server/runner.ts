@@ -1552,6 +1552,28 @@ async function sendLeftovers(sessionId: string, cwd: string, settings: RunSettin
 
 const runs = new Map<string, SessionRun>();
 
+/**
+ * What changes a session's Claude goes one at a time, each once the one before is done: a message
+ * (sendMessage), a `!` command's record, a rewind, Undo rewind, Claude started again. So a message
+ * sent from another page while a rewind starts Claude again reaches the Claude the rewind leaves,
+ * after the cut, as the pages then show it, and two rewinds never start two Claudes at once.
+ */
+const turns = new Map<string, Promise<unknown>>();
+
+/** Runs `work` once nothing else changes the session's Claude, and holds it until `work` is done. */
+export function oneAtATime<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  const mine = (turns.get(sessionId) ?? Promise.resolve()).then(work);
+  const done = mine.then(() => undefined, () => undefined);
+  turns.set(sessionId, done);
+  void done.then(() => {
+    if (turns.get(sessionId) === done) turns.delete(sessionId);
+  });
+  return mine;
+}
+
+/** Whether something is changing the session's Claude now, or waits to: a rewind, a message on its way. */
+export const changing = (sessionId: string): boolean => turns.has(sessionId);
+
 export function getRun(sessionId: string): SessionRun | undefined {
   const run = runs.get(sessionId);
   return run && !run.closed ? run : undefined;
@@ -1626,26 +1648,8 @@ async function sentTo(run: SessionRun, input: SendInput): Promise<boolean> {
 export async function sendMessage(target: { sessionId?: string; cwd?: string; sideChat?: boolean }, input: SendInput): Promise<string> {
   if (config.demo) throw new Error('This is the demo: nothing runs. Start Pelican without --demo to talk to Claude.');
   if (CLEARS.test(input.text.trim())) throw new Error(AFRESH);
-  if (target.sessionId) {
-    const existing = await currentRun(target.sessionId);
-    if (existing && (await sentTo(existing, input))) return existing.sessionId;
-    const info = await sessionInfo(target.sessionId);
-    const cwd = info?.cwd ?? target.cwd;
-    if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
-    const launch = await launchFor(cwd);
-    // A side chat goes on as one, whichever app made it and wherever it is continued from.
-    const side = target.sideChat === true || (await isSideChat(target.sessionId));
-    // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
-    const at = await resumePoint(target.sessionId);
-    // Another request may have started one while this one looked the folder up.
-    const started = getRun(target.sessionId);
-    if (started && (await sentTo(started, input))) return started.sessionId;
-    const run = new SessionRun(target.sessionId, cwd, input.settings, true, at, launch, side);
-    runs.set(run.sessionId, run);
-    run.start();
-    await run.send(input);
-    return run.sessionId;
-  }
+  const sessionId = target.sessionId;
+  if (sessionId) return oneAtATime(sessionId, () => sendTo(sessionId, target, input));
   const cwd = target.cwd;
   if (!cwd || !(await isDirectory(cwd))) throw new Error(`Not a folder: ${cwd ?? '(none)'}`);
   const launch = await launchFor(cwd);
@@ -1659,6 +1663,28 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
   return run.sessionId;
 }
 
+/** A message to a session there is: to its Claude, or to one started (resumed) for it. */
+async function sendTo(sessionId: string, target: { cwd?: string; sideChat?: boolean }, input: SendInput): Promise<string> {
+  const existing = await currentRun(sessionId);
+  if (existing && (await sentTo(existing, input))) return sessionId;
+  const info = await sessionInfo(sessionId);
+  const cwd = info?.cwd ?? target.cwd;
+  if (!cwd || !(await isDirectory(cwd))) throw new Error(`The session's folder is missing: ${cwd ?? '(unknown)'}`);
+  const launch = await launchFor(cwd);
+  // A side chat goes on as one, whichever app made it and wherever it is continued from.
+  const side = target.sideChat === true || (await isSideChat(sessionId));
+  // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
+  const at = await resumePoint(sessionId);
+  // Another request may have started one while this one looked the folder up.
+  const started = getRun(sessionId);
+  if (started && (await sentTo(started, input))) return sessionId;
+  const run = new SessionRun(sessionId, cwd, input.settings, true, at, launch, side);
+  runs.set(run.sessionId, run);
+  run.start();
+  await run.send(input);
+  return run.sessionId;
+}
+
 /** Where a Claude started for the session resumes: up to the cut, while its conversation is rewound (rewound.ts). */
 async function resumePoint(sessionId: string): Promise<{ entry: string } | undefined> {
   const cut = await liveCut(sessionId);
@@ -1669,10 +1695,11 @@ async function resumePoint(sessionId: string): Promise<{ entry: string } | undef
  * Starts the session's Claude again, to wait for the next message: resumed up to `at.entry`,
  * leaving out all that follows (rewind.ts), or, without `at`, whole (Undo rewind). Leaving out one
  * prompt's turn (`at.dropsTurn`), Claude Code first checks that nothing else would go with it; if
- * it refuses, the Claude started is the session's whole, as the Agent SDK asks, and this gives
- * none. Not while Claude is at work in the session.
+ * it refuses, the Claude started is the session's as it reads now (up to `now`, an earlier cut,
+ * or whole), as the Agent SDK asks, and this gives none. Not while Claude is at work in the
+ * session; called while holding it (oneAtATime).
  */
-export async function restartAt(sessionId: string, at?: { entry: string; dropsTurn?: string }): Promise<SessionRun | undefined> {
+export async function restartAt(sessionId: string, at?: { entry: string; dropsTurn?: string }, now?: { entry: string }): Promise<SessionRun | undefined> {
   if (config.demo) throw new Error('This is the demo: nothing runs.');
   const existing = getRun(sessionId);
   if (existing?.busy) throw new Error(REWIND_BUSY);
@@ -1695,7 +1722,7 @@ export async function restartAt(sessionId: string, at?: { entry: string; dropsTu
   };
   const run = begin(at);
   if (await run.resumed()) return run;
-  await begin().resumed();
+  await begin(now).resumed();
   return undefined;
 }
 

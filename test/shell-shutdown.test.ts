@@ -6,7 +6,11 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Recording a command starts no Claude here.
-vi.mock('../src/server/runner', () => ({ ensureRun: async () => ({ appendShell: async () => {}, busy: false }), getRun: () => undefined }));
+vi.mock('../src/server/runner', () => ({
+  ensureRun: async () => ({ appendShell: async () => {}, busy: false }),
+  getRun: () => undefined,
+  oneAtATime: (_sessionId: string, work: () => Promise<unknown>) => work(),
+}));
 
 const { hurryShells, SHUTDOWN_GRACE_MS, shutdownGrace, startShell, stopAllShells } = await import('../src/server/shell-runs');
 
