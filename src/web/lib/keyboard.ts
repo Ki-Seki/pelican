@@ -75,6 +75,8 @@ export type KeyScope =
   | 'comments'
   /** The box a comment on a line is written in. */
   | 'comment'
+  /** The message box while Claude works, where ⌘↵ does what the busy line's button does. */
+  | 'busy'
   /** A question Claude asks, while it waits. */
   | 'question'
   /** An open menu or sheet. */
@@ -84,8 +86,12 @@ export type KeyScope =
 export const KEY_GROUPS = ['General', 'This session', 'Panes', 'Message box', 'Quotes and comments', 'Questions'] as const;
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
-/** What the message box's keys depend on: the Enter key setting; and the kind of keyboard, for a key one kind has alone. */
-export type KeyContext = { enterSends: boolean; apple?: boolean };
+/**
+ * What the message box's keys depend on: the Enter key setting; what Send does while Claude works
+ * (Settings, While Claude works, Send: `steer` sends now, the default, `queue` queues for later);
+ * and the kind of keyboard, for a key one kind has alone.
+ */
+export type KeyContext = { enterSends: boolean; apple?: boolean; sendWhileBusy?: 'steer' | 'queue' };
 
 export type KeyDef = {
   label: string;
@@ -137,7 +143,11 @@ export const KEYS = {
 
   send: { label: 'Send', group: 'Message box', scope: 'box', keys: ({ enterSends }) => (enterSends ? ['enter', 'mod+enter'] : ['mod+enter']) },
   newLine: { label: 'New line', group: 'Message box', scope: 'box', keys: ({ enterSends }) => (enterSends ? ['shift+enter'] : ['enter']) },
-  queue: { label: 'Queue for later, while Claude works', group: 'Message box', scope: 'box', keys: ['mod+enter'], soon: true },
+  // While Claude works, where Enter sends, ⌘↵ is the other way to send, the busy line's button, as
+  // Desktop's ⌘↵ queues for later: Queue for later where Send sends now (Settings' default), Send
+  // now where Send queues. Where Enter makes a new line, ⌘↵ is Send, and the button alone is the other.
+  queue: { label: 'Queue for later, while Claude works', group: 'Message box', scope: 'busy', keys: ({ enterSends, sendWhileBusy }) => (enterSends && sendWhileBusy !== 'queue' ? ['mod+enter'] : []) },
+  sendNow: { label: 'Send now, while Claude works', group: 'Message box', scope: 'busy', keys: ({ enterSends, sendWhileBusy }) => (enterSends && sendWhileBusy === 'queue' ? ['mod+enter'] : []) },
   addFiles: { label: 'Add files or photos', group: 'Message box', scope: 'page', keys: ['mod+u'] },
   model: { label: 'Model', group: 'Message box', scope: 'page', keys: ['mod+shift+i'] },
   effort: { label: 'Effort', group: 'Message box', scope: 'page', keys: ['mod+shift+e'] },

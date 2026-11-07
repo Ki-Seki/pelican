@@ -27,7 +27,7 @@ function Keys({ keys }: { keys: string[] }) {
 
 /**
  * The keys Pelican knows: Claude Desktop's web keys, by part, as lib/keyboard has them. Only a key
- * that works is listed; the message box's follow the Enter key setting.
+ * that works is listed; the message box's follow the Enter key setting, and Send's while Claude works.
  */
 export function ShortcutsSheet() {
   const open = useSyncExternalStore(
@@ -37,11 +37,12 @@ export function ShortcutsSheet() {
     },
     () => shown,
   );
-  usePrefs();
+  const { sendWhileBusy } = usePrefs();
   const titleId = useId();
   const close = () => showShortcuts(false);
-  // The composer's own rule: Auto sends on Enter where the pointer is fine (not an iPad with a keyboard).
-  const parts = shortcutList({ enterSends: enterSends() });
+  // The composer's own rule: Auto sends on Enter where the pointer is fine (not an iPad with a
+  // keyboard); and ⌘↵ while Claude works is the other of Send's two ways, by Settings.
+  const parts = shortcutList({ enterSends: enterSends(), sendWhileBusy });
   return (
     <Modal open={open} onClose={close} labelledBy={titleId}>
       <div className="flex h-full w-full items-end justify-center sm:items-start sm:p-6 sm:pt-[8vh]">

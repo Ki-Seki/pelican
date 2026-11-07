@@ -184,38 +184,43 @@ describe('Claude Desktop’s web keys', () => {
 });
 
 /** Every chord a key is pressed with, shown or taken too, as held on one kind of keyboard. */
-const held = (id: KeyId, apple: boolean, enterSends: boolean) => {
+const held = (id: KeyId, apple: boolean, enterSends: boolean, sendWhileBusy: 'steer' | 'queue' = 'steer') => {
   const def = KEYS[id] as { also?: readonly string[] };
-  return [...new Set([...chordsOf(id, { enterSends, apple }), ...(def.also ?? [])].map((chord) => normalize(chord, apple)))];
+  return [...new Set([...chordsOf(id, { enterSends, apple, sendWhileBusy }), ...(def.also ?? [])].map((chord) => normalize(chord, apple)))];
 };
 const scopeOf = (id: KeyId): KeyScope => KEYS[id].scope;
 
-/** Keys that pass from one thing to another as 0.5.0 is built: ⌘↵ sends until it queues for later while Claude works. */
-const HANDOVERS: Array<[coming: KeyId, going: KeyId]> = [['queue', 'send']];
-const handedOver = (a: KeyId, b: KeyId) => HANDOVERS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
-
 describe('the key table', () => {
-  it('gives no two things one key in one place, on either kind of keyboard, whatever the Enter key does', () => {
+  it('gives no two things one key in one place, on either kind of keyboard, whatever the Enter key and Send while Claude works do', () => {
     for (const apple of [APPLE, OTHER]) {
       for (const enterSends of [true, false]) {
-        const seen = new Map<string, KeyId>();
-        for (const id of KEY_IDS) {
-          for (const chord of held(id, apple, enterSends)) {
-            const where = `${scopeOf(id)} ${chord}`;
-            const other = seen.get(where);
-            if (other) expect(handedOver(id, other), `${id} and ${other} share ${where}`).toBe(true);
-            else seen.set(where, id);
+        for (const sendWhileBusy of ['steer', 'queue'] as const) {
+          const seen = new Map<string, KeyId>();
+          for (const id of KEY_IDS) {
+            for (const chord of held(id, apple, enterSends, sendWhileBusy)) {
+              const where = `${scopeOf(id)} ${chord}`;
+              expect(seen.get(where), `${id} and ${seen.get(where)} share ${where}`).toBeUndefined();
+              seen.set(where, id);
+            }
           }
         }
       }
     }
   });
 
-  it('hands a key over only from one that works to one still to come', () => {
-    for (const [coming, going] of HANDOVERS) {
-      expect(keyWorks(coming)).toBe(false);
-      expect(keyWorks(going)).toBe(true);
-    }
+  it('has ⌘↵ while Claude works do the other of Send’s two ways, where Enter sends: Queue for later, or Send now where Send queues', () => {
+    const at = (sendWhileBusy: 'steer' | 'queue', enterSends = true) => ({ enterSends, sendWhileBusy, apple: APPLE });
+    expect(chordsOf('queue', at('steer'))).toEqual(['mod+enter']);
+    expect(chordsOf('sendNow', at('steer'))).toEqual([]);
+    expect(chordsOf('sendNow', at('queue'))).toEqual(['mod+enter']);
+    expect(chordsOf('queue', at('queue'))).toEqual([]);
+    // Where Enter makes a new line, ⌘↵ is Send, while Claude works too: the busy line's button is the other way.
+    expect(chordsOf('queue', at('steer', false))).toEqual([]);
+    expect(chordsOf('sendNow', at('queue', false))).toEqual([]);
+    expect(chordsOf('send', at('steer', false))).toEqual(['mod+enter']);
+    expect(scopeOf('queue')).toBe('busy');
+    expect(keyText('queue', APPLE, { enterSends: true })).toBe('⌘↵');
+    expect(keyText('queue', OTHER, { enterSends: true })).toBe('Ctrl+Enter');
   });
 
   it('takes no key a browser keeps for itself; only keys it shows nowhere may be ones a browser passes on', () => {
@@ -237,8 +242,12 @@ describe('the key table', () => {
     const parts = shortcutList({ enterSends: true }, APPLE);
     expect(parts.map((part) => part.group)).toEqual(KEY_GROUPS.filter((group) => parts.some((part) => part.group === group)));
     const listed = parts.flatMap((part) => part.rows.map((row) => row.id));
-    const works = KEY_IDS.filter((id) => keyWorks(id) && !('browser' in KEYS[id]));
+    // ⌘↵ while Claude works is one of two, by what Send does then: here Queue for later.
+    const works = KEY_IDS.filter((id) => keyWorks(id) && !('browser' in KEYS[id]) && id !== 'sendNow');
     expect([...listed].sort()).toEqual([...works].sort());
+    const queued = shortcutList({ enterSends: true, sendWhileBusy: 'queue' }, APPLE).flatMap((part) => part.rows.map((row) => row.id));
+    expect(queued).toContain('sendNow');
+    expect(queued).not.toContain('queue');
     expect(parts.find((part) => part.group === 'General')!.rows.map((row) => `${row.label}: ${row.keys.map((k) => k.join(' ')).join(' or ')}`)).toEqual([
       'Command menu: ⌘ K',
       'Search sessions: ⇧ ⌘ K',

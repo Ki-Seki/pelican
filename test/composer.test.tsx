@@ -113,6 +113,98 @@ describe('the message box', () => {
   });
 });
 
+describe('while Claude works', () => {
+  function renderBusy(extra: { stopping?: boolean; side?: boolean; onShell?: (command: string) => void } = {}) {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <Composer busy settings={{}} onSettings={() => {}} models={[]} onSend={onSend} onStop={onStop} draftKey="busy" {...extra} />
+      </QueryClientProvider>,
+    );
+    return { onSend, onStop, box: screen.getByLabelText(extra.side ? 'Side question' : 'Message Claude') as HTMLTextAreaElement };
+  }
+
+  it('Send sends now, as Settings has it by default, and the busy line offers Queue for later, a finger’s 44 px on a phone', () => {
+    const { onSend, box } = renderBusy();
+    expect(screen.queryByRole('button', { name: /Queue for later/ })).toBeNull();
+    fireEvent.change(box, { target: { value: 'Also keep the old --surface name' } });
+    expect(screen.getByText('Claude reads it at its next step')).toBeTruthy();
+    const queue = screen.getByRole('button', { name: /Queue for later/ });
+    expect(queue.className).toContain('h-11');
+    // A phone has no key to show beside it.
+    expect(queue.textContent).toBe('Queue for later');
+    fireEvent.click(queue);
+    expect(onSend).toHaveBeenCalledWith('Also keep the old --surface name', [], 'queue');
+    fireEvent.change(box, { target: { value: 'Now this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenLastCalledWith('Now this', [], 'steer');
+  });
+
+  it('where Settings has Send queue for later, Send queues and the busy line offers Send now', () => {
+    setPrefs({ sendWhileBusy: 'queue' });
+    const { onSend, box } = renderBusy();
+    expect(box.placeholder).toBe('Queue a message for after this turn');
+    fireEvent.change(box, { target: { value: 'After this, the docs' } });
+    expect(screen.getByText('Sent when this turn ends')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenLastCalledWith('After this, the docs', [], 'queue');
+    fireEvent.change(box, { target: { value: 'Stop touching the tests' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send now/ }));
+    expect(onSend).toHaveBeenLastCalledWith('Stop touching the tests', [], 'steer');
+    setPrefs({ sendWhileBusy: 'steer' });
+  });
+
+  it('⌘↵ is the busy line’s other way where Enter sends, shown faintly beside it on a computer; where Enter makes a new line it is Send', () => {
+    media = { [COMPUTER]: true };
+    const { onSend, box } = renderBusy();
+    fireEvent.change(box, { target: { value: 'later' } });
+    expect(screen.getByRole('button', { name: /Queue for later/ }).textContent).toBe('Queue for laterCtrl+Enter');
+    expect(screen.getByRole('button', { name: /Queue for later/ }).getAttribute('aria-keyshortcuts')).toBe('Control+Enter');
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13, ctrlKey: true });
+    expect(onSend).toHaveBeenLastCalledWith('later', [], 'queue');
+    fireEvent.change(box, { target: { value: 'now' } });
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenLastCalledWith('now', [], 'steer');
+    cleanup();
+    setPrefs({ enterToSend: 'never' });
+    const again = renderBusy();
+    fireEvent.change(again.box, { target: { value: 'sent' } });
+    expect(screen.getByRole('button', { name: /Queue for later/ }).textContent).toBe('Queue for later');
+    fireEvent.keyDown(again.box, { key: 'Enter', keyCode: 13, ctrlKey: true });
+    expect(again.onSend).toHaveBeenLastCalledWith('sent', [], 'steer');
+  });
+
+  it('Stop never hides: alone while nothing is typed, then quiet beside Send', () => {
+    const { onStop, box } = renderBusy();
+    const alone = screen.getByRole('button', { name: 'Stop' });
+    expect(alone.className).toContain('bg-fg');
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+    fireEvent.change(box, { target: { value: 'one more thing' } });
+    const stop = screen.getByRole('button', { name: 'Stop' });
+    expect(stop.className).toContain('bg-chip');
+    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('bg-fg');
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop says the turn is ending once asked, and takes no second press', () => {
+    renderBusy({ stopping: true });
+    expect((screen.getByRole('button', { name: 'Stopping' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('has no busy line for a ! command, nor in a side chat', () => {
+    const { box } = renderBusy({ onShell: () => {} });
+    fireEvent.change(box, { target: { value: '!git status' } });
+    expect(screen.queryByText('Claude reads it at its next step')).toBeNull();
+    cleanup();
+    const side = renderBusy({ side: true });
+    fireEvent.change(side.box, { target: { value: 'why?' } });
+    expect(screen.queryByText('Claude reads it at its next step')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+  });
+});
+
 describe('what waits above the message box', () => {
   const chips = () => screen.queryByRole('list', { name: 'With your next message' });
   const frame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));

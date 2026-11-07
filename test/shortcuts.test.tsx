@@ -17,11 +17,13 @@ beforeAll(() => {
 
 const { ShortcutsSheet, showShortcuts } = await import('../src/web/components/Shortcuts');
 const { closesPane, KEY_IDS, keyWorks, KEYS } = await import('../src/web/lib/keyboard');
+const { setPrefs } = await import('../src/web/lib/prefs');
 
 afterEach(() => {
   act(() => showShortcuts(false));
   cleanup();
   coarse = false;
+  setPrefs({ sendWhileBusy: 'steer', enterToSend: 'auto' });
 });
 
 /** The sheet as its parts, each with its rows as their names and keys ("Search sessions: Ctrl Shift K"). */
@@ -57,6 +59,7 @@ describe('the keyboard shortcuts sheet', () => {
       'Message box': [
         'Send: Enter Ctrl Enter',
         'New line: Shift Enter',
+        'Queue for later, while Claude works: Ctrl Enter',
         'Add files or photos: Ctrl U',
         'Model: Ctrl Shift I',
         'Effort: Ctrl Shift E',
@@ -85,12 +88,23 @@ describe('the keyboard shortcuts sheet', () => {
       const { label } = KEYS[id];
       if (!keyWorks(id)) expect(listed, label).not.toContain(label);
     }
-    // Still to come: Queue for later (the next part of 0.5.0's message box), Background tasks, picking an answer by its number.
-    expect(listed).not.toContain('Queue for later, while Claude works');
+    // Still to come: Background tasks, picking an answer by its number.
     expect(listed).not.toContain('Background tasks');
     expect(listed).not.toContain('Pick an answer');
     // The browser's own (Copy, Paste) are shown in menus, not here.
     expect(listed).not.toContain('Copy');
+  });
+
+  it('names ⌘↵ while Claude works by what it does: Send now where Send queues for later, and nothing where Enter makes a new line', () => {
+    setPrefs({ sendWhileBusy: 'queue' });
+    const queued = parts()['Message box']!;
+    expect(queued).toContain('Send now, while Claude works: Ctrl Enter');
+    expect(queued.some((row) => row.startsWith('Queue for later'))).toBe(false);
+    cleanup();
+    setPrefs({ sendWhileBusy: 'steer', enterToSend: 'never' });
+    const newLine = parts()['Message box']!;
+    expect(newLine.some((row) => row.includes('while Claude works'))).toBe(false);
+    expect(newLine).toContain('Send: Ctrl Enter');
   });
 
   it('says Send and New line as the Enter key setting has them, and the note box’s Add only where Enter adds', () => {

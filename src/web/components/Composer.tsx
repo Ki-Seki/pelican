@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Bot, FileText, Folder, Info, Loader2, Mic, Plus, Slash, Square, SquareTerminal, X } from 'lucide-react';
+import { ArrowUp, Bot, FileText, Folder, Info, ListPlus, Loader2, Mic, Plus, Slash, Square, SquareTerminal, X } from 'lucide-react';
 import { type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import type { StartDefaults } from '../../shared/defaults';
@@ -10,8 +10,8 @@ import { api, apiUrl, isDemoNote } from '../lib/api';
 import { type CommandItem, commandFor, commandList, filtered, GROUP_NAMES, isClaudeCommand, useCommandItems } from '../lib/commands';
 import { type Held, loadDraft, removeWaiting, updateWaiting, useDraftSaver, useWaiting, whenAdded } from '../lib/drafts';
 import { formatBytes } from '../lib/format';
-import { ariaKeys, composing, hasKeyboard, isKey, keyText, sendsMessage } from '../lib/keyboard';
-import { enterSends, getPrefs } from '../lib/prefs';
+import { ariaKeys, composing, hasKeyboard, isApple, isKey, keyText, sendsMessage } from '../lib/keyboard';
+import { enterSends, usePrefs } from '../lib/prefs';
 import { useMedia } from '../lib/media';
 import { showPassage, sourceElement } from '../lib/passages';
 import { type WaitingItem, withQuote } from '../lib/quote';
@@ -235,7 +235,15 @@ const restored = (a: Attachment): Upload => ({
   key: a.id, name: a.name, size: a.size, attachment: a, ...(a.mime.startsWith('image/') ? { preview: apiUrl(`uploads/${encodeURIComponent(a.id)}`) } : {}),
 });
 
-const MODE_HINT: Record<SendMode, string> = { steer: 'Claude reads it at its next step', queue: 'Sent when this turn ends' };
+/**
+ * While Claude works, Send does what Settings says (While Claude works, Send) and the busy line
+ * offers the other, as a button of its own: what each does, said on the line, and the button's name.
+ */
+const BUSY_SEND: Record<SendMode, { says: string; other: string }> = {
+  steer: { says: 'Claude reads it at its next step', other: 'Queue for later' },
+  queue: { says: 'Sent when this turn ends', other: 'Send now' },
+};
+const otherWay = (mode: SendMode): SendMode => (mode === 'steer' ? 'queue' : 'steer');
 
 /**
  * Gives the box the keys with `put`, now or, when a sheet still on its way out holds the rest of
@@ -308,6 +316,34 @@ const sameHeld = (a: Held, b: Held) =>
 
 /** Files that come back, before those in the box already. */
 const withFiles = (list: Upload[], files: Attachment[]): Upload[] => [...files.map(restored), ...list.filter((u) => !files.some((a) => a.id === u.attachment?.id))];
+
+/**
+ * While Claude works, above what you type: what Send does with it, and the other way as a button of
+ * its own, a finger's 44 px on a phone, with its key faintly beside it on a computer (⌘↵, where
+ * Enter sends), as Claude Desktop's Send offers Queue for later.
+ */
+function BusyLine({ mode, onOther }: { mode: SendMode; onOther: () => void }) {
+  const { says, other } = BUSY_SEND[mode];
+  const id = mode === 'steer' ? 'queue' : 'sendNow';
+  const context = { enterSends: enterSends(), sendWhileBusy: mode };
+  const key = hasKeyboard() ? keyText(id, isApple, context) : undefined;
+  const Icon = mode === 'steer' ? ListPlus : ArrowUp;
+  return (
+    <div className="flex items-center gap-2 pt-1.5 pr-1.5 pl-4 text-[12.5px] leading-snug text-muted">
+      <span className="min-w-0 flex-1 truncate">{says}</span>
+      <button
+        type="button"
+        onClick={onOther}
+        aria-keyshortcuts={ariaKeys(id, isApple, context)}
+        className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-chip px-3.5 text-[13.5px] text-fg hover:bg-hover pointer-fine:h-8 pointer-fine:px-3 pointer-fine:text-[13px]"
+      >
+        <Icon className="size-4 shrink-0 text-muted" />
+        {other}
+        {key && <span className="text-[12px] text-faint">{key}</span>}
+      </button>
+    </div>
+  );
+}
 
 export function Composer({
   busy,
@@ -488,17 +524,9 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.key]);
 
-  // While Claude works: Steer (Claude reads it at its next step) or Queue (after this turn). Remembered per message.
-  const [mode, setMode] = useState<SendMode>(() => getPrefs().sendWhileBusy);
-  const [modeHint, setModeHint] = useState(false);
-  useEffect(() => {
-    if (!busy) setMode(getPrefs().sendWhileBusy);
-  }, [busy]);
-  useEffect(() => {
-    if (!modeHint) return undefined;
-    const timer = setTimeout(() => setModeHint(false), 4000);
-    return () => clearTimeout(timer);
-  }, [modeHint, mode]);
+  // While Claude works, Send sends now (Claude reads it at its next step) or queues it for after
+  // this turn, as Settings says; the busy line's button, and ⌘↵ where Enter sends, does the other.
+  const { sendWhileBusy: mode } = usePrefs();
   const shell = Boolean(onShell) && !side && text.startsWith('!');
 
   // Dictation: what you say goes into the box, to read over before sending.
@@ -550,6 +578,8 @@ export function Composer({
 
   // A side chat's box asks for a question whatever its Claude is doing.
   const hint = busy && !shell && !side ? (mode === 'steer' ? 'Tell Claude while it works' : 'Queue a message for after this turn') : placeholder;
+  // The busy line: while Claude works and there is something to send, what Send does and the other way.
+  const busyLine = busy && canSend && !shell && !side;
   useEffect(() => {
     const el = area.current;
     if (!el) return;
@@ -667,7 +697,8 @@ export function Composer({
     if (byKeys || hasKeyboard()) requestAnimationFrame(() => area.current?.focus({ preventScroll: true }));
   };
 
-  const submit = () => {
+  /** Sends what the box holds; while Claude works, as Send does (`how`: the busy line's other way). */
+  const submit = (how: SendMode = mode) => {
     if (!canSend) return;
     if (shell) {
       const command = text.slice(1).trim();
@@ -707,7 +738,7 @@ export function Composer({
     const command = words.startsWith('/');
     const attachments = command ? [] : uploads.flatMap((u) => (u.attachment ? [u.attachment] : []));
     draftSaver.now(words, attachments, held);
-    onSend(words, attachments, mode);
+    onSend(words, attachments, how);
     justSent.current = true;
     setText('');
     setCaret(0);
@@ -741,10 +772,11 @@ export function Composer({
     // Keys an input method takes are its own (the Enter that picks a word, the Esc that cancels
     // one, the arrows through its list), not the / and @ list's or the box's.
     if (composing(e.nativeEvent)) return;
-    // ⌘/Ctrl+Enter sends whatever the Enter key setting, list open or not.
+    // ⌘/Ctrl+Enter sends whatever the Enter key setting, list open or not; while Claude works, where
+    // Enter sends, it is the busy line's other way (Queue for later, or Send now), as in Desktop.
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      submit();
+      submit(busyLine && enterSends() ? otherWay(mode) : mode);
       return;
     }
     if (showSuggestions && suggestions.length > 0) {
@@ -956,7 +988,7 @@ export function Composer({
           );
         })}
         {dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-danger">{dictationError}</div>}
-        {busy && modeHint && !dictationError && <div role="status" className="px-4 pt-2.5 text-[12.5px] leading-snug text-muted">{MODE_HINT[mode]}</div>}
+        {busyLine && <BusyLine mode={mode} onOther={() => submit(otherWay(mode))} />}
         <textarea
           ref={area}
           value={text}
@@ -1017,20 +1049,21 @@ export function Composer({
             </Chip>
           </div>
           )}
-          {busy && canSend && !shell && (
+          {trailing}
+          {/* Stop while Claude works, always: beside Send once there is something to send, quiet, as Send is the one to press then. */}
+          {busy && (
             <button
               type="button"
-              onClick={() => {
-                setMode((m) => (m === 'steer' ? 'queue' : 'steer'));
-                setModeHint(true);
-              }}
-              title={mode === 'steer' ? 'Claude reads it at its next step. Tap to send it after this turn instead.' : 'Sent when this turn ends. Tap to send it at Claude’s next step instead.'}
-              className="relative h-8 shrink-0 rounded-full px-2 text-[12.5px] text-muted after:absolute after:-inset-y-1.5 after:inset-x-0 hover:bg-hover hover:text-fg"
+              aria-label={stopping ? 'Stopping' : 'Stop'}
+              title="Stop (Esc)"
+              aria-keyshortcuts="Escape"
+              disabled={stopping}
+              onClick={onStop}
+              className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full disabled:opacity-40 ${canSend ? 'bg-chip text-fg hover:bg-hover' : 'bg-fg text-bg'}`}
             >
-              {mode === 'steer' ? 'Steer' : 'Queue'}
+              {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
             </button>
           )}
-          {trailing}
           {listening || (!busy && !canSend && !uploading && SpeechRecognition && !disabled) ? (
             <button
               type="button"
@@ -1040,16 +1073,12 @@ export function Composer({
             >
               {listening ? <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-white/70" /><Square className="relative size-3 fill-current" /></span> : <Mic className="size-[18px]" />}
             </button>
-          ) : busy && !canSend ? (
-            <button type="button" aria-label={stopping ? 'Stopping' : 'Stop'} title="Stop (Esc)" aria-keyshortcuts="Escape" disabled={stopping} onClick={onStop} className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg disabled:opacity-40`}>
-              {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
-            </button>
-          ) : (
+          ) : busy && !canSend ? null : (
             <button
               type="button"
               aria-label="Send"
               disabled={!canSend}
-              onClick={submit}
+              onClick={() => submit()}
               className={`${HIT} grid size-9 shrink-0 place-items-center rounded-full bg-fg text-bg transition-opacity disabled:opacity-25`}
             >
               {shell ? <SquareTerminal className="size-[17px]" /> : <ArrowUp className="size-[18px]" />}
