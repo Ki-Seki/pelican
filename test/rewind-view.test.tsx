@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Rewind to here on the page, as Claude Desktop has it: its dialog, with the
-// three choices only when files changed after the message; one tap when none did; Undo rewind at
-// the "Rewound here" marker, until the next message.
+// Rewind to here on the page, as Claude Desktop has it: its dialog, with the three choices only
+// when files changed after the message; one tap when none did; Undo rewind at the "Rewound here"
+// marker, until the next message; and /rewind, which asks which message.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -95,6 +95,7 @@ beforeAll(() => {
 
 const { Chat } = await import('../src/web/components/Chat');
 const { setWaiting } = await import('../src/web/lib/drafts');
+const { CommandMenu, showCommandMenu } = await import('../src/web/components/CommandMenu');
 
 afterEach(async () => {
   cleanup();
@@ -109,6 +110,7 @@ afterEach(async () => {
 const open = () => render(
   <QueryClientProvider client={new QueryClient()}>
     <Chat sessionId={SESSION} home="/home/me" machine="studio" wide onBack={() => {}} onOpen={() => {}} onStartIn={() => {}} />
+    <CommandMenu sessions={[]} onOpenSession={() => {}} />
   </QueryClientProvider>,
 );
 const box = () => screen.getByLabelText('Message Claude') as HTMLTextAreaElement;
@@ -244,6 +246,24 @@ describe('Rewind to here', () => {
     await loaded();
     fireEvent.click(screen.getAllByRole('button', { name: 'More for Claude’s reply' }).at(-1)!);
     fireEvent.click(within(await screen.findByRole('menu', { name: 'Claude’s reply' })).getByRole('menuitem', { name: 'Rewind to here' }));
+    await waitFor(() => expect(server.rewinds).toEqual([['u2', 'conversation']]));
+  });
+});
+
+describe('/rewind', () => {
+  it('lists the conversation’s prompts, oldest first, and picking one is its Rewind to here', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    server.check = { files: [], insertions: 0, deletions: 0 };
+    open();
+    await loaded();
+    act(() => showCommandMenu(true));
+    const menu = await screen.findByRole('dialog', { name: 'Command menu' });
+    const field = within(menu).getByRole('combobox');
+    fireEvent.change(field, { target: { value: 'rewind' } });
+    fireEvent.click(await within(menu).findByText('Rewind to an earlier message'));
+    const list = await screen.findByRole('dialog', { name: 'Rewind' });
+    expect(within(list).getAllByRole('button').map((b) => b.textContent?.replace(/\d{1,2}:\d{2}.*$/, ''))).toEqual(['Add a dark theme to the settings page', 'Now remember the choice']);
+    fireEvent.click(within(list).getByText('Now remember the choice'));
     await waitFor(() => expect(server.rewinds).toEqual([['u2', 'conversation']]));
   });
 });

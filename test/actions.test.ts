@@ -7,6 +7,7 @@ import {
   ACTIONS,
   ADD_ACTIONS,
   type AddTarget,
+  commandOf,
   copyText,
   type Device,
   entries,
@@ -51,6 +52,7 @@ const session = (extra: Partial<SessionTarget> = {}): SessionTarget => ({
   pin: noop,
   sideChat: noop,
   fork: noop,
+  rewind: noop,
   export: noop,
   view: { value: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'thinking', label: 'Thinking' }, { value: 'verbose', label: 'Verbose' }], choose: noop },
   archive: noop,
@@ -151,9 +153,20 @@ describe('the session’s list', () => {
     expect(runAction(SESSION_ACTIONS, 'delete', session({ busy: true }))).toBe(false);
   });
 
-  it('goes by Claude Code’s names in the / list', () => {
-    expect(entries(SESSION_ACTIONS, session(), 'command', 'touch').map((e) => e.id)).toEqual(['rename', 'side-chat', 'fork', 'export']);
-    expect(SESSION_ACTIONS.filter((a) => a.command).map((a) => a.command!.name)).toEqual(['/rename', '/btw', '/branch', '/export']);
+  it('goes by Claude Code’s names in the / list, /rewind among them, which no menu has', () => {
+    expect(entries(SESSION_ACTIONS, session(), 'command', 'touch').map((e) => e.id)).toEqual(['rename', 'side-chat', 'fork', 'rewind', 'export']);
+    expect(SESSION_ACTIONS.filter((a) => a.command).map((a) => a.command!.name)).toEqual(['/rename', '/btw', '/branch', '/rewind', '/export']);
+    for (const device of DEVICES) expect(names(entries(SESSION_ACTIONS, session(), 'menu', device))).not.toContain('Rewind to an earlier message');
+  });
+
+  it('gives /rewind by its name and words, as Claude Code names it, to the command list, which asks which message', () => {
+    const rewind = vi.fn();
+    const command = commandOf(SESSION_ACTIONS, 'rewind', session({ rewind }), 'pointer')!;
+    expect(command).toMatchObject({ id: 'rewind', label: 'Rewind to an earlier message', name: 'rewind', description: 'Rewind to an earlier message' });
+    command.run();
+    expect(rewind).toHaveBeenCalledOnce();
+    expect(commandOf(SESSION_ACTIONS, 'rewind', session({ rewind: undefined }), 'pointer')).toBeUndefined();
+    expect(commandOf(SESSION_ACTIONS, 'pin', session(), 'pointer')).toBeUndefined();
   });
 });
 
@@ -322,11 +335,15 @@ describe('the message box’s +', () => {
 });
 
 describe('every list', () => {
-  it('shows its actions in the same order in every way in, each way a part of the whole list', () => {
+  it('shows its actions in the same order in every way in, each way a part of the whole list, the menu all but what is only typed', () => {
     for (const [thing, [list, targets]] of Object.entries(FULL)) {
       for (const target of targets) {
         for (const device of DEVICES) {
-          const all = entries(list, target, 'menu', device).map((e) => e.id);
+          const menuIds = entries(list, target, 'menu', device).map((e) => e.id);
+          const typed = entries(list, target, 'command', device).map((e) => e.id);
+          // The whole list, in its order: the menu's, and what only a name typed reaches (/rewind).
+          const all = list.map((a) => a.id).filter((id) => menuIds.includes(id) || typed.includes(id));
+          expect(all.filter((id) => !menuIds.includes(id)).every((id) => list.find((a) => a.id === id)!.menu === false), `${thing} ${device}`).toBe(true);
           for (const way of WAYS) {
             const ids = entries(list, target, way, device).map((e) => e.id);
             expect(ids.every((id) => all.includes(id)), `${thing} ${way} ${device}`).toBe(true);
@@ -337,10 +354,10 @@ describe('every list', () => {
     }
   });
 
-  it('has a way in for every action that needs no hover: right-click on a computer, a long press or ⋯ on a phone', () => {
+  it('has a way in for every action that needs no hover: right-click on a computer, a long press or ⋯ on a phone, or its name typed', () => {
     for (const [thing, [list, targets]] of Object.entries(FULL)) {
       for (const action of list) {
-        const reached = targets.some((target) => DEVICES.some((device) => entries(list, target, 'menu', device).some((e) => e.id === action.id)));
+        const reached = targets.some((target) => DEVICES.some((device) => (['menu', 'command'] as const).some((way) => entries(list, target, way, device).some((e) => e.id === action.id))));
         expect(reached, `${thing}: ${action.id}`).toBe(true);
       }
     }

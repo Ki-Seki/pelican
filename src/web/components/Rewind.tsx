@@ -2,6 +2,7 @@ import { History, Loader2, Undo2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { RewindCheck, RewindRestore } from '../../shared/protocol';
+import { clockTime } from '../lib/format';
 import { Sheet } from './Sheet';
 
 /** Desktop's names for the three choices, in its order. */
@@ -159,5 +160,36 @@ export function RewoundMarker({ onUndo }: { onUndo?: () => Promise<void> }) {
   );
 }
 
-/** A prompt, for Rewind to here: its id, its words in a few, and when it was sent. */
+/** A prompt, as Rewind to here and /rewind's list name it: its id, its words in a few, and when it was sent. */
 export type RewindPoint = { uuid: string; text: string; timestamp?: number };
+
+/**
+ * /rewind: which message to rewind to, as Claude Code's Rewind and Desktop's list them: the
+ * conversation's prompts, oldest first, the newest picked to begin with. Picking one is its
+ * Rewind to here.
+ */
+export function RewindPicker({ open, points, onClose, onPick }: { open: boolean; points: RewindPoint[]; onClose: () => void; onPick: (point: RewindPoint) => void }) {
+  return (
+    <Sheet open={open} onClose={onClose} title="Rewind">
+      {points.length === 0 ? (
+        <div className="px-3 py-6 text-center text-[13px] text-faint italic">Nothing to rewind to yet</div>
+      ) : (
+        <ul className="pb-1">
+          {points.map((point, i) => (
+            <li key={point.uuid}>
+              <button
+                type="button"
+                {...(i === points.length - 1 ? { 'data-autofocus': true } : {})}
+                onClick={() => onPick(point)}
+                className="flex min-h-12 w-full items-baseline gap-3 rounded-xl px-3 py-2 text-left hover:bg-hover focus-visible:bg-hover pointer-fine:min-h-10"
+              >
+                <span className="line-clamp-2 min-w-0 flex-1 text-[14.5px] break-words">{point.text}</span>
+                {point.timestamp && <span className="shrink-0 text-[12px] text-faint tabular-nums">{clockTime(point.timestamp)}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Sheet>
+  );
+}

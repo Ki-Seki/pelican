@@ -13,6 +13,7 @@ import type { Attachment, BackgroundTask, Block, ChatMessage, RewindCheck, Rewin
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
 import { api, ApiError, apiUrl, isDemoNote, isUnreachable, type TrustChoice, type TrustQuestion } from '../lib/api';
 import { useDemoNote } from '../lib/demo';
+import { commandOf, SESSION_ACTIONS } from '../lib/actions';
 import { addWaiting, clearDraft, moveDraft, putBackWaiting, removeWaiting, saveDraft, takeWaiting, waitingOf } from '../lib/drafts';
 import { newId } from '../lib/ids';
 import { baseName, clockTime, shortPath, untilTime } from '../lib/format';
@@ -45,7 +46,7 @@ import {
 import { askForTerminal, RunInTerminal, useTerminalsAvailable, wantTerminalFocus } from '../lib/terminals';
 import { setSessionTitle } from '../lib/title';
 import { currentTasks, type Todo } from '../lib/tools';
-import type { Item } from '../lib/turns';
+import { buildItems, type Item } from '../lib/turns';
 import { useWorkspaceStep } from '../lib/workspace-route';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { ContextPanel, ContextRing } from './ContextPanel';
@@ -56,7 +57,7 @@ import { StartIn } from './NewSession';
 import { OfflineLine, retryNow, useOffline } from './Offline';
 import { PermissionCard } from './PermissionCard';
 import { QueuedStrip } from './QueuedStrip';
-import { RewindDialog, type RewindPoint, type RewindProblem } from './Rewind';
+import { RewindDialog, RewindPicker, type RewindPoint, type RewindProblem } from './Rewind';
 import { type QuoteTarget, QuoteTargetContext } from './Quotes';
 import { StatusBadge } from './SessionList';
 import { showCommandMenu } from './CommandMenu';
@@ -414,9 +415,10 @@ export function Chat({
   const failedMcp = useMemo(() => (mcp.data?.live ? mcp.data.servers.filter((server) => server.status === 'failed').map((server) => server.name) : []), [mcp.data]);
   const [mcpSeen, setMcpSeen] = useState<string>();
   const [usageOpen, setUsageOpen] = useState(false);
-  // Rewind to here, asked about (its dialog).
+  // Rewind to here, asked about (its dialog), and /rewind's list of messages.
   const [rewind, setRewind] = useState<RewindAsk>();
   const [rewindWork, setRewindWork] = useState<{ working: boolean; problem?: RewindProblem }>({ working: false });
+  const [picking, setPicking] = useState(false);
   const [tipsSeen, setTipsSeen] = useState(() => new Set(Object.values(TIP_KEYS).filter(tipSeen)));
   const [modeSeen, setModeSeen] = useState<string>();
   const [trustAsk, setTrustAsk] = useState<TrustAsk>();
@@ -797,6 +799,13 @@ export function Chat({
       failed(error);
     }
   };
+  // /rewind's list: the prompts that began turns, oldest first.
+  const rewindPoints = useMemo<RewindPoint[]>(() => (picking ? buildItems(view.messages, machine).flatMap((item) => (
+    item.kind === 'user' && !item.command && !item.steered && !item.pending
+      ? [{ uuid: item.key, text: promptGist(item.text).trim() || item.files.map((f) => f.name).join(', ') || 'A picture', ...(item.timestamp ? { timestamp: item.timestamp } : {}) }]
+      : []
+  )) : []), [picking, view.messages, machine]);
+
   // The pane's tabs load once the conversation is up, ready before they are asked for.
   useEffect(() => {
     if (!cwd) return undefined;
@@ -1099,6 +1108,9 @@ export function Chat({
     const add = (item: CommandItem) => mine.push(item);
     if (!sideChat) add({ id: 'side-chat', group: 'session', label: 'Side chat', icon: MessagesSquare, name: 'btw', description: 'Ask in side chat', key: 'sideChat', needsWords: true, run: (words) => side.show(words) });
     add({ id: 'fork', group: 'session', label: 'Fork', icon: GitFork, name: 'branch', description: 'Fork from here · new session', key: 'fork', run: () => act.current.fork() });
+    // /rewind, as Claude Code names it (lib/actions): which message to go back to before.
+    const rewinding = sideChat ? undefined : commandOf(SESSION_ACTIONS, 'rewind', { title: '', archived: false, pinned: false, from: 'title', rewind: () => setPicking(true) }, hasKeyboard() ? 'pointer' : 'touch');
+    if (rewinding) add({ group: 'session', aliases: ['checkpoint', 'undo'], ...rewinding, run: () => rewinding.run() });
     add({ id: 'rename', group: 'session', label: 'Rename', icon: Pencil, name: 'rename', description: 'Rename this session', key: 'rename', run: (words) => act.current.rename(words) });
     add({ id: 'export', group: 'session', label: 'Export', icon: Download, name: 'export', description: 'Export', run: () => exportSession(sessionId, session?.title) });
     if (cwd) add({ id: 'changes', group: 'session', label: 'Changes', icon: FileDiff, name: 'diff', description: linesWords ? `Changes · ${linesWords}` : 'Changes', key: 'changes', run: () => act.current.showPane('changes') });
@@ -1402,6 +1414,17 @@ export function Chat({
           {...(rewindWork.problem ? { problem: rewindWork.problem } : {})}
           onCancel={closeRewind}
           onRewind={(restore) => rewind && void doRewind(rewind, restore, true)}
+        />
+      )}
+      {sessionId && !sideChat && (
+        <RewindPicker
+          open={picking}
+          points={rewindPoints}
+          onClose={() => setPicking(false)}
+          onPick={(point) => {
+            setPicking(false);
+            requestRewind(point);
+          }}
         />
       )}
       {sessionId && (

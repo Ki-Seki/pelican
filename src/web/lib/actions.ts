@@ -89,6 +89,8 @@ export type Action<T> = {
   row?: true | Device;
   /** What a left swipe on a phone does; one action of a list at most. */
   swipe?: true;
+  /** Not in the thing's menu: reached by its command alone, typed (/rewind, which asks which message). */
+  menu?: false;
   /** Only on one kind of screen. */
   only?: Device;
   /** Undoes nothing, and shows in red, last. */
@@ -127,7 +129,7 @@ function inWay<T>(action: Action<T>, way: Way, device: Device): boolean {
   if (way === 'row') return action.row === true || action.row === device;
   if (way === 'swipe') return Boolean(action.swipe);
   if (way === 'command') return Boolean(action.command);
-  return true;
+  return action.menu !== false;
 }
 
 function entry<T>(action: Action<T>, target: T, device: Device): MenuEntry | undefined {
@@ -175,6 +177,17 @@ export function entries<T>(list: readonly Action<T>[], target: T, way: Way, devi
 
 /** What a left swipe does to this thing, if anything. */
 export const swipeAction = <T>(list: readonly Action<T>[], target: T): MenuEntry | undefined => entries(list, target, 'swipe', 'touch')[0];
+
+/** One of a thing's actions as the / list and ⌘K show it (lib/commands): Claude Code's name for it, without the /, and the list's words. */
+export type CommandEntry = { id: string; label: string; icon?: LucideIcon; key?: KeyId; name: string; description: string; run: () => void };
+
+/** The action `id` by its command, as it applies to this thing now; none when it does not. */
+export function commandOf<T>(list: readonly Action<T>[], id: string, target: T, device: Device): CommandEntry | undefined {
+  const action = list.find((a) => a.id === id);
+  const made = action?.command && entries([action], target, 'command', device)[0];
+  if (!action?.command || !made || !('run' in made)) return undefined;
+  return { id, label: made.label, ...(made.icon ? { icon: made.icon } : {}), ...(made.key ? { key: made.key } : {}), name: action.command.name.replace(/^\//, ''), description: action.command.description, run: made.run };
+}
 
 /** Runs a thing's action by its id, as a key or a way in that names it does. */
 export function runAction<T>(list: readonly Action<T>[], id: string, target: T, device: Device = 'pointer'): boolean {
@@ -266,13 +279,19 @@ export type SessionTarget = {
   pin?: (pinned: boolean) => void;
   sideChat?: () => void;
   fork?: () => void;
+  /** Asks which of its messages to rewind to (/rewind). */
+  rewind?: () => void;
   export?: () => void;
   view?: Choice;
   archive?: (archived: boolean) => void;
   remove?: () => void;
 };
 
-/** The session's menu: Rename · Pin · Side chat · Fork · Copy resume command · Export · Transcript view · Archive · Delete. */
+/**
+ * The session's menu: Rename · Pin · Side chat · Fork · Copy resume command · Export · Transcript
+ * view · Archive · Delete. /rewind is the session's by its command alone: it asks which message,
+ * whose own Rewind to here (on the prompt, its reply's ⋯) does the rest.
+ */
 export const SESSION_ACTIONS: readonly Action<SessionTarget>[] = [
   {
     id: 'rename', group: 'name', label: 'Rename', icon: Pencil, key: 'rename',
@@ -292,6 +311,11 @@ export const SESSION_ACTIONS: readonly Action<SessionTarget>[] = [
     id: 'fork', group: 'more', label: 'Fork', icon: GitFork, key: 'fork',
     command: { name: '/branch', description: 'Fork from here · new session' },
     when: (s) => Boolean(s.fork), run: (s) => s.fork?.(),
+  },
+  {
+    id: 'rewind', group: 'more', label: 'Rewind to an earlier message', icon: History, menu: false,
+    command: { name: '/rewind', description: 'Rewind to an earlier message' },
+    when: (s) => Boolean(s.rewind), run: (s) => s.rewind?.(),
   },
   { id: 'copy-resume', group: 'more', label: 'Copy resume command', icon: SquareTerminal, when: (s) => Boolean(s.resume), run: (s) => copy(s.resume) },
   {
