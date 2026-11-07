@@ -754,19 +754,22 @@ async function checkDocked(browser, base, sessions) {
  * The side chat, at the narrowest width it sits beside the conversation at, where the session list
  * folds away for it: it opens with Cmd/Ctrl+;, stays inside the window when the conversation holds
  * a long line, leaves the conversation room, and answers a question (the demo acts the answer out).
+ * Then a session with side chats of its own: it opens on the latest, called by its first question,
+ * under Changes, Files and the Terminal at 1440px, sharing the column, its ▾ listing the others; on
+ * a phone, the same one in a sheet that Back closes.
  */
-async function checkSideChat(browser, base, sessions) {
+async function checkSideChat(browser, base, sessions, where = 'app') {
   const session = sessions.find((s) => !s.sideChatOf);
   if (!session) return;
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   const page = await context.newPage();
-  watch(page, () => 'app, side chat');
+  watch(page, () => `${where}, side chat`);
   await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(300);
   await page.keyboard.press('ControlOrMeta+;');
   const pane = page.getByRole('complementary', { name: 'Side chat' });
   if (!(await pane.waitFor({ timeout: 3000 }).then(() => true, () => false))) {
-    problems.push('app, side chat: does not open with Cmd/Ctrl+;');
+    problems.push(`${where}, side chat: does not open with Cmd/Ctrl+;`);
     await context.close();
     return;
   }
@@ -784,17 +787,92 @@ async function checkSideChat(browser, base, sessions) {
     if (conversation && conversation.width - r.width < 320) out.push(`the conversation is ${Math.round(conversation.width - r.width)}px wide beside it`);
     return out;
   });
-  problems.push(...found.map((problem) => `app, side chat: ${problem}`));
+  problems.push(...found.map((problem) => `${where}, side chat: ${problem}`));
   const question = 'Why CSS variables, and not a context?';
   const box = pane.getByRole('textbox', { name: 'Side question' });
   await box.fill(question);
   await box.press('Enter');
   if (!(await pane.getByText(/answers here from the session so far/).first().waitFor({ timeout: 8000 }).then(() => true, () => false))) {
-    problems.push('app, side chat: a question gets no answer');
+    problems.push(`${where}, side chat: a question gets no answer`);
   } else if (!(await pane.getByText(question).count())) {
-    problems.push('app, side chat: the question does not show above its answer');
+    problems.push(`${where}, side chat: the question does not show above its answer`);
   }
   await context.close();
+  await checkSideChats(browser, base, sessions, where);
+}
+
+/** The side chats of the session that has them, from the computer's list, on a computer and on a phone. */
+async function checkSideChats(browser, base, sessions, where) {
+  const sides = sessions.filter((s) => s.sideChatOf && !s.archived).sort((a, b) => b.lastActivity - a.lastActivity);
+  const session = sessions.find((s) => sides.some((side) => side.sideChatOf === s.id));
+  if (!session) {
+    problems.push(`${where}, side chats: no session has side chats to show`);
+    return;
+  }
+  const own = sides.filter((s) => s.sideChatOf === session.id);
+  const latest = own[0];
+  const name = latest.sideQuestion ? `Side chat · ${latest.sideQuestion}` : 'Side chat';
+  const say = (problem) => problems.push(`${where}, side chats of ${session.id}: ${problem}`);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript(() => {
+    try {
+      const prefs = JSON.parse(localStorage.getItem('pelican:prefs') || '{}');
+      localStorage.setItem('pelican:prefs', JSON.stringify({ ...prefs, workspacePane: true }));
+    } catch {
+      // A frame without storage.
+    }
+  });
+  const page = await context.newPage();
+  watch(page, () => `${where}, side chats at 1440px`);
+  await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  await page.keyboard.press('ControlOrMeta+;');
+  const pane = page.getByRole('complementary', { name: 'Side chat' });
+  if (!(await pane.getByRole('heading', { name, exact: true }).waitFor({ timeout: 5000 }).then(() => true, () => false))) {
+    say(`at 1440px it does not open on the latest, "${name}"`);
+  } else {
+    const found = await page.evaluate(() => {
+      const out = [];
+      const workspace = document.querySelector('aside[aria-label="Changes and files"]')?.getBoundingClientRect();
+      const side = document.querySelector('aside[aria-label="Side chat"]').getBoundingClientRect();
+      if (!workspace) return ['the pane closed for it, though there is room for both'];
+      if (side.top < workspace.bottom - 1) out.push(`it overlaps the pane by ${Math.round(workspace.bottom - side.top)}px`);
+      if (Math.abs(side.left - workspace.left) > 1 || Math.abs(side.right - workspace.right) > 1) out.push('it is not in the pane’s column');
+      if (side.bottom > innerHeight + 1 || side.right > innerWidth + 1) out.push('it ends past the window');
+      if (side.height < 200) out.push(`it is ${Math.round(side.height)}px tall`);
+      if (!document.querySelector('[role="separator"][aria-label="Resize the side chat"]')) out.push('no handle shares the height');
+      return out;
+    });
+    for (const problem of found) say(`under the pane at 1440px, ${problem}`);
+    await pane.getByRole('button', { name, exact: true }).click();
+    const menu = page.getByRole('menu', { name: 'Side chats' });
+    if (!(await menu.waitFor({ timeout: 3000 }).then(() => true, () => false))) say('its ▾ opens no menu');
+    else {
+      const items = await menu.getByRole('menuitem').allTextContents();
+      const expected = [...own.slice(1).map((s) => s.sideQuestion ?? 'Side chat'), 'New side chat'];
+      if (JSON.stringify(items) !== JSON.stringify(expected)) say(`its ▾ lists ${JSON.stringify(items)}, not ${JSON.stringify(expected)}`);
+      await page.keyboard.press('Escape');
+    }
+  }
+  await context.close();
+  // A phone: the same side chat in a sheet, which Back closes, the session left as it was.
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const touch = await phone.newPage();
+  watch(touch, () => `${where}, side chats on a phone`);
+  await touch.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+  await touch.waitForTimeout(300);
+  await touch.locator(CHAT_HEADER).locator('h2 button').first().tap();
+  await touch.getByRole('menuitem', { name: /^Side chat/ }).tap().catch(() => say('the title’s menu on a phone has no Side chat'));
+  const sheet = touch.getByRole('dialog', { name, exact: true });
+  if (!(await sheet.waitFor({ timeout: 5000 }).then(() => true, () => false))) say(`on a phone it does not open on the latest, "${name}"`);
+  else {
+    await touch.waitForTimeout(400);
+    await touch.goBack();
+    await touch.waitForTimeout(600);
+    if (await touch.getByRole('dialog', { name: /^Side chat/ }).count()) say('on a phone Back does not close it');
+    if (!touch.url().includes(encodeURIComponent(session.id)) && !touch.url().includes(session.id)) say(`on a phone Back leaves the session too (${touch.url()})`);
+  }
+  await phone.close();
 }
 
 /**
@@ -1706,6 +1784,7 @@ try {
     await driveApp(browser, `${server.base}demo/`, sessions, await walkable(sessions, saved));
     await checkSentFiles(browser, `${server.base}demo/`, sessions, saved);
     await checkExport(browser, `${server.base}demo/`, sessions, 'site, demo');
+    await checkSideChat(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkRequests(browser, `${server.base}demo/`, sessions, saved, 'site, demo');
     await checkRewind(browser, `${server.base}demo/`, sessions, 'site, demo');

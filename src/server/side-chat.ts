@@ -1,8 +1,12 @@
 import path from 'node:path';
+import readline from 'node:readline';
 
 import type { CanUseTool, Options } from '@anthropic-ai/claude-agent-sdk';
 
 import type { RunSettings } from '../shared/protocol.js';
+import { promptGist } from '../shared/quoted.js';
+import { shortTitle } from '../shared/titles.js';
+import { openRegular } from './open.js';
 import { everTitled, firstTurnSession, transcriptPath } from './transcripts.js';
 
 /**
@@ -93,3 +97,83 @@ export async function sideChatOf(sessionId: string): Promise<string | undefined>
 }
 
 export const isSideChat = async (sessionId: string): Promise<boolean> => Boolean(await sideChatOf(sessionId));
+
+/** A side chat's first question: the message its own conversation starts at, and its words, as a title. */
+export type SideQuestion = { uuid: string; text: string };
+
+/** How far into a side chat's transcript its first question is looked for: past the copy of a long session. */
+const QUESTION_SCAN = 64 * 1024 * 1024;
+
+/** What Claude Code writes as a prompt that nobody asked: a command, what it printed, a task's news, an interruption. */
+const NOT_ASKED = /^(?:<(?:command-name|command-message|command-args|local-command-[a-z]+|bash-[a-z]+|task-notification)>|\[Request interrupted)/;
+
+/** What each side chat's transcript was found to hold, as it was then: a file only grows, so a question found stays. */
+const questions = new Map<string, { ino: number; size: number; found?: SideQuestion }>();
+
+/** A prompt's text, without the notes Claude Code and Pelican add for Claude (the side chat's own among them). */
+function promptText(content: unknown): string {
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.flatMap((block: unknown) => {
+        const b = block as { type?: unknown; text?: unknown } | null;
+        return b?.type === 'text' && typeof b.text === 'string' ? [b.text] : [];
+      }).join('\n\n')
+      : '';
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+}
+
+/**
+ * The first question a side chat asked, after the conversation it copied, by which Pelican names
+ * it: its first prompt of its own (under its own id, not one the copy brought, which names where it
+ * came from), as Pelican shows it, in a few words: not the note sideChatPrompt puts before it, nor
+ * the markers of a passage it was asked with (a selection's attach block), only what was typed.
+ * None before one is in the transcript.
+ */
+export async function sideChatQuestion(file: string): Promise<SideQuestion | undefined> {
+  let handle: Awaited<ReturnType<typeof openRegular>> | undefined;
+  try {
+    handle = await openRegular(file);
+    const { ino, size } = await handle.stat();
+    const known = questions.get(file);
+    if (known && known.ino === ino && (known.found || known.size === size)) return known.found;
+    const own = path.basename(file, '.jsonl');
+    const ownRow = `"sessionId":"${own}"`;
+    let found: SideQuestion | undefined;
+    let read = 0;
+    const input = handle.createReadStream({ start: 0, autoClose: false });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        read += line.length + 1;
+        if (read > QUESTION_SCAN) break;
+        // A prompt of its own: a user row under its id, copied from nowhere, that is no tool's result.
+        if (!line.includes('"type":"user"') || !line.includes(ownRow) || line.includes('"forkedFrom":{') || line.includes('"tool_use_id"')) continue;
+        try {
+          const row = JSON.parse(line) as {
+            type?: unknown; uuid?: unknown; sessionId?: unknown; isSidechain?: unknown; isMeta?: unknown; isCompactSummary?: unknown; forkedFrom?: unknown;
+            message?: { content?: unknown };
+          };
+          if (row.type !== 'user' || row.sessionId !== own || typeof row.uuid !== 'string' || row.isSidechain === true || row.isMeta === true || row.isCompactSummary === true) continue;
+          if (row.forkedFrom !== undefined && row.forkedFrom !== null) continue;
+          const text = promptText(row.message?.content);
+          if (!text || NOT_ASKED.test(text)) continue;
+          found = { uuid: row.uuid, text: shortTitle(promptGist(text)) };
+          break;
+        } catch {
+          // A row being written.
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    if (questions.size > 10_000) questions.clear();
+    questions.set(file, { ino, size, ...(found ? { found } : {}) });
+    return found;
+  } catch {
+    return undefined; // Missing or unreadable.
+  } finally {
+    await handle?.close();
+  }
+}

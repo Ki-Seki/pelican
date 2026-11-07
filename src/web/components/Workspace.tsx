@@ -19,6 +19,7 @@ import { folderOf, goTo, goUp, leave, useWorkspaceStep, type WorkspaceStep, type
 import { SendComments } from './Comments';
 import { ActionMenu } from './ActionMenu';
 import { PaneQuote, SelectionFoot, type SelectionFootAt } from './FileViewer';
+import { useDockedMark } from './PaneColumn';
 import { PathLabel } from './PathLabel';
 import { downloadFile } from './PathMenu';
 import type { RewindPoint } from './Rewind';
@@ -418,14 +419,9 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
 
   const view = useRef<HTMLDivElement>(null);
   useCovering(open && !docked, view);
-  // Beside the conversation on a screen under 1280px, the session list makes way (styles.css).
-  useLayoutEffect(() => {
-    if (!open || !docked) return undefined;
-    document.documentElement.dataset.pane = 'docked';
-    return () => {
-      delete document.documentElement.dataset.pane;
-    };
-  }, [open, docked]);
+  // Beside the conversation on a screen under 1280px, the session list makes way (styles.css); the
+  // side chat, which can sit under it, marks the page too, and the mark stays while either does.
+  useDockedMark(open && docked);
 
   if (!open) return null;
   if (docked) {

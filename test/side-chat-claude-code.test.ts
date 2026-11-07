@@ -21,6 +21,8 @@ const home = vi.hoisted(() => {
 });
 
 const QUESTION = 'Why CSS variables?';
+/** The id the page gives the side chat's first question, which its own conversation starts at. */
+const ASKED = '5a5a5a5a-0000-4000-8000-000000000001';
 let api: StandIn;
 let folder: string;
 let parent: string;
@@ -65,7 +67,7 @@ beforeAll(async () => {
 
   parent = await sendMessage({ cwd: folder }, { text: 'Add a dark theme', attachments: [], settings: {} });
   await until(() => turns().length >= 1 && getRun(parent)?.busy === false, 90_000, 'the session’s turn');
-  side = await startSideChat(parent, { text: QUESTION, settings: {} });
+  side = await startSideChat(parent, { text: QUESTION, settings: {}, uuid: ASKED });
   await until(() => getRun(side)?.busy === false && sideTurns().some((request) => resultsAfterQuestion(request).length >= 3), 90_000, 'the side chat’s turn');
 }, 200_000);
 
@@ -96,7 +98,7 @@ describe('a side chat, in the Claude Code the Agent SDK bundles', () => {
     expect(read!.text).toContain('The colors are CSS variables in theme.css.');
   });
 
-  it('is still titled "Side chat" once its Claude has exited, and stays folded under its session', async () => {
+  it('is still titled "Side chat" once its Claude has exited, stays folded under its session, and is listed by its first question', async () => {
     getRun(side)?.close();
     // The run goes once its Claude has ended, which is when Claude Code writes what it writes on exit.
     await until(() => getRun(side) === undefined, 20_000, 'its Claude to exit');
@@ -106,6 +108,8 @@ describe('a side chat, in the Claude Code the Agent SDK bundles', () => {
     expect(rows.filter((row) => row.type === 'custom-title').at(-1)?.customTitle).toBe('Side chat');
     await refreshTranscriptIndex();
     const listed = await listSummaries(() => undefined);
-    expect(listed.find((s) => s.id === side)).toMatchObject({ title: 'Side chat', sideChatOf: parent });
+    // Called by its question, which its own conversation starts at, after the copy of the session's.
+    expect(listed.find((s) => s.id === side)).toMatchObject({ title: QUESTION, sideChatOf: parent, sideQuestion: QUESTION, sideStart: ASKED });
+    expect(rows.filter((row) => row.type === 'user' && (row as { uuid?: string }).uuid === ASKED)).toHaveLength(1);
   }, 30_000);
 });

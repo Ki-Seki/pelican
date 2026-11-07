@@ -470,6 +470,26 @@ const SESSIONS: DemoSession[] = [
       ];
     },
   },
+  // A later one, started from a passage of Claude's reply, which it was asked with: the session's
+  // side chat opens on it, the one before under its ▾.
+  {
+    id: 'a3f1c2d4-1111-4a1b-8c3d-0000000000a2',
+    title: 'Side chat',
+    project: 'acme-web',
+    branch: 'feat/dark-theme',
+    copies: 'a3f1c2d4-1111-4a1b-8c3d-000000000001',
+    rows: () => {
+      const t = Date.now() - 1 * MIN;
+      return [
+        { role: 'user', at: t, content: '<!-- attach -->\n> one more set of values plus a toggle\n\nWhy not a class on html instead of a second set of values?' },
+        {
+          role: 'assistant',
+          at: t + 6000,
+          content: [text("It is one, in effect: the toggle sets `data-theme` on `<html>`, and `:root[data-theme='dark']` swaps the values, so every color still comes from one variable. A second stylesheet would repeat every rule.")],
+        },
+      ];
+    },
+  },
   {
     id: 'e2f5d8a4-5555-4e5f-8071-000000000005',
     title: 'Turn this CSV into JSON',

@@ -174,19 +174,35 @@ describe('the demo', () => {
     expect(page.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 
-  it('asks a side question in a side chat of the session’s, listed under it, and says what Claude would do there', async () => {
-    const { sessionId } = await api.side(SESSION, { question: 'Why CSS variables?', settings: { permissionMode: 'bypassPermissions' }, uuid: 'side-q' });
+  it('asks a side question in a side chat of the session’s, listed under it and called by its question, and says what Claude would do there', async () => {
+    const { sessionId } = await api.side(SESSION, { question: '<!-- attach -->\n> one more set of values\n\nWhy CSS variables?', settings: { permissionMode: 'bypassPermissions' }, uuid: 'side-q' });
     expect(sessionId).not.toBe(SESSION);
     vi.runAllTimers();
     const messages = getView(sessionId).messages;
     expect(messages.map((m) => m.uuid)[0]).toBe('side-q');
     expect(messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_SIDE_REPLY });
     expect(getView(sessionId).run?.settings.permissionMode).toBe('dontAsk');
-    expect((await api.session(sessionId)).session).toMatchObject({ title: 'Side chat', sideChatOf: SESSION });
+    // Called by what was typed, as the server calls one, and its own conversation starts at the question.
+    expect((await api.session(sessionId)).session).toMatchObject({ title: 'Why CSS variables?', sideChatOf: SESSION, sideQuestion: 'Why CSS variables?', sideStart: 'side-q' });
     // A later question goes to the same side chat.
     await api.send(sessionId, { text: 'And the toggle?', attachments: [], settings: {}, uuid: 'side-q2' });
     vi.runAllTimers();
     expect(getView(sessionId).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_SIDE_REPLY });
+  });
+
+  it('answers a question in a side chat its server lists as a side chat, in its own mode', async () => {
+    const SIDE = 'a3f1c2d4-1111-4a1b-8c3d-0000000000a2';
+    const listed = { id: SIDE, title: 'Why not a class on html?', cwd: CWD, project: 'acme-web', lastActivity: 1, status: 'idle', sideChatOf: SESSION, sideQuestion: 'Why not a class on html?', sideStart: 'q' };
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ sessions: [listed] }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    try {
+      expect((await api.sessions()).map((s) => s.id)).toContain(SIDE);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    await api.send(SIDE, { text: 'And with a class?', attachments: [], settings: { permissionMode: 'bypassPermissions' }, uuid: 'side-q3' });
+    vi.runAllTimers();
+    expect(getView(SIDE).messages.at(-1)?.blocks[0]).toEqual({ type: 'text', text: DEMO_SIDE_REPLY });
+    expect(getView(SIDE).run?.settings.permissionMode).toBe('dontAsk');
   });
 
   it('stops when asked, as Claude would', async () => {

@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { sessionChanges } from '../src/server/changes';
 import { config } from '../src/server/config';
 import { demoLiveProcesses, demoRunState, demoRunStatus, demoRunTasks, demoTaskOutput, prepareDemo } from '../src/server/demo';
-import { sentFiles } from '../src/server/sessions';
+import { listSummaries, sentFiles } from '../src/server/sessions';
 import { readLastTurn } from '../src/server/transcripts';
 import { gitStatus } from '../src/server/workspace';
 import { workflowAgentPage, workflowView } from '../src/server/workflows';
@@ -114,6 +114,26 @@ describe('the demo’s folders', () => {
 });
 
 describe('the demo’s side chat', () => {
+  it('two of the dark theme’s, each called by its first question, the latest asked with a passage of Claude’s reply', async () => {
+    const listed = (await listSummaries(() => undefined)).filter((s) => s.sideChatOf === FIRST);
+    expect(listed.map((s) => [s.title, s.sideQuestion])).toEqual([
+      ['Why not a class on html instead of a second set of values?', 'Why not a class on html instead of a second set of values?'],
+      ['Why CSS variables, and not a theme context in React?', 'Why CSS variables, and not a theme context in React?'],
+    ]);
+    // Each starts at its own first question, after the copy of the session's conversation.
+    for (const side of listed) {
+      const rows = await rowsOf(transcriptOf('acme-web', side.id));
+      const start = rows.findIndex((row) => row.uuid === side.sideStart);
+      expect(rows.slice(1, start).every((row) => row.forkedFrom)).toBe(true);
+      expect(rows[start]?.forkedFrom).toBeUndefined();
+    }
+    const asked = (await rowsOf(transcriptOf('acme-web', listed[0]!.id))).find((row) => row.uuid === listed[0]!.sideStart);
+    expect(asked?.message.content).toBe('<!-- attach -->\n> one more set of values plus a toggle\n\nWhy not a class on html instead of a second set of values?');
+    // The passage is what Claude said in the session.
+    const session = await rowsOf(transcriptOf('acme-web', FIRST));
+    expect(JSON.stringify(session)).toContain('a dark theme is one more set of values plus a toggle that switches them');
+  });
+
   it('copies no checkpoints with its session’s rows, as forkSession copies none, and its Changes show none of their turns', async () => {
     const file = transcriptOf('acme-web', SIDE);
     const rows = await rowsOf(file);

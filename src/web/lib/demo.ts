@@ -10,6 +10,7 @@ import { COMMIT_REQUEST, requestShown } from '../../shared/requests';
 import { FIRST_MESSAGE, NOT_HERE, NOTHING_TO_UNDO, REWIND_BUSY } from '../../shared/rewind';
 import { currentTasks, type Todo } from '../../shared/tasks';
 import { isLive } from '../../shared/workflows';
+import { promptGist } from '../../shared/quoted';
 import { shortTitle } from '../../shared/titles';
 import { answerLocally, api, ApiError } from './api';
 import { fromDefaults } from './defaults';
@@ -47,6 +48,8 @@ type Story = {
 const stories = new Map<string, Story>();
 const folders = new Map<string, string>();
 const titles = new Map<string, string>();
+/** The side chats the demo's server lists: a question asked in one gets a side chat's answer, as one made here does. */
+const sideChats = new Set<string>();
 let home = '';
 
 const storyOf = (id: string): Story => {
@@ -167,7 +170,7 @@ function reply(sessionId: string, message: ChatMessage): void {
   runAs(sessionId, { ...run, busy: true, permissions: [], partial: [] });
   const typedText = message.blocks.find((b) => b.type === 'text');
   if (typedText?.type === 'text' && actRequest(sessionId, typedText.text)) return;
-  const words = stories.get(sessionId)?.summary?.sideChatOf ? DEMO_SIDE_REPLY : DEMO_REPLY;
+  const words = sideChats.has(sessionId) || stories.get(sessionId)?.summary?.sideChatOf ? DEMO_SIDE_REPLY : DEMO_REPLY;
   later(sessionId, 1400, () => {
     say(sessionId, assistant([{ type: 'text', text: words }]));
     finish(sessionId, 1400);
@@ -284,7 +287,8 @@ function send(sessionId: string, body: SendBody): { sessionId: string } {
     }
     return { sessionId };
   }
-  if (!run) runAs(sessionId, idleRun(sessionId, body.settings));
+  // A side chat runs in its own mode, whatever the session's.
+  if (!run) runAs(sessionId, idleRun(sessionId, sideChats.has(sessionId) ? { ...body.settings, permissionMode: 'dontAsk' } : body.settings));
   reply(sessionId, message);
   return { sessionId };
 }
@@ -311,20 +315,26 @@ function create(body: SendBody): { sessionId: string } {
   return { sessionId: id };
 }
 
-/** A side question: a side chat of the session's, started in the page like a new session, listed under it. */
+/**
+ * A side question: a side chat of the session's, started in the page like a new session, listed
+ * under it, and called by its question, as the server calls one (side-chat.ts).
+ */
 function side(sessionId: string, body: { question?: string; uuid?: string; settings?: RunSettings }): { sessionId: string } {
   const id = newId();
   const cwd = folders.get(sessionId) ?? '';
   folders.set(id, cwd);
+  const question = shortTitle(promptGist(body.question ?? ''));
   storyOf(id).summary = {
     id,
-    title: 'Side chat',
+    title: question || 'Side chat',
     cwd,
     project: cwd.split('/').filter(Boolean).at(-1) ?? '',
     lastActivity: Date.now(),
     createdAt: Date.now(),
     status: 'running',
     sideChatOf: sessionId,
+    ...(question ? { sideQuestion: question } : {}),
+    ...(question && body.uuid ? { sideStart: body.uuid } : {}),
   };
   runAs(id, idleRun(id, { ...body.settings, permissionMode: 'dontAsk' }));
   reply(id, user([{ type: 'text', text: body.question ?? '' }], body.uuid ? { uuid: body.uuid } : {}));
@@ -582,6 +592,7 @@ function adjust(path: string, data: unknown): unknown {
     for (const session of sessions) {
       folders.set(session.id, session.cwd);
       titles.set(session.id, session.title);
+      if (session.sideChatOf) sideChats.add(session.id);
     }
     const started = [...stories.values()].flatMap((story) => (story.summary ? [story.summary] : []));
     return { sessions: [...started, ...sessions].map(summarize).sort((a, b) => b.lastActivity - a.lastActivity) };

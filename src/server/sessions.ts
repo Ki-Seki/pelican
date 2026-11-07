@@ -13,7 +13,7 @@ import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
 import { readHistory, readRecordedSettings } from './history.js';
 import { beforeCut, liveCut, shownCut } from './rewound.js';
-import { sideChatSource } from './side-chat.js';
+import { SIDE_CHAT_TITLE, type SideQuestion, sideChatQuestion, sideChatSource } from './side-chat.js';
 import { forgetTranscripts, lastTurnTime, limiter, transcriptFiles, transcriptPath } from './transcripts.js';
 
 export type StatusSource = (sessionId: string) => SessionStatus | undefined;
@@ -63,9 +63,12 @@ async function summarize(
   const cwd = info.cwd || lastTurn?.cwd || '';
   if (!info.cwd && cwd) infoCache.set(info.sessionId, { ...info, cwd });
   const gitBranch = lastTurn?.gitBranch ?? info.gitBranch;
-  const title = sessionTitle(info, lastTurn?.summarized) ?? 'Untitled session';
   // Side chats, Claude Desktop's and Pelican's: a copy of a conversation with a question or two of its own.
   const sideChatOf = fresh ? fresh.sideChatOf : file ? await sideChatSource(file) : undefined;
+  const question = !sideChatOf ? undefined : fresh ? fresh.sideQuestion : file ? await sideChatQuestion(file) : undefined;
+  // A side chat is called by its first question, unless someone named it otherwise.
+  const titled = sessionTitle(info, lastTurn?.summarized) ?? 'Untitled session';
+  const title = question && titled === SIDE_CHAT_TITLE ? question.text : titled;
   return {
     id: info.sessionId,
     title,
@@ -82,6 +85,7 @@ async function summarize(
     ...(lastTurn?.stopped ? { stopped: lastTurn.stopped } : lastTurn?.preview ? { preview: lastTurn.preview } : {}),
     ...(working > 0 ? { tasks: working } : {}),
     ...(sideChatOf ? { sideChatOf } : {}),
+    ...(question ? { sideQuestion: question.text, sideStart: question.uuid } : {}),
     // Never both (kept.ts); should the files say both (written by hand), archived wins.
     ...(archived.has(info.sessionId) ? { archived: true } : pinned.has(info.sessionId) ? { pinned: true } : {}),
     // Open, idle, in another app too: its Claude does not see what is sent here until it reopens.
@@ -94,9 +98,9 @@ const defined = <T extends object>(value: T): Partial<T> =>
 
 /**
  * A transcript as the list last saw it: its size and time then, what the SDK made of it (null:
- * nothing to list), and the session it is a side chat of.
+ * nothing to list), and the session it is a side chat of, with its first question.
  */
-type Seen = { id: string; file: string; size: number; mtimeMs: number; info: SDKSessionInfo | null; continuedIn?: string; sideChatOf?: string };
+type Seen = { id: string; file: string; size: number; mtimeMs: number; info: SDKSessionInfo | null; continuedIn?: string; sideChatOf?: string; sideQuestion?: SideQuestion };
 
 /** Every transcript the list has seen, by path. */
 const seen = new Map<string, Seen>();
@@ -136,7 +140,10 @@ async function refresh(): Promise<SDKSessionInfo[]> {
     const info = (dir ? await getSessionInfo(entry.id, { dir }).catch(() => undefined) : undefined)
       ?? await getSessionInfo(entry.id).catch(() => undefined);
     const sideChatOf = info ? await sideChatSource(entry.file) : undefined;
-    seen.set(entry.file, { ...entry, info: info ?? null, ...(turn?.continuedIn ? { continuedIn: turn.continuedIn } : {}), ...(sideChatOf ? { sideChatOf } : {}) });
+    const sideQuestion = sideChatOf ? await sideChatQuestion(entry.file) : undefined;
+    seen.set(entry.file, {
+      ...entry, info: info ?? null, ...(turn?.continuedIn ? { continuedIn: turn.continuedIn } : {}), ...(sideChatOf ? { sideChatOf } : {}), ...(sideQuestion ? { sideQuestion } : {}),
+    });
   })));
   files.clear();
   for (const entry of seen.values()) {
