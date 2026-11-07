@@ -167,12 +167,12 @@ settings; and updates from Settings.
   marker sits at the cut, with Undo rewind, which brings the messages back (the files stay as they
   are) until you send your next message; it takes the words back out of the box while they are as
   the rewind put them. Code and conversation is all or nothing: code that cannot go back leaves the
-  conversation as it was, an earlier rewind's cut and all. Not while Claude works, and, while
-  another app has the session open, the code alone, as Desktop does; the conversation's first
-  message (also after a SessionStart hook's context), and one before a compaction, can go back in
-  code only. A rewind, Undo rewind and a message go one at a time: one sent from another page
-  while a rewind starts Claude again goes after the cut, and a second rewind meanwhile says Claude
-  is working. A rewind leaves the session's name as it was.
+  conversation as it was, an earlier rewind's cut and all. Not while Claude works, which it says
+  until Claude stops, and, while another app has the session open, the code alone, as Desktop
+  does; the conversation's first message (also after a SessionStart hook's context), and one
+  before a compaction, can go back in code only. A rewind, Undo rewind and a message go one at a
+  time: one sent from another page while a rewind starts Claude again goes after the cut, and a
+  second rewind meanwhile says Claude is working. A rewind leaves the session's name as it was.
 - **`/rewind`, as Claude Code names it** (also `/checkpoint` and `/undo`), and Rewind to an earlier
   message in ⌘K list the conversation's prompts, oldest first; picking one is its Rewind to here.
   A turn in Changes ends with its prompt's Rewind to here.

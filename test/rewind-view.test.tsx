@@ -111,6 +111,8 @@ const { Chat } = await import('../src/web/components/Chat');
 const { loadDraft, saveDraft, waitingOf, setWaiting } = await import('../src/web/lib/drafts');
 const { CommandMenu, showCommandMenu } = await import('../src/web/components/CommandMenu');
 const { setRun } = await import('../src/web/lib/store');
+const { ApiError } = await import('../src/web/lib/api');
+const { REWIND_BUSY } = await import('../src/shared/rewind');
 
 afterEach(async () => {
   cleanup();
@@ -262,6 +264,24 @@ describe('Rewind to here', () => {
     await screen.findByText('Rewind is unavailable while Claude is working.');
     expect(server.rewinds).toEqual([]);
     expect(dialog()).toBeNull();
+    // Claude stops: what was said of its work goes with it.
+    act(() => setRun(SESSION, { ...server.run!, busy: false }));
+    await waitFor(() => expect(screen.queryByText('Rewind is unavailable while Claude is working.')).toBeNull());
+  });
+
+  it('says so when the computer says Claude works, and no longer once it has stopped', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    // A message from another page took the session as the rewind was asked for.
+    server.failure = new ApiError(REWIND_BUSY, 409);
+    open();
+    await loaded();
+    fireEvent.click(rewindOn('Now remember the choice'));
+    await screen.findByText(REWIND_BUSY);
+    act(() => setRun(SESSION, { sessionId: SESSION, cwd: CWD, busy: true, settings: {}, permissions: [], partial: [] }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText(REWIND_BUSY)).toBeTruthy();
+    act(() => setRun(SESSION, { sessionId: SESSION, cwd: CWD, busy: false, settings: {}, permissions: [], partial: [] }));
+    await waitFor(() => expect(screen.queryByText(REWIND_BUSY)).toBeNull());
   });
 
   it('offers only the code where the conversation cannot go back, and says why when there is no code to put back', async () => {

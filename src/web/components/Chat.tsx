@@ -8,6 +8,7 @@ import { type DragEvent, lazy, type ReactNode, Suspense, useCallback, useEffect,
 import { OWN_EFFORT, startModeFor } from '../../shared/defaults';
 import { pickerValue } from '../../shared/model-names';
 import { MODE_INFO } from '../../shared/modes';
+import { REWIND_BUSY } from '../../shared/rewind';
 import { shortTitle } from '../../shared/titles';
 import type { Attachment, BackgroundTask, Block, ChatMessage, RewindCheck, RewindRestore, RunSettings, RunState, ScheduledCheck, SendMode, SessionSummary, UsageLimit } from '../../shared/protocol';
 import { announce, announcement, askedFor, type ChatMoment } from '../lib/announce';
@@ -98,6 +99,8 @@ function localMessage(uuid: string, text: string, attachments: Attachment[]): Ch
  * Desktop: one answered sooner, with nothing to put back, rewinds the conversation at once.
  */
 const REWIND_PAUSE_MS = 400;
+/** How long Rewind's "unavailable while Claude is working" stays where Claude was not seen at work here. */
+const REWIND_REFUSAL_MS = 5000;
 
 /** Rewind to here being asked about: the message, and what its check says can go back. */
 type RewindAsk = RewindPoint & { token: number; preview: RewindCheck | 'pending'; shown: boolean };
@@ -477,6 +480,23 @@ export function Chat({
   // do, or the computer out of reach (the line under the header says so too).
   const [sendError, setSendError] = useState<{ text: string; note: boolean }>();
   const failed = (error: unknown) => setSendError({ text: (error as Error).message, note: isDemoNote(error) || isUnreachable(error) });
+  // "Rewind is unavailable while Claude is working" holds while it works: it goes once Claude stops,
+  // or, where it was not seen at work here (a message from another page took the session for a
+  // moment), a few seconds after it was said.
+  const rewindRefused = sendError?.text === REWIND_BUSY;
+  const workedSinceRefused = useRef(false);
+  useEffect(() => {
+    if (!rewindRefused) {
+      workedSinceRefused.current = false;
+      return undefined;
+    }
+    if (busy) {
+      workedSinceRefused.current = true;
+      return undefined;
+    }
+    const timer = setTimeout(() => setSendError((now) => (now?.text === REWIND_BUSY ? undefined : now)), workedSinceRefused.current ? 0 : REWIND_REFUSAL_MS);
+    return () => clearTimeout(timer);
+  }, [rewindRefused, busy]);
   const [demoNote, dismissDemoNote] = useDemoNote(sessionId);
   // The title's menu, opened under the title (from the keyboard: its first action has focus).
   const [menu, setMenu] = useState<{ keys: boolean }>();
@@ -833,7 +853,7 @@ export function Chat({
     if (!sessionId) return;
     setSendError(undefined);
     if (busy) {
-      setSendError({ text: 'Rewind is unavailable while Claude is working.', note: true });
+      setSendError({ text: REWIND_BUSY, note: true });
       return;
     }
     rewindToken.current += 1;
