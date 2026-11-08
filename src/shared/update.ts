@@ -58,11 +58,12 @@ export type InstallInfo = {
 export type Interruption = {
   /**
    * session: Claude working or waiting for you in a session; queued: messages queued for the end
-   * of its turn, which go unsent; work: its background tasks (agents, workflows, commands) or
-   * checks it stays running for; terminal: a program in a terminal; command: a `!` command.
+   * of its turn, which go unsent; work: its background tasks (agents, workflows, commands) or work
+   * it keeps running unseen; scheduled: a check Claude scheduled there (/loop, a reminder), which
+   * only its Claude fires; terminal: a program in a terminal; command: a `!` command.
    */
-  kind: 'session' | 'queued' | 'work' | 'terminal' | 'command';
-  /** The session's title, the terminal's program, the command. */
+  kind: 'session' | 'queued' | 'work' | 'scheduled' | 'terminal' | 'command';
+  /** The session's title, the check as the session lists it, the terminal's program, the command. */
   title: string;
   /** What it is doing, or where. */
   detail: string;

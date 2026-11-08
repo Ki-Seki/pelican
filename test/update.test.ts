@@ -906,33 +906,46 @@ describe('the check', () => {
 });
 
 describe('what an update would end', () => {
-  it('lists Claude working or waiting, the messages queued for the end of its turn, its background tasks, terminals with a program and ! commands', async () => {
+  it('lists Claude working or waiting, the messages queued for the end of its turn, its background tasks, the checks it scheduled, terminals with a program and ! commands', async () => {
     useUpdateContext(context(await globalInstall(path.join(dir, 'global'))));
+    const soon = Date.now() + 20 * 60_000;
     useRunningSources({
       runs: () => [
-        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, queued: 2, tasks: [], checks: 0, unseen: false },
-        { sessionId: 's2', cwd: '/w/api', busy: true, waiting: true, tasks: [], checks: 0, unseen: false },
+        { sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, queued: 2, tasks: [], checks: [], unseen: false },
+        { sessionId: 's2', cwd: '/w/api', busy: true, waiting: true, tasks: [], checks: [], unseen: false },
         {
-          sessionId: 's3', cwd: '/w/web', busy: false, waiting: false, checks: 1, unseen: false,
+          sessionId: 's3', cwd: '/w/web', busy: false, waiting: false, unseen: false,
           tasks: [
             { id: 't1', description: 'Explore', type: 'Explore' }, { id: 't2', description: 'Review', type: 'general-purpose' },
             { id: 't3', description: 'npm run dev', type: 'local_bash', output: true }, { id: 't4', description: 'fix', type: 'local_workflow' },
           ],
+          checks: [{ id: 'wakeup', what: 'The build takes about 20 minutes', next: soon, repeats: false }],
         },
-        { sessionId: 's4', cwd: '/w/ops', busy: false, waiting: false, tasks: [], checks: 0, unseen: true },
-        { sessionId: 's5', cwd: '/w/idle', busy: false, waiting: false, tasks: [], checks: 0, unseen: false },
+        { sessionId: 's4', cwd: '/w/ops', busy: false, waiting: false, tasks: [], checks: [], unseen: true },
+        { sessionId: 's5', cwd: '/w/idle', busy: false, waiting: false, tasks: [], checks: [], unseen: false },
+        // Idle, with nothing running but what Claude scheduled: a /loop every day at noon, and a reminder.
+        {
+          sessionId: 's6', cwd: '/w/deploy', busy: false, waiting: false, tasks: [], unseen: false,
+          checks: [
+            { id: 'job-1', what: 'Every day at 12:00 PM: /loop', repeats: true },
+            { id: 'job-2', what: `30 14 9 11 *: check that the release went out ${'and say so '.repeat(8)}`.trim(), next: soon, repeats: false },
+          ],
+        },
       ],
       terminals: async () => [{ program: 'vim', cwd: path.join(dir, 'home', 'repo') }],
       shells: () => [{ sessionId: 's1', command: 'npm test -- --watch\nsecond line' }],
-      title: async (id) => ({ s1: 'Fix the build', s2: 'Ship the API', s3: 'Redo the site' } as Record<string, string>)[id],
+      title: async (id) => ({ s1: 'Fix the build', s2: 'Ship the API', s3: 'Redo the site', s6: 'Watch the deploy' } as Record<string, string>)[id],
     });
     const { busy } = await updateInfo(true);
     expect(busy).toEqual([
       { kind: 'session', title: 'Fix the build', detail: 'Claude is working', sessionId: 's1' },
       { kind: 'queued', title: 'Fix the build', detail: '2 messages for when this turn ends', sessionId: 's1' },
       { kind: 'session', title: 'Ship the API', detail: 'Claude waits for you', sessionId: 's2' },
-      { kind: 'work', title: 'Redo the site', detail: '2 agents, a workflow, a command and a check it scheduled in the background', sessionId: 's3' },
+      { kind: 'work', title: 'Redo the site', detail: '2 agents, a workflow and a command in the background', sessionId: 's3' },
+      { kind: 'scheduled', title: 'The build takes about 20 minutes', detail: 'in Redo the site', sessionId: 's3' },
       { kind: 'work', title: 'ops', detail: 'work it keeps running in the background', sessionId: 's4' },
+      { kind: 'scheduled', title: 'Every day at 12:00 PM: /loop', detail: 'in Watch the deploy', sessionId: 's6' },
+      { kind: 'scheduled', title: '30 14 9 11 *: check that the release went out and say so and say so and say so and say so and say so…', detail: 'in Watch the deploy', sessionId: 's6' },
       { kind: 'terminal', title: 'vim', detail: 'in ~/repo' },
       { kind: 'command', title: '!npm test -- --watch…', detail: 'in Fix the build', sessionId: 's1' },
     ]);
@@ -1101,9 +1114,21 @@ describe('updating', () => {
     expect(serving.stops).toBe(0);
   }, 30_000);
 
+  it('asks first for a check Claude scheduled, where nothing else runs: its session is idle, and the restart would end it all the same', async () => {
+    const loop = { id: 'job-1', what: 'Every day at 12:00 PM: /loop', repeats: true };
+    useRunningSources({ ...nothingRuns, runs: () => [{ sessionId: 's1', cwd: '/w/deploy', busy: false, waiting: false, tasks: [], checks: [loop], unseen: false }] });
+    const info = await ready();
+    expect(info.busy).toEqual([{ kind: 'scheduled', title: 'Every day at 12:00 PM: /loop', detail: 'in deploy', sessionId: 's1' }]);
+    const unconfirmed = await api('POST', '/api/update', { version: NEXT, when: 'now' });
+    expect(unconfirmed.status).toBe(409);
+    expect(unconfirmed.body.busy).toEqual(info.busy);
+    expect(await npmRuns()).toEqual([]);
+    expect(await installedVersion(prefix())).toBe(CURRENT);
+  });
+
   it('asks first while something runs that it would end, then updates now, or once nothing has run for a minute', async () => {
     let running = true;
-    useRunningSources({ ...nothingRuns, runs: () => (running ? [{ sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, tasks: [], checks: 0, unseen: false }] : []) });
+    useRunningSources({ ...nothingRuns, runs: () => (running ? [{ sessionId: 's1', cwd: '/w/app', busy: true, waiting: false, tasks: [], checks: [], unseen: false }] : []) });
     const info = await ready();
     expect(info.busy).toEqual([{ kind: 'session', title: 'app', detail: 'Claude is working', sessionId: 's1' }]);
     // Now, unconfirmed: the page is to list what it ends first.

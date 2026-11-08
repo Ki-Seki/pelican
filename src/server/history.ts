@@ -369,6 +369,19 @@ export async function conversationEnd(file: string): Promise<string | undefined>
   return transcripts.get(file)?.leaf?.uuid;
 }
 
+/**
+ * The conversation up to `entry`, where Claude Code resumes it there (a rewind's cut), oldest
+ * message first: the chain back from that entry, across compactions. Without one, or with one the
+ * transcript does not hold, the conversation as it reads now.
+ */
+export async function conversationUpTo(file: string, entry?: string): Promise<ChatMessage[]> {
+  const messages = await readHistory(file);
+  const t = transcripts.get(file);
+  const node = entry === undefined ? undefined : t?.nodes.get(entry);
+  if (!t || !node) return messages;
+  return walk(t, node).nodes.flatMap((n) => (n.message ? [n.message] : []));
+}
+
 /** Claude Code's line for a turn stopped part way, which belongs to the turn, not to the user. */
 const INTERRUPTED = /^\[Request interrupted by user/;
 

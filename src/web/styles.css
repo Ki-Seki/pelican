@@ -119,6 +119,9 @@ body {
   height: 100dvh;
   /* What is visible, keyboard taken off where the browser lays it over the page (lib/viewport). */
   height: var(--app-h, 100dvh);
+  /* And where it starts, below the top where the browser moved down to show the field typed in
+     (lib/viewport): each of these boxes is placed, fixed or relative. */
+  top: var(--app-top, 0px);
 }
 
 /* Typing in a phone's terminal line while what can be seen is short (data-short, lib/viewport: its

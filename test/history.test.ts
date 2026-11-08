@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { readHistory } from '../src/server/history';
+import { conversationUpTo, readHistory } from '../src/server/history';
 
 let dir: string;
 beforeAll(async () => {
@@ -84,6 +84,26 @@ describe('readHistory', () => {
 
   it('returns nothing for a missing file', async () => {
     expect(await readHistory(path.join(dir, 'missing.jsonl'))).toEqual([]);
+  });
+});
+
+describe('conversationUpTo', () => {
+  it('reads the conversation up to a rewind’s cut, where Claude Code resumes, across compactions; as it reads now without one, or with one it does not hold', async () => {
+    const file = path.join(dir, 'upto.jsonl');
+    await writeFile(file, [
+      say('u1', null, 'user', 'before'),
+      say('a1', 'u1', 'assistant', 'old reply'),
+      boundary('b1', 'a1'),
+      say('s1', 'b1', 'user', 'summary', { isCompactSummary: true, isMeta: true }),
+      say('u2', 's1', 'user', 'kept'),
+      say('a2', 'u2', 'assistant', 'answer'),
+      say('u3', 'a2', 'user', 'rewound away'),
+      say('a3', 'u3', 'assistant', 'gone too'),
+    ].join('\n') + '\n');
+    expect(texts(await conversationUpTo(file, 'a2'))).toEqual(['before', 'old reply', 'summary', 'kept', 'answer']);
+    const whole = ['before', 'old reply', 'summary', 'kept', 'answer', 'rewound away', 'gone too'];
+    expect(texts(await conversationUpTo(file))).toEqual(whole);
+    expect(texts(await conversationUpTo(file, 'never-written'))).toEqual(whole);
   });
 });
 

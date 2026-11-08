@@ -517,7 +517,7 @@ export function Workspace({ open, docked = false, busy = false, needsYou, onClos
           onClose();
         }
       }}
-      className="app-height animate-fade fixed inset-x-0 top-0 z-30 flex flex-col bg-bg outline-none"
+      className="app-height animate-fade fixed inset-x-0 z-30 flex flex-col bg-bg outline-none"
     >
       <div className="pt-safe shrink-0">
         <div data-makes-room="short" className="flex items-center gap-0.5 px-2 py-1.5">

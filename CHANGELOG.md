@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.2
+
+The checks Claude schedules, seen before an update and kept when Claude starts again.
+
+### Fixes
+
+- **Scheduled checks before an update.** Before an update restarts Pelican, Settings names each
+  check Claude scheduled that the restart would end, a `/loop` or a reminder, on a line of its own
+  under Scheduled with its session, as it names a `!` command: they live only in the session's
+  Claude Code process. Update when idle lists them under what it waits for, and they are no
+  longer counted among a session's background work.
+- **Checks Claude Code schedules again.** When a session's Claude starts again (your next message
+  after Pelican restarted, a rewind, Undo rewind), Claude Code schedules again the checks its
+  conversation made that it still keeps: a repeating one for a week after it was made, one that
+  fires once until its time. Pelican now shows them, keeps that Claude running for them, and names
+  them before an update. Before, they went unseen, and Pelican closed that Claude after 30 minutes
+  idle, ending them. A `/loop` given no interval, which wakes itself, is not scheduled again. A check
+  a subagent schedules counts as its session's, and `/loop` given no prompt shows as `/loop`.
+
+## 0.5.1
+
+Typing on a phone whose browser lays its keyboard over the page.
+
+### Fixes
+
+- On a phone whose browser lays its keyboard over the page, as Edge on Android does, typing in a
+  conversation's message box, a new session's or the terminal's line leaves the page where it can be
+  seen: the header, the top of the conversation and a terminal's first rows, where a new
+  terminal's prompt is, slid up out of view, with blank page under the box. Edge does not follow
+  the page's `interactive-widget=resizes-content`: with its keyboard up it moves what can be seen
+  down to the field typed in, while the page kept the height it had before. The page now starts
+  where what can be seen starts and reaches no lower than the page Edge lays out, and it looks
+  again for a moment after a field is entered or left, for a browser that says its new size late,
+  or not at all. Chrome, which resizes the page, sees no change.
+
 ## 0.5.0
 
 A terminal beside the conversation, quotes with notes, and every action where it is used, as in

@@ -24,7 +24,7 @@ function howItGoes(info: UpdateInfo): string {
   return `${where}: Pelican installs it, checks that it starts, and ${again}. Pages reconnect by themselves.`;
 }
 
-const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', queued: 'Queued', work: 'Background', terminal: 'Terminal', command: 'Command' };
+const KIND_WORD: Record<Interruption['kind'], string> = { session: 'Session', queued: 'Queued', work: 'Background', scheduled: 'Scheduled', terminal: 'Terminal', command: 'Command' };
 
 /** What an update would end, one line each. */
 function EndsList({ busy }: { busy: Interruption[] }) {
