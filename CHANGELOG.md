@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1
+
+Typing on a phone whose browser lays its keyboard over the page.
+
+### Fixes
+
+- On a phone whose browser lays its keyboard over the page, as Edge on Android does, typing in a
+  conversation's message box, a new session's or the terminal's line leaves the page where it can be
+  seen: the header, the top of the conversation and a terminal's first rows, where a new
+  terminal's prompt is, slid up out of view, with blank page under the box. Edge does not follow
+  the page's `interactive-widget=resizes-content`: with its keyboard up it moves what can be seen
+  down to the field typed in, while the page kept the height it had before. The page now starts
+  where what can be seen starts and reaches no lower than the page Edge lays out, and it looks
+  again for a moment after a field is entered or left, for a browser that says its new size late,
+  or not at all. Chrome, which resizes the page, sees no change.
+
 ## 0.5.0
 
 A terminal beside the conversation, quotes with notes, and every action where it is used, as in
