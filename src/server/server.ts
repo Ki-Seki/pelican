@@ -17,6 +17,7 @@ import { closeAll, runState } from './runner.js';
 import { hostAllowed, originAllowed } from './security.js';
 import { askedBySystemd, LAUNCHD_EXIT_TIMEOUT_S, launchdExitTimeout, launchdJob, runCommand } from './service.js';
 import { hurryShells, runningShells, shellsEvent, shutdownGrace, stopAllShells } from './shell-runs.js';
+import { flushUsage } from './stats.js';
 import { RunChannel } from './stream.js';
 import { attachTerminal, closeAllTerminals } from './terminals.js';
 import { servedBy } from './update.js';
@@ -254,6 +255,9 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     exitTimeout = seconds;
   }, () => undefined);
   let stopping = false;
+  // What Pelican noted of the sessions it ran, written a moment after, is written as it stops: at
+  // most a second and a half of waiting for it.
+  const noted = () => Promise.race([flushUsage().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1500).unref())]);
   const shutdown = (signal: NodeJS.Signals) => {
     if (stopping) {
       hurryShells();
@@ -270,7 +274,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
     closeAllTerminals();
     closeAll();
     server.close();
-    void Promise.all([shells, new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
+    void Promise.all([shells, noted(), new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -295,7 +299,7 @@ export async function startServer(): Promise<{ url: string; close: () => Promise
       const shells = stopAllShells(shutdownGrace(exitTimeout));
       closeAllTerminals();
       closeAll();
-      await shells;
+      await Promise.all([shells, noted()]);
       const closed = close();
       // A page's connection kept open for its next request goes too.
       setTimeout(() => (server as { closeAllConnections?: () => void }).closeAllConnections?.(), 2000).unref();
