@@ -1,5 +1,5 @@
 import { History, Loader2, Undo2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import type { RewindCheck, RewindRestore } from '../../shared/protocol';
 import { clockTime } from '../lib/format';
@@ -39,9 +39,14 @@ export function RewindDialog({ open, text, preview, cwd, working, problem, onCan
   const stays = check?.conversationStays;
   const offered: RewindRestore[] = files.length === 0 ? [] : stays ? ['code'] : ['both', 'conversation', 'code'];
   const [picked, setPicked] = useState<RewindRestore>('both');
-  useEffect(() => {
+  // Each time it opens, and for another message, it starts on Desktop's default from the moment
+  // it shows: set a moment after, it first showed the choice made the time before, and undid a
+  // choice made in that moment.
+  const [startedFor, setStartedFor] = useState({ open, text });
+  if (startedFor.open !== open || startedFor.text !== text) {
+    setStartedFor({ open, text });
     if (open) setPicked('both');
-  }, [open, text]);
+  }
   // Without choices the conversation goes back; with them, Desktop's default, Code and conversation.
   const restore: RewindRestore = offered.length === 0 ? 'conversation' : offered.includes(picked) ? picked : offered[0]!;
   const code = restore !== 'conversation';

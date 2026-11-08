@@ -176,6 +176,33 @@ describe('Rewind to here', () => {
     expect(marker()?.textContent).toBe('Rewound here·Undo rewind');
   });
 
+  it('opens again on Code and conversation from the moment it shows, after another choice and Cancel, and keeps a choice made at once', async () => {
+    media = { '(hover: hover) and (pointer: fine)': true };
+    server.check = { files: [`${CWD}/src/settings/prefs.ts`], insertions: 1, deletions: 0 };
+    open();
+    await loaded();
+    const checked = (asked: HTMLElement) => within(asked).getAllByRole('radio').map((c) => c.getAttribute('aria-checked'));
+    fireEvent.click(rewindOn('Now remember the choice'));
+    const asked = await screen.findByRole('dialog', { name: 'Rewind to this message?' });
+    fireEvent.click(within(asked).getAllByRole('radio')[1]!);
+    expect(checked(asked)).toEqual(['false', 'true', 'false']);
+    fireEvent.click(within(asked).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(document.querySelector('dialog')).toBeNull());
+    // What it shows the moment it is there again, before React has done anything after.
+    const shown: Array<Array<string | null>> = [];
+    const watch = new MutationObserver(() => {
+      const choices = [...document.querySelectorAll('dialog [role="radio"]')];
+      if (choices.length > 0 && shown.length === 0) shown.push(choices.map((c) => c.getAttribute('aria-checked')));
+    });
+    watch.observe(document.body, { subtree: true, childList: true, attributes: true });
+    fireEvent.click(rewindOn('Now remember the choice'));
+    const again = await screen.findByRole('dialog', { name: 'Rewind to this message?' });
+    watch.disconnect();
+    expect(shown).toEqual([['true', 'false', 'false']]);
+    fireEvent.click(within(again).getAllByRole('radio')[2]!);
+    expect(checked(again)).toEqual(['false', 'false', 'true']);
+  });
+
   it('takes one tap when nothing changed after the message: the conversation goes back at once, no dialog', async () => {
     media = { '(hover: hover) and (pointer: fine)': true };
     server.check = { files: [], insertions: 0, deletions: 0 };
