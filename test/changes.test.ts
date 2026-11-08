@@ -6,7 +6,9 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { sessionChanges, turnDiff } from '../src/server/changes';
+import { readHistory } from '../src/server/history';
 import { lineDiff, splitLines, toHunks } from '../src/shared/line-diff';
+import { headerOnly } from '../src/web/lib/diff-header';
 import { parseDiff } from '../src/web/lib/review';
 
 /**
@@ -96,10 +98,10 @@ describe('changes per turn, from Claude Code’s records', () => {
     // The question in between changed nothing: it keeps its number, as in Claude Code's /diff.
     expect(turns.map((t) => [t.n, t.text])).toEqual([[1, 'Add a dark theme with a toggle'], [3, 'The text is too dim in the dark'], [4, '/review the theme']]);
     expect(turns[0]!.uuid).toBe(ids.first);
-    // A new file counts as /diff counts it: each piece of its text between newlines.
+    // A new file counts its lines, as Claude Desktop counts them: the newline at its end ends its one line.
     expect(turns[0]!.files).toEqual([
       { path: 'src/theme.css', added: 5, removed: 0, line: 5 },
-      { path: 'src/Toggle.tsx', added: 2, removed: 0, created: true, line: 1 },
+      { path: 'src/Toggle.tsx', added: 1, removed: 0, created: true, line: 1 },
     ]);
     // A file Claude edited twice in one turn counts each edit's lines, as /diff does.
     const second = turns[1]!.files;
@@ -137,7 +139,7 @@ describe('changes per turn, from Claude Code’s records', () => {
     t.lines[0] = JSON.stringify({ ...first, parentUuid: last.uuid });
     await appendFile(grows, `${t.lines.join('\n')}\n`);
     const { turns } = await sessionChanges(grows, cwd);
-    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 3, removed: 0, created: true }] });
+    expect(turns.at(-1)).toMatchObject({ uuid: next, n: 5, files: [{ path: 'b.txt', added: 2, removed: 0, created: true }] });
   });
 });
 
@@ -224,21 +226,26 @@ describe('turns as Claude Code’s /diff cuts the conversation into them', () =>
     expect(turns.map((turn) => [turn.uuid, turn.n, turn.files.map((f) => f.path)])).toEqual([[first, 1, ['Toggle.tsx', 'theme.css']], [second, 2, ['theme.css']]]);
   });
 
-  it('count a new file’s lines as /diff does, each piece of its text between newlines, and an edit that changed nothing not at all', async () => {
+  it('count a new file’s lines as Claude Desktop does, where a newline ends a line, and an edit that changed nothing not at all', async () => {
     const t = transcript(path.join(work, 'app'));
     const prompt = t.prompt('Add a toggle');
     t.tool('Write', { file_path: `${work}/app/Toggle.tsx` }, { type: 'create', filePath: `${work}/app/Toggle.tsx`, content: 'export const Toggle = () => null;\n', structuredPatch: [], originalFile: null });
     t.tool('Write', { file_path: `${work}/app/b.txt` }, { type: 'create', filePath: `${work}/app/b.txt`, content: '1\n2', structuredPatch: [], originalFile: null });
+    t.tool('Write', { file_path: `${work}/app/.keep` }, { type: 'create', filePath: `${work}/app/.keep`, content: '', structuredPatch: [], originalFile: null });
     // Written over with the same text: no patch, so no change.
     t.tool('Write', { file_path: `${work}/app/same.txt` }, { type: 'update', filePath: `${work}/app/same.txt`, content: 'a\n', structuredPatch: [], originalFile: 'a\n' });
     const { turns, file: out } = await changesOf(t);
+    // Not as /diff counts them, which takes what follows a file's last newline for one line more.
     expect(turns[0]!.files).toEqual([
-      { path: 'Toggle.tsx', added: 2, removed: 0, created: true, line: 1 },
+      { path: 'Toggle.tsx', added: 1, removed: 0, created: true, line: 1 },
       { path: 'b.txt', added: 2, removed: 0, created: true, line: 1 },
+      { path: '.keep', added: 0, removed: 0, created: true },
     ]);
-    // The diff shows what the count counts, as /diff's turn view does.
+    // The diff shows what the count counts.
     const added = parseDiff(await turnDiff(out, path.join(work, 'app'), prompt, 'Toggle.tsx')).filter((l) => l.kind === 'add').map((l) => l.text);
-    expect(added).toEqual(['export const Toggle = () => null;', '']);
+    expect(added).toEqual(['export const Toggle = () => null;']);
+    // A new file with nothing in it, as git's header says one.
+    expect(headerOnly(await turnDiff(out, path.join(work, 'app'), prompt, '.keep'))).toBe('A new, empty file');
   });
 });
 
@@ -272,6 +279,35 @@ describe('a side chat’s changes', () => {
       const desktop = await write('d1', (row, copied) => (copied ? row : { ...row, sessionId: 'd1' }));
       expect((await sessionChanges(desktop, app, true)).turns).toEqual([]);
       expect((await sessionChanges(desktop, app)).turns).toMatchObject([{ n: 1, text: 'Add a dark theme' }]);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the line under a turn and the turn’s steps', () => {
+  it('say the same, as in Claude Desktop: each step what its patch, or its new file, records it changed, the turn their sum', async () => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'pelican-turn-steps-'));
+    try {
+      const app = path.join(work, 'app');
+      const t = transcript(app);
+      t.prompt('Rename the flag and note it');
+      // A line changed, and a new file of one line: /diff said 2 files changed, +3 -1.
+      t.tool('Edit', { file_path: `${app}/flags.ts` }, edit(`${app}/flags.ts`, 'const on = true;\nexport {};\n', 'const enabled = true;\nexport {};\n'));
+      t.tool('Write', { file_path: `${app}/NOTES.md` }, { type: 'create', filePath: `${app}/NOTES.md`, content: 'Renamed the flag.\n', structuredPatch: [], originalFile: null });
+      // Every one of three lines; a line added after one that the edit's text stops short of.
+      t.tool('Edit', { file_path: `${app}/a.ts` }, { ...edit(`${app}/a.ts`, 'x\nx\nx\n', 'y\ny\ny\n'), replaceAll: true });
+      t.tool('Edit', { file_path: `${app}/b.ts` }, edit(`${app}/b.ts`, 'a\nb\nz\n', 'a\nb\nc\nz\n'));
+      // Written over with the text it had; held for review; failed: no change, and no count to say.
+      t.tool('Write', { file_path: `${app}/same.txt` }, { type: 'update', filePath: `${app}/same.txt`, content: 'a\n', structuredPatch: [], originalFile: 'a\n' });
+      t.tool('Edit', { file_path: `${app}/held.ts` }, { ...edit(`${app}/held.ts`, 'a\n', 'b\n'), staged: true });
+      t.tool('Edit', { file_path: `${app}/gone.ts` }, 'Error: File does not exist.');
+      const out = path.join(work, 's1.jsonl');
+      await writeFile(out, `${t.lines.join('\n')}\n`);
+      const { turns } = await sessionChanges(out, app);
+      expect(turns[0]!.files.map((f) => [f.path, f.added, f.removed])).toEqual([['flags.ts', 1, 1], ['NOTES.md', 1, 0], ['a.ts', 3, 3], ['b.ts', 1, 0]]);
+      const steps = (await readHistory(out)).flatMap((m) => m.blocks).flatMap((b) => (b.type === 'tool_result' ? [b.edited] : []));
+      expect(steps).toEqual([{ added: 1, removed: 1 }, { added: 1, removed: 0 }, { added: 3, removed: 3 }, { added: 1, removed: 0 }, { added: 0, removed: 0 }, undefined, undefined]);
     } finally {
       await rm(work, { recursive: true, force: true });
     }

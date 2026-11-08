@@ -60,7 +60,7 @@ export function Login({ mode, onSignedIn }: { mode: AuthMode; onSignedIn: () => 
   };
 
   return (
-    <div className="app-height flex items-center justify-center px-6">
+    <div className="app-height relative flex items-center justify-center px-6">
       <form onSubmit={submit} className="w-full max-w-xs">
         <img src="./icon.svg" alt="" className="mx-auto size-12 rounded-2xl" />
         <h1 className="mt-4 text-center text-[20px] font-semibold tracking-tight">Pelican</h1>

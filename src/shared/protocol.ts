@@ -87,7 +87,15 @@ export type ToolResultBlock = {
   delivered?: Delivery;
   /** An Agent call that did not wait for its agent: how Claude Code records it began it, next to the result. */
   agent?: AgentLaunch;
+  /**
+   * What a file edit (Edit, MultiEdit, Write) changed, from the patch Claude Code records next to
+   * the result, or a new file's lines: what its turn's files count (TurnFile), the step's own.
+   */
+  edited?: EditedLines;
 };
+
+/** Lines a file edit added and removed. */
+export type EditedLines = { added: number; removed: number };
 
 /**
  * How an Agent call that does not wait for its agent began it: in the background on this computer
@@ -477,7 +485,7 @@ export type Account = { email?: string; organization?: string; plan?: string };
 /** A file changed in a folder, as git says; `committed`: changed by commits alone, nothing of it waits to be committed. */
 export type GitFile = { path: string; status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'; added?: number; removed?: number; from?: string; committed?: true };
 
-/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it, with each edit's lines added up, as /diff counts them. */
+/** A file one turn changed, from Claude Code's record of its edits: relative to the session's folder when inside it, with each edit's lines added up (each its step's `edited`), as Claude Desktop counts them. */
 export type TurnFile = { path: string; added: number; removed: number; created?: boolean; /** Where its first change is, in the file as its first edit left it. */ line?: number };
 
 /**

@@ -173,7 +173,7 @@ export function App() {
   useEffect(() => fitToVisibleViewport(), []);
 
   if (auth.isPending) {
-    return <div className="app-height flex items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>;
+    return <div className="app-height relative flex items-center justify-center text-faint"><Loader2 className="size-5 animate-spin" /></div>;
   }
   if (auth.data?.required && !auth.data.signedIn) {
     return (
@@ -585,7 +585,7 @@ function Main() {
     );
   }
   return (
-    <div className="app-height overflow-hidden">
+    <div className="app-height relative overflow-hidden">
       {main ?? list}
       {settings}
       <ShortcutsSheet />

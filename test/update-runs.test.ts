@@ -18,19 +18,20 @@ const run = (sessionId: string, busy: boolean, status: string, shown: Record<str
 describe('what an update would end, from the Claude processes Pelican runs', () => {
   it('is each of them: working, waiting for you, with messages queued, background work, checks, or work it shows no one', () => {
     const task = { id: 't1', description: 'npm run dev', type: 'local_bash' };
+    const check = { id: 'job-1', what: 'Every day at 12:00 PM: /loop', repeats: true };
     open.runs = [
       run('working', true, 'running', { queued: [{ uuid: 'q1' }, { uuid: 'q2' }] }),
       run('waiting', true, 'waiting'),
-      run('background', false, 'idle', { tasks: [task], scheduled: [{ id: 'c1' }] }),
+      run('background', false, 'idle', { tasks: [task], scheduled: [check] }, true),
       run('watching', false, 'idle', {}, true),
       run('idle', false, 'idle'),
     ];
     expect(runningHere.runs()).toEqual([
-      { sessionId: 'working', cwd: '/w/working', busy: true, waiting: false, queued: 2, tasks: [], checks: 0, unseen: false },
-      { sessionId: 'waiting', cwd: '/w/waiting', busy: true, waiting: true, queued: 0, tasks: [], checks: 0, unseen: false },
-      { sessionId: 'background', cwd: '/w/background', busy: false, waiting: false, queued: 0, tasks: [task], checks: 1, unseen: false },
-      { sessionId: 'watching', cwd: '/w/watching', busy: false, waiting: false, queued: 0, tasks: [], checks: 0, unseen: true },
-      { sessionId: 'idle', cwd: '/w/idle', busy: false, waiting: false, queued: 0, tasks: [], checks: 0, unseen: false },
+      { sessionId: 'working', cwd: '/w/working', busy: true, waiting: false, queued: 2, tasks: [], checks: [], unseen: false },
+      { sessionId: 'waiting', cwd: '/w/waiting', busy: true, waiting: true, queued: 0, tasks: [], checks: [], unseen: false },
+      { sessionId: 'background', cwd: '/w/background', busy: false, waiting: false, queued: 0, tasks: [task], checks: [check], unseen: false },
+      { sessionId: 'watching', cwd: '/w/watching', busy: false, waiting: false, queued: 0, tasks: [], checks: [], unseen: true },
+      { sessionId: 'idle', cwd: '/w/idle', busy: false, waiting: false, queued: 0, tasks: [], checks: [], unseen: false },
     ]);
     open.runs = [];
     expect(runningHere.runs()).toEqual([]);

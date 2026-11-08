@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-import { columnsOf, isBlank } from '../../shared/terminal';
+import { isBlank, lineColumns } from '../../shared/terminal';
 
 /**
  * Run in terminal's question: the command it runs, all of it, as it runs, before it does. A code
@@ -20,6 +20,7 @@ export type DrawnPart = { text: string; mark: boolean };
  */
 export function drawnLine(line: string): DrawnPart[] {
   const chars = [...line];
+  const columns = lineColumns(line);
   let trailing = chars.length;
   while (trailing > 0 && isBlank(chars[trailing - 1]!)) trailing -= 1;
   const parts: DrawnPart[] = [];
@@ -28,11 +29,8 @@ export function drawnLine(line: string): DrawnPart[] {
     if (last && last.mark === mark) last.text += text;
     else parts.push({ text, mark });
   };
-  let column = 0;
   chars.forEach((char, at) => {
-    const width = columnsOf(char, column);
-    column += width;
-    if (char === '\t') return add(`→${' '.repeat(width - 1)}`, true);
+    if (char === '\t') return add(`→${' '.repeat(columns[at]! - 1)}`, true);
     if (!isBlank(char)) return add(char, false);
     const alone = char === ' ' && at < trailing && !isBlank(chars[at - 1] ?? 'x') && !isBlank(chars[at + 1] ?? 'x');
     return add(alone ? ' ' : '·', !alone);

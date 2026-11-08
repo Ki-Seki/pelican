@@ -4,6 +4,7 @@ import path from 'node:path';
 import { type Hunk, unifiedDiff } from '../shared/line-diff.js';
 import type { ChatMessage, SessionChanges, TurnChanges, TurnFile } from '../shared/protocol.js';
 import { readHistory } from './history.js';
+import { editedLines, type RecordedEdit, recordedEdit } from './normalize.js';
 import { openRegular } from './open.js';
 
 /**
@@ -18,7 +19,10 @@ import { openRegular } from './open.js';
  * compaction left) starts one, numbered by its place among them, and holds the edits that follow
  * it up to the next. So a prompt that changed nothing leaves a gap, and what Claude does in answer
  * to a `!` command is that command's turn. A turn's diff of a file is each of its edits' patches
- * in turn, and its counts their lines added up, as in /diff.
+ * in turn, and its counts their lines added up, as in /diff, and as Claude Desktop adds up a turn's
+ * steps, each step counting its own (ToolResultBlock's `edited`, from the same patch): so the line
+ * under a turn says what its steps say. A new file's lines are counted as Desktop counts them
+ * (normalize.ts, recordedEdit), not as /diff does, one more where the file ends in a newline.
  *
  * The transcript is read the way history.ts reads it: incrementally, parsing only the rows that
  * matter here (edit results, checkpoints and prompts); an edit's patch is read again from its row
@@ -49,53 +53,6 @@ const locks = new Map<string, Promise<unknown>>();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
-
-/** What one tool result says it did to one file. */
-type Recorded = { file: string; hunks: Hunk[]; created: boolean };
-
-/**
- * A structured patch's hunks, as /diff reads them: each with its start lines and its lines, the
- * rest left out. The line counts git puts in a hunk's header are worked out where missing.
- */
-function hunksOf(value: unknown): Hunk[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((raw): Hunk[] => {
-    if (!isRecord(raw) || typeof raw.oldStart !== 'number' || typeof raw.newStart !== 'number' || !Array.isArray(raw.lines)) return [];
-    const lines = raw.lines.filter((l): l is string => typeof l === 'string');
-    const count = (n: unknown, mark: string) => (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : lines.filter((l) => !l.startsWith(mark)).length);
-    return [{ oldStart: raw.oldStart, oldLines: count(raw.oldLines, '+'), newStart: raw.newStart, newLines: count(raw.newLines, '-'), lines }];
-  });
-}
-
-/**
- * The file edit a tool result records (`toolUseResult` on its row), as Claude Code's /diff reads
- * it: a file's path and a patch (Edit, MultiEdit, Write over a file), or for a new file with no
- * patch, its text, every piece of it between newlines an added line (`a\n` is two, as /diff counts
- * it). Edits held for review (`staged`), a patch that changed nothing and anything else are no edit.
- */
-export function recordedEdit(result: unknown): Recorded | undefined {
-  if (!isRecord(result) || result.staged === true) return undefined;
-  const file = str(result.filePath);
-  if (!file) return undefined;
-  const created = result.type === 'create';
-  const hunks = hunksOf(result.structuredPatch);
-  if (hunks.length > 0) return { file, hunks, created };
-  if (!created || typeof result.content !== 'string') return undefined;
-  const lines = result.content.split('\n');
-  return { file, hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((line) => `+${line}`) }], created };
-}
-
-function counts(hunks: readonly Hunk[]): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (const hunk of hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith('+')) added += 1;
-      else if (line.startsWith('-')) removed += 1;
-    }
-  }
-  return { added, removed };
-}
 
 /** Where the first change of a patch is, in the file as it left it. */
 function firstLine(hunks: readonly Hunk[]): number | undefined {
@@ -152,7 +109,7 @@ function addRow(scan: Scan, line: string, at: number, bytes: number, cwd: string
     at,
     bytes,
     ...(toolUseId ? { toolUseId } : {}),
-    edits: [{ path: relative(edit.file, cwd), ...counts(edit.hunks), ...(line1 ? { line: line1 } : {}), ...(edit.created ? { created: true } : {}) }],
+    edits: [{ path: relative(edit.file, cwd), ...editedLines(edit.hunks), ...(line1 ? { line: line1 } : {}), ...(edit.created ? { created: true } : {}) }],
   });
 }
 
@@ -343,7 +300,7 @@ export async function sessionChanges(file: string, cwd: string | undefined, ownO
 }
 
 /** The edit a row recorded, read again from its place in the file. */
-async function readEdit(file: string, row: EditRow): Promise<Recorded | undefined> {
+async function readEdit(file: string, row: EditRow): Promise<RecordedEdit | undefined> {
   const handle = await openRegular(file);
   try {
     const buffer = Buffer.alloc(row.bytes);
@@ -362,7 +319,8 @@ const MAX_EDITS_SHOWN = 50;
 
 /**
  * What one turn changed in one file, as Claude Code's /diff shows it: each edit's patch, in the
- * order Claude made them. Empty when the turn did not edit the file.
+ * order Claude made them; a new file with nothing in it, as git's header says one. Empty when the
+ * turn did not edit the file.
  */
 export async function turnDiff(file: string, cwd: string | undefined, turnId: string, target: string, ownOnly = false): Promise<string> {
   const scan = await scanned(file, cwd);
@@ -370,6 +328,7 @@ export async function turnDiff(file: string, cwd: string | undefined, turnId: st
   const rows = (turn?.rows ?? []).filter(({ row }) => row.edits.some((e) => e.path === target)).map(({ row }) => row);
   if (rows.length === 0) return '';
   const edits = await Promise.all(rows.slice(0, MAX_EDITS_SHOWN).map((row) => readEdit(file, row)));
-  const diff = unifiedDiff(target, edits.flatMap((edit) => edit?.hunks ?? []));
+  const diff = unifiedDiff(target, edits.flatMap((edit) => edit?.hunks ?? []))
+    || (edits.some((edit) => edit?.created) ? `diff --git a/${target} b/${target}\nnew file mode 100644\n` : '');
   return rows.length > MAX_EDITS_SHOWN ? `${diff}… (${rows.length - MAX_EDITS_SHOWN} more edits of this file in this turn)\n` : diff;
 }

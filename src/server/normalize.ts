@@ -1,6 +1,7 @@
 import path from 'node:path';
 
-import type { AgentLaunch, Block, ChatMessage, DeliveredFile, Delivery, Handback, ImageBlock, TextBlock, ToolResultBlock, WorkflowLaunch } from '../shared/protocol.js';
+import { type Hunk, splitLines } from '../shared/line-diff.js';
+import type { AgentLaunch, Block, ChatMessage, DeliveredFile, Delivery, EditedLines, Handback, ImageBlock, TextBlock, ToolResultBlock, WorkflowLaunch } from '../shared/protocol.js';
 import { RUN_ID } from '../shared/workflows.js';
 
 const MAX_TEXT = 60_000;
@@ -269,6 +270,66 @@ export function deliveryOf(output: Raw): Delivery | undefined {
   return { files, ...(display ? { display } : {}), ...(caption ? { caption } : {}), ...(missed > 0 ? { missed } : {}) };
 }
 
+/** What one tool result says it did to one file. */
+export type RecordedEdit = { file: string; hunks: Hunk[]; created: boolean };
+
+/**
+ * A structured patch's hunks, as /diff reads them: each with its start lines and its lines, the
+ * rest left out. The line counts git puts in a hunk's header are worked out where missing.
+ */
+function hunksOf(value: unknown): Hunk[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): Hunk[] => {
+    if (!isRecord(raw) || typeof raw.oldStart !== 'number' || typeof raw.newStart !== 'number' || !Array.isArray(raw.lines)) return [];
+    const lines = raw.lines.filter((l): l is string => typeof l === 'string');
+    const count = (n: unknown, mark: string) => (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : lines.filter((l) => !l.startsWith(mark)).length);
+    return [{ oldStart: raw.oldStart, oldLines: count(raw.oldLines, '+'), newStart: raw.newStart, newLines: count(raw.newLines, '-'), lines }];
+  });
+}
+
+/**
+ * The file edit a tool result records (`toolUseResult` in a transcript, `tool_use_result` in the
+ * stream), as Claude Code's /diff reads it: a file's path and a patch (Edit, MultiEdit, Write over
+ * a file), or for a new file with no patch, its text, each of its lines an added one. Those are
+ * counted as Claude Desktop and git count them: a newline ends a line, so `a\n` is one line, where
+ * /diff counts the nothing after it as a second; an empty file has none. Edits held for review
+ * (`staged`), a patch that changed nothing and anything else are no edit.
+ */
+export function recordedEdit(result: unknown): RecordedEdit | undefined {
+  if (!isRecord(result) || result.staged === true) return undefined;
+  const file = typeof result.filePath === 'string' ? result.filePath : undefined;
+  if (!file) return undefined;
+  const created = result.type === 'create';
+  const hunks = hunksOf(result.structuredPatch);
+  if (hunks.length > 0) return { file, hunks, created };
+  if (!created || typeof result.content !== 'string') return undefined;
+  const lines = splitLines(result.content);
+  return { file, hunks: lines.length > 0 ? [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((line) => `+${line}`) }] : [], created };
+}
+
+/** The lines a file edit's hunks add and remove. */
+export function editedLines(hunks: readonly Hunk[]): EditedLines {
+  let added = 0;
+  let removed = 0;
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) added += 1;
+      else if (line.startsWith('-')) removed += 1;
+    }
+  }
+  return { added, removed };
+}
+
+/**
+ * What a file edit's result records it changed, in lines, as the turn's files count it
+ * (changes.ts): none for a file written over with the text it had, which has no patch.
+ */
+function editOf(output: Raw): EditedLines | undefined {
+  const edit = recordedEdit(output);
+  if (edit) return editedLines(edit.hunks);
+  return output.staged !== true && typeof output.filePath === 'string' && Array.isArray(output.structuredPatch) ? { added: 0, removed: 0 } : undefined;
+}
+
 /**
  * Converts a transcript message (`getSessionMessages`) or a streamed SDK message
  * into the shape the app renders. Returns undefined for messages with nothing
@@ -329,6 +390,8 @@ export function toChatMessage(raw: Raw, address?: ImageAddress | 'omit'): ChatMe
     if (delivered) only.delivered = delivered;
     const agent = only.is_error ? undefined : agentLaunch(output);
     if (agent) only.agent = agent;
+    const edited = only.is_error ? undefined : editOf(output);
+    if (edited) only.edited = edited;
   }
   return out;
 }

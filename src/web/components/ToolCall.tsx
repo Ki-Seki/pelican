@@ -1045,6 +1045,9 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
     setMenu(p.pointerType === 'touch' || p.pointerType === 'pen' ? { at: p.element, lift: p.element } : p.pointerType === 'keyboard' ? { at: p.element, keys: true } : { at: { x: p.x, y: p.y } });
   }, { enabled: hasMenu, nativeMenu: (target) => Boolean(target.closest('a[href]:not([data-path-link]), img')) });
   const stats = useMemo(() => {
+    // What the edit changed, as Claude Code recorded it with the result: what the line under the
+    // turn adds up, as in Claude Desktop. Until the result comes, what the call asks for.
+    if (call.result?.edited) return call.result.edited;
     const edits = editsOf(call);
     if (edits.length === 0) return undefined;
     return edits.reduce((acc, e) => {

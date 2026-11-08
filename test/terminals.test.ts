@@ -412,6 +412,8 @@ describe('a terminal', () => {
     const padded = [
       `ls -la${' '.repeat(300)}; touch ${marker}`, `ls${'\t'.repeat(60)}; touch ${marker}`, `ls${'\n'.repeat(200)}touch ${marker}`,
       `ls\n\n\n\ntouch ${marker}`, `echo ${'x'.repeat(500)}; touch ${marker}`,
+      // Fewer characters than 500, but wider: each of the 250 CJK ones takes two columns.
+      `echo ${'\u4e2d'.repeat(250)}; touch ${marker}`,
       [...Array.from({ length: 50 }, (_, i) => `echo ${i}`), `touch ${marker}`].join('\n'),
     ];
     for (const command of padded) {

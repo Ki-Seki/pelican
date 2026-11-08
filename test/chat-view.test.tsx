@@ -302,6 +302,23 @@ describe('what you decided stays visible', () => {
     expect(failed.container.textContent).not.toContain('<tool_use_error>');
   });
 
+  it('an edit counts the lines its result records it changed, which the line under its turn adds up; before that, what it asks for, line by line', () => {
+    // Every one of three lines: the result's patch says so, the old and new text once.
+    const everywhere = tool('Edit', { file_path: '/p/a.ts', old_string: 'on', new_string: 'enabled', replace_all: true });
+    const { container } = render(<ToolCallView call={{ ...everywhere, result: { type: 'tool_result', tool_use_id: 't', content: 'Updated.', edited: { added: 3, removed: 3 } } }} running={false} />);
+    expect(container.textContent).toMatch(/\+3\s*−3/);
+    cleanup();
+    // A line added after one whose newline the edit's text stops short of: one line added, none removed.
+    const pending = render(<ToolCallView call={tool('Edit', { file_path: '/p/b.ts', old_string: 'a\nb', new_string: 'a\nb\nc' })} running />);
+    expect(pending.container.textContent).toContain('+1');
+    expect(pending.container.textContent).not.toMatch(/\+2|−1/);
+    cleanup();
+    // Written over with the text it had: nothing to count.
+    const same = tool('Write', { file_path: '/p/same.txt', content: 'a\n' });
+    const unchanged = render(<ToolCallView call={{ ...same, result: { type: 'tool_result', tool_use_id: 't', content: 'Updated.', edited: { added: 0, removed: 0 } } }} running={false} />);
+    expect(unchanged.container.textContent).not.toMatch(/\+1/);
+  });
+
   it('your answers show under Claude’s questions', () => {
     const questions = [{ question: 'Which database?', options: [] }, { question: 'Which environments?', options: [] }];
     render(<ToolCallView call={tool('AskUserQuestion', { questions }, 'Your questions have been answered: "Which database?"="Postgres", "Which environments?"="dev, staging" notes: not production yet. You can now continue with these answers in mind.')} running={false} />);
