@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.6
+
+Setting up Tailscale, said where you need it.
+
+### Fixes
+
+- `pelican phone` says how to set up Tailscale on your system where it is not ready: on a Mac, the
+  app; on Linux and in WSL, the install script and `sudo tailscale up`, with the operator setting
+  `tailscale serve` needs there; and in WSL, how to use Tailscale on Windows instead, as Tailscale
+  advises where it is there already. Installed but not connected, it says how to connect. The docs
+  have the same steps, WSL included, and the README points to them.
+- What Pelican noted of the sessions it ran in its last two seconds is written down when it stops,
+  for an update or on a signal, as it was meant to be.
+
 ## 0.5.5
 
 Why Claude Code stopped, in its own words.
