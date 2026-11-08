@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.3
+
+A service installed from inside a Claude Code session, Run in terminal's width, and the lines a
+turn changed.
+
+### Security
+
+- `pelican service install` run inside a Claude Code session (by Claude, or as a `!` command) or
+  in an IDE's terminal no longer writes that session's own variables into the launchd agent or
+  systemd unit, where every later Pelican, and every session it ran, took them for its own: the
+  session's id, its inbox socket, the path of the claude that ran it, how it was started (so
+  Pelican's sessions said they came from the CLI or Claude Desktop), the IDE's port, the Agent
+  SDK's options for one query and the like. Your own Claude Code settings still go with the
+  service, and a count of tokens such as `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, left out before as a
+  secret, now does too; a name with TOKENS anywhere but at its end is still left out.
+
+### Fixes
+
+- Run in terminal measures a command's lines in the columns a terminal draws them in, with the
+  Unicode 11 widths Pelican's terminals use: a line of CJK characters or emoji is offered, and run,
+  up to 500 columns, where it went up to 1,000; a run of full-width spaces counts as wide as it
+  shows, and an accent written as a letter and a mark counts once.
+- The line under a turn and the turn's steps count changed lines alike, as Claude Desktop counts
+  them: a new file of one line is +1, where Claude Code's `/diff` count made it +2, and its diff no
+  longer ends in an empty added line; a step counts what Claude Code recorded its edit changed, so
+  an edit of every occurrence, a file written over, and lines added after one whose newline the
+  edit's text stops short of count as the turn does.
+
 ## 0.5.2
 
 The checks Claude schedules, seen before an update and kept when Claude starts again.
