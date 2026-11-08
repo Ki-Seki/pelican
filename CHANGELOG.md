@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.5
+
+Why Claude Code stopped, in its own words.
+
+### Fixes
+
+- When Claude Code stops as a session starts (a flag it does not know, a configuration it refuses,
+  a crash, a claude that is not there), the page says why in Claude Code's own words, as a terminal
+  shows them, with keys, tokens and the password in an address masked. It shows above the message
+  box when the message never reached Claude Code, where it said only "Claude Code stopped in this
+  session", and at the end of the conversation when Claude Code stopped just after, where a new
+  session's page showed nothing.
+
 ## 0.5.4
 
 Rewind's dialog from the moment it opens.

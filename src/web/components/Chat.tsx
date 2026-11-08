@@ -1529,7 +1529,8 @@ export function Chat({
         {demoNote && <Notice onDismiss={dismissDemoNote}>{demoNote}</Notice>}
         {sendError && (
           <Notice tone={sendError.note ? 'info' : 'error'} onDismiss={() => setSendError(undefined)}>
-            <NoteText text={sendError.text} />
+            {/* Line for line: why Claude Code stopped before the message reached it is as it printed it. */}
+            <span className="whitespace-pre-wrap break-words"><NoteText text={sendError.text} /></span>
           </Notice>
         )}
         {sessionId && view.run?.queued && view.run.queued.length > 0 && (

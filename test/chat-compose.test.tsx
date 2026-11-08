@@ -267,6 +267,16 @@ describe('a message that did not go', () => {
     expect(server.sent[2]).toMatchObject({ text: 'Why does this log say the export failed?', attachments: ['up-export.log'] });
   });
 
+  it('to a new session whose Claude Code stopped before the message reached it says why line for line, as Claude Code printed it, and comes back to the box', async () => {
+    const printed = 'Error: Invalid MCP configuration:\nmcpServers: Invalid input: expected record, received number';
+    server.answers.push(new ApiError(printed, 500));
+    fresh();
+    sendText('Fix the login test');
+    await waitFor(() => expect(box().value).toBe('Fix the login test'));
+    const said = await screen.findByText((_, element) => element?.tagName === 'SPAN' && element.textContent === printed);
+    expect(said.className).toContain('whitespace-pre-wrap');
+  });
+
   it('comes back with its files when the trust question is put away', async () => {
     server.answers.push(untrusted());
     session();

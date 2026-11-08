@@ -10,9 +10,10 @@ export type Listener = (event: ServerEvent) => void;
 const POLL_MS = 1000;
 /**
  * How long a published message waits for a client that subscribes late (a new session's first
- * prompt, sent before the page could subscribe). Later ones come from the transcript.
+ * prompt, sent before the page could subscribe). Later ones come from the transcript. Why a run
+ * stopped on its own waits as long (runner.ts).
  */
-const RECENT_MS = 2 * 60_000;
+export const RECENT_MS = 2 * 60_000;
 
 /**
  * Delivers one session's messages to the clients viewing it.

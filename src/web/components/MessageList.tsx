@@ -1149,7 +1149,7 @@ export function MessageList({
             {!busy && view.run?.error && !endsOnError && (
               <div className="flex items-start gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-[13px] text-danger">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                <span className="whitespace-pre-wrap">{view.run.error}</span>
+                <span className="min-w-0 whitespace-pre-wrap break-words">{view.run.error}</span>
               </div>
             )}
             {shells.map((shell) => <LiveShellItem key={shell.id} sessionId={sessionId} shell={shell} />)}
