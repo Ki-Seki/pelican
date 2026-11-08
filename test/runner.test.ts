@@ -775,8 +775,8 @@ describe('work that runs on its own', () => {
       // Made eight days ago: Claude Code let it go a week after.
       called('c1', 'CronCreate', { cron: '7 * * * *', prompt: 'check the deploy' }, 8 * day),
       ran('c1', { id: 'job-old', humanSchedule: 'Every hour at :07', recurring: true }, 8 * day),
-      // Every day at noon, made two days ago.
-      called('c2', 'CronCreate', { cron: '0 12 * * *', prompt: 'check the deploy', recurring: true }, 2 * day),
+      // /loop with an interval and no prompt of yours, every day at noon, two days ago.
+      called('c2', 'CronCreate', { cron: '0 12 * * *', prompt: '<<autonomous-loop>>', recurring: true }, 2 * day),
       ran('c2', { id: 'job-noon', humanSchedule: 'Every day at 12:00 PM', recurring: true, nextFireAt: Date.now() - day }, 2 * day),
       // Cancelled.
       called('c3', 'CronCreate', { cron: '*/5 * * * *', prompt: 'check the queue' }, 2 * day),
@@ -801,7 +801,7 @@ describe('work that runs on its own', () => {
     const run = getRun(sessionId)!;
     expect(claude.options).toMatchObject({ resume: sessionId });
     await vi.waitFor(() => expect(run.state().scheduled).toEqual([
-      { id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true },
+      { id: 'job-noon', what: 'Every day at 12:00 PM: /loop', repeats: true },
       { id: 'job-later', what: '0 15 9 11 *: check the release', next: later, repeats: false },
     ]));
     claude.say(result());
@@ -810,7 +810,7 @@ describe('work that runs on its own', () => {
     expect(run.closed).toBe(false);
     // Updating would end them: each is named, with the session it is in.
     expect(await whatWouldEnd()).toEqual([
-      { kind: 'scheduled', title: 'Every day at 12:00 PM: check the deploy', detail: 'in Watch the deploy', sessionId },
+      { kind: 'scheduled', title: 'Every day at 12:00 PM: /loop', detail: 'in Watch the deploy', sessionId },
       { kind: 'scheduled', title: '0 15 9 11 *: check the release', detail: 'in Watch the deploy', sessionId },
     ]);
     // Cancelled now, they go, and nothing keeps Claude running.
@@ -861,6 +861,17 @@ describe('work that runs on its own', () => {
       { id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true },
       { id: 'job-queue', what: 'Every 5 minutes: check the queue', repeats: true },
     ]));
+  });
+
+  it('counts a check a subagent schedules, which the session’s Claude fires; /loop with no prompt of yours is named /loop', async () => {
+    const { claude, state } = await start();
+    const inAgent = { parent_tool_use_id: 'toolu_agent' };
+    claude.say({ ...toolCall('c1', 'CronCreate', { cron: '*/5 * * * *', prompt: '<<autonomous-loop>>' }), ...inAgent });
+    claude.say({ ...toolResult('c1', { id: 'job-1', humanSchedule: 'Every 5 minutes', recurring: true }), ...inAgent });
+    await vi.waitFor(() => expect(state().scheduled).toEqual([{ id: 'job-1', what: 'Every 5 minutes: /loop', repeats: true }]));
+    claude.say({ ...toolCall('c2', 'CronDelete', { id: 'job-1' }), ...inAgent });
+    claude.say({ ...toolResult('c2', { id: 'job-1' }), ...inAgent });
+    await vi.waitFor(() => expect(state().scheduled).toBeUndefined());
   });
 
   it('reports what subagents and background tasks are doing, and what a command printed', async () => {

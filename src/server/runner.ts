@@ -1312,15 +1312,18 @@ export class SessionRun {
     return total >= before ? total - before : total;
   }
 
-  /** Remembers Claude's calls to the tools that schedule work, to read what their results scheduled. */
-  private noteCalls(content: unknown): void {
+  /**
+   * Remembers Claude's calls to the tools that schedule work, to read what their results scheduled:
+   * a subagent's too (`subagent`), whose checks are the session's, fired by its process.
+   */
+  private noteCalls(content: unknown, subagent = false): void {
     if (!Array.isArray(content)) return;
     for (const block of content as Array<Record<string, unknown>>) {
       if (block?.type !== 'tool_use' || typeof block.id !== 'string') continue;
       const name = str(block.name);
       if (name === 'ScheduleWakeup' || name === 'CronCreate' || name === 'CronDelete') {
         this.scheduling.set(block.id, { name, input: (block.input ?? {}) as Record<string, unknown> });
-      } else if (name === 'SendUserFile') {
+      } else if (name === 'SendUserFile' && !subagent) {
         this.sending.add(block.id);
       }
     }
@@ -1347,6 +1350,14 @@ export class SessionRun {
       flow.shown = undefined;
       this.emit(true);
     }
+    this.noteScheduled(raw);
+  }
+
+  /** What Claude's calls that schedule work scheduled, as their results say; whether a check changed. */
+  private noteScheduled(raw: Record<string, unknown>): boolean {
+    const content = (raw.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return false;
+    let changed = false;
     for (const block of content as Array<Record<string, unknown>>) {
       if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue;
       const call = this.scheduling.get(block.tool_use_id);
@@ -1369,7 +1380,9 @@ export class SessionRun {
         this.cronEnds.delete(id);
         this.cronsGone.add(id);
       }
+      changed = true;
     }
+    return changed;
   }
 
   private onStream(event: Record<string, unknown>): void {
@@ -1424,7 +1437,12 @@ export class SessionRun {
             break;
           case 'assistant':
           case 'user': {
-            if (raw.parent_tool_use_id) break;
+            if (raw.parent_tool_use_id) {
+              // A subagent's own steps show on its card; a check it schedules is the session's.
+              if (message.type === 'assistant') this.noteCalls(message.message.content, true);
+              else if (this.noteScheduled(raw)) this.emit(true);
+              break;
+            }
             if (message.type === 'assistant') {
               this.completedBlocks += 1;
               this.noteCalls(message.message.content);

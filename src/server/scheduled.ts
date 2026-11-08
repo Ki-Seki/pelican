@@ -22,6 +22,14 @@ export const DUE_GRACE_MS = 10 * 60_000;
  */
 export const RECURRING_MAX_AGE_MS = 7 * 24 * 3600_000;
 
+/** What /loop schedules when you give it no prompt, by the name Claude Code shows for it. */
+const LOOP_PROMPTS = new Map([
+  ['<<autonomous-loop>>', '/loop'],
+  ['<<autonomous-loop-dynamic>>', '/loop'],
+  ['<<loop.md>>', '/loop (loop.md)'],
+  ['<<loop.md-dynamic>>', '/loop (loop.md)'],
+]);
+
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -36,7 +44,7 @@ export type MadeCheck = { check: ScheduledCheck; ends?: number };
 export function cronCheck(input: Record<string, unknown>, output: Record<string, unknown>, madeAt: number): MadeCheck | undefined {
   const id = str(output.id);
   if (!id) return undefined;
-  const prompt = str(input.prompt);
+  const prompt = LOOP_PROMPTS.get(str(input.prompt)) ?? str(input.prompt);
   const repeats = output.recurring !== false;
   const check: ScheduledCheck = {
     id,
