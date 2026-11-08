@@ -154,8 +154,16 @@ function keptEnd(printed: string): string {
  * more, only its last 2,000 characters: a flag it does not know, a setting it refuses, a crash.
  * Masked before it is cut, so a secret at the cut is masked whole.
  */
+/**
+ * What a quote's masking leaves, which an error about a connection can print: the password in an
+ * address (a proxy's `http://user:pass@host`), and what follows Bearer or Basic in a header.
+ */
+const ADDRESS_PASSWORD = /([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)([^\s@/]+)@/gi;
+const AUTH_VALUE = /\b(Bearer|Basic)[ \t]+[A-Za-z0-9._~+/=-]{8,}/g;
+const maskLogins = (text: string) => text.replace(ADDRESS_PASSWORD, (_all, before: string) => `${before}${'\u2022'.repeat(8)}@`).replace(AUTH_VALUE, (_all, kind: string) => `${kind} ${'\u2022'.repeat(8)}`);
+
 export function claudeSaid(printed: string): string {
-  const said = maskSecrets(cleanOutput(printed)).trim();
+  const said = maskSecrets(maskLogins(cleanOutput(printed))).trim();
   if (said.length <= SAID_MAX) return said;
   const end = said.slice(1 - SAID_MAX);
   // Not half of a character made of two.

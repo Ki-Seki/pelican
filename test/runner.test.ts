@@ -1240,6 +1240,14 @@ describe('what Claude Code printed, as the page says why it stopped', () => {
     expect(claudeSaid(`Error: invalid x-api-key ${key}\n`)).toBe(`Error: invalid x-api-key ${key.slice(0, 8)}${'•'.repeat(key.length - 8)}`);
   });
 
+  it('has the password in an address and what follows Bearer or Basic masked, which a quote leaves', () => {
+    expect(claudeSaid('Error: connect ECONNREFUSED through http://ada:made-up-pass@proxy.example:8080\n')).toBe(`Error: connect ECONNREFUSED through http://ada:${'•'.repeat(8)}@proxy.example:8080`);
+    expect(claudeSaid('401 with Authorization: Bearer madeUpToken123456\n')).toBe(`401 with Authorization: Bearer ${'•'.repeat(8)}`);
+    expect(claudeSaid('sent Basic YWRhOm1hZGUtdXA=\n')).toBe(`sent Basic ${'•'.repeat(8)}`);
+    // An address with no password, and a word that is not a header's, stay as they are.
+    expect(claudeSaid('fetching https://ada@example.com/x and a Bearer of news\n')).toBe('fetching https://ada@example.com/x and a Bearer of news');
+  });
+
   it('is its last 2,000 characters when it is longer, the cut said, a key across the cut masked whole', () => {
     const key = fake('sk-', 'ant-', 'api03-', 'B'.repeat(30));
     const said = claudeSaid(`${'x'.repeat(3000)}\n${key} ${'y'.repeat(1990)}\n`);
