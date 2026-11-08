@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { checkAddress, findPhoneAddress, normalAddress, phoneBlock, placeHere, servedAddress, setupHint } from '../src/server/phone';
+import { checkAddress, findPhoneAddress, normalAddress, phoneBlock, placeHere, servedAddress, setupHint, tailnetHint, tailnetOf } from '../src/server/phone';
 import { instance, recordRunning, runningServer } from '../src/server/running';
 
 const saved = { ...config };
@@ -124,6 +124,28 @@ describe('the terminal’s QR code', () => {
     expect(setupHint({ tailscale: { cli: '/Applications/Tailscale.app/Contents/MacOS/Tailscale' } }, 7860, 'pelican', 'mac').join('\n')).toContain('open the Tailscale app and sign in');
     // Connected: the command, and on Linux what to do if it is root's.
     expect(setupHint({ tailscale: { cli: 'tailscale', name: 'box.tail1234.ts.net' } }, 7860, 'pelican', 'linux').join('\n')).toContain('`sudo tailscale set --operator=$USER`');
+  });
+
+  it('says, under the code, when the phone cannot be on the tailnet yet: only this computer on it, or no phone', () => {
+    // As `tailscale status --json` has it: no other device, as in WSL where only Ubuntu joined.
+    const alone = tailnetOf({ BackendState: 'Running', Self: { OS: 'linux' }, Peer: null });
+    expect(alone).toEqual({ others: 0, phones: 0 });
+    const hint = tailnetHint(alone, 7860, 'linux').join('\n');
+    expect(hint).toContain('Only this computer is on your tailnet, so your phone cannot open this address yet.');
+    expect(hint).toContain('install the Tailscale app, sign in with the same account, and turn off any other');
+    expect(hint).toContain('VPN or proxy (Clash and the like): a phone runs one VPN at a time.');
+    // Windows on it, no phone yet.
+    const windows = tailnetOf({ BackendState: 'Running', Peer: { a: { OS: 'windows', Online: true } } });
+    expect(tailnetHint(windows, 7860, 'linux').join('\n')).toContain('No phone is on your tailnet yet.');
+    // A phone on it: nothing to say, but in WSL that Windows opens Pelican through localhost.
+    const phone = tailnetOf({ BackendState: 'Running', Peer: { a: { OS: 'windows' }, b: { OS: 'android' } } });
+    expect(phone).toEqual({ others: 2, phones: 1 });
+    expect(tailnetHint(phone, 7860, 'linux')).toEqual([]);
+    expect(tailnetHint(phone, 7860, 'wsl')).toEqual(["  On this PC, Windows' own browser opens Pelican at http://localhost:7860: to Tailscale, Windows is a device of its own."]);
+    expect(tailnetHint(tailnetOf({ BackendState: 'Running', Peer: { b: { OS: 'iOS' } } }), 7860, 'mac')).toEqual([]);
+    // Tailscale not running here: nothing known, nothing said.
+    expect(tailnetOf({ BackendState: 'Stopped' })).toBeUndefined();
+    expect(tailnetHint(undefined, 7860, 'mac')).toEqual([]);
   });
 
   it('knows a Mac, Linux, and Linux in WSL', () => {

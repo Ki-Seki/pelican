@@ -10,6 +10,7 @@ import { askLocal, callable, pelicanAt, reachable, thisPelican } from './local.j
 import { listensLocally } from './security.js';
 
 const DOCS = 'https://ki-seki.github.io/pelican/docs.html';
+const DOCS_PHONE = 'https://ki-seki.github.io/pelican/docs/phone.html';
 
 /** The name this was started by: `pelican-cc` where another program owns `pelican`. */
 const NAME = /^pelican-cc(\.js)?$/.test(path.basename(process.argv[1] ?? '')) ? 'pelican-cc' : 'pelican';
@@ -205,7 +206,7 @@ async function tokenCommand(reset: boolean, portGiven: boolean): Promise<void> {
  * token or password goes anywhere.
  */
 async function phoneCommand(given: string | undefined, portGiven: boolean): Promise<void> {
-  const { findPhoneAddress, checkAddress, setupHint } = await import('./phone.js');
+  const { findPhoneAddress, checkAddress, setupHint, tailnetHere, tailnetHint } = await import('./phone.js');
   const asked = portGiven ? config.port : undefined;
   const local = await thisPelican(asked);
   if (!local) {
@@ -220,7 +221,7 @@ async function phoneCommand(given: string | undefined, portGiven: boolean): Prom
   const search = await findPhoneAddress(running.port, running.host, given);
   if (!search.address) {
     console.log(setupHint(search, running.port, NAME).join('\n'));
-    console.log(`More: ${DOCS}#phone`);
+    console.log(`More: ${DOCS_PHONE}`);
     process.exitCode = 1;
     return;
   }
@@ -240,14 +241,16 @@ async function phoneCommand(given: string | undefined, portGiven: boolean): Prom
     if (!response.ok) throw new Error(`Pelican did not make a code (${response.status}).`);
     return ((await response.json()) as { code: string | null }).code;
   };
-  await showPhone(address, mint);
+  // A tailnet's address opens only on its devices: say so where the phone is not on it yet.
+  const onTailnet = address.from === 'tailscale serve' || new URL(address.url).hostname.endsWith('.ts.net');
+  await showPhone(address, mint, onTailnet ? tailnetHint(await tailnetHere(), running.port) : []);
 }
 
 /** Prints the phone's QR code, and a new one each time Enter is pressed (on a terminal). */
-async function showPhone(address: import('./phone.js').PhoneAddress, mint: () => Promise<string | null>): Promise<void> {
+async function showPhone(address: import('./phone.js').PhoneAddress, mint: () => Promise<string | null>, notes: string[] = []): Promise<void> {
   const { phoneBlock } = await import('./phone.js');
   const code = await mint();
-  process.stdout.write(`\n${phoneBlock(address, code)}`);
+  process.stdout.write(`\n${phoneBlock(address, code)}${notes.length > 0 ? `\n${notes.join('\n')}\n` : ''}`);
   if (!code || !process.stdin.isTTY || !process.stdout.isTTY) return;
   process.stdout.write('  Press Enter for a new code, Ctrl-C to stop.\n');
   let expiry: NodeJS.Timeout | undefined;

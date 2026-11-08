@@ -182,6 +182,47 @@ export function setupHint(search: PhoneSearch, port: number, command: string, pl
   return lines;
 }
 
+/** Who else is on the tailnet: how many devices besides this one, and how many of them are phones. */
+export type Tailnet = { others: number; phones: number };
+
+/** Read from `tailscale status --json`, while Tailscale runs here. */
+export function tailnetOf(status: Record<string, unknown> | undefined): Tailnet | undefined {
+  if (!status || status.BackendState !== 'Running') return undefined;
+  const peers = Object.values(record(status.Peer));
+  const phones = peers.filter((peer) => /^(android|ios)$/i.test(String(record(peer).OS ?? ''))).length;
+  return { others: peers.length, phones };
+}
+
+/** Who else is on the tailnet this computer is on, as Tailscale says; nothing where it is not on. */
+export async function tailnetHere(): Promise<Tailnet | undefined> {
+  const cli = await tailscaleCli();
+  return cli ? tailnetOf(json(await read(cli, ['status', '--json']))) : undefined;
+}
+
+/**
+ * Under a QR code for a Tailscale address: why the phone may not open it yet. An address on a
+ * tailnet opens only on the tailnet's devices, so a phone not on it gets nowhere; and a proxy or
+ * another VPN on the phone (Clash and the like) takes its requests, which then end in "closed the
+ * connection" (ERR_CONNECTION_CLOSED), and Android runs one VPN at a time. In WSL, Windows is a
+ * device of its own to Tailscale: its browser opens Pelican through localhost.
+ */
+export function tailnetHint(tailnet: Tailnet | undefined, port: number, place: Place = placeHere()): string[] {
+  const lines: string[] = [];
+  if (tailnet?.others === 0) {
+    lines.push('Only this computer is on your tailnet, so your phone cannot open this address yet.');
+  } else if (tailnet && tailnet.phones === 0) {
+    lines.push('No phone is on your tailnet yet.');
+  }
+  if (lines.length > 0) {
+    lines.push('On the phone, install the Tailscale app, sign in with the same account, and turn off any other');
+    lines.push('VPN or proxy (Clash and the like): a phone runs one VPN at a time. `tailscale status` here then lists it.');
+  }
+  if (place === 'wsl') {
+    lines.push(`On this PC, Windows' own browser opens Pelican at http://localhost:${port}: to Tailscale, Windows is a device of its own.`);
+  }
+  return lines.map((line) => `  ${line}`);
+}
+
 /**
  * Whether an address reaches this very Pelican. Only its public sign-in state is asked for, so
  * no secret goes to an address that turns out to be someone else's; the answer names the server.
