@@ -36,9 +36,11 @@ beforeAll(async () => {
   config.auth = 'none';
   marker = path.join(root, 'ran');
   launched = path.join(root, 'launched');
-  // A stand-in for Claude Code that only notes how it was started.
+  // A stand-in for Claude Code that only notes how it was started, and ends once the first message
+  // has reached it. Ended before, as it could on a busy computer, the message would not have gone,
+  // and the session would not have started (500).
   const fake = path.join(root, 'claude-fake');
-  await writeFile(fake, `#!/bin/sh\n{ echo "cwd=$(pwd)"; for a in "$@"; do echo "arg=$a"; done; echo "git=$GIT_CONFIG_COUNT $GIT_CONFIG_KEY_0"; } >> ${launched}\nexit 1\n`);
+  await writeFile(fake, `#!/bin/sh\n{ echo "cwd=$(pwd)"; for a in "$@"; do echo "arg=$a"; done; echo "git=$GIT_CONFIG_COUNT $GIT_CONFIG_KEY_0"; } >> ${launched}\nwhile read -r line; do case $line in *'"type":"user"'*) exit 1;; esac; done\nexit 1\n`);
   await chmod(fake, 0o755);
   config.claudeExecutable = fake;
 

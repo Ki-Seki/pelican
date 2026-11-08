@@ -25,9 +25,11 @@ beforeAll(async () => {
   config.stateDir = path.join(root, 'state');
   config.configDir = path.join(root, 'config');
   config.auth = 'none';
-  // A stand-in for Claude Code that starts nothing.
+  // A stand-in for Claude Code that starts nothing: it ends once the first message has reached it.
+  // Ended before, as `exit 1` alone could on a busy computer, the message would not have gone, and
+  // the session would not have started (500).
   const fake = path.join(root, 'claude-fake');
-  await writeFile(fake, '#!/bin/sh\nexit 1\n');
+  await writeFile(fake, `#!/bin/sh\nwhile read -r line; do case $line in *'"type":"user"'*) exit 1;; esac; done\nexit 1\n`);
   await chmod(fake, 0o755);
   config.claudeExecutable = fake;
 });
