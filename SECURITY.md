@@ -386,7 +386,10 @@ can read your sessions and have Claude run commands as you, so treat access to i
   Claude Code's settings into the launchd agent or systemd unit, made readable only by you even
   when the file was there before. It never writes a variable whose name says it is a key, a token,
   a password or headers, nor an address with a user name or password in it; its log never holds
-  the sign-in link.
+  the sign-in link. Nor does it write what Claude Code, or the app or IDE that runs it, sets for one
+  session: run inside a Claude Code session or an IDE's terminal, it leaves out `CLAUDECODE`, that
+  session's id, its inbox socket and the token for it, the IDE's port, how Claude Code was started
+  and the like, which every session the service runs would otherwise take for its own.
 
 Pelican keeps no copies of your sessions: it reads Claude Code's transcripts where Claude Code
 writes them, and saves a `!` command's output too long for the conversation where Claude Code saves

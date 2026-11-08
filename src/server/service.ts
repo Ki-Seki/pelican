@@ -8,7 +8,8 @@ import path from 'node:path';
  * `pelican service`: keeps Pelican running, started at login and again if it stops, as a launchd
  * agent on macOS or a systemd user unit on Linux. The service gets the installing shell's PATH (a
  * login item's own is too thin to find Node, `npx` MCP servers or the tools `!` commands use) and
- * Pelican's settings, never a secret. Its output goes to a log, where Pelican prints no sign-in link.
+ * Pelican's and Claude Code's settings, never a secret, nor what a Claude Code session the command
+ * runs in set for itself. Its output goes to a log, where Pelican prints no sign-in link.
  */
 
 export const LABEL = 'io.github.ki-seki.pelican';
@@ -40,11 +41,35 @@ export const runCommand: Run = (command, args) => new Promise((resolve) => {
 /** Variables the service carries over from the installing shell. */
 const KEEP = /^(PATH|SHELL|LANG|LC_[A-Z]+|TZ|PELICAN_.+|CLAUDE_CONFIG_DIR|CLAUDE_CODE_.+|ANTHROPIC_.+|AWS_PROFILE|AWS_REGION|CLOUD_ML_REGION|NODE_EXTRA_CA_CERTS|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy)$/;
 /**
+ * Never carried over, nor said: what Claude Code sets for one session or one process, in its own
+ * environment and in what the session runs (`!` and Bash commands, hooks, MCP servers), and what
+ * the app or IDE running Claude Code sets for it. Taken from inside a session, these would reach
+ * every session the service's Pelican runs: the session's id, its inbox socket and its token, the
+ * path of the claude that ran it, how it was started (cli, sdk-ts, claude-desktop), the agent it
+ * runs as, a teammate's tmux, the IDE's port, the Agent SDK's options for one query, and what
+ * Pelican tells the sessions it runs (claudeEnv, SIDE_CHAT_ENV). By name, as Claude Code's docs say
+ * it sets them and as Claude Code 2.1.318 does; and by family: those Claude Code itself does not
+ * carry to another computer (SESSION_, SDK_, HOST_, REMOTE, RELAUNCH_), Remote Control's (BRIDGE_)
+ * and the desktop app's (DESKTOP_). Every other CLAUDE_CODE_* is a setting of yours, documented or
+ * not (Claude Code reads hundreds, more with each release), and goes with the service.
+ */
+const PER_SESSION = new Set([
+  'CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_INVOKED_SKILLS',
+  'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+  'CLAUDE_CODE_AGENT', 'CLAUDE_CODE_TMUX_SESSION', 'CLAUDE_CODE_TMUX_PREFIX', 'CLAUDE_CODE_TMUX_PREFIX_CONFLICTS',
+  'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING', 'CLAUDE_CODE_QUESTION_PREVIEW_FORMAT', 'CLAUDE_CODE_QUESTION_EXTENDED',
+  'CLAUDE_CODE_QUESTION_OPTIONAL_DESCRIPTIONS', 'CLAUDE_CODE_AGENT_PROGRESS_SUMMARIES',
+  'CLAUDE_CODE_ATTACHMENTS_BY_PATH', 'CLAUDE_CODE_RESUME_SOURCE_ALIVE',
+]);
+const PER_SESSION_FAMILY = /^CLAUDE_CODE_(SESSION_|SDK_|HOST_|REMOTE|RELAUNCH_|BRIDGE_|DESKTOP_)/;
+const perSession = (name: string) => PER_SESSION.has(name) || PER_SESSION_FAMILY.test(name);
+/**
  * Never written to a file: a service has no business holding them, and Claude Code keeps its own
  * sign-in. By name (a key, a token, headers such as ANTHROPIC_CUSTOM_HEADERS), or by value: an
- * address with a user name or a password in it (a proxy's `http://user:pass@host`).
+ * address with a user name or a password in it (a proxy's `http://user:pass@host`). A count of
+ * tokens is no token: CLAUDE_CODE_MAX_OUTPUT_TOKENS goes with the service.
  */
-const SECRET = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|HEADER/i;
+const SECRET = /KEY|TOKEN(?!S)|SECRET|PASSWORD|CREDENTIAL|HEADER/i;
 const WITH_LOGIN = /[a-z][a-z0-9+.-]*:\/\/[^\s]*@/i;
 
 /** The environment written into the service, and the names left out because they look like secrets. */
@@ -52,7 +77,7 @@ export function serviceEnvironment(env: NodeJS.ProcessEnv): { kept: Record<strin
   const kept: Record<string, string> = {};
   const secrets: string[] = [];
   for (const [name, value] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
-    if (value === undefined || !KEEP.test(name)) continue;
+    if (value === undefined || !KEEP.test(name) || perSession(name)) continue;
     if (SECRET.test(name) || WITH_LOGIN.test(value)) secrets.push(name);
     else kept[name] = value;
   }

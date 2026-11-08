@@ -63,6 +63,81 @@ describe('the environment a service gets', () => {
   });
 });
 
+describe('a service installed from inside a Claude Code session', () => {
+  // Settings of yours, documented or not, some named like what a session sets, or like a secret
+  // (a count of tokens).
+  const settings = {
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '400000',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    CLAUDE_CODE_EFFORT_LEVEL: 'high',
+    CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS: '5000',
+    CLAUDE_CODE_TMUX_TRUECOLOR: '1',
+    CLAUDE_CODE_TMPDIR: '/var/tmp/ada',
+    CLAUDE_CODE_TASK_LIST_ID: 'release',
+    CLAUDE_CODE_SOME_LATER_SETTING: 'on',
+    AWS_REGION: 'us-east-1',
+  };
+  // What a `!` or Bash command gets in a session: what Claude Code 2.1.318 sets there, and what the
+  // Agent SDK, Pelican, an IDE's terminal, the desktop app, Remote Control, a cloud session, a
+  // relaunch or a teammate in tmux set for the Claude Code they run. Made-up values.
+  const session = {
+    CLAUDECODE: '1',
+    CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555',
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_SESSION_ATTENDED: '1',
+    CLAUDE_CODE_SESSION_KIND: 'bg',
+    CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
+    CLAUDE_CODE_EXECPATH: '/Users/ada/.local/share/claude/versions/2.1.318',
+    CLAUDE_CODE_INVOKED_SKILLS: 'review',
+    CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/claude-501/inbox-made-up.sock',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-inbox-token',
+    CLAUDE_CODE_SSE_PORT: '47401',
+    CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: 'true',
+    CLAUDE_CODE_QUESTION_PREVIEW_FORMAT: 'html',
+    CLAUDE_CODE_QUESTION_EXTENDED: '1',
+    CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH: '1',
+    CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1',
+    CLAUDE_CODE_RESUME_SOURCE_ALIVE: '1',
+    CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+    CLAUDE_CODE_HOST_HTTP_PROXY_PORT: '47402',
+    CLAUDE_CODE_DESKTOP_APP_VERSION: '4.23118.0',
+    CLAUDE_CODE_BRIDGE_SESSION_ID: 'session_made_up',
+    CLAUDE_CODE_REMOTE: 'true',
+    CLAUDE_CODE_REMOTE_SESSION_ID: 'cse_made_up',
+    CLAUDE_CODE_RELAUNCH_TERMINAL_SIZE: '120x40',
+    CLAUDE_CODE_AGENT: 'reviewer',
+    CLAUDE_CODE_TMUX_SESSION: 'made-up-team',
+    CLAUDE_PID: '4242',
+    CLAUDE_EFFORT: 'high',
+    CLAUDE_AGENT_SDK_VERSION: '0.3.318',
+    AI_AGENT: 'claude-code',
+    GIT_EDITOR: 'true',
+  };
+
+  it('carries your settings and none of what the session set for itself, saying nothing of it', () => {
+    const { kept, secrets } = serviceEnvironment({ PATH: '/bin', ...settings, ...session });
+    expect(kept).toEqual({ PATH: '/bin', ...settings });
+    // The inbox's token is the session's, not a secret of yours to set up another way.
+    expect(secrets).toEqual([]);
+  });
+
+  for (const platform of ['darwin', 'linux'] as const) {
+    it(`writes none of it into the service (${platform})`, async () => {
+      const ctx = await context(platform, { env: { PATH: '/bin', ...settings, ...session } });
+      answers['launchctl print'] = { code: 113 };
+      const said: string[] = [];
+      await installService(ctx, (line) => said.push(line));
+      const written = await readFile(platform === 'darwin' ? plistFile(ctx.home) : unitFile(ctx.home), 'utf8');
+      for (const [name, value] of Object.entries(settings)) expect(written, name).toContain(`${name}${platform === 'darwin' ? '</key>\n    <string>' : '='}${value}`);
+      for (const name of Object.keys(session)) expect(written, name).not.toContain(name);
+      for (const value of ['11111111-2222', 'inbox-made-up', '47401', '47402', 'session_made_up', 'cse_made_up', 'versions/2.1.318']) expect(written).not.toContain(value);
+      expect(said.join('\n')).not.toMatch(/CLAUDE/);
+    });
+  }
+});
+
 describe('credentials in the installing shell', () => {
   it('are left out of a service by their value too: headers, and addresses with a user name or password', () => {
     const { kept, secrets } = serviceEnvironment({
