@@ -97,6 +97,7 @@ const { accessToken, loadAuth } = await import('../src/server/auth');
 const { config } = await import('../src/server/config');
 const { rememberChoice } = await import('../src/server/trust');
 const { refreshTranscriptIndex } = await import('../src/server/transcripts');
+const { flushUsage } = await import('../src/server/stats');
 
 const folder = process.cwd();
 const settle = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -153,7 +154,12 @@ afterEach(async () => {
   await rm(settingsFile, { force: true });
   await settle();
 });
-afterAll(() => rm(scratch, { recursive: true, force: true }));
+afterAll(async () => {
+  // Pelican writes down the sessions it ran 2 s after they start (stats.ts): written now, not into
+  // the folder as it is taken away, where it made a folder again and the removal failed (ENOTEMPTY).
+  await flushUsage();
+  await rm(scratch, { recursive: true, force: true });
+});
 
 describe.skipIf(process.platform === 'win32')('a ! command in a session', () => {
   it('shows at once and as its output comes, then goes into the conversation, and Claude answers it', async () => {

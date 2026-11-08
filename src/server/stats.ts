@@ -609,7 +609,10 @@ export async function flushUsage(): Promise<void> {
   saveTimer = undefined;
   saving = saving.then(saveShards, saveShards);
   await saving;
-  await saveOwn();
+  clearTimeout(ownTimer);
+  ownTimer = undefined;
+  ownSaving = ownSaving.then(saveOwn, saveOwn);
+  await ownSaving;
 }
 
 // --- Reading everything, a little at a time -----------------------------------------------------
@@ -703,6 +706,8 @@ const ownFile = () => path.join(storeDir(), 'pelican.json');
 let own: Promise<Own> | undefined;
 let ownChanged = false;
 let ownTimer: NodeJS.Timeout | undefined;
+/** The record's writes, one after another, so that flushUsage waits for one under way as well as for what is not written yet. */
+let ownSaving: Promise<void> = Promise.resolve();
 const MAX_WAITS = 5000;
 
 function ownRecord(): Promise<Own> {
@@ -736,7 +741,7 @@ function ownSoon(): void {
   ownVersion += 1;
   ownTimer ??= setTimeout(() => {
     ownTimer = undefined;
-    void saveOwn();
+    ownSaving = ownSaving.then(saveOwn, saveOwn);
   }, 2000);
   ownTimer.unref?.();
 }
