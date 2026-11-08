@@ -3,9 +3,21 @@ import { useMemo, useState } from 'react';
 
 type Line = { kind: 'add' | 'del' | 'same'; text: string };
 
+/**
+ * An edit's old and new text, line by line. Both often stop short of their last line's newline,
+ * where the same rest of that line follows either in the file: read as ending in one, as Claude
+ * Desktop reads them, so a last line that stays, lines added after it, is not read as removed and
+ * added again. Where only one of them ends in a newline, the edit splits or joins a line, and the
+ * texts are compared as they are.
+ */
+function diffParts(before: string, after: string) {
+  const open = (text: string) => text !== '' && !text.endsWith('\n');
+  return open(before) && open(after) ? diffLines(`${before}\n`, `${after}\n`) : diffLines(before, after);
+}
+
 function toLines(before: string, after: string): Line[] {
   const lines: Line[] = [];
-  for (const part of diffLines(before, after)) {
+  for (const part of diffParts(before, after)) {
     const kind = part.added ? 'add' : part.removed ? 'del' : 'same';
     const texts = part.value.replace(/\n$/, '').split('\n');
     for (const text of texts) lines.push({ kind, text });
@@ -82,7 +94,7 @@ export function Diff({ before, after, maxLines = 400 }: { before: string; after:
 export function diffStats(before: string, after: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
-  for (const part of diffLines(before, after)) {
+  for (const part of diffParts(before, after)) {
     const count = part.count ?? part.value.split('\n').length - 1;
     if (part.added) added += count;
     else if (part.removed) removed += count;
