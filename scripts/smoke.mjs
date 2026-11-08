@@ -1788,14 +1788,14 @@ async function checkUsage(browser, base) {
 }
 
 /** The site's own pages: the pictures fit their phones, the demo frame lays out as a phone does. */
-async function checkSite(browser, base) {
+async function checkSite(browser, base, docsPages = []) {
   for (const [size, options] of Object.entries(SIZES)) {
     for (const scheme of ['light', 'dark']) {
       const context = await browser.newContext({ ...options, colorScheme: scheme });
       const page = await context.newPage();
       let at = '';
       watch(page, () => `site, ${size}, ${scheme}, ${at}`);
-      for (const name of ['index.html', 'docs.html']) {
+      for (const name of ['index.html', 'docs.html', ...docsPages]) {
         at = name;
         await page.goto(base + (name === 'index.html' ? '' : name), { waitUntil: 'networkidle' });
         const found = await page.evaluate(() => {
@@ -1852,7 +1852,9 @@ try {
   if (site) {
     const server = await serveFolder(site);
     stop = async () => server.stop();
-    await checkSite(browser, server.base);
+    // The docs are a page each (docs-pages.mjs): every one of them.
+    const docsPages = (await readdir(path.join(site, 'docs'))).filter((name) => name.endsWith('.html')).map((name) => `docs/${name}`);
+    await checkSite(browser, server.base, docsPages);
     await checkFirstScreen(`${server.base}demo/`, 'site, demo');
     const sessions = await savedSessions(site);
     const saved = (request) => readFile(path.join(site, 'demo', 'data', `${requestKey(request)}.json`), 'utf8').then(JSON.parse);

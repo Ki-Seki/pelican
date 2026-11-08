@@ -1,0 +1,63 @@
+<p>What Pelican does of Claude Code’s features, next to the terminal (CLI) and Claude Desktop as Claude Code’s docs describe them on 5 November 2026. Pelican runs Claude Code itself, so what Claude Code does on its own, such as your settings, <code>CLAUDE.md</code>, hooks, skills, subagents, models and any login, works as it does in the terminal; this table is about what you see and use. A dash means that app’s docs describe no such thing. The table is updated with each release.</p>
+      <table class="coverage">
+        <colgroup><col><col class="where"><col class="where"><col class="ours"></colgroup>
+        <thead><tr><th scope="col">Feature</th><th scope="col">CLI</th><th scope="col">Desktop</th><th scope="col">Pelican</th></tr></thead>
+        <tbody>
+          <tr class="group"><th scope="rowgroup" colspan="4">Sessions</th></tr>
+          <tr><th scope="row">Pick up an earlier session<span>Pelican lists every app’s sessions, live, with their whole history</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Rename a session</th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Fork a conversation<span>Fork, and Fork from here on a prompt or a reply</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Rewind<span>The code, the conversation or both, with Undo rewind until the next message; no Summarize from here</span></th><td>Yes</td><td>–</td><td class="ours">Partly</td></tr>
+          <tr><th scope="row">Compact<span><code>/compact</code>; each compaction shows as a divider with its summary</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Export a conversation<span>As Markdown</span></th><td>Yes</td><td>–</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Pin a session<span>Pelican’s own, apart from Desktop’s</span></th><td>–</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Archive<span>Pelican’s archive is its own, apart from Desktop’s</span></th><td>–</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">A worktree for each session<span>A session started in a worktree elsewhere shows and continues there</span></th><td>Yes</td><td>Yes</td><td class="ours">No</td></tr>
+          <tr><th scope="row">Background sessions (agent view)<span>Pelican’s own sessions run without a terminal anyway</span></th><td>Yes</td><td>–</td><td class="ours">No</td></tr>
+          <tr><th scope="row">Side questions (<code>/btw</code>)<span>A read-only side chat, as Desktop’s</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Cloud sessions<span>Pelican runs Claude Code on your computer only</span></th><td>Yes</td><td>Yes</td><td class="ours">No</td></tr>
+          <tr><th scope="row">Remote Control<span>Pelican is another way in; it cannot answer a prompt waiting in another app</span></th><td>Yes</td><td>Yes</td><td class="ours">No</td></tr>
+        </tbody>
+        <tbody>
+          <tr class="group"><th scope="rowgroup" colspan="4">Working with Claude</th></tr>
+          <tr><th scope="row">Permission modes<span>Manual, Accept edits, Plan, Auto and Bypass; a session in Don’t ask keeps it</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">New sessions start as Claude Code’s settings say<span>Model, effort, fast mode, Ultracode and mode; Settings saves them as <code>/model</code> and <code>/config</code> do</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Approvals, plans and questions<span>With the diff; Always allow says where the rule is kept; 1 to 9 pick an answer, as in Desktop</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Send now or queue for later while Claude works<span>Send does what Settings says, and the other way is beside it, ⌘ Enter where Enter sends; a queued message can be taken back</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Shell commands (<code>!</code>)<span>Output as it comes, with Stop, up to 30 minutes; Claude answers as in the CLI</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row"><code>/</code> commands and skills<span>The session’s own list; commands that need a terminal are left out</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row"><code>@</code> files, folders and subagents</th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Images and files in a prompt<span>The CLI takes pasted images; Pelican takes photos and any file</span></th><td>Partly</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Files Claude sends you<span>Pictures, videos, sounds, pages, text and PDFs show; anything else downloads</span></th><td>–</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Model, effort and fast mode</th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Prompt suggestions<span>Settings › Suggest what to ask next</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Voice dictation<span>Your browser’s dictation, with any login</span></th><td>Yes</td><td>–</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Transcript views<span>Normal, Thinking and Verbose, as in Desktop</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Quote part of a reply<span>Also a step’s output, or lines of a file</span></th><td>–</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Task list<span>One line in the conversation; the bar above the message box shows where it stands</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Subagents and background tasks<span>“1 in background”, listed with ⌃B or <code>/tasks</code>; each with a Stop, and a command’s output</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Workflows<span>Phases, agents and each agent’s steps, live, with Stop; pausing one or restarting an agent is the CLI’s <code>/workflows</code></span></th><td>Yes</td><td>Yes</td><td class="ours">Partly</td></tr>
+          <tr><th scope="row"><code>/loop</code> and reminders<span>Listed with when they are next due; Cancel asks Claude</span></th><td>Yes</td><td>–</td><td class="ours">Partly</td></tr>
+          <tr><th scope="row">Context and usage<span>A ring for the context, plan limits, a usage page across every app; no <code>/context</code> breakdown</span></th><td>Yes</td><td>Yes</td><td class="ours">Partly</td></tr>
+          <tr><th scope="row">Notifications<span>For Pelican’s work, with Allow and Deny for a command shown whole where the device has buttons, and when another app’s session waits for you</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+        </tbody>
+        <tbody>
+          <tr class="group"><th scope="rowgroup" colspan="4">Changes and files</th></tr>
+          <tr><th scope="row">Review the changes<span>All changes (by <code>/diff</code>’s rule), Uncommitted changes, or one turn; comments on lines go with your next message</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Commit and create a PR<span>Desktop’s own requests to Claude, sent at once, queued while Claude works; the pull request’s card, live where gh can read it; no Push, as in Desktop</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Edit a file yourself<span>Pelican reads, searches, quotes and mentions files</span></th><td>–</td><td>Yes</td><td class="ours">No</td></tr>
+          <tr><th scope="row">A terminal beside the conversation<span>Tabs, Ctrl `, Desktop’s menu, Run in terminal, Quote, Clear terminal on every page; on a phone a line field and a key row</span></th><td>–</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Preview a running app<span>Pages and visuals Claude writes do show, in a sandbox</span></th><td>–</td><td>Yes</td><td class="ours">No</td></tr>
+          <tr><th scope="row">Pull request status<span>A card for the pull request Claude names, live where gh can read it; none for a branch Claude opened no pull request for here</span></th><td>Yes</td><td>Yes</td><td class="ours">Partly</td></tr>
+        </tbody>
+        <tbody>
+          <tr class="group"><th scope="rowgroup" colspan="4">Setup</th></tr>
+          <tr><th scope="row">Settings, <code>CLAUDE.md</code>, hooks, skills, subagents<span>In a folder kept to your settings, only yours</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">MCP servers<span>Status, turn off, reconnect, forms; sign in to one with <code>/mcp</code> in a terminal</span></th><td>Yes</td><td>Yes</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Plugins<span>Install them with <code>/plugin</code> in a terminal</span></th><td>Yes</td><td>Yes</td><td class="ours">Untested</td></tr>
+          <tr><th scope="row">Chrome and computer use</th><td>Yes</td><td>Yes</td><td class="ours">Untested</td></tr>
+          <tr><th scope="row">Bedrock, Google Cloud, Foundry, gateways<span>Pelican uses whatever Claude Code is set up with</span></th><td>Yes</td><td>Partly</td><td class="ours">Yes</td></tr>
+          <tr><th scope="row">Dispatch from the Claude app</th><td>–</td><td>Yes</td><td class="ours">No</td></tr>
+          <tr><th scope="row">Sessions on another machine over SSH<span>Run Pelican on that machine instead</span></th><td>–</td><td>Yes</td><td class="ours">No</td></tr>
+        </tbody>
+      </table>

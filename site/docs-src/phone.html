@@ -1,0 +1,40 @@
+<aside class="callout note"><p class="callout-title">Only you get in</p><p>Pelican listens on <code>127.0.0.1</code>, so only your computer can reach it until you choose a way in, and every browser signs in. Whoever can use Pelican can run Claude Code as you, so pick a way in that keeps everyone else out.</p></aside>
+      <h2 id="tailscale">Tailscale (recommended)</h2>
+      <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need.</p>
+      <p id="tailscale-setup">No Tailscale yet? Install it on the computer and on the phone, signed in to the same account on both. <code>pelican phone</code> says how for your system too.</p>
+      <div class="tabs" data-tabs>
+        <div class="tablist" role="tablist" aria-label="Your computer"><button type="button" role="tab" id="tab-ts-mac" aria-controls="ts-mac" aria-selected="true">Mac</button><button type="button" role="tab" id="tab-ts-linux" aria-controls="ts-linux" aria-selected="false" tabindex="-1">Linux</button><button type="button" role="tab" id="tab-ts-wsl" aria-controls="ts-wsl" aria-selected="false" tabindex="-1">WSL on Windows</button></div>
+        <div class="tab-panel" role="tabpanel" id="ts-mac" aria-labelledby="tab-ts-mac"><p class="tab-label">Mac</p><p>The Tailscale app, from the App Store or <a href="https://tailscale.com/download/mac">tailscale.com/download/mac</a>.</p></div>
+        <div class="tab-panel" role="tabpanel" id="ts-linux" aria-labelledby="tab-ts-linux"><p class="tab-label">Linux</p><p><code>curl -fsSL https://tailscale.com/install.sh | sh</code>, then <code>sudo tailscale up</code>, and open the link it prints to sign in. On Linux <code>tailscale serve</code> is root’s until you make yourself Tailscale’s operator: <code>sudo tailscale set --operator=$USER</code>.</p></div>
+        <div class="tab-panel" role="tabpanel" id="ts-wsl" aria-labelledby="tab-ts-wsl"><p class="tab-label">WSL on Windows</p>
+          <p>As on Linux, inside WSL, where Pelican runs. Tailscale's service starts through systemd, which WSL leaves off unless <code>/etc/wsl.conf</code> turns it on. This prints <code>systemd</code> where it is on:</p>
+          <pre><code>ps -p 1 -o comm=</code></pre>
+          <p>Where it prints something else, turn it on (where <code>/etc/wsl.conf</code> has a <code>[boot]</code> section already, put <code>systemd=true</code> under it instead), then run <code>wsl --shutdown</code> in PowerShell and open Ubuntu again:</p>
+          <pre><code>printf '[boot]\nsystemd=true\n' | sudo tee -a /etc/wsl.conf</code></pre>
+          <p>Then install Tailscale as on Linux. To Tailscale, WSL is a device of its own, and Windows is another: in Windows' own browser, open Pelican at <code>http://localhost:7860</code>, as the <code>ts.net</code> address opens only on devices on your tailnet. WSL can stop once its last window closes, and Pelican with it: keep a WSL window open while you use Pelican from the phone.</p>
+          <p>With Tailscale already on Windows, Tailscale advises using that one alone: run <code>tailscale serve --bg 7860</code> in PowerShell, which reaches Pelican in WSL through <code>localhost</code>, then <code>pelican phone https://&lt;this PC&gt;.&lt;your tailnet&gt;.ts.net</code> in WSL. Should WSL not reach that address, open it on the phone and sign in with a password (<code>pelican password</code>).</p>
+        </div>
+      </div>
+      <p>On the phone: the Tailscale app, from the App Store or Google Play, signed in with the same account. A phone runs one VPN at a time, so turn any other VPN or proxy app off.</p>
+      <aside class="callout tip"><p class="callout-title">First time</p><p>The first time, <code>tailscale serve</code> asks you to turn on HTTPS for your tailnet, with the link that does it. Then:</p></aside>
+      <pre><code>tailscale serve --bg 7860
+pelican phone</code></pre>
+      <p><code>pelican phone</code> finds the address <code>tailscale serve</code> gave Pelican, checks that it reaches this very Pelican, and prints a QR code. Scan it with the phone’s camera: Pelican opens there, signed in. The code works once, for two minutes; press Enter for a new one. On a Mac with only the Tailscale app, <code>tailscale</code> is not a command in your terminal; run <code>pelican phone</code>, and it prints the command with the app’s own path.</p>
+      <p>Once Pelican knows the phone’s address, its start banner shows the QR code, and so does Settings › On your phone on the computer. To give the address yourself, run <code>pelican phone https://laptop.example.ts.net</code>, or start Pelican with <code>PELICAN_PUBLIC_URL</code> set to it. Or set a password with <code>pelican password</code> and type it on the phone.</p>
+      <h2 id="cannot-open">When the phone cannot open it</h2>
+      <p>An address on your tailnet, <code>…ts.net</code>, opens only on the devices on it. <code>tailscale status</code> on the computer lists them, and the phone must be one, signed in with the same account. Where only the computer is on it, <code>pelican phone</code> says so under its QR code.</p>
+      <ul>
+        <li><b><code>ERR_CONNECTION_CLOSED</code></b>, the site “closed the connection”: the request never reached Tailscale, as a proxy (Clash and the like) on the phone or the computer took it. On the computer, add <code>ts.net</code> and <code>100.64.0.0/10</code> to the proxy's direct rules, or turn it off. On a phone, which runs one VPN at a time, turn the proxy's VPN off while you use Pelican: with it on, Tailscale is off.</li>
+        <li><b>The site cannot be reached, or its name is not found</b>: this device is not on your tailnet, or Tailscale on it is off. Open the Tailscale app, sign in with the same account, and connect.</li>
+        <li><b>In WSL</b>: Windows is a device of its own to Tailscale. Its browser opens Pelican at <code>http://localhost:7860</code>; <code>tailscale status</code> in WSL lists WSL alone until another device joins.</li>
+      </ul>
+      <h2 id="ssh-tunnel">An SSH tunnel</h2>
+      <p>From a laptop, or a phone app that forwards ports (Termius, Blink): <code>ssh -N -L 7860:127.0.0.1:7860 you@computer</code>, then open the link Pelican printed.</p>
+      <h2 id="own-reverse-proxy">Your own reverse proxy</h2>
+      <p>Put Pelican behind Caddy or nginx with HTTPS, and tell it the public address:</p>
+      <pre><code>PELICAN_PUBLIC_URL=https://pelican.example.com pelican</code></pre>
+      <p>Pelican then answers to that name and takes changes from it, and <code>pelican phone</code> makes its QR codes for it. If the proxy already authenticates, add <code>--no-auth</code> to turn Pelican’s own sign-in off. With the proxy on the same computer, <code>PELICAN_TRUSTED_PROXY=1</code> lets Pelican count failed sign-ins per client. Pelican works under any path prefix, so <code>https://example.com/pelican/</code> is fine.</p>
+      <h2 id="home-network">On the home network</h2>
+      <p><code>pelican --host 0.0.0.0</code> prints a QR code for your phone and works across your Wi-Fi, but over plain HTTP: the sign-in travels in the clear and notifications are off. Prefer Tailscale.</p>
+      <h2 id="add-home-screen">Add it to your Home Screen</h2>
+      <p>In Safari, Share → Add to Home Screen; in Chrome, Install app. Pelican then opens full screen, and on an iPhone notifications only work this way.</p>

@@ -1,0 +1,27 @@
+<table>
+        <thead><tr><th>Option</th><th>Environment</th><th>Default</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>-p, --port</code></td><td><code>PELICAN_PORT</code></td><td><code>7860</code></td><td>Port to listen on</td></tr>
+          <tr><td><code>-H, --host</code></td><td><code>PELICAN_HOST</code></td><td><code>127.0.0.1</code></td><td>Address to listen on</td></tr>
+          <tr><td><code>--name</code></td><td><code>PELICAN_MACHINE</code></td><td>host name</td><td>Name shown for this computer</td></tr>
+          <tr><td><code>--no-auth</code></td><td><code>PELICAN_AUTH=none</code></td><td></td><td>Ask no one to sign in, when a proxy in front authenticates</td></tr>
+          <tr><td><code>--no-terminal</code></td><td></td><td></td><td>No <a href="#terminals">terminal</a>; <code>!</code> commands still run</td></tr>
+          <tr><td><code>--open</code></td><td></td><td></td><td>Open Pelican in this computer’s browser</td></tr>
+          <tr><td><code>--demo</code></td><td></td><td></td><td>Made-up sessions; nothing runs</td></tr>
+          <tr><td><code>-v, --version</code></td><td></td><td></td><td>The versions of Pelican, Claude Code, the Agent SDK and Node</td></tr>
+          <tr><td></td><td><code>PELICAN_PUBLIC_URL</code></td><td></td><td>The address phones use to reach Pelican, such as <code>https://laptop.example.ts.net</code>; Pelican answers to it and takes changes from it</td></tr>
+          <tr><td></td><td><code>PELICAN_ALLOWED_ORIGINS</code></td><td></td><td>Comma-separated origins allowed to make changes, besides Pelican’s own and the public address</td></tr>
+          <tr><td></td><td><code>PELICAN_ALLOWED_HOSTS</code></td><td></td><td>Host names to answer to, besides this computer’s names and addresses, loopback and <code>*.ts.net</code></td></tr>
+          <tr><td></td><td><code>PELICAN_TRUSTED_PROXY</code></td><td></td><td><code>1</code>: believe <code>X-Forwarded-For</code> from a proxy on this computer, so sign-in limits count each client</td></tr>
+          <tr><td></td><td><code>PELICAN_FRAME_ANCESTORS</code></td><td></td><td>Origins allowed to show Pelican in a frame, besides its own</td></tr>
+          <tr><td></td><td><code>PELICAN_SESSION_URL</code></td><td></td><td>Where a tapped notification opens a session (<code>{id}</code> is replaced), for a page that embeds Pelican</td></tr>
+          <tr><td></td><td><code>PELICAN_KEEP_AWAKE</code></td><td></td><td><code>0</code>: let the computer sleep while Claude works</td></tr>
+          <tr><td></td><td><code>PELICAN_IDLE_CLOSE_MS</code></td><td>30 min</td><td>How long an idle Claude process stays open; the next message resumes the session</td></tr>
+          <tr><td></td><td><code>PELICAN_CLAUDE_PATH</code></td><td>bundled</td><td>The Claude Code executable to run, such as the one your terminal runs: <code>"$(command -v claude)"</code></td></tr>
+          <tr><td></td><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>~/.claude</code></td><td>Where Claude Code keeps its sessions</td></tr>
+          <tr><td></td><td><code>PELICAN_CONFIG_DIR</code></td><td><code>~/.config/pelican</code></td><td>The access token and the password hash</td></tr>
+          <tr><td></td><td><code>PELICAN_STATE_DIR</code></td><td><code>~/.local/state/pelican</code></td><td>Uploads, push keys and subscriptions, the folders you trusted, the folders in the system’s temp folder you started sessions in, and the sessions you pinned or archived</td></tr>
+          <tr><td></td><td><code>PELICAN_SCRATCH_DIR</code></td><td><code>~/scratch</code></td><td>Where sessions started without a project get their folders</td></tr>
+        </tbody>
+      </table>
+      <p><code>pelican token</code> prints the link that signs a browser in (Pelican shows it at start only on a terminal, never in a log), and <code>pelican token --reset</code> makes a new token. <code>pelican password</code> sets a password, which replaces the token until <code>pelican password --off</code> removes it. A new token or password signs every browser out at once, with no restart. <code>pelican login</code> signs Claude Code in. <code>pelican phone</code> is under <a href="#phone">Use it from your phone</a>, and <code>pelican service</code> under <a href="#running">Keep it running</a>. If the port is taken, Pelican says whether it already runs there; <code>pelican token</code> and <code>pelican phone</code> find a running Pelican’s port by themselves.</p>

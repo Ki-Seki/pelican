@@ -1,0 +1,26 @@
+<dl class="qa-list">
+        <dt id="plan">Does it work with my Claude plan?</dt>
+        <dd>Pelican runs Anthropic’s own Claude Code, unmodified (the copy the official Agent SDK ships, or the one <code>PELICAN_CLAUDE_PATH</code> names), on your computer, signed in the way you signed in to <code>claude</code>. It never sees, stores or forwards your credentials, puts no service in between, and serves only you: don’t open your Pelican to other people. Signed in with a plan, what you send from Pelican is Agent SDK usage, which draws from your plan’s limits, as Anthropic’s help center says; Anthropic paused a planned change to that on 15 June 2026, so their page has the latest. An API key, Bedrock, Google Cloud or Microsoft Foundry are billed as usual. Anthropic’s rules: <a href="https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use">authentication and credential use</a>, and <a href="https://support.claude.com/en/articles/15036540">using the Agent SDK with your Claude plan</a>. Checked on 5 November 2026.</dd>
+        <dt>Why not Remote Control?</dt>
+        <dd>Use Remote Control if you are on a Claude plan and want to answer, from your phone, the prompt waiting in your terminal: Pelican cannot. Pelican shows every session on the computer without turning anything on, keeps nothing on anyone’s servers, and works with any login, API keys and cloud providers included. <a href="#compare">The comparison</a> has the details.</dd>
+        <dt id="terminal">Can I approve a prompt waiting in my terminal?</dt>
+        <dd>No: that prompt belongs to the Claude running in the terminal, so answer it there, or use Remote Control. Pelican shows that the session needs you there, and your phone gets a notification if the wait lasts about 20 seconds. Once the session is idle, you can continue it here. Work you start or continue in Pelican asks you in Pelican.</dd>
+        <dt>Why not SSH and tmux?</dt>
+        <dd>That works, and needs nothing new on the computer. Pelican is for what a terminal on a phone does badly: long transcripts, diffs, approvals in one tap, notifications, charts and pages, and history across compactions.</dd>
+        <dt id="sleep">What happens when my computer sleeps?</dt>
+        <dd>A computer that is asleep runs nothing: Pelican does not answer, and Claude does not work. While Claude works, Pelican keeps the computer from going to sleep on its own, though a closed laptop lid still sleeps unless the laptop is on power with a display attached. To reach Pelican at any time, keep the computer awake, as <a href="#running">Keep it running</a> shows.</dd>
+        <dt>Does it send my code anywhere, or phone home?</dt>
+        <dd>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browsers and to Claude Code on the same computer and, if you turn notifications on, to your browser’s push service, with the content encrypted. Claude Code talks to Anthropic, or your provider, as it always does.</dd>
+        <dt>Why is the install about 150 MB?</dt>
+        <dd>The official Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code, for your computer alone: about 150 MB to download, about 400 MB on disk. Pelican itself is about 2 MB to download and 6 MB on disk. The <a href="demo/">live demo</a> needs no install at all.</dd>
+        <dt>How does Pelican keep up with Claude Code?</dt>
+        <dd>Each release moves to the newest Agent SDK, and the Claude Code it brings, once Pelican’s tests pass with it. <a href="#coverage">Claude Code coverage</a> says what Pelican does of Claude Code’s features, and <a href="#claude-code">Which Claude Code runs</a> how to run your own.</dd>
+        <dt>Does it work with an API key, Bedrock or Google Cloud?</dt>
+        <dd>Yes: Pelican uses whatever Claude Code is set up with, Microsoft Foundry and LLM gateways included.</dd>
+        <dt>Can I use it while the same session runs in the terminal?</dt>
+        <dd>Yes. Pelican shows that the other app is working on it and follows along. Sending from Pelican then starts a second Claude in that conversation, as the message box says, so wait for the other one to finish first.</dd>
+        <dt>Several computers?</dt>
+        <dd>Run Pelican on each; each is its own page. Add them all to your Home Screen.</dd>
+        <dt>Windows?</dt>
+        <dd>Pelican runs on macOS and Linux. Native Windows does not work yet: <code>!</code> commands and the status of other apps’ sessions assume a Unix system, and Pelican says so when it starts there. WSL is Linux, so Pelican should run there, next to Claude Code, untested so far; reports are welcome.</dd>
+      </dl>

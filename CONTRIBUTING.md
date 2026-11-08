@@ -90,7 +90,7 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/web/lib/quote.ts`, `review.ts`, `src/shared/quoted.ts` | Quotes with notes and line comments, written and read back in Claude Desktop's formats |
 | `src/shared/requests.ts`, `src/web/lib/requests.ts` | Commit changes and Create PR, in Claude Desktop's own words, and the `<pr-created>` card |
 | `public/preview.html` | Where a page or visual Claude made runs, once you tap Run |
-| `site/` | The website and the docs; `scripts/site.mjs` adds the live demo |
+| `site/` | The website; `site/docs-src/` holds each page of the docs, which `scripts/site.mjs` wraps (`scripts/docs-pages.mjs`) and builds with the live demo |
 | `src/shared/` | Types and logic both sides use |
 | `src/web/` | The web app (React, Tailwind) |
 | `scripts/` | Build (with the third-party notices), development, the browser smoke test, the site, screenshots, icons, what changed upstream, the registry CI installs the package from, and the check that the terminal's binaries are Microsoft's |
@@ -114,9 +114,9 @@ issue "Claude Code updates to consider" keeps each week.
    with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
 Before the bump, take the newest Agent SDK, and the Claude Code it brings, if all its checks pass.
-Then bring the docs' Claude Code coverage table (`site/docs.html#coverage`) up to date with what
+Then bring the docs' Claude Code coverage table (`site/docs-src/coverage.html`) up to date with what
 changed, and the "checked on" dates of the comparison in `README.md`, `site/index.html` and
-`site/docs.html`.
+`site/docs-src/compare.html`.
 
 The release runs the checks again and publishes to npm from GitHub Actions, through npm's trusted
 publishing (OIDC, with provenance): no npm token exists anywhere, and only `release.yml` in the

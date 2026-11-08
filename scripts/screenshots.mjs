@@ -2,7 +2,10 @@
 //   npm run build && npm run screenshots      (CHROME=/path/to/chrome if it is not in the usual place;
 //                                              PELICAN_DEMO_PORT if 47860 is taken)
 // Writes docs/shots/{phone,desktop,list,live}-{light,dark}.png; with --og, og.png too, the picture
-// shared links show, which is otherwise kept as uploaded.
+// shared links show, which is otherwise kept as uploaded. Also feature-{approve,live,visuals,changes}
+// -{light,dark}.png, the site's feature cards; with --features, only those.
+// terminal-{light,dark}.png is not the demo's, which runs no terminal: it was taken from a Pelican
+// of its own (scratch home and folder), `git log --oneline` and `npm test` run in a small project.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -151,7 +154,28 @@ async function socialCard(shots) {
   await page.close();
 }
 
+/** The site's feature cards: whole phone screens at 2x, which the page crops to what each shows. */
+async function featureShots(scheme) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: scheme });
+  await context.addInitScript(watchPointer);
+  const page = await context.newPage();
+  const shots = {
+    approve: await phoneShot(page, `${BASE}?s=${WAITING}`, 900),
+    live: await phoneShot(page, `${BASE}?s=${ELSEWHERE}`, 900),
+    visuals: await phoneShot(page, `${BASE}?s=${CHART}`, 1400, async () => {
+      await page.evaluate(() => document.querySelectorAll('.overscroll-contain').forEach((el) => { el.scrollTop = 0; }));
+      await page.waitForTimeout(500);
+      await page.evaluate(() => document.querySelector('[aria-label="Jump to latest"]')?.remove());
+    }),
+    changes: await phoneShot(page, `${BASE}?s=${WAITING}&w=changes`, 1200),
+  };
+  await context.close();
+  for (const [name, png] of Object.entries(shots)) await writeFile(path.join(OUT, `feature-${name}-${scheme}.png`), png);
+}
+
 for (const scheme of ['light', 'dark']) {
+  await featureShots(scheme);
+  if (process.argv.includes('--features')) continue;
   const { shots, live, list } = await phoneShots(scheme);
   await strip(shots, scheme, `phone-${scheme}.png`);
   await writeFile(path.join(OUT, `list-${scheme}.png`), list);

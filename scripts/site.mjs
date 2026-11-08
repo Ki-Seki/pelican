@@ -7,6 +7,7 @@ import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { MARK, startDemo } from './demo-server.mjs';
+import { buildDocs } from './docs-pages.mjs';
 
 const out = path.resolve(process.argv[2] ?? '_site');
 const PORT = Number(process.env.PELICAN_DEMO_PORT ?? 47861);
@@ -24,7 +25,9 @@ function requestKey(value) {
 
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-await cp('site', out, { recursive: true });
+// The docs' sources become pages of their own (docs-pages.mjs), docs.html among them.
+await cp('site', out, { recursive: true, filter: (from) => !from.split(path.sep).includes('docs-src') && path.relative('site', from) !== 'docs.html' });
+await buildDocs(out);
 await mkdir(path.join(out, 'assets', 'shots'), { recursive: true });
 await cp('docs/shots', path.join(out, 'assets', 'shots'), { recursive: true });
 await cp('docs/logo.svg', path.join(out, 'assets', 'logo.svg'));

@@ -1,0 +1,6 @@
+<figure><img src="assets/how-it-works.svg" width="960" height="500" alt="Your phone talks to the Pelican server on your computer, which runs Claude Code through the Agent SDK and reads the transcripts in ~/.claude that every Claude Code app writes"></figure>
+      <ol>
+        <li>The web app talks to the server over REST and a WebSocket, which carries Claude’s reply as it is written, permission requests and status changes. Each terminal has a WebSocket of its own, for its output and your keys; the server keeps a copy of its screen to show a page that comes back.</li>
+        <li>To run a turn, the server starts Claude Code with the Agent SDK, resuming the session, and passes your approvals back. An idle process closes after a while; the next message resumes the session.</li>
+        <li>Everything else comes from Claude Code’s own files. The transcripts in <code>~/.claude/projects</code>, read incrementally and across compactions, give each session’s history, whichever app wrote it; they are followed while anyone watches. The process registry in <code>~/.claude/sessions</code> tells which sessions another app is running, and whether they are working or waiting for you.</li>
+      </ol>

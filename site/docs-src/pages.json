@@ -1,0 +1,144 @@
+[
+ {
+  "slug": "",
+  "group": "Get started",
+  "nav": "Overview",
+  "title": "Pelican docs",
+  "description": "Every Claude Code session on your computer, on your phone. Start here: install it, open it on your phone, then find your way around.",
+  "file": "index.html"
+ },
+ {
+  "slug": "install",
+  "group": "Get started",
+  "nav": "Install",
+  "title": "Install",
+  "description": "Put Pelican on the computer where you use Claude Code, keep it running, and keep it up to date.",
+  "ids": [
+   "install"
+  ],
+  "file": "install.html"
+ },
+ {
+  "slug": "phone",
+  "group": "Get started",
+  "nav": "Use it from your phone",
+  "title": "Use it from your phone",
+  "description": "Reach Pelican from your phone over Tailscale, an SSH tunnel or your own proxy, and add it to your Home Screen.",
+  "ids": [
+   "phone"
+  ],
+  "file": "phone.html"
+ },
+ {
+  "slug": "sessions",
+  "group": "Using Pelican",
+  "nav": "Sessions",
+  "title": "Sessions",
+  "description": "Find and follow every session, wherever it started, read it, and find every action where you use it.",
+  "ids": [
+   "using"
+  ],
+  "file": "sessions.html"
+ },
+ {
+  "slug": "talking",
+  "group": "Using Pelican",
+  "nav": "Talking to Claude",
+  "title": "Talking to Claude",
+  "description": "Send, quote and attach, choose a permission mode, keep Claude moving while it works, and run commands of your own.",
+  "file": "talking.html"
+ },
+ {
+  "slug": "workspace",
+  "group": "Using Pelican",
+  "nav": "Changes, files, terminal",
+  "title": "Changes, files and terminal",
+  "description": "See what Claude changed, read the folder, work in a terminal beside the conversation, and look at what Claude makes.",
+  "file": "workspace.html"
+ },
+ {
+  "slug": "more",
+  "group": "Using Pelican",
+  "nav": "Rewind, MCP, settings",
+  "title": "Rewind, MCP and settings",
+  "description": "Rewind and fork, MCP servers, usage and background tasks, the folders you trust, and settings and keys.",
+  "file": "more.html"
+ },
+ {
+  "slug": "coverage",
+  "group": "Reference",
+  "nav": "Claude Code coverage",
+  "title": "Claude Code coverage",
+  "description": "What Pelican covers of Claude Code, feature by feature, and what it does not.",
+  "ids": [
+   "coverage"
+  ],
+  "file": "coverage.html"
+ },
+ {
+  "slug": "configuration",
+  "group": "Reference",
+  "nav": "Configuration",
+  "title": "Configuration",
+  "description": "The options and environment variables Pelican reads.",
+  "ids": [
+   "config"
+  ],
+  "file": "configuration.html"
+ },
+ {
+  "slug": "security",
+  "group": "Reference",
+  "nav": "Security",
+  "title": "Security",
+  "description": "How Pelican keeps everyone but you out, and what to keep in mind.",
+  "ids": [
+   "security"
+  ],
+  "file": "security.html"
+ },
+ {
+  "slug": "how-it-works",
+  "group": "Reference",
+  "nav": "How it works",
+  "title": "How it works",
+  "description": "What runs where, and how Pelican follows and continues your sessions.",
+  "ids": [
+   "how"
+  ],
+  "file": "how-it-works.html"
+ },
+ {
+  "slug": "compare",
+  "group": "Reference",
+  "nav": "Compared with",
+  "title": "Compared with",
+  "description": "Other ways to reach Claude Code from a phone, as each project documents it.",
+  "ids": [
+   "compare"
+  ],
+  "file": "compare.html"
+ },
+ {
+  "slug": "faq",
+  "group": "Reference",
+  "nav": "Questions",
+  "title": "Questions",
+  "description": "Plans and costs, a computer that sleeps, and what people ask before they install it.",
+  "ids": [
+   "faq"
+  ],
+  "file": "faq.html"
+ },
+ {
+  "slug": "development",
+  "group": "Reference",
+  "nav": "Development",
+  "title": "Development",
+  "description": "Run Pelican from a clone, check a change, and contribute.",
+  "ids": [
+   "develop"
+  ],
+  "file": "development.html"
+ }
+]
