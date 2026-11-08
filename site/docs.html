@@ -100,7 +100,15 @@ pelican</code></pre>
       <h2>Use it from your phone</h2>
       <p>Pelican listens on <code>127.0.0.1</code>, so only your computer can reach it until you choose a way in, and every browser signs in. Whoever can use Pelican can run Claude Code as you, so pick a way in that keeps everyone else out.</p>
       <h3>Tailscale (recommended)</h3>
-      <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need. With Tailscale on both:</p>
+      <p>Your phone and computer join the same private network, and <code>tailscale serve</code> puts Pelican behind HTTPS, which notifications need.</p>
+      <p id="tailscale-setup">No Tailscale yet? Install it on the computer and on the phone, signed in to the same account on both. <code>pelican phone</code> says how for your system too.</p>
+      <ul>
+        <li><b>Mac</b>: the Tailscale app, from the App Store or <a href="https://tailscale.com/download/mac">tailscale.com/download/mac</a>.</li>
+        <li><b>Linux</b>: <code>curl -fsSL https://tailscale.com/install.sh | sh</code>, then <code>sudo tailscale up</code>, and open the link it prints to sign in. On Linux <code>tailscale serve</code> is root’s until you make yourself Tailscale’s operator: <code>sudo tailscale set --operator=$USER</code>.</li>
+        <li><b>WSL on Windows</b>: as on Linux, inside WSL, where Pelican runs. With Tailscale already on Windows, Tailscale advises using that one alone: run <code>tailscale serve --bg 7860</code> in PowerShell, which reaches Pelican in WSL through <code>localhost</code>, then <code>pelican phone https://&lt;this PC&gt;.&lt;your tailnet&gt;.ts.net</code> in WSL; should WSL not reach that address, open it on the phone and sign in with a password (<code>pelican password</code>). WSL can stop once its last window closes, and Pelican with it: keep a WSL window open while you use Pelican from the phone.</li>
+        <li><b>The phone</b>: the Tailscale app, from the App Store or Google Play.</li>
+      </ul>
+      <p>The first time, <code>tailscale serve</code> asks you to turn on HTTPS for your tailnet, with the link that does it. Then:</p>
       <pre><code>tailscale serve --bg 7860
 pelican phone</code></pre>
       <p><code>pelican phone</code> finds the address <code>tailscale serve</code> gave Pelican, checks that it reaches this very Pelican, and prints a QR code. Scan it with the phone’s camera: Pelican opens there, signed in. The code works once, for two minutes; press Enter for a new one. On a Mac with only the Tailscale app, <code>tailscale</code> is not a command in your terminal; run <code>pelican phone</code>, and it prints the command with the app’s own path.</p>

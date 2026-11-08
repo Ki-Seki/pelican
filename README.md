@@ -60,7 +60,9 @@ pelican phone
 With [Tailscale](https://tailscale.com) on the computer and the phone, `tailscale serve` gives
 Pelican a private HTTPS address, and `pelican phone` shows a QR code for it. Scan it with the
 phone's camera: Pelican opens there, signed in. `pelican service install` keeps Pelican running.
-The docs cover [an SSH tunnel or your own proxy](https://ki-seki.github.io/pelican/docs.html#phone).
+No Tailscale yet? `pelican phone` says how to install it on your system, and the docs cover
+[setting it up](https://ki-seki.github.io/pelican/docs.html#tailscale-setup), WSL included, and
+[an SSH tunnel or your own proxy](https://ki-seki.github.io/pelican/docs.html#phone).
 
 ## What it does
 

@@ -139,16 +139,46 @@ export async function findPhoneAddress(port: number, host: string, given?: strin
   return { tailscale: { cli, ...(name ? { name } : {}) } };
 }
 
-/** What to do when no address is known: the one command that makes one, where it is known. */
-export function setupHint(search: PhoneSearch, port: number, command: string): string[] {
+/** Where Pelican runs, for how Tailscale is set up there: a Mac, Linux, or Linux in WSL on Windows. */
+export type Place = 'mac' | 'linux' | 'wsl';
+
+export function placeHere(platform: NodeJS.Platform = process.platform, release = os.release(), env: NodeJS.ProcessEnv = process.env): Place {
+  if (platform === 'darwin') return 'mac';
+  return env.WSL_DISTRO_NAME || /microsoft/i.test(release) ? 'wsl' : 'linux';
+}
+
+/**
+ * What to do when no address is known: the one command that makes one where Tailscale is on; how
+ * to sign it in where it is installed but not connected; and where it is not installed, how to
+ * install it here, as Tailscale's own pages say for this system.
+ */
+export function setupHint(search: PhoneSearch, port: number, command: string, place: Place = placeHere()): string[] {
   const lines = ['Pelican listens only on this computer, and your phone needs an address that reaches it.'];
+  // On Linux, `tailscale serve` is root's unless this account is Tailscale's operator.
+  const operator = place === 'mac' ? [] : ['If it says access is denied: `sudo tailscale set --operator=$USER`, then run it again.'];
   if (search.tailscale?.name) {
     lines.push(`Tailscale is on here. This serves Pelican at https://${search.tailscale.name}/ to your tailnet:`);
-    lines.push('', `  ${search.tailscale.cli} serve --bg ${port}`, '', `Then run \`${command} phone\` again.`);
-  } else {
-    lines.push(`With Tailscale on the computer and the phone: \`tailscale serve --bg ${port}\`, then \`${command} phone\`.`);
-    lines.push(`Any other address that reaches this computer: \`${command} phone https://…\`.`);
+    lines.push('', `  ${search.tailscale.cli} serve --bg ${port}`, '', ...operator, `Then run \`${command} phone\` again.`);
+    return lines;
   }
+  if (search.tailscale) {
+    lines.push(place === 'mac'
+      ? 'Tailscale is installed here but not connected: open the Tailscale app and sign in, with the account your phone uses.'
+      : 'Tailscale is installed here but not connected: run `sudo tailscale up` and sign in, with the account your phone uses.');
+    lines.push(`Then \`${search.tailscale.cli} serve --bg ${port}\`, and \`${command} phone\` again.`, ...operator);
+    return lines;
+  }
+  lines.push('Tailscale gives it one: install it here and on the phone, signed in to the same account. Here:');
+  if (place === 'mac') lines.push('', '  The Tailscale app, from the App Store or https://tailscale.com/download/mac', '');
+  else lines.push('', '  curl -fsSL https://tailscale.com/install.sh | sh', '  sudo tailscale up', '');
+  // The Mac app puts no `tailscale` on the PATH: once it is in, this command says the one with its path.
+  lines.push(place === 'mac'
+    ? `On the phone, the Tailscale app from the App Store or Google Play. Then run \`${command} phone\` again: it says the command that serves Pelican.`
+    : `On the phone, the Tailscale app from the App Store or Google Play. Then \`tailscale serve --bg ${port}\` here, and \`${command} phone\` again.`, ...operator);
+  if (place === 'wsl') {
+    lines.push(`Tailscale already on Windows? Use that one alone, as Tailscale advises: \`tailscale serve --bg ${port}\` in PowerShell, then \`${command} phone https://<this PC>.<your tailnet>.ts.net\` here.`);
+  }
+  lines.push(`Any other address that reaches this computer: \`${command} phone https://…\`.`);
   return lines;
 }
 

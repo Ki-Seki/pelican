@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { config } from '../src/server/config';
-import { checkAddress, findPhoneAddress, normalAddress, phoneBlock, servedAddress, setupHint } from '../src/server/phone';
+import { checkAddress, findPhoneAddress, normalAddress, phoneBlock, placeHere, servedAddress, setupHint } from '../src/server/phone';
 import { instance, recordRunning, runningServer } from '../src/server/running';
 
 const saved = { ...config };
@@ -102,6 +102,35 @@ describe('the terminal’s QR code', () => {
     expect(hint).toContain('/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 7860');
     expect(hint).toContain('https://laptop.tail1234.ts.net/');
     expect(setupHint({}, 7860, 'pelican-cc').join('\n')).toContain('`pelican-cc phone https://…`');
+  });
+
+  it('says how to install Tailscale where it is not, as Tailscale says for this system, and how to connect it where it is', () => {
+    const mac = setupHint({}, 7860, 'pelican', 'mac').join('\n');
+    expect(mac).toContain('The Tailscale app, from the App Store or https://tailscale.com/download/mac');
+    expect(mac).toContain('the Tailscale app from the App Store or Google Play. Then run `pelican phone` again: it says the command that serves Pelican.');
+    expect(mac).not.toContain('install.sh');
+    expect(mac).not.toContain('--operator');
+    const linux = setupHint({}, 7860, 'pelican', 'linux').join('\n');
+    expect(linux).toContain('  curl -fsSL https://tailscale.com/install.sh | sh\n  sudo tailscale up');
+    expect(linux).toContain('`sudo tailscale set --operator=$USER`');
+    expect(linux).not.toContain('PowerShell');
+    // In WSL, the same; or Tailscale on Windows alone, as Tailscale advises against running both.
+    const wsl = setupHint({}, 7860, 'pelican', 'wsl').join('\n');
+    expect(wsl).toContain('install.sh');
+    expect(wsl).toContain('Tailscale already on Windows? Use that one alone, as Tailscale advises: `tailscale serve --bg 7860` in PowerShell, then `pelican phone https://<this PC>.<your tailnet>.ts.net` here.');
+    expect(wsl).toContain('`pelican phone https://…`');
+    // Installed, not connected.
+    expect(setupHint({ tailscale: { cli: 'tailscale' } }, 7860, 'pelican', 'linux').join('\n')).toContain('run `sudo tailscale up` and sign in, with the account your phone uses');
+    expect(setupHint({ tailscale: { cli: '/Applications/Tailscale.app/Contents/MacOS/Tailscale' } }, 7860, 'pelican', 'mac').join('\n')).toContain('open the Tailscale app and sign in');
+    // Connected: the command, and on Linux what to do if it is root's.
+    expect(setupHint({ tailscale: { cli: 'tailscale', name: 'box.tail1234.ts.net' } }, 7860, 'pelican', 'linux').join('\n')).toContain('`sudo tailscale set --operator=$USER`');
+  });
+
+  it('knows a Mac, Linux, and Linux in WSL', () => {
+    expect(placeHere('darwin', '25.0.0', {})).toBe('mac');
+    expect(placeHere('linux', '6.8.0-49-generic', {})).toBe('linux');
+    expect(placeHere('linux', '5.15.167.4-microsoft-standard-WSL2', {})).toBe('wsl');
+    expect(placeHere('linux', '6.8.0', { WSL_DISTRO_NAME: 'Ubuntu' })).toBe('wsl');
   });
 });
 
