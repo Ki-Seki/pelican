@@ -48,9 +48,13 @@ beforeAll(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   history.replaceState(null, '', '/');
+  // What the page asked for ahead of need, the conversation and Settings 1.5 s after the list is up,
+  // may still be on its way: it arrives before the next test loads the app afresh, not in that app,
+  // where it would stand in for a part that test makes drop.
+  await vi.dynamicImportSettled();
 });
 
 /** The app as a page loads it, at `route`, with `drops` requests for each part failing first. */
