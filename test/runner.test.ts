@@ -155,6 +155,7 @@ const { fork } = await import('../src/server/actions');
 const { connect, feedFor } = await import('../src/server/feed');
 const { listModels } = await import('../src/server/models');
 const { config } = await import('../src/server/config');
+const { whatWouldEnd } = await import('../src/server/update');
 
 const folder = process.cwd();
 const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -196,6 +197,35 @@ const toolResult = (id: string, output: unknown, text = 'ok') => ({
   message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] },
 });
 const system = (subtype: string, extra: Record<string, unknown> = {}) => ({ type: 'system', subtype, uuid: crypto.randomUUID(), session_id: 's', ...extra });
+
+/** A row of a transcript, written `ago` ms before now. */
+type Row = Record<string, unknown> & { ago: number };
+const said = (text: string, ago: number): Row => ({ type: 'user', ago, message: { role: 'user', content: text } });
+const replied = (text: string, ago: number): Row => ({
+  type: 'assistant', ago, message: { id: `msg_${crypto.randomUUID().slice(0, 8)}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] },
+});
+const called = (id: string, name: string, input: Record<string, unknown>, ago: number): Row => ({
+  type: 'assistant', ago, message: { id: `msg_${id}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name, input }] },
+});
+/** A tool's result, with what Claude Code records of it beside it. */
+const ran = (id: string, output: unknown, ago: number, error = false): Row => ({
+  type: 'user', ago, toolUseResult: output, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: error ? String(output) : 'ok', ...(error ? { is_error: true } : {}) }] },
+});
+
+/** A session's transcript on disk, each row after the one before it, as Claude Code writes them; the rows' ids. */
+async function transcriptOf(sessionId: string, rows: Row[]): Promise<string[]> {
+  const dir = path.join(scratch, 'claude', 'projects', folder.replace(/[^a-zA-Z0-9]/g, '-'));
+  await mkdir(dir, { recursive: true });
+  const ids: string[] = [];
+  const lines = rows.map(({ ago, ...row }) => {
+    const uuid = crypto.randomUUID();
+    const line = JSON.stringify({ uuid, parentUuid: ids.at(-1) ?? null, sessionId, cwd: folder, timestamp: new Date(Date.now() - ago).toISOString(), ...row });
+    ids.push(uuid);
+    return line;
+  });
+  await writeFile(path.join(dir, `${sessionId}.jsonl`), `${lines.join('\n')}\n`);
+  return ids;
+}
 
 const textOf = (message: SDKUserMessage) => {
   const content = message.message.content;
@@ -736,6 +766,103 @@ describe('work that runs on its own', () => {
     }
   });
 
+  it('resumed, runs again the checks Claude Code schedules again from the conversation: listed, kept running for, and named by what an update would end', async () => {
+    const sessionId = crypto.randomUUID();
+    const day = 24 * 3600_000;
+    const later = Date.now() + 3 * 3600_000;
+    await transcriptOf(sessionId, [
+      said('Watch the deploy', 9 * day),
+      // Made eight days ago: Claude Code let it go a week after.
+      called('c1', 'CronCreate', { cron: '7 * * * *', prompt: 'check the deploy' }, 8 * day),
+      ran('c1', { id: 'job-old', humanSchedule: 'Every hour at :07', recurring: true }, 8 * day),
+      // Every day at noon, made two days ago.
+      called('c2', 'CronCreate', { cron: '0 12 * * *', prompt: 'check the deploy', recurring: true }, 2 * day),
+      ran('c2', { id: 'job-noon', humanSchedule: 'Every day at 12:00 PM', recurring: true, nextFireAt: Date.now() - day }, 2 * day),
+      // Cancelled.
+      called('c3', 'CronCreate', { cron: '*/5 * * * *', prompt: 'check the queue' }, 2 * day),
+      ran('c3', { id: 'job-five', humanSchedule: 'Every 5 minutes', recurring: true }, 2 * day),
+      called('c4', 'CronDelete', { id: 'job-five' }, day),
+      ran('c4', { id: 'job-five' }, day),
+      // Reminders: one whose time has come, and one still to come.
+      called('c5', 'CronCreate', { cron: '0 9 8 11 *', prompt: 'say good morning', recurring: false }, day),
+      ran('c5', { id: 'job-past', humanSchedule: '0 9 8 11 *', recurring: false, nextFireAt: Date.now() - 3600_000 }, day),
+      called('c6', 'CronCreate', { cron: '0 15 9 11 *', prompt: 'check the release', recurring: false }, day),
+      ran('c6', { id: 'job-later', humanSchedule: '0 15 9 11 *', recurring: false, nextFireAt: later }, day),
+      // Refused: nothing was scheduled.
+      called('c7', 'CronCreate', { cron: 'daily', prompt: 'check again' }, day),
+      ran('c7', "Invalid cron expression 'daily'. Expected 5 fields: M H DoM Mon DoW.", day, true),
+      // A self-paced /loop's next wake-up, which the Agent SDK's resume does not schedule again.
+      called('c8', 'ScheduleWakeup', { delaySeconds: 1200, reason: 'The build takes about 20 minutes', prompt: '/loop check the build' }, 60_000),
+      ran('c8', { scheduledFor: Date.now() + 1_140_000, clampedDelaySeconds: 1200, wasClamped: false }, 60_000),
+      replied('Watching it.', 59_000),
+    ]);
+    await sendMessage({ sessionId }, { text: 'Is the deploy fine?', attachments: [], settings: {} });
+    const claude = claudes.at(-1)!;
+    const run = getRun(sessionId)!;
+    expect(claude.options).toMatchObject({ resume: sessionId });
+    await vi.waitFor(() => expect(run.state().scheduled).toEqual([
+      { id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true },
+      { id: 'job-later', what: '0 15 9 11 *: check the release', next: later, repeats: false },
+    ]));
+    claude.say(result());
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    closeIdle(Date.now() + config.idleCloseMs + 60_000);
+    expect(run.closed).toBe(false);
+    // Updating would end them: each is named, with the session it is in.
+    expect(await whatWouldEnd()).toEqual([
+      { kind: 'scheduled', title: 'Every day at 12:00 PM: check the deploy', detail: 'in Watch the deploy', sessionId },
+      { kind: 'scheduled', title: '0 15 9 11 *: check the release', detail: 'in Watch the deploy', sessionId },
+    ]);
+    // Cancelled now, they go, and nothing keeps Claude running.
+    claude.say(toolCall('d1', 'CronDelete', { id: 'job-noon' }));
+    claude.say(toolResult('d1', { id: 'job-noon' }));
+    claude.say(toolCall('d2', 'CronDelete', { id: 'job-later' }));
+    claude.say(toolResult('d2', { id: 'job-later' }));
+    await vi.waitFor(() => expect(run.state().scheduled).toBeUndefined());
+    expect(await whatWouldEnd()).toEqual([]);
+    closeIdle(Date.now() + config.idleCloseMs + 60_000);
+    expect(run.closed).toBe(true);
+  });
+
+  it('resumed, keeps a check Claude cancels in the new process cancelled, whether that comes before or after the conversation is read', async () => {
+    const sessionId = crypto.randomUUID();
+    await transcriptOf(sessionId, [
+      said('Keep an eye on things', 3600_000),
+      called('c1', 'CronCreate', { cron: '*/5 * * * *', prompt: 'check the queue' }, 3500_000),
+      ran('c1', { id: 'job-queue', humanSchedule: 'Every 5 minutes', recurring: true }, 3500_000),
+      called('c2', 'CronCreate', { cron: '0 * * * *', prompt: 'check the deploy' }, 3400_000),
+      ran('c2', { id: 'job-deploy', humanSchedule: 'Every hour', recurring: true }, 3400_000),
+    ]);
+    await sendMessage({ sessionId }, { text: 'Stop checking the queue', attachments: [], settings: {} });
+    const claude = claudes.at(-1)!;
+    const run = getRun(sessionId)!;
+    claude.say(toolCall('d1', 'CronDelete', { id: 'job-queue' }));
+    claude.say(toolResult('d1', { id: 'job-queue' }));
+    // The other comes from the conversation only: once it is there, the conversation was read.
+    await vi.waitFor(() => expect(run.state().scheduled).toEqual([{ id: 'job-deploy', what: 'Every hour: check the deploy', repeats: true }]));
+  });
+
+  it('rewound, runs again only the checks made before the cut, where Claude Code resumes; Undo rewind, all of them', async () => {
+    const sessionId = crypto.randomUUID();
+    const day = 24 * 3600_000;
+    const rows = await transcriptOf(sessionId, [
+      said('Watch the deploy', 2 * day),
+      called('c1', 'CronCreate', { cron: '0 12 * * *', prompt: 'check the deploy' }, 2 * day),
+      ran('c1', { id: 'job-noon', humanSchedule: 'Every day at 12:00 PM', recurring: true }, 2 * day),
+      replied('Every day at noon.', 2 * day),
+      said('And the queue, every five minutes', day),
+      called('c2', 'CronCreate', { cron: '*/5 * * * *', prompt: 'check the queue' }, day),
+      ran('c2', { id: 'job-queue', humanSchedule: 'Every 5 minutes', recurring: true }, day),
+    ]);
+    const cut = await restartAt(sessionId, { entry: rows[3]!, dropsTurn: rows[4]! });
+    await vi.waitFor(() => expect(cut!.state().scheduled).toEqual([{ id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true }]));
+    const whole = await restartAt(sessionId);
+    await vi.waitFor(() => expect(whole!.state().scheduled).toEqual([
+      { id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true },
+      { id: 'job-queue', what: 'Every 5 minutes: check the queue', repeats: true },
+    ]));
+  });
+
   it('reports what subagents and background tasks are doing, and what a command printed', async () => {
     const { run, claude, state } = await start();
     claude.say(system('task_started', { task_id: 'a1', tool_use_id: 'toolu_1', description: 'Find the flaky test', subagent_type: 'Explore' }));
@@ -1190,6 +1317,24 @@ describe('side chats', () => {
     expect(again.options).toMatchObject({ resume: side, tools: ['Read', 'Grep', 'Glob'], strictMcpConfig: true, permissionMode: 'dontAsk', allowDangerouslySkipPermissions: false });
     await settle();
     expect(again.prompts.map(textOf)).toEqual([sideChatPrompt('And where is it kept?')]);
+  });
+
+  it('run none of the checks their session scheduled, where Claude Code is told that session goes on; a fork runs them as the session does', async () => {
+    const parent = crypto.randomUUID();
+    const noon = { id: 'job-noon', what: 'Every day at 12:00 PM: check the deploy', repeats: true };
+    await transcriptOf(parent, [
+      said('Watch the deploy', 3600_000),
+      called('c1', 'CronCreate', { cron: '0 12 * * *', prompt: 'check the deploy' }, 3500_000),
+      ran('c1', { id: 'job-noon', humanSchedule: 'Every day at 12:00 PM', recurring: true }, 3500_000),
+      replied('Every day at noon.', 3400_000),
+    ]);
+    const side = await startSideChat(parent, { text: 'When does it check?', settings: {} });
+    const copy = await fork(parent);
+    await sendMessage({ sessionId: copy }, { text: 'Carry on here', attachments: [], settings: {} });
+    await sendMessage({ sessionId: parent }, { text: 'Carry on', attachments: [], settings: {} });
+    await vi.waitFor(() => expect(getRun(parent)!.state().scheduled).toEqual([noon]));
+    await vi.waitFor(() => expect(getRun(copy)!.state().scheduled).toEqual([noon]));
+    expect(getRun(side)!.state().scheduled).toBeUndefined();
   });
 
   it('branched from one of their questions (an earlier prompt edited), go on as side chats', async () => {

@@ -57,6 +57,7 @@ import { liveProcesses } from './live.js';
 import { deliveryOf, toChatMessage } from './normalize.js';
 import { answerable, notify, oneLine } from './push.js';
 import { liveCut, spendCut } from './rewound.js';
+import { cronCheck, DUE_GRACE_MS, resumedChecks } from './scheduled.js';
 import { keepNameThroughRequests, sessionInfo, sessionTitle } from './sessions.js';
 import { bashModeMessages, type ForClaude } from './shell.js';
 import { isSideChat, SIDE_CHAT_COMMAND, SIDE_CHAT_ENV, SIDE_CHAT_TITLE, sideChatOptions, sideChatPrompt, sideChatSettings } from './side-chat.js';
@@ -369,11 +370,6 @@ function liveWorkflow(flow: LiveFlow): Workflow {
   return flow.shown;
 }
 
-/** A scheduled check stays counted this long after it was due, in case it fires late. */
-const DUE_GRACE_MS = 10 * 60_000;
-/** Claude Code lets a recurring check go this long after it was made (CronCreate: "auto-expired after 7 days"). */
-const RECURRING_MAX_AGE_MS = 7 * 24 * 3600_000;
-
 /** One Claude Code process driving one session. It stays alive between turns until idle. */
 export class SessionRun {
   busy = false;
@@ -416,6 +412,8 @@ export class SessionRun {
   private crons = new Map<string, ScheduledCheck>();
   /** When Claude Code lets each recurring check go. */
   private cronEnds = new Map<string, number>();
+  /** Checks Claude cancelled in this process: what its conversation says of them on resuming is older. */
+  private cronsGone = new Set<string>();
   /** Prompts waiting for the turn to end; Claude gets them together when it does. */
   private queued: Prompt[] = [];
   /** The turn ended with prompts waiting, which went out at once: the idle that follows is not the end. */
@@ -631,6 +629,31 @@ export class SessionRun {
     void sessionInfo(this.sessionId).then((info) => {
       if (info) this.title = sessionTitle(info) ?? '';
     });
+    // A side chat's Claude schedules nothing again: Claude Code is told its session goes on.
+    if (this.resume && !this.sideChat) void this.checksResumed();
+  }
+
+  /**
+   * The checks Claude Code schedules again as it resumes the session (resumedChecks), which this
+   * process runs as it runs the ones Claude makes in it: shown, kept running for, and ended with
+   * it. Not one Claude cancelled here meanwhile, nor one this process already told of.
+   */
+  private async checksResumed(): Promise<void> {
+    try {
+      // A session resumed has a transcript: one written since the index was last read is looked for afresh.
+      const file = (await transcriptPath(this.sessionId)) ?? (await refreshTranscriptIndex().then(() => transcriptPath(this.sessionId)));
+      const found = file ? await resumedChecks(file, this.resumeAt?.entry) : [];
+      let added = false;
+      for (const { check, ends } of found) {
+        if (this.closed || this.crons.has(check.id) || this.cronsGone.has(check.id)) continue;
+        this.crons.set(check.id, check);
+        if (ends !== undefined) this.cronEnds.set(check.id, ends);
+        added = true;
+      }
+      if (added) this.emit();
+    } catch (error) {
+      console.warn(`[pelican] could not read which checks ${this.sessionId.slice(0, 8)} had scheduled:`, (error as Error).message);
+    }
   }
 
   state(): RunState {
@@ -1332,23 +1355,19 @@ export class SessionRun {
       if (block.is_error === true) continue;
       const output = (raw.tool_use_result ?? {}) as Record<string, unknown>;
       if (call.name === 'ScheduleWakeup') {
+        // Stopped, or past the longest a self-paced /loop runs, it says no time: no wake-up is left.
         const at = typeof output.scheduledFor === 'number' ? output.scheduledFor : undefined;
         this.wakeup = call.input.stop === true || !at ? undefined : { id: 'wakeup', what: str(call.input.reason) || 'Claude checks back', next: at, repeats: false };
       } else if (call.name === 'CronCreate') {
-        const id = str(output.id);
-        if (!id) continue;
-        const prompt = str(call.input.prompt);
-        const repeats = output.recurring !== false;
-        this.crons.set(id, {
-          id,
-          what: oneLine(`${str(output.humanSchedule) || str(call.input.cron)}${prompt ? `: ${prompt}` : ''}`, 100),
-          ...(typeof output.nextFireAt === 'number' ? { next: output.nextFireAt } : {}),
-          repeats,
-        });
-        if (repeats) this.cronEnds.set(id, Date.now() + RECURRING_MAX_AGE_MS);
+        const made = cronCheck(call.input, output, Date.now());
+        if (!made) continue;
+        this.crons.set(made.check.id, made.check);
+        if (made.ends !== undefined) this.cronEnds.set(made.check.id, made.ends);
       } else {
-        this.crons.delete(str(call.input.id));
-        this.cronEnds.delete(str(call.input.id));
+        const id = str(call.input.id);
+        this.crons.delete(id);
+        this.cronEnds.delete(id);
+        this.cronsGone.add(id);
       }
     }
   }
