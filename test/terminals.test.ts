@@ -1220,6 +1220,15 @@ async function saysRunning(id: string, expected: boolean): Promise<void> {
   }
 }
 
+/** Until the terminal says `program` is in front: the shell starts it a moment after Enter, longer on a busy computer. */
+async function inFront(id: string, program: string): Promise<void> {
+  const front = async () => ((await api('GET', `/api/terminals/${id}`)).body as { terminal?: TerminalInfo }).terminal?.program;
+  for (const start = Date.now(); (await front()) !== program;) {
+    if (Date.now() - start > 10_000) throw new Error(`${program} never came in front`);
+    await pause(100);
+  }
+}
+
 /** Runs `work` while ps cannot say what runs (it fails, as where it is missing or refused). */
 async function withoutPs<T>(work: () => Promise<T>): Promise<T> {
   const failing = path.join(dir, 'failing-ps');
@@ -1368,12 +1377,14 @@ describe('what runs in a terminal', () => {
     await shown.sees(/\[1\] \d+/);
     await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
     expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'bash' }), running: true });
-    shown.type('kill %1; wait\r');
-    await shown.sees(/Terminated/);
+    // Ended: the line says so once `wait` is done. bash says "Terminated" only for a job that ends
+    // while `wait` waits for it, and none for one it found ended first, as it can on a busy computer.
+    shown.type("kill %1; wait; echo EN''DED\r");
+    await shown.sees(/ENDED/);
     await saysRunning(terminal.id, false);
     // A job stopped (Ctrl+Z), in the background.
     shown.type('sleep 300\r');
-    await pause(600);
+    await inFront(terminal.id, 'sleep');
     shown.type('\u001a');
     await shown.sees(/Stopped/);
     await until(() => /PROMPT\$ $/.test(shown.lines().filter(Boolean).at(-1) ?? ''), 10_000, 'the prompt');
@@ -1383,7 +1394,7 @@ describe('what runs in a terminal', () => {
     await saysRunning(terminal.id, false);
     // A program in front.
     shown.type('sleep 300\r');
-    await pause(600);
+    await inFront(terminal.id, 'sleep');
     expect(await running()).toEqual({ terminal: expect.objectContaining({ program: 'sleep' }), running: true });
     shown.type('\u0003');
     // Ended, nothing runs; gone, there is no such terminal.
