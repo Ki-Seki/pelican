@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { ServerEvent } from '../src/shared/protocol';
+import type { RunState, ServerEvent } from '../src/shared/protocol';
 import { app } from '../src/server/app';
 import { config } from '../src/server/config';
 import { feedFor } from '../src/server/feed';
@@ -38,7 +38,11 @@ afterAll(async () => {
 
 /** What Claude Code prints, and exits 1 on, given a flag it does not know. */
 const UNKNOWN_FLAG = 'error: unknown option \'--bad-flag\'';
+/** What it prints, and exits 1 on, given an MCP configuration it refuses: two lines. */
+const BAD_MCP = 'Error: Invalid MCP configuration:\nmcpServers: Invalid input: expected record, received number';
 const printing = (words: string) => words.split('\n').map((line) => `echo "${line}" >&2`).join('\n');
+/** Reads what the Agent SDK sends it until the first message comes, then runs `then`. */
+const onFirstMessage = (then: string) => `while read -r line; do case $line in *'"type":"user"'*) ${then};; esac; done\nexit 1`;
 
 /** A stand-in for Claude Code, made of a shell script: Pelican runs it in Claude Code's place. */
 async function standIn(name: string, script: string): Promise<void> {
@@ -60,6 +64,27 @@ async function startSession(): Promise<{ status: number; sessionId?: string; err
   return { status: answer.status, ...((await answer.json()) as { sessionId?: string; error?: string }) };
 }
 
+/**
+ * The session's run once its Claude Code has stopped, as its page finds it on opening: loaded, and
+ * as the socket says it to a page that subscribes (runState). None, when the page finds no run.
+ */
+async function foundOnceStopped(sessionId: string): Promise<RunState | undefined> {
+  await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+  const { run } = (await (await request(`/api/sessions/${sessionId}`)).json()) as { run?: RunState | null };
+  expect(runState(sessionId)).toEqual(run ?? undefined);
+  return run ?? undefined;
+}
+
+/**
+ * What the page learns of a session whose Claude Code stopped as it started. On a busy computer
+ * Claude Code ends before the message goes, and starting the session fails, saying why; on an idle
+ * one the message goes first, and the session's page, once it opens, finds why.
+ */
+async function told(started: { status: number; sessionId?: string; error?: string }): Promise<string | undefined> {
+  expect([200, 500]).toContain(started.status);
+  return started.status === 200 ? (await foundOnceStopped(started.sessionId!))?.error : started.error;
+}
+
 /** A Claude of a session of its own, started as a message would start it. */
 async function startedRun(): Promise<SessionRun> {
   const run = new SessionRun(randomUUID(), await mkdtemp(path.join(root, 'project-')), {}, false);
@@ -76,9 +101,27 @@ describe('Claude Code that stops before the first message reaches it', () => {
     await run.ended;
     await expect(run.send(message)).rejects.toMatchObject({ message: UNKNOWN_FLAG });
   });
+
+  it('says why to the request that starts the session or, when the message went first, on the session’s page: whichever came first', async () => {
+    await standIn('unknown-flag', `${printing(UNKNOWN_FLAG)}\nexit 1`);
+    expect(await told(await startSession())).toBe(UNKNOWN_FLAG);
+  });
+
+  it('that is not there says so, in Pelican’s words with what to do, as Claude Code never ran to say anything', async () => {
+    const missing = path.join(root, 'missing');
+    config.claudeExecutable = missing;
+    expect(await told(await startSession())).toBe(`Pelican could not find Claude Code at ${missing}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or reinstall Pelican.`);
+  });
 });
 
 describe('Claude Code that stops just after the first message reached it', () => {
+  it('says why on the session’s page, which asks only once starting the session has answered, line for line', async () => {
+    await standIn('bad-mcp', onFirstMessage(`${printing(BAD_MCP)}; exit 1`));
+    const started = await startSession();
+    expect(started.status).toBe(200);
+    expect(await foundOnceStopped(started.sessionId!)).toMatchObject({ busy: false, error: BAD_MCP });
+  });
+
   it('as the message goes, too soon after it ended for the Agent SDK to read how, still says why', async () => {
     // Something it started holds its stderr a while after it ended: the Agent SDK waits up to
     // 200 ms for it before it reads how Claude Code ended, and a message that goes meanwhile cannot

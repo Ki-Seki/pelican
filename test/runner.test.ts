@@ -1146,6 +1146,39 @@ describe('Claude Code that stops on its own', () => {
     expect(claudes.at(-1)!.prompts).toEqual([]);
   });
 
+  it('just after the first message, says why to a page that asks a moment later, as a new session’s asks once starting it has answered; a while after, it finds no run', async () => {
+    const { sessionId, claude, events } = await start();
+    claude.print(`${UNKNOWN_FLAG}\n`);
+    claude.fail(exited(UNKNOWN_FLAG));
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    // The pages watching hear it as it happens; one that asks after, from the run as it ended.
+    expect(events.filter((e) => e.type === 'run').at(-1)).toMatchObject({ state: { busy: false, error: UNKNOWN_FLAG } });
+    expect(runState(sessionId)).toMatchObject({ sessionId, busy: false, error: UNKNOWN_FLAG });
+    // As long as a page that subscribes late is sent the messages it missed.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 60_000 - 1000);
+      expect(runState(sessionId)?.error).toBe(UNKNOWN_FLAG);
+      vi.setSystemTime(Date.now() + 2000);
+      expect(runState(sessionId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is no news once Claude starts in the session again: that Claude speaks for it, and once it ends well, nothing is left of the last', async () => {
+    const { sessionId, claude } = await start();
+    claude.print(`${UNKNOWN_FLAG}\n`);
+    claude.fail(exited(UNKNOWN_FLAG));
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    await send({ sessionId, cwd: folder });
+    expect(runState(sessionId)).toMatchObject({ busy: true });
+    expect(runState(sessionId)).not.toHaveProperty('error');
+    getRun(sessionId)!.close();
+    await vi.waitFor(() => expect(getRun(sessionId)).toBeUndefined());
+    expect(runState(sessionId)).toBeUndefined();
+  });
+
   it('says what it printed, not the Agent SDK’s words around it; the SDK’s error only when it printed nothing', async () => {
     const said = await start();
     said.claude.print('Error: Invalid MCP configuration:\n');

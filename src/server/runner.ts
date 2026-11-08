@@ -54,7 +54,7 @@ import { config } from './config.js';
 import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
 import { newSessionSettings } from './defaults.js';
 import { type Completions, forgetCompletions, knownModels, noteTerminalCommands, onSubscription, startError, toCompletions, toMcpServers } from './models.js';
-import { broadcastAll, feedFor, sessionsChanged } from './feed.js';
+import { broadcastAll, feedFor, RECENT_MS, sessionsChanged } from './feed.js';
 import { isDirectory } from './folders.js';
 import { liveProcesses } from './live.js';
 import { deliveryOf, toChatMessage } from './normalize.js';
@@ -606,6 +606,8 @@ export class SessionRun {
   private beforeFirst?: Promise<void>;
 
   start(): void {
+    // A Claude started for the session speaks for it: how the last one ended is no news any more.
+    endedRuns.delete(this.sessionId);
     const settings = this.given ?? this.settings;
     const ultracodeOff = this.given?.ultracode === false;
     // A new session is given its model as picked: Default, picked where a file or the environment
@@ -1686,9 +1688,12 @@ export class SessionRun {
       if (!this.replaced()) {
         runs.delete(this.sessionId);
         // Pages show why it ended, if it did on an error, until they next ask and find no run;
-        // otherwise they forget it now, as a page opened now finds no run.
+        // otherwise they forget it now, as a page opened now finds no run. Ended so on its own, a
+        // page that asks a moment later finds why (endedRuns): a new session's page asks only once
+        // starting the session has answered, by when its Claude Code may have stopped.
         if (this.error) {
           this.emit();
+          if (!closedHere) keepEnded(this.sessionId, this.state());
         } else {
           feedFor(this.sessionId).broadcast({ type: 'run', sessionId: this.sessionId, state: null });
           this.sayStatus();
@@ -1722,6 +1727,25 @@ async function sendLeftovers(sessionId: string, cwd: string, settings: RunSettin
 }
 
 const runs = new Map<string, SessionRun>();
+
+/**
+ * How runs whose Claude Code stopped on its own on an error ended, as their pages last saw them,
+ * for a page that asks a moment later. Kept as long as a page subscribing late is still sent the
+ * messages it missed (feed.ts), or until Claude starts in the session again.
+ */
+const endedRuns = new Map<string, { state: RunState; until: number }>();
+
+function keepEnded(sessionId: string, state: RunState, now = Date.now()): void {
+  for (const [id, ended] of endedRuns) if (ended.until <= now) endedRuns.delete(id);
+  endedRuns.set(sessionId, { state, until: now + RECENT_MS });
+}
+
+function endedRun(sessionId: string, now = Date.now()): RunState | undefined {
+  const ended = endedRuns.get(sessionId);
+  if (ended && ended.until > now) return ended.state;
+  endedRuns.delete(sessionId);
+  return undefined;
+}
 
 /**
  * What changes a session's Claude goes one at a time, each once the one before is done: a message
@@ -1768,9 +1792,10 @@ export function runTasks(sessionId: string): number {
   return getRun(sessionId)?.backgroundCount ?? 0;
 }
 
+/** The session's run as it is now; one that stopped on its own a moment ago, as it ended (endedRuns). */
 export function runState(sessionId: string): RunState | undefined {
   if (config.demo) return demoRunState(sessionId);
-  return getRun(sessionId)?.state();
+  return getRun(sessionId)?.state() ?? endedRun(sessionId);
 }
 
 /**
