@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+Rewind's dialog from the moment it opens.
+
+### Fixes
+
+- Rewind to here's dialog starts on Code and conversation from the moment it opens: opened again
+  after another choice, it showed that choice for a moment, and a choice made in that moment went
+  back to Code and conversation.
+
 ## 0.5.3
 
 A service installed from inside a Claude Code session, Run in terminal's width, and the lines a
