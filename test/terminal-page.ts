@@ -16,9 +16,10 @@ const { Unicode11Addon } = unicode11Addon;
 
 export const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Until `check` holds, for at most `ms` of a clock of its own: a test may stop the wall clock (Date.now). */
 export async function until(check: () => boolean, ms = 10_000, what = 'the page'): Promise<void> {
-  for (const start = Date.now(); !check();) {
-    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
+  for (const start = performance.now(); !check();) {
+    if (performance.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
     await pause(10);
   }
 }

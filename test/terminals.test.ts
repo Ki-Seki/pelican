@@ -788,10 +788,14 @@ describe('a page that comes back', () => {
     const realNow = Date.now;
     try {
       for (let join = 0; join < 12; join += 1) {
+        // Timers keep a clock of their own, and the wall clock may run behind it, by a millisecond:
+        // for every other page it stands still from before the page comes in, so only the page's
+        // timer can say its time is up, however busy the computer.
+        if (join % 2 === 0) {
+          const stopped = realNow();
+          Date.now = () => stopped;
+        }
         const late = page(terminal.id);
-        await until(() => terminalState(terminal.id)!.viewers.some((v) => v.joining), 5000, 'the page to come in');
-        // Timers keep a clock of their own: here the wall clock runs behind it, as it may by a millisecond.
-        if (join % 2 === 0) Date.now = () => realNow() - 50;
         await late.readied();
         Date.now = realNow;
         await late.close();
