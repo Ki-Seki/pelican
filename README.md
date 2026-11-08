@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/logo.svg" width="64" height="64" alt="">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/logo.svg" width="72" height="72" alt="">
 </p>
 
 <h1 align="center">Pelican</h1>
@@ -28,70 +28,76 @@
 </picture>
 </a>
 
-<p align="center"><sub>The live demo is the real app with made-up sessions, in your browser. Nothing to install.</sub></p>
+## Get started
 
-Pelican is one small server next to Claude Code. It reads Claude Code's own transcripts, so the
-sessions you started in the terminal, Claude Desktop or your editor are all there, live, with their
-whole history. It continues them through the official Agent SDK, so your login, settings,
-`CLAUDE.md`, skills and MCP servers apply. Your phone reaches it over Tailscale or an SSH tunnel:
-nothing sits in between.
+You need macOS or Linux (WSL works too), Node 22.12 or newer, and Claude Code signed in.
 
-## Install
+**1. Install and start it** on the computer where you use Claude Code:
 
 ```sh
 npm install -g pelican-cc
 pelican
 ```
 
-On the computer where you use Claude Code, with Node 22.12 or newer and Claude Code signed in, on
-macOS or Linux. `pelican` prints the link that signs this browser in. The install is about 150 MB
-to download and about 400 MB on disk, most of it the copy of Claude Code that the Agent SDK brings.
-The command is also called `pelican-cc`, for computers where Python's Pelican has `pelican`.
-Settings says when a newer Pelican is out, with what changed, and installs it where npm installed
-Pelican.
+Open the link it prints. Your sessions are already there.
 
-## On your phone
+**2. Open it on your phone.** Put [Tailscale](https://tailscale.com/download) on the computer and
+the phone, signed in to the same account, then:
 
 ```sh
 tailscale serve --bg 7860
 pelican phone
 ```
 
-With [Tailscale](https://tailscale.com) on the computer and the phone, `tailscale serve` gives
-Pelican a private HTTPS address, and `pelican phone` shows a QR code for it. Scan it with the
-phone's camera: Pelican opens there, signed in. `pelican service install` keeps Pelican running.
-No Tailscale yet? `pelican phone` says how to install it on your system, and the docs cover
-[setting it up](https://ki-seki.github.io/pelican/docs.html#tailscale-setup), WSL included, and
-[an SSH tunnel or your own proxy](https://ki-seki.github.io/pelican/docs.html#phone).
+Scan the QR code with the phone's camera: Pelican opens, signed in. The phone cannot open it?
+[Here is why](https://ki-seki.github.io/pelican/docs/phone.html#cannot-open), usually another VPN or
+proxy on the phone. Not using Tailscale? [An SSH tunnel or your own proxy](https://ki-seki.github.io/pelican/docs/phone.html) works too.
 
-## What it does
+**3. Keep it running**, if you like: `pelican service install` starts it at login.
 
-- **Every session, wherever you started it.** Live while it runs, with its whole history back past
-  every compaction. When another app is working on one, or waits for you there, Pelican says which
-  app; once it is idle, continue it here.
-- **All of Claude Code.** Approvals with the diff, plans and questions, send now or queue for later
-  while Claude works, quotes with notes and side chats as in Claude Desktop, `!` commands with their
-  output live, `/` commands and skills, `@` files, every model and permission mode, rewind and fork,
-  subagents, workflows and background tasks, MCP servers.
-- **What Claude makes, in place.** Charts and diagrams Claude draws, pages it writes and files it
-  sends you show in the conversation, as in Claude Desktop: pages as still pictures until you tap
-  Run, pictures side by side, videos and sounds in a player, a PDF in your browser's viewer,
-  anything else to download.
-- **Changes, files and a terminal, as in Claude Desktop.** All changes, as Claude Code's `/diff`
-  counts them, what is uncommitted, or what each turn changed, with diffs. Search and read the
-  folder; a path in a reply opens the file at its line. Comment on lines or quote them; Commit
-  changes and Create PR send Desktop's own requests to Claude, and the pull request it opens shows
-  as a card. Your own shell sits beside them, with a line field and a key row on a phone.
-- **Your usage, from every app.** Tokens, sessions and streaks by project, model and app, with your
-  plan's limits, or the cost Claude Code estimates on an API key.
-- **Made for a phone, good on a computer.** One hand, dictation, a notification when Claude needs
-  you or finishes, and a Home Screen icon. Every action sits on what it acts on: a long press on a
-  phone, a right-click or ⌘K on a computer, with Claude Desktop's keys. On a wide screen, the list,
-  the conversation and the changes sit side by side, and the list hides when you want the room.
+Just looking? The [live demo](https://ki-seki.github.io/pelican/demo/) is the real app with
+made-up sessions, in your browser.
+
+## Why Pelican
+
+- **Every session, wherever you started it.** The terminal, Claude Desktop, your editor: they all
+  show up, live, with their whole history. Pick one up from your phone once it is idle.
+- **All of Claude Code.** Approve edits with the diff, answer Claude's questions, queue messages
+  while it works, rewind and fork. Your settings, `CLAUDE.md`, skills and MCP servers apply.
+- **Nothing in between.** Pelican runs on your computer, next to Claude Code, through the official
+  Agent SDK. Your phone connects to it directly. No relay, no account, no telemetry.
+- **Made for a phone.** One hand, dictation, a notification when Claude needs you, a terminal with
+  a key row, and a Home Screen icon. On a computer, everything sits side by side.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="320" alt="A tour of Pelican on a phone: an edit waiting for approval; a passage of Claude's reply quoted with a note; the edit allowed and Claude's question answered with a tap; the session's menu and what changed; a workflow at work in the background, its card a tap away; a chart Claude drew, in place">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/tour.gif" width="300" alt="A tour of Pelican on a phone: an edit waiting for approval; a passage of Claude's reply quoted with a note; the edit allowed and Claude's question answered with a tap; the session's menu and what changed; a workflow at work in the background; a chart Claude drew, in place">
 </p>
+
+## What you can do
+
+- Approve edits and commands with the diff; answer plans and questions with a tap
+- Send now, or queue for later while Claude works
+- Quote a passage with a note, or ask in a side chat, as in Claude Desktop
+- See the changes, read the files, and use a terminal beside the conversation
+- Look at the charts, pages and files Claude makes, in place
+- Rewind and fork; `!` commands, `/` commands and skills, `@` files
+- Follow subagents, workflows and background tasks
+- Use every model and permission mode, with any login: a Claude plan, an API key, Bedrock, Google
+  Cloud or Microsoft Foundry
+- See your usage by project, model and app
+
+What it covers of Claude Code, and what it does not, is in
+[the full table](https://ki-seki.github.io/pelican/docs/coverage.html).
+
+## How it works
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/how-it-works.svg" width="760" alt="Your phone talks to the Pelican server on your computer; Pelican runs Claude Code through the Agent SDK, and reads every session's transcript in ~/.claude, which the terminal, Claude Desktop and editors also write">
+</p>
+
+Pelican is one small server next to Claude Code. It reads the transcripts Claude Code keeps in
+`~/.claude`, so it sees every session, and continues them through the official Agent SDK. It
+listens only on `127.0.0.1`, and every browser signs in.
 
 ## Compared with
 
@@ -106,62 +112,37 @@ As each project documents it, checked on 5 November 2026:
 | [CloudCLI](https://github.com/siteboon/claudecodeui) | Every session in `~/.claude` | Nothing on your network, or CloudCLI Cloud | Claude Code, Cursor CLI, Codex | AGPL-3.0 |
 | SSH and tmux | The ones running in tmux | Nothing | Any | |
 
-Remote Control can answer a prompt waiting in your terminal; Pelican cannot. More in
-[the docs](https://ki-seki.github.io/pelican/docs.html#compare).
-
-## Claude Code coverage
-
-Pelican runs Claude Code itself, so your settings, `CLAUDE.md`, hooks, skills, subagents and MCP
-servers work as they do in the terminal, and so does any login: a Claude plan, an API key, Bedrock,
-Google Cloud or Microsoft Foundry. What Pelican does not do: Remote Control, cloud sessions, a
-worktree for each new session, or editing files by hand. [The full table](https://ki-seki.github.io/pelican/docs.html#coverage) goes through Claude
-Code's features one by one.
-
-## Security
-
-Whoever can use Pelican can run commands as you, so:
-
-- It listens on `127.0.0.1`, and every browser signs in, also on this computer: with the link it
-  prints, a QR code that works once, or a password.
-- Requests must come from Pelican's own page, under a host name it knows: no cross-site requests,
-  no DNS rebinding, no framing by other sites.
-- What Claude writes renders in a sandboxed frame that cannot reach Pelican, as a still picture
-  until you tap Run.
-- A folder runs nothing of its own, such as hooks or MCP servers, until you trust it.
-- A terminal is your shell, as you: it opens under the same checks, runs in a folder as Claude Code
-  does there, keeps nothing on disk and ends with Pelican. Nothing runs in it without you, and
-  Claude sees it only in what you quote.
-
-The whole model is in [SECURITY.md](SECURITY.md).
+Remote Control can answer a prompt waiting in your terminal; Pelican cannot.
 
 ## Questions
 
-**Does it work with my Claude plan?** Pelican runs Anthropic's own Claude Code, unmodified, on your
-computer, signed in the way you signed in to `claude`; it never sees, stores or forwards your
-credentials, and it is for your own use. Signed in with a plan, what you send from Pelican is Agent
-SDK usage and draws from your plan's limits, as
-[Anthropic's help center](https://support.claude.com/en/articles/15036540) says (checked on
-5 November 2026); the rules are under
-[authentication and credential use](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
+**Does it work with my Claude plan?** Yes. Pelican runs Anthropic's own Claude Code, unmodified,
+signed in the way you signed in to `claude`, and never sees your credentials. What you send from
+Pelican is Agent SDK usage and counts toward your plan's limits, as
+[Anthropic's help center](https://support.claude.com/en/articles/15036540) says.
 
-**Why not Remote Control?** Use it if you are on a Claude plan and want to answer, from your phone,
-the prompt waiting in your terminal: Pelican cannot. Pelican shows every session without turning
-anything on, keeps nothing on anyone's servers, and works with any login, API keys and cloud
-providers included.
+**Why not Remote Control?** Use it to answer, from your phone, the prompt waiting in your terminal:
+Pelican cannot. Pelican shows every session without turning anything on, keeps nothing on anyone's
+servers, and works with any login.
 
 **Why not SSH and tmux?** That works. Pelican is for what a terminal on a phone does badly: long
-transcripts, diffs, approvals in one tap, notifications, charts and pages, and history across
-compactions.
+transcripts, diffs, one-tap approvals, notifications, and charts.
 
-**What if my computer sleeps?** A computer that is asleep runs nothing. While Claude works, Pelican
-keeps it from going to sleep on its own; to reach Pelican at any time, keep the computer awake, as
-[the docs](https://ki-seki.github.io/pelican/docs.html#running) show.
+**What if my computer sleeps?** Then nothing runs. Pelican keeps it awake while Claude works; to
+reach it any time, keep the computer awake, as [the docs](https://ki-seki.github.io/pelican/docs/install.html#running)
+show.
 
-**Does it cost anything, or phone home?** No. Pelican is free and MIT licensed, with no account and
-no telemetry. It talks to your browser and, for notifications, to the browser's push service, with
-the content encrypted.
+**Does it cost anything, or phone home?** No. It is free and MIT licensed, with no account and no
+telemetry.
 
-[More questions](https://ki-seki.github.io/pelican/docs.html#faq)
+[More questions](https://ki-seki.github.io/pelican/docs/faq.html)
+
+## Security
+
+Whoever can use Pelican can run commands as you, so it keeps everyone else out: it listens on
+`127.0.0.1`, every browser signs in, requests must come from its own page, what Claude writes
+renders in a sandbox, and a folder runs nothing of its own until you trust it. The whole model is
+in [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
@@ -170,12 +151,10 @@ npm ci
 npm run dev
 ```
 
-`npm run dev` runs the server and the web app, both reloading on change; `npm test` and
-`npm run typecheck` check a change. See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go
-through [SECURITY.md](SECURITY.md).
+`npm test` and `npm run typecheck` check a change. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
 [MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic. The
-packages built into its server and web app are under their own licenses: `THIRD_PARTY_NOTICES`,
-in the npm package, gives each with its license in full.
+packages built into it keep their own licenses, each given in full in `THIRD_PARTY_NOTICES` in the
+npm package.
