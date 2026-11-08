@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { plainText } from '../src/server/transcripts';
 
+/**
+ * Milliseconds of work since `started` (process.cpuUsage()): time spent working, not time passed.
+ * A busy computer slows the clock, not the work: with a Mac's efficiency cores kept busy, the
+ * previews below took 1.3 s for 0.13 s of work.
+ */
+const workSince = (started: NodeJS.CpuUsage) => {
+  const spent = process.cpuUsage(started);
+  return (spent.user + spent.system) / 1000;
+};
+
 describe('a reply’s preview in the list', () => {
   it('keeps the characters names are made of, and drops only Markdown’s marks', () => {
     expect(plainText("Found it: `export_rows` looks up each row's owner.")).toBe("Found it: export_rows looks up each row's owner.");
@@ -25,10 +35,11 @@ describe('a reply’s preview in the list, from a reply with one very long line'
   it('takes about as long as the reply is, not its square: the server waits on nothing else meanwhile', async () => {
     // Emphasis marks that never close, after spaces or brackets: field names, a one-line program.
     const line = Array.from({ length: 16_000 }, (_, i) => `_field${i}`).join(', ');
-    let started = performance.now();
+    // Both took at most 55 ms of work here, 131 ms on the efficiency cores; the bound is for a slower computer.
+    let started = process.cpuUsage();
     expect(plainText(` _a${' _a'.repeat(40_000)}`)).toMatch(/^_a _a/);
     expect(plainText(`(${'(_x, '.repeat(24_000)}`)).toMatch(/^\(\(_x, \(_x,/);
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(workSince(started)).toBeLessThan(1000);
 
     const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
     const os = await import('node:os');
@@ -42,9 +53,9 @@ describe('a reply’s preview in the list, from a reply with one very long line'
         { type: 'user', uuid: 'u1', timestamp: at, cwd: '/w', message: { role: 'user', content: 'List the fields' } },
         { type: 'assistant', uuid: 'a1', timestamp: at, cwd: '/w', message: { role: 'assistant', content: [{ type: 'text', text: `**Fields:** ${line}` }] } },
       ].map((row) => JSON.stringify(row)).join('\n')}\n`);
-      started = performance.now();
+      started = process.cpuUsage();
       const turn = await readLastTurn(file);
-      expect(performance.now() - started).toBeLessThan(1000);
+      expect(workSince(started)).toBeLessThan(1000);
       expect(turn?.preview).toBe(`Fields: ${line}`.slice(0, 160));
     } finally {
       await rm(dir, { recursive: true, force: true });
