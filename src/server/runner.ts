@@ -1,7 +1,7 @@
 import { randomUUID, type UUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { AbortError, query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
   EffortLevel,
@@ -44,6 +44,9 @@ import type {
 import { isRequest } from '../shared/requests.js';
 import { REWIND_BUSY } from '../shared/rewind.js';
 import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js';
+// What Claude Code prints, as a terminal shows it, with secrets kept out as a quote keeps them out.
+import { maskSecrets } from '../web/lib/secrets.js';
+import { cleanOutput } from '../web/lib/turns.js';
 import { fork, remove } from './actions.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
 import { sdkPackage } from './claude-code.js';
@@ -120,11 +123,43 @@ export type SendInput = {
 
 type Prompt = { uuid: string; text: string; attachments: Attachment[] };
 
-/** The run closed while a message to it was on its way: it never reached Claude, and can go to another. */
+const STOPPED = 'Claude Code stopped in this session';
+
+/**
+ * The run closed while a message to it was on its way: it never reached Claude, and can go to
+ * another. A Claude Code that stopped on its own says why, as it said it (claudeSaid).
+ */
 class RunClosed extends Error {
-  constructor() {
-    super('Claude Code stopped in this session');
+  constructor(why?: string) {
+    super(why ?? STOPPED);
   }
+}
+
+/** How much of what Claude Code prints on stderr a run keeps as it runs: the end, from a line's start. */
+const PRINTED_KEPT = 8192;
+/** The most of it shown: the last 2,000 characters, where a terminal leaves what it said last. */
+const SAID_MAX = 2000;
+
+/** The end of what Claude Code printed so far, from a line's start, enough to show the last of it whole. */
+function keptEnd(printed: string): string {
+  if (printed.length <= PRINTED_KEPT) return printed;
+  const end = printed.slice(-PRINTED_KEPT / 2);
+  const line = end.indexOf('\n');
+  return line >= 0 ? end.slice(line + 1) : end;
+}
+
+/**
+ * What Claude Code printed on stderr, as a terminal shows it (colors and other escape codes gone, a
+ * line it rewrote as it ended), keys and tokens masked as a quote masks them, and, when there is
+ * more, only its last 2,000 characters: a flag it does not know, a setting it refuses, a crash.
+ * Masked before it is cut, so a secret at the cut is masked whole.
+ */
+export function claudeSaid(printed: string): string {
+  const said = maskSecrets(cleanOutput(printed)).trim();
+  if (said.length <= SAID_MAX) return said;
+  const end = said.slice(1 - SAID_MAX);
+  // Not half of a character made of two.
+  return `…${/^[\uDC00-\uDFFF]/.test(end) ? end.slice(1) : end}`;
 }
 
 /** How long a message waits for Claude Code to take the settings it goes with; tests shorten it. */
@@ -451,6 +486,10 @@ export class SessionRun {
   private atCut: boolean;
   /** Claude Code refused to resume as asked: more than the turn it was told to drop would go. */
   private refusedResume = false;
+  /** The end of what Claude Code printed on stderr: its own words, should it stop on its own. */
+  private printed = '';
+  /** Why Claude Code stopped on its own, in its words: what a message that could not reach it says. */
+  private stoppedWith?: string;
   /** A message went after the cut; its turn has not ended yet. */
   private leftCut = false;
 
@@ -615,6 +654,7 @@ export class SessionRun {
       ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
       stderr: (data) => {
         if (process.env.PELICAN_DEBUG) process.stderr.write(`[claude ${this.sessionId.slice(0, 8)}] ${data}`);
+        this.printed = keptEnd(this.printed + data);
       },
       // Last, so nothing above can give a side chat a tool, a server or a mode of the session's.
       ...(this.sideChat ? sideChatOptions() : {}),
@@ -875,7 +915,7 @@ export class SessionRun {
     await this.applySettings(input.settings);
     if (this.beforeFirst) await answeredWithin(this.beforeFirst, runTiming.settingsMs);
     // Closed meanwhile (the idle close, an exit): queued or sent, it would wait for nobody.
-    if (this.closed) throw new RunClosed();
+    if (this.closed) throw new RunClosed(this.stoppedWith);
     const prompt = { uuid: input.uuid ?? randomUUID(), text: input.text, attachments: input.attachments };
     // Queued: not part of the conversation until the turn ends and Claude gets it.
     if (this.busy && input.mode === 'queue') {
@@ -889,7 +929,7 @@ export class SessionRun {
 
   private async deliver(prompt: Prompt, steer: boolean): Promise<void> {
     const content = await contentOf(this.sideChat ? sideChatPrompt(prompt.text) : prompt.text, prompt.attachments);
-    if (this.closed) throw new RunClosed();
+    if (this.closed) throw new RunClosed(this.stoppedWith);
     const message: SDKUserMessage = {
       type: 'user',
       uuid: prompt.uuid as UUID,
@@ -910,7 +950,7 @@ export class SessionRun {
     const chat = toChatMessage({ type: 'user', uuid: prompt.uuid, message: { role: 'user', content } });
     if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     // Shown already: the Claude it goes to instead publishes it under the same id, which the feed has.
-    if (this.closed) throw new RunClosed();
+    if (this.closed) throw new RunClosed(this.stoppedWith);
     this.leaveCut();
     this.input.push(message);
   }
@@ -937,7 +977,7 @@ export class SessionRun {
    * before it says so. `uuid`: the id of the message holding the command.
    */
   async appendShell(result: ForClaude, respond: boolean, uuid: string = randomUUID()): Promise<void> {
-    if (this.closed) throw new RunClosed();
+    if (this.closed) throw new RunClosed(this.stoppedWith);
     const parts = bashModeMessages(result, respond);
     const messages = parts.map(({ text, meta }, i): SDKUserMessage => ({
       type: 'user',
@@ -958,7 +998,7 @@ export class SessionRun {
       const chat = toChatMessage({ type: 'user', uuid: message.uuid, version, ...(message.isSynthetic ? { isMeta: true } : {}), message: message.message });
       if (chat) await feedFor(this.sessionId).publish({ ...chat, timestamp: Date.now() });
     }
-    if (this.closed) throw new RunClosed();
+    if (this.closed) throw new RunClosed(this.stoppedWith);
     if (respond) {
       // A turn starts with the output, as with a prompt: the page shows Claude at work at once.
       this.error = undefined;
@@ -1423,6 +1463,18 @@ export class SessionRun {
     await feedFor(this.sessionId).publish({ uuid, role: 'system', blocks: [{ type: 'text', text }], timestamp: Date.now() });
   }
 
+  /**
+   * Why Claude Code stopped on its own, as it would show it in a terminal: what it printed
+   * (claudeSaid). When it printed nothing, the Agent SDK's error says what there is to say (the
+   * exit code, a claude that is not there), as before; but for an abort of the SDK's own, which
+   * says nothing of why: a message went as the process ended, before the SDK read how it ended.
+   */
+  private whyStopped(error: Error): string {
+    const said = claudeSaid(this.printed);
+    if (said) return said;
+    return error instanceof AbortError ? STOPPED : readableError(error.message);
+  }
+
   private async pump(): Promise<void> {
     const q = this.q!;
     try {
@@ -1595,10 +1647,11 @@ export class SessionRun {
         }
       }
     } catch (error) {
-      // Closed here while what was queued went out, or a resume Claude Code refused (the rewind
-      // resumes the session whole instead): no error of Claude's.
-      if (!(error instanceof RunClosed) && !this.refusedResume) {
-        this.error = readableError((error as Error).message);
+      // Closed here (by Pelican, perhaps as what was queued went out), or a resume Claude Code
+      // refused (the rewind resumes the session whole instead): no error of Claude's.
+      if (!this.closed && !this.refusedResume) {
+        this.stoppedWith = this.whyStopped(error as Error);
+        this.error = this.stoppedWith;
         console.warn(`[pelican] session ${this.sessionId.slice(0, 8)} ended with an error:`, this.error);
       }
     } finally {

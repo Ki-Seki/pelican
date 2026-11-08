@@ -58,6 +58,11 @@ class FakeClaude {
     this.listening?.resolve({ value: undefined, done: true });
   }
 
+  /** Claude Code prints on stderr: the Agent SDK hands it on as it comes. */
+  print(text: string): void {
+    this.options.stderr?.(text);
+  }
+
   /** The process ends on its own, as a crash or a kill ends it. */
   fail(error = new Error('Claude Code process exited with code 1')): void {
     this.failure = error;
@@ -111,6 +116,8 @@ class FakeClaude {
   refusal?: Error;
   /** The next Claude refuses to resume where it is asked to, the way Claude Code does. */
   static refuseResume = false;
+  /** The next Claude stops as it starts, before a message can reach it: what it prints, and how the SDK says it ended. */
+  static stopsAtStart?: { printed: string; error: Error };
   close() {
     this.calls.push({ name: 'close', args: [] });
     if (FakeClaude.closeDelay > 0) setTimeout(() => this.end(), FakeClaude.closeDelay);
@@ -134,6 +141,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
       claude.say({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [words], duration_ms: 0, duration_api_ms: 0, num_turns: 0, stop_reason: null, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], uuid: crypto.randomUUID(), session_id: 's' });
       setTimeout(() => claude.fail(claude.refusal), 1);
     }
+    if (FakeClaude.stopsAtStart) {
+      claude.print(FakeClaude.stopsAtStart.printed);
+      claude.fail(FakeClaude.stopsAtStart.error);
+    }
     claudes.push(claude);
     return claude;
   },
@@ -147,7 +158,8 @@ vi.mock('../src/server/push', async (importOriginal) => ({
   },
 }));
 
-const { claudeEnv, closeAll, closeIdle, getRun, sendMessage, restartAt, askedFor, runTasks, startSideChat } = await import('../src/server/runner');
+const { AbortError } = await import('@anthropic-ai/claude-agent-sdk');
+const { claudeEnv, claudeSaid, closeAll, closeIdle, getRun, sendMessage, restartAt, askedFor, runState, runTasks, startSideChat } = await import('../src/server/runner');
 const { cutOf, endCut, keepCut } = await import('../src/server/rewound');
 const { oneLine } = await import('../src/server/push');
 const { sideChatPrompt } = await import('../src/server/side-chat');
@@ -262,6 +274,7 @@ beforeEach(async () => {
   FakeClaude.closeDelay = 0;
   FakeClaude.controlDelay = 0;
   FakeClaude.refuseResume = false;
+  FakeClaude.stopsAtStart = undefined;
   // No model known yet and no plan, whichever test ran before.
   await readModels();
 });
@@ -1115,6 +1128,92 @@ describe('when Claude Code ends', () => {
     expect(last.state).not.toHaveProperty('tasks');
     expect(last.state).not.toHaveProperty('progress');
     expect(last.state).not.toHaveProperty('startedAt');
+  });
+});
+
+describe('Claude Code that stops on its own', () => {
+  /** What Claude Code prints, and exits 1 on, given a flag it does not know. */
+  const UNKNOWN_FLAG = 'error: unknown option \'--bad-flag\'';
+  /** How the Agent SDK says a process ended that printed that. */
+  const exited = (printed: string) => new Error(`Claude Code process exited with code 1. stderr: ${printed}`);
+  const send = (target: { sessionId?: string; cwd?: string }) => sendMessage(target, { text: 'Fix the login test', attachments: [], settings: {} });
+
+  it('before the first message reaches it, says why to the message, in its words: starting the session or resuming it fails with them', async () => {
+    FakeClaude.stopsAtStart = { printed: `${UNKNOWN_FLAG}\n`, error: exited(UNKNOWN_FLAG) };
+    await expect(send({ cwd: folder })).rejects.toMatchObject({ message: UNKNOWN_FLAG });
+    expect(claudes.at(-1)!.prompts).toEqual([]);
+    await expect(send({ sessionId: crypto.randomUUID(), cwd: folder })).rejects.toMatchObject({ message: UNKNOWN_FLAG });
+    expect(claudes.at(-1)!.prompts).toEqual([]);
+  });
+
+  it('says what it printed, not the Agent SDK’s words around it; the SDK’s error only when it printed nothing', async () => {
+    const said = await start();
+    said.claude.print('Error: Invalid MCP configuration:\n');
+    said.claude.print('mcpServers: Invalid input: expected record, received number\n');
+    said.claude.fail(exited('Error: Invalid MCP configuration:\nmcpServers: Invalid input: expected record, received number'));
+    await vi.waitFor(() => expect(getRun(said.sessionId)).toBeUndefined());
+    expect(said.run.error).toBe('Error: Invalid MCP configuration:\nmcpServers: Invalid input: expected record, received number');
+    const silent = await start();
+    silent.claude.fail(new Error('Claude Code process terminated by signal SIGKILL'));
+    await vi.waitFor(() => expect(getRun(silent.sessionId)).toBeUndefined());
+    expect(silent.run.error).toBe('Claude Code process terminated by signal SIGKILL');
+  });
+
+  it('as a message goes to it, too late for the Agent SDK to read how it ended (it aborts instead), still says what it printed, or that it stopped', async () => {
+    const said = await start();
+    said.claude.print(`${UNKNOWN_FLAG}\n`);
+    said.claude.fail(new AbortError('Operation aborted'));
+    await vi.waitFor(() => expect(getRun(said.sessionId)).toBeUndefined());
+    expect(said.run.error).toBe(UNKNOWN_FLAG);
+    const silent = await start();
+    silent.claude.fail(new AbortError('Operation aborted'));
+    await vi.waitFor(() => expect(getRun(silent.sessionId)).toBeUndefined());
+    expect(silent.run.error).toBe('Claude Code stopped in this session');
+  });
+
+  it('stopped with Stop, or closed here, is no error, whatever it prints and however it ends meanwhile, and leaves nothing for a page to find', async () => {
+    const { sessionId, claude, run, events } = await start();
+    claude.say(init());
+    await run.interrupt();
+    claude.print('Request interrupted by user\n');
+    claude.say(result({ subtype: 'error_during_execution', is_error: true, errors: ['Request was aborted.'] }));
+    await vi.waitFor(() => expect(run.busy).toBe(false));
+    expect(run.error).toBeUndefined();
+    // Closed (idle, deleted, Pelican shutting down), it may end on an error of its own as it goes.
+    claude.close = () => {
+      claude.print('error: its input closed\n');
+      claude.fail(exited('error: its input closed'));
+    };
+    run.close();
+    await run.ended;
+    expect(run.error).toBeUndefined();
+    expect(events.filter((e) => e.type === 'run').at(-1)).toEqual({ type: 'run', sessionId, state: null });
+    expect(runState(sessionId)).toBeUndefined();
+  });
+});
+
+describe('what Claude Code printed, as the page says why it stopped', () => {
+  /** A synthetic key of a kind a quote masks, put together here so no file holds one. */
+  const fake = (...parts: string[]) => parts.join('');
+
+  it('is as a terminal shows it: its colors and the lines it rewrote worked out, its lines kept', () => {
+    expect(claudeSaid('\u001b[31merror:\u001b[39m unknown option \'--bad-flag\'\r\n')).toBe('error: unknown option \'--bad-flag\'');
+    expect(claudeSaid('Checking settings\rError: Settings file not found: /tmp/{bad\nExiting\n\n')).toBe('Error: Settings file not found: /tmp/{bad\nExiting');
+    expect(claudeSaid('\u001b[2K\n  \n')).toBe('');
+  });
+
+  it('has keys and tokens masked, as a quote has them', () => {
+    const key = fake('sk-', 'ant-', 'api03-', 'A'.repeat(30));
+    expect(claudeSaid(`Error: invalid x-api-key ${key}\n`)).toBe(`Error: invalid x-api-key ${key.slice(0, 8)}${'•'.repeat(key.length - 8)}`);
+  });
+
+  it('is its last 2,000 characters when it is longer, the cut said, a key across the cut masked whole', () => {
+    const key = fake('sk-', 'ant-', 'api03-', 'B'.repeat(30));
+    const said = claudeSaid(`${'x'.repeat(3000)}\n${key} ${'y'.repeat(1990)}\n`);
+    expect(said).toHaveLength(2000);
+    expect(said).toBe(`…${'•'.repeat(8)} ${'y'.repeat(1990)}`);
+    // Never half of a character made of two.
+    expect(claudeSaid(`a${'\u{1f427}'.repeat(1500)}`)).toBe(`…${'\u{1f427}'.repeat(999)}`);
   });
 });
 
