@@ -79,15 +79,20 @@ export function boundedWidths(base: Widths): Widths {
   };
 }
 
+/**
+ * The columns a character moves the cursor on, from what the widths said of it: none when it joins
+ * the cell before, else its width.
+ */
+export const columnsFrom = (properties: number): number => (properties & JOINS ? 0 : (properties >>> WIDTH_SHIFT) & 3);
+
 /** A terminal, xterm.js's or the headless one: what the widths are set through. */
 type Unicode = { unicode: { register(widths: Widths): void; activeVersion: string } };
 
-/**
- * Gives `terminal` the widths every terminal of Pelican draws with: Unicode 11's, from the addon
- * (`Unicode11Addon` of @xterm/addon-unicode11, whose `activate` hands them to the terminal it is
- * given), bounded.
- */
-export function loadWidths(terminal: Unicode, Unicode11Addon: new () => { activate(terminal: never): void }): void {
+/** @xterm/addon-unicode11's `Unicode11Addon`, whose `activate` hands Unicode 11's widths to the terminal it is given. */
+type Unicode11 = new () => { activate(terminal: never): void };
+
+/** The widths every terminal of Pelican draws with: Unicode 11's, from the addon, bounded. */
+export function terminalWidths(Unicode11Addon: Unicode11): Widths {
   let unicode11: Widths | undefined;
   const taker: Unicode = {
     unicode: {
@@ -99,7 +104,12 @@ export function loadWidths(terminal: Unicode, Unicode11Addon: new () => { activa
   };
   new Unicode11Addon().activate(taker as never);
   if (!unicode11) throw new Error('The Unicode 11 addon gave no widths');
-  const widths = boundedWidths(unicode11);
+  return boundedWidths(unicode11);
+}
+
+/** Gives `terminal` the widths every terminal of Pelican draws with (terminalWidths). */
+export function loadWidths(terminal: Unicode, Unicode11Addon: Unicode11): void {
+  const widths = terminalWidths(Unicode11Addon);
   terminal.unicode.register(widths);
   terminal.unicode.activeVersion = widths.version;
 }

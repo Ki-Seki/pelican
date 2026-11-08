@@ -19,7 +19,10 @@
 // swallows each of them (`terminal.parser.registerCsiHandler({ final: 'c' }, () => true)` and so
 // on, for a color only the asking) keeps its own quiet.
 
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+
 import { revealHidden } from './hidden';
+import { columnsFrom, terminalWidths, type Widths } from './terminal-widths';
 
 /** How a terminal's shell ended: its exit code, or the signal that ended it (`SIGHUP`). */
 export type TerminalExit = { code: number | null; signal: string | null };
@@ -182,7 +185,7 @@ export const TERMINAL_CLOSE = {
 /**
  * How Run in terminal's command may be laid out, for its question to show all of it at once,
  * wrapped, its lines numbered and its blanks drawn (components/RunCommand): at most `lines` lines,
- * each at most `columns` wide (a tab reaching the next of every 8), with no run of more than
+ * each at most `columns` wide as a terminal draws it (lineColumns), with no run of more than
  * `blanks` columns of blanks (spaces, tabs, any other space), and at most `blankLines` blank lines
  * in a row. Past them, a run of blanks or of empty lines pushes what follows out of sight, as 300
  * spaces after `ls -la` hid a `; touch …` that ran, and a command too long to take in at a glance
@@ -195,8 +198,35 @@ export const COMMAND_LAYOUT = { lines: 50, columns: 500, blanks: 16, blankLines:
 const BLANK = /[^\S\n]/;
 export const isBlank = (char: string): boolean => BLANK.test(char);
 
-/** Columns a character takes on a line at `column`: a tab reaches the next of every 8, anything else one. */
-export const columnsOf = (char: string, column: number): number => (char === '\t' ? 8 - (column % 8) : 1);
+/** Pelican's terminals' widths, made the first time a line is measured. */
+let widths: Widths | undefined;
+
+/**
+ * The columns each character of a line takes in a terminal, in the order `[...line]` gives them,
+ * from the line's start: a tab reaches the next of every 8, and anything else takes the cells a
+ * terminal of Pelican's draws it in (terminal-widths.ts, Unicode 11's widths): two for an emoji or
+ * a CJK character, none for a mark the terminal joins to the character before.
+ */
+export function lineColumns(line: string): number[] {
+  widths ??= terminalWidths(Unicode11Addon);
+  const columns: number[] = [];
+  let column = 0;
+  // What the widths said of the character before, as xterm hands it on; a tab starts afresh.
+  let preceding = 0;
+  for (const char of line) {
+    let width: number;
+    if (char === '\t') {
+      width = 8 - (column % 8);
+      preceding = 0;
+    } else {
+      preceding = widths.charProperties(char.codePointAt(0)!, preceding);
+      width = columnsFrom(preceding);
+    }
+    columns.push(width);
+    column += width;
+  }
+  return columns;
+}
 
 /**
  * Why `command`'s layout would hide some of it from its question, as a sentence; undefined when its
@@ -209,10 +239,12 @@ export function layoutHides(command: string): string | undefined {
   for (const line of lines) {
     emptyRun = line.trim() === '' ? emptyRun + 1 : 0;
     if (emptyRun > COMMAND_LAYOUT.blankLines) return `It has more than ${COMMAND_LAYOUT.blankLines} blank lines in a row, which push what follows out of sight`;
+    const columns = lineColumns(line);
     let column = 0;
     let blanks = 0;
+    let at = 0;
     for (const char of line) {
-      const width = columnsOf(char, column);
+      const width = columns[at++]!;
       column += width;
       blanks = BLANK.test(char) ? blanks + width : 0;
       if (blanks > COMMAND_LAYOUT.blanks) return `It has a run of more than ${COMMAND_LAYOUT.blanks} blanks, which push what follows out of sight`;

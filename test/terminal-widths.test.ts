@@ -10,6 +10,7 @@ import unicode11Addon from '@xterm/addon-unicode11';
 import xtermHeadless, { type Terminal } from '@xterm/headless';
 import { describe, expect, it } from 'vitest';
 
+import { lineColumns } from '../src/shared/terminal';
 import { boundedWidths, loadWidths, MARKS_PER_CHARACTER, UNITS_PER_CELL, type Widths } from '../src/shared/terminal-widths';
 
 const { Terminal: HeadlessTerminal } = xtermHeadless;
@@ -300,4 +301,25 @@ describe('the widths', () => {
     await feed(plain.t, text);
     expect(cells(bounded.t)).toEqual(cells(plain.t));
   }, 30_000);
+});
+
+describe('a line as Run in terminal measures it', () => {
+  it('takes the columns a terminal of Pelican’s draws it in: two for an emoji or a CJK character, none for what joins the one before, a tab to the next of every 8', async () => {
+    const lines = [
+      'ls -la',
+      '\u4e2d\u6587\u6587\u4ef6\u5939 \u65e5\u672c\u8a9e \uac00\ub098\ub2e4 \uff21\uff22\uff23 \u{20000}',
+      '\u{1f468}\u200d\u{1f469}\u200d\u{1f467} \u{1f44d}\u{1f3fd} \u{1f1ef}\u{1f1f5} 1\ufe0f\u20e3 \u2764\ufe0e \u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}',
+      'cafe\u0301 Vie\u0323\u0302t \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35',
+      // Past 11 marks on a letter, the 12th starts a cell of its own; a mark with nothing before it takes one too.
+      `\u0301a${marks(30)}b`,
+      '\u4e2d\ta\t\u0301b\u3000\u3000|',
+    ];
+    expect(lineColumns('\u4e2da\u0301\t\u{1f44d}x')).toEqual([2, 1, 0, 5, 2, 1]);
+    for (const line of lines) {
+      const { t } = screen({ cols: 500 });
+      await write(t, line);
+      expect(lineColumns(line).reduce((sum, width) => sum + width, 0), line).toBe(t.buffer.active.cursorX);
+      expect(lineColumns(line)).toHaveLength([...line].length);
+    }
+  });
 });
