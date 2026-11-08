@@ -1011,9 +1011,11 @@ describe('flow control', () => {
     asleep.stall();
     awake.type("yes 0123456789012345678901234567890123456789 | head -c 4000000; echo DO''NE\r");
     await awake.sees(/DONE\r\n/, 60_000);
-    // Nothing waits for the sleeping page any more.
+    // Nothing waits for the sleeping page any more: it is let go, and the shell goes on once the
+    // page still reading has said it drew what it was sent, which the computer hears a moment
+    // after that page has the end.
     await until(() => terminalState(terminal.id)!.viewers.length === 1, 5000, 'the sleeping page to be let go');
-    expect(terminalState(terminal.id)!.paused).toBe(false);
+    await until(() => !terminalState(terminal.id)!.paused, 5000, 'the shell to go on');
     asleep.resume();
     await until(() => asleep.closed !== undefined, 10_000, 'the sleeping page to hear');
     expect(asleep.closed?.code).toBe(TERMINAL_CLOSE.behind);
