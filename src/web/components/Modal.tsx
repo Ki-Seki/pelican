@@ -117,7 +117,7 @@ export function Modal({
       // Clipped, not a box that scrolls: Chrome on Android scrolled it to the first thing it focused
       // while the sheet was still sliding in from below, and the sheet then settled above the bottom
       // edge, with the page under its foot neither dimmed nor covered.
-      className={`group/modal fixed inset-0 m-0 h-[var(--app-h,100%)] max-h-none w-full max-w-none overflow-clip border-0 bg-transparent p-0 text-fg outline-none backdrop:bg-transparent ${className}`}
+      className={`group/modal fixed inset-x-0 top-[var(--app-top,0px)] m-0 h-[var(--app-h,100%)] max-h-none w-full max-w-none overflow-clip border-0 bg-transparent p-0 text-fg outline-none backdrop:bg-transparent ${className}`}
     >
       {open ? children : shown.current}
     </dialog>,
