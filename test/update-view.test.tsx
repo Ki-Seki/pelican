@@ -175,6 +175,24 @@ describe('Settings, of updates', () => {
     expect(screen.queryByText('Transcripts, files, pins, settings and drafts stay.')).toBeNull();
   });
 
+  it('names each check Claude scheduled, with its session, among what an update would end', async () => {
+    server.info = {
+      ...NEWER,
+      busy: [
+        { kind: 'scheduled', title: 'Every day at 12:00 PM: /loop', detail: 'in Watch the deploy', sessionId: 's6' },
+        { kind: 'scheduled', title: 'The build takes about 20 minutes', detail: 'in Redo the site', sessionId: 's3' },
+      ],
+    };
+    render(<UpdateSection open />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 0.5.1' }));
+    expect(await screen.findByText('Updating restarts Pelican, which ends:')).toBeTruthy();
+    expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'ScheduledEvery day at 12:00 PM: /loop · in Watch the deploy',
+      'ScheduledThe build takes about 20 minutes · in Redo the site',
+    ]);
+    expect(screen.getByText('Transcripts, files, pins, settings and drafts stay.')).toBeTruthy();
+  });
+
   it('says to stop Pelican and start it with the new version where npx, pnpm dlx or bunx runs it', async () => {
     server.info = {
       ...NEWER,

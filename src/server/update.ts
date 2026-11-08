@@ -9,7 +9,7 @@ import { createGunzip } from 'node:zlib';
 import { type Context, Hono, type Next } from 'hono';
 
 import pkg from '../../package.json' with { type: 'json' };
-import type { BackgroundTask } from '../shared/protocol.js';
+import type { BackgroundTask, ScheduledCheck } from '../shared/protocol.js';
 import {
   changesBetween, IDLE_FOR_MS, type InstallInfo, type Interruption, isNewerVersion, PACKAGE_NAME, type RestartWay, type UpdateInfo, type UpdateState, VERSION,
 } from '../shared/update.js';
@@ -30,8 +30,9 @@ import { listTerminals, terminalRunning } from './terminals.js';
  * (`pelican --version`), then over this install with the same prefix (npm checks each tarball's
  * integrity); then Pelican starts again, through launchd or systemd when it runs as a service, in
  * its own place in a terminal. Wherever it cannot, Settings shows the command to run instead, and
- * why. An update ends what Pelican runs (Claude's processes, background tasks, terminals, `!`
- * commands), so Settings lists those first and offers to wait until nothing has run for a minute.
+ * why. An update ends what Pelican runs (Claude's processes, background tasks, the checks Claude
+ * scheduled, terminals, `!` commands), so Settings lists those first and offers to wait until
+ * nothing has run for a minute.
  */
 
 /** What a program printed, and how it ended (-1: it could not run, or was stopped). */
@@ -695,8 +696,11 @@ export function nodeSatisfies(range: string | undefined, node = process.versions
 
 /** Where what an update would end is found; tests give stand-ins. */
 export type RunningSources = {
-  /** `queued`: messages sent to wait for the turn's end (Queue for later), which no restart keeps. */
-  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; queued?: number; tasks: BackgroundTask[]; checks: number; unseen: boolean }>;
+  /**
+   * `queued`: messages sent to wait for the turn's end (Queue for later), which no restart keeps;
+   * `checks`: the checks Claude scheduled there, which its Claude fires while it runs.
+   */
+  runs: () => Array<{ sessionId: string; cwd: string; busy: boolean; waiting: boolean; queued?: number; tasks: BackgroundTask[]; checks: ScheduledCheck[]; unseen: boolean }>;
   terminals: () => Promise<Array<{ program: string; cwd: string }>>;
   shells: () => Array<{ sessionId: string; command: string }>;
   title: (sessionId: string) => Promise<string | undefined>;
@@ -712,7 +716,7 @@ export const runningHere: RunningSources = {
       waiting: run.status() === 'waiting',
       queued: shown.queued?.length ?? 0,
       tasks: shown.tasks ?? [],
-      checks: shown.scheduled?.length ?? 0,
+      checks: shown.scheduled ?? [],
       // Work Claude Code keeps running and shows no one (watchers).
       unseen: run.hasBackgroundTasks && (shown.tasks?.length ?? 0) === 0 && (shown.scheduled?.length ?? 0) === 0,
     };
@@ -744,7 +748,7 @@ const clipped = (text: string, max = 80) => {
 
 /**
  * What an update would end now: Claude at work or waiting, the messages queued for the end of its
- * turn, its background work, terminals with a program, `!` commands.
+ * turn, its background work, the checks it scheduled, terminals with a program, `!` commands.
  */
 export async function whatWouldEnd(): Promise<Interruption[]> {
   const ended: Interruption[] = [];
@@ -764,10 +768,11 @@ export async function whatWouldEnd(): Promise<Interruption[]> {
       ...(agents ? [count(agents, 'agent')] : []),
       ...(workflows ? [count(workflows, 'workflow')] : []),
       ...(commands ? [count(commands, 'command')] : []),
-      ...(run.checks ? [count(run.checks, 'check it scheduled', 'checks it scheduled')] : []),
       ...(run.unseen ? ['work it keeps running'] : []),
     ];
     if (work.length > 0) ended.push({ kind: 'work', title: await title(run.sessionId, run.cwd), detail: `${listed(work)} in the background`, sessionId: run.sessionId });
+    // Each check as the session lists it, a /loop or a reminder: only its Claude fires it.
+    for (const check of run.checks) ended.push({ kind: 'scheduled', title: clipped(check.what, 100), detail: `in ${await title(run.sessionId, run.cwd)}`, sessionId: run.sessionId });
   }
   for (const terminal of await sources.terminals()) ended.push({ kind: 'terminal', title: terminal.program, detail: `in ${tilde(terminal.cwd)}` });
   for (const shell of sources.shells()) ended.push({ kind: 'command', title: `!${clipped(shell.command)}`, detail: `in ${await title(shell.sessionId)}`, sessionId: shell.sessionId });
