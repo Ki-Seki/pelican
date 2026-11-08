@@ -21,12 +21,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0e7490" alt="MIT license"></a>
 </p>
 
-<a href="https://ki-seki.github.io/pelican/demo/">
+<p align="center"><a href="https://ki-seki.github.io/pelican/demo/">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/phone-dark.png">
-  <img alt="Pelican on a phone: the session list, an edit waiting for approval with its diff, and a chart Claude drew" src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/phone-light.png">
+  <img width="660" alt="Pelican on a phone: the session list, an edit waiting for approval with its diff, and a chart Claude drew" src="https://raw.githubusercontent.com/Ki-Seki/pelican/main/docs/shots/phone-light.png">
 </picture>
-</a>
+</a></p>
 
 ## Get started
 
