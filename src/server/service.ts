@@ -66,10 +66,11 @@ const perSession = (name: string) => PER_SESSION.has(name) || PER_SESSION_FAMILY
 /**
  * Never written to a file: a service has no business holding them, and Claude Code keeps its own
  * sign-in. By name (a key, a token, headers such as ANTHROPIC_CUSTOM_HEADERS), or by value: an
- * address with a user name or a password in it (a proxy's `http://user:pass@host`). A count of
- * tokens is no token: CLAUDE_CODE_MAX_OUTPUT_TOKENS goes with the service.
+ * address with a user name or a password in it (a proxy's `http://user:pass@host`). A name that
+ * ends in TOKENS counts tokens, and is no token: CLAUDE_CODE_MAX_OUTPUT_TOKENS goes with the
+ * service; TOKENS anywhere else in a name is still taken for a secret.
  */
-const SECRET = /KEY|TOKEN(?!S)|SECRET|PASSWORD|CREDENTIAL|HEADER/i;
+const SECRET = /KEY|TOKEN(?!S$)|SECRET|PASSWORD|CREDENTIAL|HEADER/i;
 const WITH_LOGIN = /[a-z][a-z0-9+.-]*:\/\/[^\s]*@/i;
 
 /** The environment written into the service, and the names left out because they look like secrets. */

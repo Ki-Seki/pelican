@@ -61,6 +61,12 @@ describe('the environment a service gets', () => {
     expect(kept).toEqual({ AWS_PROFILE: 'p', PATH: '/bin', PELICAN_PORT: '7861' });
     expect(secrets).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
   });
+
+  it('keeps a count of tokens, a name that ends in TOKENS, and still leaves out one with TOKENS elsewhere in it', () => {
+    const { kept, secrets } = serviceEnvironment({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000', ANTHROPIC_TOKENS_BACKUP: 'made-up', CLAUDE_CODE_TOKENS_FILE: '/tmp/made-up' });
+    expect(kept).toEqual({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000' });
+    expect(secrets).toEqual(['ANTHROPIC_TOKENS_BACKUP', 'CLAUDE_CODE_TOKENS_FILE']);
+  });
 });
 
 describe('a service installed from inside a Claude Code session', () => {
