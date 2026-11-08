@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.7
+
+When the phone cannot open Pelican's Tailscale address, `pelican phone` says why; and the README,
+the site and the docs, made over.
+
+### Fixes
+
+- `pelican phone` says, under its QR code, when your phone cannot open a Tailscale address yet:
+  only this computer is on your tailnet, or no phone is. On the phone, install the Tailscale app,
+  sign in with the same account, and turn off any other VPN or proxy, such as Clash: a phone runs
+  one VPN at a time. In WSL, it says that Windows' own browser opens Pelican at
+  `http://localhost:7860`, as Windows is a device of its own to Tailscale.
+
+### Site and docs
+
+- The README gets you started in three steps, with why Pelican and what it does in a few lines,
+  and the rest in the docs.
+- The site shows more at a glance: feature cards with the phone's own screens, the diagram of how
+  it works, and the rest of Claude Code as icons with a line each.
+- The docs are a page per topic, with search over every page (`/` or ⌘K), the contents in groups,
+  the headings of the page being read, previous and next, callouts, and tabs for setting Tailscale
+  up on a Mac, Linux or WSL. Links to the one-page docs still land where they pointed. The phone page
+  says how WSL turns systemd on, and why a phone cannot open the address: `ERR_CONNECTION_CLOSED`
+  usually means a proxy took the request.
+
 ## 0.5.6
 
 Setting up Tailscale, said where you need it.
