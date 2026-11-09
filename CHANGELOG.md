@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.8
+
+A step's ⋯ beside what the step says of itself.
+
+### Fixes
+
+- On a computer, a step you point at shows its ⋯ beside what the step says of itself, not over it:
+  the spinner of a step at work lay under the ⋯'s dots, and failed, denied, interrupted or stopped
+  were covered too. They now move aside while the ⋯ shows.
+
 ## 0.5.7
 
 When the phone cannot open Pelican's Tailscale address, `pelican phone` says why; and the README,
