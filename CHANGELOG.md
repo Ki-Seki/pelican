@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0
+
+Pelican runs your own Claude Code, and installs in a moment: about 3 MB, where it was 150 MB.
+
+### Changes in behavior
+
+- **Pelican runs the Claude Code you have.** It brings no copy of its own: it runs the `claude`
+  your terminal runs, the first on PATH, else where Claude Code's installers put it, or the one
+  `PELICAN_CLAUDE_PATH` names. `claude update` updates it. Install it first if you have not:
+  `curl -fsSL https://claude.ai/install.sh | bash`.
+- **A small install.** `npm install -g pelican-cc` installs Pelican alone: about 3 MB to download
+  and 9 MB on disk, where it was 150 MB and 400 MB. `npx pelican-cc --demo` is as small.
+- **The Agent SDK, fetched once for each version.** Its license lets no one else ship it, so
+  Pelican's first start fetches Anthropic's own package from npm, the version it was tested with
+  and no Claude Code: about 60 MB in `~/.local/state/pelican/agent-sdk`, with your npm settings.
+  Where npm cannot, Pelican says what npm said and the command to run, and tries again later. It
+  loads that version alone, never another found elsewhere.
+- The banner and Settings › About say when your Claude Code is older than the one Pelican was
+  tested with; where there is none, they, `pelican login`, `pelican --version` and your first
+  message say how to install it. The "your claude is newer: update Pelican" line is gone.
+
+### Site, docs and project
+
+- The README, site and docs say the above; "Why is the install about 150 MB?" is now "Which
+  Claude Code does it run?". CI checks the package brings no SDK, and each week starts the newest
+  Claude Code through the pinned SDK.
+
 ## 0.5.8
 
 A step's ⋯ beside what the step says of itself.
