@@ -41,6 +41,9 @@ describe('Claude Code that cannot start', () => {
     expect(startError('Claude Code native binary not found at /opt/claude. Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable.'))
       .toMatch(/^Pelican could not find Claude Code at \/opt\/claude\. Set PELICAN_CLAUDE_PATH/);
     expect(startError('Claude Code executable not found at /x/claude. Is options.pathToClaudeCodeExecutable set?')).toMatch(/at \/x\/claude\. Set PELICAN_CLAUDE_PATH/);
+    // Never "reinstall the SDK": as Pelican fetches it, it brings no Claude Code to find.
+    expect(startError('Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable.'))
+      .toMatch(/^Pelican could not find Claude Code\. Set PELICAN_CLAUDE_PATH .*, or install Claude Code there with\ncurl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/);
     expect(startError('Something else')).toBeUndefined();
   });
 });

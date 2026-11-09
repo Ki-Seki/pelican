@@ -456,7 +456,7 @@ export function newerMarkdown({ version, versions, sdkLog, claudeCodeLog, full =
   const entries = changelogBetween(claudeCodeLog, pinned.claudeCode);
   if (!newer.length && !entries.length) return '';
   const sdkSections = new Set(changelogSections(sdkLog).map((entry) => entry.version));
-  const header = { text: `Pelican pins Agent SDK ${version}, which brings Claude Code ${pinned.claudeCode}.`, shorten: () => header.text };
+  const header = { text: `Pelican pins Agent SDK ${version}, released with Claude Code ${pinned.claudeCode}.`, shorten: () => header.text };
   const sdkPart = section('### Agent SDK', newer.length ? newer.map((entry) => {
     const link = sdkSections.has(entry.version) ? `${CHANGELOGS.sdk.page}${anchor(entry.version)}` : `${NPM_PAGE}${entry.version}`;
     return `- [${entry.version}](${link})${entry.claudeCode ? ` · Claude Code ${entry.claudeCode}` : ''}${entry.date ? ` · ${entry.date}` : ''}`;
@@ -494,7 +494,7 @@ async function main(args) {
     return;
   }
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  const pinned = versions[0] ?? manifest.dependencies?.[SDK];
+  const pinned = versions[0] ?? manifest.devDependencies?.[SDK];
   if (!isVersion(pinned)) throw new Error(`package.json pins no exact version of ${SDK}`);
   const report = await newerReport(pinned, { full });
   if (report) console.log(report);

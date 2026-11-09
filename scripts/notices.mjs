@@ -2,8 +2,9 @@
 // metafile) and its web app (dist/web, by the modules Vite puts in it), each with its name, version,
 // license and the full text of its license, and where its source is. Written by `npm run build`,
 // which fails if a package built in is missing from it (scripts/build-server.mjs); npm ships it.
-// The Agent SDK and the terminal's PTY (@lydell/node-pty) are not built in: npm installs each as a
-// package, with its own license.
+// The Agent SDK and the terminal's PTY (@lydell/node-pty) are not built in: Pelican fetches
+// Anthropic's own package of the one when it first runs Claude Code, and npm installs the other,
+// each with its own license.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -212,7 +213,7 @@ export function notices({ version, server, web, helpers = [], adapted = [], file
   const head = [
     `Third-party notices for pelican-cc ${version}`,
     '',
-    wrap('Pelican is under the MIT License (LICENSE). Its server, dist/server/index.js, and its web app, dist/web, are built with the packages below in them, each under its own license, whose text follows its name. The Agent SDK and the terminal\'s PTY, @lydell/node-pty, are not among them: npm installs each as a package of its own, with its license.'),
+    wrap('Pelican is under the MIT License (LICENSE). Its server, dist/server/index.js, and its web app, dist/web, are built with the packages below in them, each under its own license, whose text follows its name. The Agent SDK and the terminal\'s PTY, @lydell/node-pty, are not among them: Pelican fetches Anthropic\'s own package of the Agent SDK from npm the first time it runs Claude Code, and npm installs the PTY as a package of its own, each with its license.'),
     ...(offered.length > 0 ? [
       '',
       wrap(`Of them, ${offered.map((pkg) => `${pkg.name} ${pkg.version} (${pkg.license})`).join(', ')} ${offered.length === 1 ? 'is' : 'are'} under a license that asks for its source code to be offered: it is the npm package of that name and version, as its section says.`),

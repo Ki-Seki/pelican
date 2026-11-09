@@ -32,7 +32,8 @@ jobs:
       # The script takes exact versions only, so nothing else in package.json reaches a command.
       - name: Write the report, when the pinned version changes
         run: |
-          pin() { node -e 'const p = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(String(p.dependencies?.["@anthropic-ai/claude-agent-sdk"] ?? ""))'; }
+          # Where the pin is: dependencies before 0.6.0, devDependencies since, as Pelican fetches the SDK itself.
+          pin() { node -e 'const p = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(String(p.devDependencies?.["@anthropic-ai/claude-agent-sdk"] ?? p.dependencies?.["@anthropic-ai/claude-agent-sdk"] ?? ""))'; }
           from=$(git show HEAD^1:package.json | pin)
           to=$(pin < package.json)
           if [ "$from" = "$to" ]; then

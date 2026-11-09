@@ -1,5 +1,3 @@
-import { deleteSession, forkSession, getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
-
 import { revealHidden } from '../shared/hidden.js';
 import { hasQuotes, readPrompt } from '../shared/quoted.js';
 import { partsShown, requestShown } from '../shared/requests.js';
@@ -8,6 +6,7 @@ import { durationText } from '../shared/workflows.js';
 import { baseName, shortPath } from '../web/lib/format.js';
 import { type PrCreated, readPrCreated } from '../web/lib/requests.js';
 import { buildItems, cleanOutput, type SentFile, type ToolCall, type WorkflowNotice } from '../web/lib/turns.js';
+import { sdk } from './agent-sdk.js';
 import { config } from './config.js';
 import { asCode, asText, codeBlock, inlineCode, inlineText, reply } from './markdown.js';
 import { sessionInfo, shownMessages } from './sessions.js';
@@ -26,6 +25,7 @@ export async function fork(sessionId: string, upTo?: string, title?: string): Pr
   const info = await sessionInfo(sessionId);
   const where = info?.cwd ? { dir: info.cwd } : {};
   const side = await isSideChat(sessionId);
+  const { forkSession } = await sdk();
   const result = await forkSession(sessionId, {
     ...where,
     ...(upTo ? { upToMessageId: upTo } : {}),
@@ -42,6 +42,7 @@ export async function fork(sessionId: string, upTo?: string, title?: string): Pr
  * name the copy was given ("Side chat (fork)"), which stays its name.
  */
 async function markSideChat(copy: string, where: { dir?: string }): Promise<void> {
+  const { getSessionInfo, renameSession } = await sdk();
   const named = (await getSessionInfo(copy, where))?.customTitle;
   if (named === SIDE_CHAT_TITLE) return;
   await renameSession(copy, SIDE_CHAT_TITLE, where);
@@ -51,6 +52,7 @@ async function markSideChat(copy: string, where: { dir?: string }): Promise<void
 export async function remove(sessionId: string): Promise<void> {
   if (config.demo) throw new Error('This is the demo: nothing changes.');
   const info = await sessionInfo(sessionId);
+  const { deleteSession } = await sdk();
   await deleteSession(sessionId, info?.cwd ? { dir: info.cwd } : {});
   await refreshTranscriptIndex();
 }

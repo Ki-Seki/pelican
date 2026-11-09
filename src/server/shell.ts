@@ -7,9 +7,8 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 
-import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
-
 import type { SavedOutputPage } from '../shared/protocol.js';
+import { sdk } from './agent-sdk.js';
 import { openRegular } from './open.js';
 import { readHistory, transcriptRow } from './history.js';
 import { transcriptPath } from './transcripts.js';
@@ -1058,6 +1057,7 @@ export async function bashModeSettings(cwd: string): Promise<{ respond: boolean 
   try {
     const { settingSources } = await launchFor(cwd);
     const dir = await realpath(cwd).catch(() => cwd);
+    const { resolveSettings } = await sdk();
     const { effective } = await resolveSettings({ cwd: dir, settingSources });
     const set = settingLimit(effective.bashOutputMaxChars);
     const env: unknown = (effective.env as Record<string, unknown> | undefined)?.BASH_MAX_OUTPUT_LENGTH;

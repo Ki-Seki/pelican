@@ -1,12 +1,15 @@
 // Bundles the server into one ESM file, with the packages it uses built in, as CI tested them, the
 // terminal's copy of the screen (@xterm/headless, with Unicode 11's widths) among them; the web app
-// is built separately by Vite. Two stay packages npm installs, each finding what it runs in its
-// platform's package, of which npm installs this computer's alone: the Agent SDK, its Claude Code,
-// and the terminal's PTY (@lydell/node-pty, an optional dependency loaded on first use), its native
-// module. (From a package that pins its tree with npm-shrinkwrap.json, npm installs every
-// platform's: 2.6 GB.)
-import { realpathSync } from 'node:fs';
+// is built separately by Vite. Two stay out. The terminal's PTY (@lydell/node-pty, an optional
+// dependency loaded on first use) is a package npm installs, which finds its native module in its
+// platform's package, of which npm installs this computer's alone. (From a package that pins its
+// tree with npm-shrinkwrap.json, npm installs every platform's: 2.6 GB.) And Anthropic's Agent SDK,
+// whose license lets no one else ship its code: the server loads Anthropic's own package, which it
+// fetches from npm the first time it runs (src/server/agent-sdk.ts). Only its version, and the
+// Claude Code version it was released with, are written in.
+import { readFileSync, realpathSync } from 'node:fs';
 import { chmod, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,6 +34,18 @@ const filesAsBuiltIn = {
 };
 
 /**
+ * The Agent SDK npm installed here, which must be the version package.json pins: what the server
+ * says it was tested with (the Claude Code that SDK was released with) before it loads its own copy.
+ */
+export function agentSdk() {
+  const require = createRequire(import.meta.url);
+  const manifest = JSON.parse(readFileSync(path.join(path.dirname(require.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8'));
+  const pinned = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).devDependencies?.['@anthropic-ai/claude-agent-sdk'];
+  if (manifest.version !== pinned) throw new Error(`npm installed Agent SDK ${manifest.version} here, package.json pins ${pinned}: run npm ci`);
+  return { version: manifest.version, claudeCodeVersion: manifest.claudeCodeVersion };
+}
+
+/**
  * How the server is built; test/package.test.ts builds it so too.
  * @type {import('esbuild').BuildOptions}
  */
@@ -41,6 +56,8 @@ export const serverBuild = {
   format: 'esm',
   target: 'node22',
   external: ['@anthropic-ai/claude-agent-sdk', '@lydell/node-pty'],
+  // As strings, which esbuild writes in where they are used.
+  define: Object.fromEntries(Object.entries(agentSdk()).map(([key, value]) => [`PELICAN_SDK_${key === 'version' ? 'VERSION' : 'CLAUDE_CODE'}`, JSON.stringify(value)])),
   plugins: [filesAsBuiltIn],
   // Packages written for require() (web-push, ws) require Node's own modules: an ES module has
   // no require of its own, so it is given one.

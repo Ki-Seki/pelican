@@ -10,6 +10,8 @@ import path from 'node:path';
 
 import { afterAll, afterEach } from 'vitest';
 
+import { testClaude } from './test-claude';
+
 const root = mkdtempSync(path.join(os.tmpdir(), 'pelican-test-'));
 Object.assign(process.env, {
   CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
@@ -18,6 +20,9 @@ Object.assign(process.env, {
   // The developer's hooks, templates and signing would run in the repositories tests make.
   GIT_CONFIG_GLOBAL: os.devNull,
   GIT_CONFIG_NOSYSTEM: '1',
+  // The Claude Code a test starts is the one Pelican was tested with, whatever this computer has
+  // installed, or not: the copy the Agent SDK's package for this platform brings, a devDependency.
+  PELICAN_CLAUDE_PATH: testClaude() ?? path.join(root, 'no-claude-code'),
 });
 // Whatever launchd job started the tests, a server they start is none, and asks launchd nothing.
 delete process.env.XPC_SERVICE_NAME;

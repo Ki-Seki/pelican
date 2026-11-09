@@ -3,11 +3,10 @@ import { mkdir, opendir, readdir, realpath, rename, stat, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 
-import { listSessions } from '@anthropic-ai/claude-agent-sdk';
-
 import { mayHide, revealItem } from '../shared/hidden.js';
 import type { CommandAt } from '../shared/protocol.js';
 import { type Budget as ReadBudget, sharedBudget } from '../shared/shell-words.js';
+import { sdk } from './agent-sdk.js';
 import { config } from './config.js';
 import { openRegular } from './open.js';
 import { lastTurnTime, transcriptPath } from './transcripts.js';
@@ -261,7 +260,7 @@ export async function claudeRanIn(folder: string): Promise<boolean> {
   const cached = ranCache.get(dir);
   if (cached && Date.now() - cached.at < (cached.value ? YES_MS : NO_MS)) return cached.value;
   let value = false;
-  const sessions = await listSessions({ dir, limit: 50, includeWorktrees: false }).catch(() => []);
+  const sessions = await sdk().then(({ listSessions }) => listSessions({ dir, limit: 50, includeWorktrees: false })).catch(() => []);
   for (const session of sessions) {
     const file = await transcriptPath(session.sessionId);
     const recorded = file ? (await lastTurnTime(file))?.lastTurn?.cwd : undefined;

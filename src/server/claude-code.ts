@@ -1,49 +1,98 @@
 import { execFile, spawn } from 'node:child_process';
-import { constants, existsSync, readFileSync } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { constants } from 'node:fs';
+import { access, realpath, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
+import { sdkPackage } from './agent-sdk.js';
 import { config } from './config.js';
 
 /**
- * The Claude Code that Pelican runs: the one the Agent SDK bundles, or the one PELICAN_CLAUDE_PATH
- * names. Bug reports need its version, and the start banner says whether it is signed in, since a
- * signed-out Claude Code otherwise shows only when the first message fails. The banner and About
- * also say when the user's own `claude` is newer, since its new features reach Pelican only with
- * an update.
+ * The Claude Code that Pelican runs: the user's own, the one their terminal runs, which Claude
+ * Code's installer keeps up to date (`claude update`). PELICAN_CLAUDE_PATH names one; otherwise the
+ * first `claude` on PATH, else one where Claude Code's installers put it, for a Pelican started with
+ * a PATH that has none (a service, an app). Bug reports need its version, and the start banner says
+ * whether it is signed in, since a signed-out Claude Code otherwise shows only when the first
+ * message fails. The banner and About also say when it is older than the Claude Code the Agent SDK
+ * Pelican pins was released with, which is the one Pelican was tested with, and, where there is
+ * none, how to install it.
  */
 
-const require = createRequire(import.meta.url);
+/** Claude Code's own command that installs it, as its setup docs give it (code.claude.com/docs/en/setup). */
+export const INSTALL_COMMAND = process.platform === 'win32' ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash';
 
-/** The Agent SDK's package.json: its own version and the version of the Claude Code it bundles. */
-export function sdkPackage(): { version?: string; claudeCodeVersion?: string } {
-  try {
-    const entry = require.resolve('@anthropic-ai/claude-agent-sdk');
-    return JSON.parse(readFileSync(path.join(path.dirname(entry), 'package.json'), 'utf8')) as { version?: string; claudeCodeVersion?: string };
-  } catch {
-    return {};
-  }
+/**
+ * Where Claude Code's installers put `claude`, as their docs and packages say, in the order looked
+ * in: the native installer's launcher (`~/.local/bin/claude`, on Windows too), Homebrew's cask in
+ * Homebrew's prefix (Apple silicon, Intel, Linux), the apt, dnf and apk packages (`/usr/bin`), a
+ * global npm install by the npm beside the Node running Pelican, and the local install of older
+ * versions of Claude Code (`~/.claude/local`), which a shell alias runs.
+ */
+export function installedPlaces(home = os.homedir(), env: NodeJS.ProcessEnv = process.env, execPath = process.execPath, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') return [path.join(home, '.local', 'bin', 'claude.exe')];
+  const brew = [env.HOMEBREW_PREFIX, '/opt/homebrew', '/usr/local', '/home/linuxbrew/.linuxbrew'].filter((prefix): prefix is string => Boolean(prefix && path.isAbsolute(prefix)));
+  return [...new Set([
+    path.join(home, '.local', 'bin', 'claude'),
+    ...brew.map((prefix) => path.join(prefix, 'bin', 'claude')),
+    '/usr/bin/claude',
+    path.join(path.dirname(execPath), 'claude'),
+    path.join(home, '.claude', 'local', 'claude'),
+  ])];
 }
 
-/** The bundled binary, found the way the SDK finds it (its platform package). */
-export function bundledClaude(): string | undefined {
-  const exe = process.platform === 'win32' ? '.exe' : '';
-  const base = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
-  const names = process.platform === 'linux' ? [base, `${base}-musl`] : [base];
-  for (const name of names) {
+/** The first of `files` that is a file this account may run. */
+async function firstRunnable(files: string[]): Promise<string | undefined> {
+  for (const file of files) {
     try {
-      const file = require.resolve(`${name}/claude${exe}`);
-      if (existsSync(file)) return file;
+      await access(file, constants.X_OK);
+      if ((await stat(file)).isFile()) return file;
     } catch {
-      // Not installed for this platform; try the next.
+      // Not there.
     }
   }
   return undefined;
 }
 
-/** The binary Pelican starts: PELICAN_CLAUDE_PATH, else the bundled one. */
-export const claudeBinary = (): string | undefined => config.claudeExecutable ?? bundledClaude();
+/**
+ * The first `claude` on PATH, as a shell finds it, but in absolute folders only: an empty or
+ * relative entry would run a `claude` from whatever folder Pelican was started in.
+ */
+export function claudeOnPath(PATH = process.env.PATH ?? ''): Promise<string | undefined> {
+  const name = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  return firstRunnable(PATH.split(path.delimiter).filter((dir) => path.isAbsolute(dir)).map((dir) => path.join(dir, name)));
+}
+
+let placesInstead: string[] | undefined;
+/** For tests: look in these places instead of where Claude Code's installers put it (undefined: there again). */
+export function useClaudePlaces(places?: string[]): void {
+  placesInstead = places;
+}
+
+/**
+ * The claude Pelican runs: the one PELICAN_CLAUDE_PATH names, as it is; else the first on PATH;
+ * else the first where Claude Code's installers put it. Undefined where there is none.
+ */
+export async function claudePath(PATH?: string): Promise<string | undefined> {
+  if (config.claudeExecutable) return config.claudeExecutable;
+  return (await claudeOnPath(PATH)) ?? firstRunnable(placesInstead ?? installedPlaces());
+}
+
+/** Where no Claude Code was found: how to install it, or to name the one to run. */
+export const notFoundLine = (): string => `Claude Code not found: install it with \`${INSTALL_COMMAND}\`, or set PELICAN_CLAUDE_PATH to it`;
+
+/** No Claude Code to start: said where a message or a look at its models would start one. */
+export class ClaudeCodeMissing extends Error {
+  constructor() {
+    super(`Claude Code is not installed on ${config.machine}, or not where Pelican looks. Install it there with\n${INSTALL_COMMAND}\nor set PELICAN_CLAUDE_PATH to the claude program.`);
+  }
+}
+
+/** The claude to start: ClaudeCodeMissing where there is none. */
+export async function claudeToRun(): Promise<string> {
+  const file = await claudePath();
+  if (!file) throw new ClaudeCodeMissing();
+  return file;
+}
 
 type Output = { code: number; stdout: string };
 
@@ -58,25 +107,48 @@ function run(file: string, args: string[], timeout: number): Promise<Output | un
   });
 }
 
-export type ClaudeCodeInfo = { version?: string; path?: string; missing?: boolean };
+/** Each binary's answer to `--version`, by its real path, size and time: an update, or another claude on PATH, is asked afresh. */
+const versions = new Map<string, Promise<string | null>>();
 
-let info: Promise<ClaudeCodeInfo> | undefined;
+/** The version a claude says it is: null where it does not run, undefined where it says none. */
+async function versionOf(file: string): Promise<string | null | undefined> {
+  const real = await realpath(file).catch(() => undefined);
+  const found = real ? await stat(real).catch(() => undefined) : undefined;
+  if (!real || !found) return null;
+  const key = `${real}\0${found.size}\0${found.mtimeMs}`;
+  let answer = versions.get(key);
+  if (!answer) {
+    answer = run(file, ['--version'], 5000).then((output) => (output ? (/\d+\.\d+\.\d+/.exec(output.stdout)?.[0] ?? '') : null));
+    versions.set(key, answer);
+    // One that did not answer is asked again next time.
+    void answer.then((said) => {
+      if (said === null) versions.delete(key);
+    });
+  }
+  const said = await answer;
+  return said === null ? null : said || undefined;
+}
 
 /**
- * Which Claude Code runs and its version: the bundled one's from the SDK's package.json (nothing
- * runs), one named by PELICAN_CLAUDE_PATH by asking it. `path` is set only for the latter.
+ * Which Claude Code runs: its path and version, and `tested`, the version Pelican was tested with,
+ * where this one is older. `missing` where there is none, or PELICAN_CLAUDE_PATH names one that is
+ * not there (then with that `path`). The demo runs nothing: its made-up sessions were written by
+ * the Claude Code Pelican was tested with.
  */
-export function claudeCodeInfo(): Promise<ClaudeCodeInfo> {
-  info ??= (async () => {
-    if (!config.claudeExecutable) {
-      const version = sdkPackage().claudeCodeVersion;
-      return bundledClaude() ? { ...(version ? { version } : {}) } : { missing: true };
-    }
-    const answer = await run(config.claudeExecutable, ['--version'], 5000);
-    const version = answer?.stdout.match(/\d+\.\d+\.\d+/)?.[0];
-    return { path: config.claudeExecutable, ...(version ? { version } : {}), ...(answer ? {} : { missing: true }) };
-  })();
-  return info;
+export type ClaudeCodeInfo = { version?: string; path?: string; missing?: boolean; tested?: string };
+
+export async function claudeCodeInfo(): Promise<ClaudeCodeInfo> {
+  const tested = sdkPackage().claudeCodeVersion;
+  if (config.demo) return tested ? { version: tested } : {};
+  const file = await claudePath();
+  if (!file) return { missing: true };
+  const version = await versionOf(file);
+  if (version === null && config.claudeExecutable) return { path: file, missing: true };
+  return {
+    path: file,
+    ...(version ? { version } : {}),
+    ...(version && tested && isNewer(tested, version) ? { tested } : {}),
+  };
 }
 
 /** Whether version `a` (x.y.z) comes after `b`. */
@@ -89,63 +161,14 @@ export function isNewer(a: string, b: string): boolean {
   return false;
 }
 
-/**
- * The first `claude` on PATH, as a shell finds it, but in absolute folders only: an empty or
- * relative entry would run a `claude` from whatever folder Pelican was started in.
- */
-export async function claudeOnPath(PATH = process.env.PATH ?? ''): Promise<string | undefined> {
-  const name = process.platform === 'win32' ? 'claude.exe' : 'claude';
-  for (const dir of PATH.split(path.delimiter)) {
-    if (!path.isAbsolute(dir)) continue;
-    const file = path.join(dir, name);
-    try {
-      await access(file, constants.X_OK);
-      if ((await stat(file)).isFile()) return file;
-    } catch {
-      // Not in this folder.
-    }
-  }
-  return undefined;
-}
-
-/** The version of the `claude` on PATH when it is newer than `ours`; undefined when not, or when it cannot say in time. */
-export async function newerOnPath(ours: string, PATH?: string, timeout = 3000): Promise<string | undefined> {
-  const file = await claudeOnPath(PATH);
-  if (!file) return undefined;
-  const answer = await run(file, ['--version'], timeout);
-  const version = answer?.code === 0 ? /\d+\.\d+\.\d+/.exec(answer.stdout)?.[0] : undefined;
-  return version && isNewer(version, ours) ? version : undefined;
-}
-
-let newer: Promise<string | undefined> | undefined;
-let newerFound: string | undefined;
-
-/**
- * The version of the user's own `claude` when it is newer than the Claude Code Pelican brings:
- * that one has what Pelican gets only from an update. Asked once, at start, in the background.
- * Not when PELICAN_CLAUDE_PATH names the Claude Code to run, the user's choice already, nor in
- * the demo, which runs nothing.
- */
-export function checkNewerClaude(): Promise<string | undefined> {
-  newer ??= (async () => {
-    const ours = config.claudeExecutable || config.demo ? undefined : (await claudeCodeInfo()).version;
-    newerFound = ours ? await newerOnPath(ours) : undefined;
-    return newerFound;
-  })();
-  return newer;
-}
-
-/** What the check at start found so far, without waiting for it. */
-export const newerClaude = (): string | undefined => newerFound;
-
-/** The banner's line when the user's own `claude` is newer than the Claude Code Pelican runs. */
-export const newerClaudeLine = (version: string): string => `Your claude is newer (${version}): update Pelican to get it`;
+/** The banner's line, and About's, when the Claude Code that runs is older than the one Pelican was tested with. */
+export const olderLine = (version: string, tested: string): string => `Claude Code ${version} is older than ${tested}, which Pelican was tested with: run \`claude update\``;
 
 export type SignIn = { loggedIn: boolean; email?: string } | undefined;
 
 /** Whether Claude Code is signed in on this computer, as `claude auth status` says; undefined if it cannot say. */
 export async function claudeSignIn(timeout = 5000): Promise<SignIn> {
-  const binary = claudeBinary();
+  const binary = await claudePath();
   if (!binary) return undefined;
   const answer = await run(binary, ['auth', 'status', '--json'], timeout);
   if (!answer) return undefined;
@@ -158,14 +181,15 @@ export async function claudeSignIn(timeout = 5000): Promise<SignIn> {
   }
 }
 
+const tilde = (file: string) => {
+  const home = os.homedir();
+  return file.startsWith(`${home}${path.sep}`) ? `~${file.slice(home.length)}` : file;
+};
+
 /** One line for the start banner: which Claude Code, and whether it can work. */
 export function claudeCodeLine(code: ClaudeCodeInfo, signIn: SignIn, login: string): string {
-  if (code.missing) {
-    return code.path
-      ? `Claude Code not found at ${code.path} (PELICAN_CLAUDE_PATH)`
-      : 'Claude Code is missing: reinstall Pelican (npm install -g pelican-cc)';
-  }
-  const name = `Claude Code ${code.version ?? ''}`.trim() + (code.path ? ` (${code.path})` : '');
+  if (code.missing) return code.path ? `Claude Code not found at ${code.path} (PELICAN_CLAUDE_PATH)` : notFoundLine();
+  const name = `Claude Code ${code.version ?? ''}`.trim() + (code.path ? ` (${tilde(code.path)})` : '');
   if (!signIn) return name;
   return signIn.loggedIn
     ? `${name} · signed in${signIn.email ? ` as ${signIn.email}` : ''}`
@@ -173,12 +197,13 @@ export function claudeCodeLine(code: ClaudeCodeInfo, signIn: SignIn, login: stri
 }
 
 /** Signs Claude Code in with its own `auth login`, in this terminal; resolves to its exit code. */
-export function claudeLogin(): Promise<number> {
-  const binary = claudeBinary();
-  if (!binary) return Promise.reject(new Error('Claude Code is missing: reinstall Pelican (npm install -g pelican-cc).'));
+export async function claudeLogin(): Promise<number> {
+  const binary = await claudePath();
+  if (!binary) throw new Error(`${notFoundLine()}.`);
   return new Promise((resolve, reject) => {
     const child = spawn(binary, ['auth', 'login'], { stdio: 'inherit' });
-    child.on('error', reject);
+    // Not there, where PELICAN_CLAUDE_PATH names it: said as the banner says it.
+    child.on('error', (error: NodeJS.ErrnoException) => reject(error.code === 'ENOENT' ? new Error(`${claudeCodeLine({ path: binary, missing: true }, undefined, '')}.`) : error));
     child.on('exit', (code) => resolve(code ?? 1));
   });
 }

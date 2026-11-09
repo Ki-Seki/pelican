@@ -572,10 +572,12 @@ export type ServerInfo = {
   auth: boolean;
   demo: boolean;
   /**
-   * The Claude Code this server runs: its version, and its path when it is not the one Pelican
-   * brings; `newer`, the version of the user's own `claude` when that one is newer.
+   * The Claude Code this server runs, the user's own: its version and path; `tested`, the version
+   * Pelican was tested with, where this one is older. `missing` where there is none, with
+   * `install`, Claude Code's own command that installs it there; with `path`, the one
+   * PELICAN_CLAUDE_PATH names, which is not there.
    */
-  claudeCode?: { version?: string; path?: string; newer?: string };
+  claudeCode?: { version?: string; path?: string; tested?: string; missing?: boolean; install?: string };
   /** Whether this server runs terminals, and why not; GET /api/terminals says for sure. */
   terminal?: TerminalAvailability;
 };

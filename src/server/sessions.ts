@@ -1,14 +1,15 @@
 import { appendFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { getSessionInfo, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 import type { ChatMessage, MessagesPage, RecordedSettings, Rewound, SessionStatus, SessionSummary, ToolResultBlock } from '../shared/protocol.js';
 import { promptGist } from '../shared/quoted.js';
 import { COMMIT_REQUEST, CREATE_PR_OPEN } from '../shared/requests.js';
 import { shortTitle } from '../shared/titles.js';
+import { sdk } from './agent-sdk.js';
 import { config } from './config.js';
+import { demoSessionInfo } from './demo-sessions.js';
 import { folderKind, pickedFolders } from './folders.js';
 import { type Kept, kept } from './kept.js';
 import { type LiveProcess, liveProcesses } from './live.js';
@@ -159,6 +160,15 @@ const asking = limiter(8);
 let refreshing: Promise<SDKSessionInfo[]> | undefined;
 
 /**
+ * How a session's info is read: by the Agent SDK's `getSessionInfo`, which an SDK that cannot load
+ * (fetched from npm the first time) says why it does not; the demo, which loads no SDK, reads its
+ * own transcripts.
+ */
+async function infoReader(): Promise<(sessionId: string, options?: { dir?: string }) => Promise<SDKSessionInfo | undefined>> {
+  return config.demo ? demoSessionInfo : (await sdk()).getSessionInfo;
+}
+
+/**
  * Every session's info, as the SDK's `listSessions` gives it, without reading every transcript
  * each time: files are only stat'ed, and only those new or changed since the last look are read
  * again (`getSessionInfo`), a few at a time, so even a first look at thousands never stalls the
@@ -166,6 +176,7 @@ let refreshing: Promise<SDKSessionInfo[]> | undefined;
  * on in another one with a transcript of its own is that one.
  */
 async function refresh(): Promise<SDKSessionInfo[]> {
+  const getSessionInfo = await infoReader();
   const found = await transcriptFiles();
   const stats = await Promise.all(found.map(({ id, file }) => statting(async () => {
     const info = await stat(file).catch(() => undefined);
@@ -227,6 +238,7 @@ export async function listSummaries(status: StatusSource, tasks: TaskSource = ()
 export async function sessionInfo(sessionId: string): Promise<SDKSessionInfo | undefined> {
   // Without a project dir, `getSessionInfo` searches every project and may leave `cwd` out; the
   // list has both. One it has not seen yet is searched for, never a whole listing.
+  const getSessionInfo = await infoReader();
   const cached = infoCache.get(sessionId);
   // The folder it last ran in may not be the one its transcript is filed under: then search.
   const found = (cached?.cwd ? await getSessionInfo(sessionId, { dir: cached.cwd }).catch(() => undefined) : undefined)
@@ -252,6 +264,7 @@ export async function sessionSummary(sessionId: string, status: StatusSource, ta
 
 export async function renameSessionTitle(sessionId: string, title: string): Promise<void> {
   const dir = infoCache.get(sessionId)?.cwd;
+  const { renameSession } = await sdk();
   await renameSession(sessionId, title, dir ? { dir } : {});
   infoCache.delete(sessionId);
 }

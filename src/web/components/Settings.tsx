@@ -211,15 +211,27 @@ export function SettingsSheet({
           <>
             <br />
             Claude Code {info.claudeCode.version}
-            {info.claudeCode.path && <> from <span className="font-mono text-[12px] break-all">{info.claudeCode.path}</span></>}
-            {info.claudeCode.newer && (
-              <>
+            {info.claudeCode.path && <> from <span className="font-mono text-[12px] break-all">{shortPath(info.claudeCode.path, info.home)}</span></>}
+            {info.claudeCode.tested && (
+              <span className="text-wait">
                 <br />
-                Your <code className="font-mono text-[12px]">claude</code> is newer ({info.claudeCode.newer}):{' '}
-                <a className="underline decoration-faint underline-offset-2" href="https://ki-seki.github.io/pelican/docs.html#update" target="_blank" rel="noreferrer">update Pelican</a> to get it
-              </>
+                Claude Code {info.claudeCode.version} is older than {info.claudeCode.tested}, which Pelican was tested with: run <code className="font-mono text-[12px]">claude update</code>
+              </span>
             )}
           </>
+        )}
+        {info?.claudeCode?.missing && (
+          <span className="text-wait">
+            <br />
+            {info.claudeCode.path ? (
+              <>Claude Code not found at <span className="font-mono text-[12px] break-all">{info.claudeCode.path}</span> (PELICAN_CLAUDE_PATH)</>
+            ) : (
+              <>
+                Claude Code not found: install it with <code className="font-mono text-[12px] break-all">{info.claudeCode.install}</code>, or set{' '}
+                <code className="font-mono text-[12px]">PELICAN_CLAUDE_PATH</code> to it
+              </>
+            )}
+          </span>
         )}
         <br />
         <a className="underline decoration-faint underline-offset-2" href="https://github.com/Ki-Seki/pelican" target="_blank" rel="noreferrer">github.com/Ki-Seki/pelican</a>

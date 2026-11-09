@@ -15,7 +15,7 @@ vi.mock('../src/web/lib/api', async (original) => {
       usage: async () => [{ type: 'five_hour', status: 'allowed', utilization: 0.4 }],
       planUsage: async () => null,
       defaults: async () => (await import('./start-defaults')).BUILT_IN,
-      phoneAddress: async () => undefined,
+      phoneAddress: async () => null,
       // Still being read: the page is there, its figures to come.
       usageStats: (range: string) => {
         asked.ranges.push(range);
@@ -82,5 +82,24 @@ describe('Settings', () => {
     // It loads when first asked for, which takes longer on a busy machine.
     expect(await screen.findByRole('dialog', { name: 'Usage and activity' }, { timeout: 5000 })).toBeTruthy();
     expect(asked.ranges.length).toBeGreaterThan(0);
+  });
+
+  it('says in About which Claude Code runs, when it is older than the one Pelican was tested with, and how to install it where there is none', () => {
+    const about = (claudeCode: Record<string, unknown>) => {
+      cleanup();
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <SettingsSheet open onClose={() => {}} info={{ version: '0.6.0', machine: 'studio', home: '/home/ada', demo: false, claudeCode } as never} notifications="off" onToggleNotifications={() => {}} onSignOut={() => {}} />
+        </QueryClientProvider>,
+      );
+      return screen.getByText(/^Pelican 0\.6\.0 on/).closest('div')!.textContent;
+    };
+    expect(about({ version: '2.1.318', path: '/home/ada/.local/bin/claude' })).toContain('Claude Code 2.1.318 from ~/.local/bin/claude');
+    expect(about({ version: '2.1.318', path: '/home/ada/.local/bin/claude' })).not.toContain('older');
+    expect(about({ version: '2.1.300', path: '/usr/bin/claude', tested: '2.1.318' }))
+      .toContain('Claude Code 2.1.300 from /usr/bin/claude' + 'Claude Code 2.1.300 is older than 2.1.318, which Pelican was tested with: run claude update');
+    expect(about({ missing: true, install: 'curl -fsSL https://claude.ai/install.sh | bash' }))
+      .toContain('Claude Code not found: install it with curl -fsSL https://claude.ai/install.sh | bash, or set PELICAN_CLAUDE_PATH to it');
+    expect(about({ missing: true, path: '/opt/claude' })).toContain('Claude Code not found at /opt/claude (PELICAN_CLAUDE_PATH)');
   });
 });

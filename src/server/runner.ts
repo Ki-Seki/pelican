@@ -1,7 +1,6 @@
 import { randomUUID, type UUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { AbortError, query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   CanUseTool,
   EffortLevel,
@@ -48,8 +47,9 @@ import { addPhase, agentTokens, parseMeta, RUN_ID } from '../shared/workflows.js
 import { maskSecrets } from '../web/lib/secrets.js';
 import { cleanOutput } from '../web/lib/turns.js';
 import { fork, remove } from './actions.js';
+import { type AgentSdk, isAbortError, sdk, sdkPackage } from './agent-sdk.js';
 import { describeAlways, sessionModeOf } from './approvals.js';
-import { sdkPackage } from './claude-code.js';
+import { claudeToRun } from './claude-code.js';
 import { config } from './config.js';
 import { demoRunState, demoRunStatus, demoRunTasks } from './demo.js';
 import { newSessionSettings } from './defaults.js';
@@ -237,6 +237,18 @@ const refusedWith = (note: string) => `${REFUSED} To tell you how to proceed, th
  */
 export function claudeEnv(launch: Launch): Record<string, string | undefined> {
   return { ...process.env, ...launch.env, CLAUDE_CODE_ATTACHMENTS_BY_PATH: '1' };
+}
+
+/** What starting a session's Claude takes: the Agent SDK's query(), and the claude it runs. */
+type Starter = { query: AgentSdk['query']; claude: string };
+
+/**
+ * The Agent SDK, loaded (fetched from npm the first time), and the user's own Claude Code, found;
+ * or why not, in words for the page: no Claude Code is installed, or the SDK could not be fetched.
+ */
+export async function starter(): Promise<Starter> {
+  const [{ query }, claude] = await Promise.all([sdk(), claudeToRun()]);
+  return { query, claude };
 }
 
 /** /clear and its aliases start a new conversation inside the same Claude Code process, under a new id. */
@@ -613,7 +625,7 @@ export class SessionRun {
   /** Settings Claude Code gets before the first message: until then, that message waits. */
   private beforeFirst?: Promise<void>;
 
-  start(): void {
+  start({ query, claude }: Starter): void {
     // A Claude started for the session speaks for it: how the last one ended is no news any more.
     endedRuns.delete(this.sessionId);
     const settings = this.given ?? this.settings;
@@ -661,7 +673,8 @@ export class SessionRun {
       tools: { type: 'preset', preset: 'claude_code' },
       canUseTool: this.canUseTool,
       onElicitation: this.onElicitation,
-      ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
+      // The user's own Claude Code, always: the Agent SDK's package as Pelican fetches it brings none.
+      pathToClaudeCodeExecutable: claude,
       stderr: (data) => {
         if (process.env.PELICAN_DEBUG) process.stderr.write(`[claude ${this.sessionId.slice(0, 8)}] ${data}`);
         this.printed = keptEnd(this.printed + data);
@@ -1482,7 +1495,7 @@ export class SessionRun {
   private whyStopped(error: Error): string {
     const said = claudeSaid(this.printed);
     if (said) return said;
-    return error instanceof AbortError ? STOPPED : readableError(error.message);
+    return isAbortError(error) ? STOPPED : readableError(error.message);
   }
 
   private async pump(): Promise<void> {
@@ -1859,10 +1872,11 @@ export async function sendMessage(target: { sessionId?: string; cwd?: string; si
   const launch = await launchFor(cwd);
   // What was picked for it, and the rest as Claude Code's settings give it.
   const { given, shown } = await newSessionSettings(cwd, input.settings);
+  const starting = await starter();
   const run = new SessionRun(randomUUID(), cwd, shown, false, undefined, launch);
   run.given = given;
   runs.set(run.sessionId, run);
-  run.start();
+  run.start(starting);
   await run.send({ ...input, settings: shown });
   return run.sessionId;
 }
@@ -1882,12 +1896,13 @@ async function sendTo(sessionId: string, target: { cwd?: string; sideChat?: bool
   const side = target.sideChat === true || (await isSideChat(sessionId));
   // Rewound, and its Claude closed since (idle, or Pelican restarted): the message goes after the cut.
   const at = await resumePoint(sessionId);
+  const starting = await starter();
   // Another request may have started one while this one looked the folder up.
   const started = getRun(sessionId);
   if (started && (await sentTo(started, input))) return sessionId;
   const run = new SessionRun(sessionId, cwd, input.settings, true, at, launch, side);
   runs.set(run.sessionId, run);
-  run.start();
+  run.start(starting);
   await run.send(input);
   return run.sessionId;
 }
@@ -1916,6 +1931,7 @@ export async function restartAt(sessionId: string, at?: { entry: string; dropsTu
   const side = existing?.sideChat ?? (await isSideChat(sessionId));
   // It goes on with what the one it replaces ran with; the next message brings the page's own.
   const settings = existing?.state().settings ?? {};
+  const starting = await starter();
   const begin = (from?: { entry: string; dropsTurn?: string }) => {
     const before = runs.get(sessionId);
     if (before) {
@@ -1924,7 +1940,7 @@ export async function restartAt(sessionId: string, at?: { entry: string; dropsTu
     }
     const run = new SessionRun(sessionId, cwd, settings, true, from, launch, side);
     runs.set(sessionId, run);
-    run.start();
+    run.start(starting);
     return run;
   };
   const run = begin(at);
@@ -1947,11 +1963,12 @@ export async function ensureRun(sessionId: string, settings: RunSettings = {}): 
   const launch = await launchFor(cwd);
   const side = await isSideChat(sessionId);
   const at = await resumePoint(sessionId);
+  const starting = await starter();
   const started = getRun(sessionId);
   if (started) return started;
   const run = new SessionRun(sessionId, cwd, settings, true, at, launch, side);
   runs.set(sessionId, run);
-  run.start();
+  run.start(starting);
   return run;
 }
 

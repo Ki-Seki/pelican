@@ -45,7 +45,7 @@ Options
 Environment
   PELICAN_PUBLIC_URL          The address your phone uses, when it is not this computer's own
   PELICAN_KEEP_AWAKE=0        Let the computer sleep while Claude works
-  PELICAN_CLAUDE_PATH         Run this Claude Code instead of the one Pelican brings
+  PELICAN_CLAUDE_PATH         Run this Claude Code instead of the claude on PATH
 
 Pelican ${pkg.version} runs Claude Code, and so commands, as you. It listens on 127.0.0.1,
 and every browser signs in, with the link Pelican prints or with your password.
@@ -349,12 +349,13 @@ async function afterStart(ctx: import('./service.js').ServiceContext, before: nu
   console.log(`\n  ${token ? tokenLink(address, token) : address}${signIn}\n  On your phone: \`${NAME} phone\`\n`);
 }
 
-/** One line with every version a bug report needs. */
+/** One line with every version a bug report needs; where there is no Claude Code, a second with how to install it. */
 async function versionLine(): Promise<string> {
-  const { claudeCodeInfo, sdkPackage } = await import('./claude-code.js');
+  const [{ claudeCodeInfo, notFoundLine }, { sdkPackage }] = await Promise.all([import('./claude-code.js'), import('./agent-sdk.js')]);
   const code = await claudeCodeInfo();
-  const claude = code.missing ? 'not found' : `${code.version ?? '?'}${code.path ? ` (${code.path})` : ''}`;
-  return `${pkg.version} (Pelican) · Claude Code ${claude} · Agent SDK ${sdkPackage().version ?? '?'} · Node ${process.version} · ${process.platform}-${process.arch}`;
+  const claude = code.missing ? `not found${code.path ? ` at ${code.path}` : ''}` : `${code.version ?? '?'}${code.path ? ` (${code.path})` : ''}`;
+  const line = `${pkg.version} (Pelican) · Claude Code ${claude} · Agent SDK ${sdkPackage().version ?? '?'} · Node ${process.version} · ${process.platform}-${process.arch}`;
+  return code.missing && !code.path ? `${line}\n${notFoundLine()}` : line;
 }
 
 /**
@@ -485,6 +486,8 @@ async function main(): Promise<void> {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') return portTaken();
     throw error;
   }
+  // Anthropic's Agent SDK, which the first session needs: loaded now, fetched from npm the first time.
+  (await import('./agent-sdk.js')).loadSdkSoon();
   // Where it really listens (`localhost` may be ::1), so the commands that talk to it reach it.
   const { recordRunning } = await import('./running.js');
   await recordRunning({ port: config.port, host: config.host, url: reachable(url), version: pkg.version }).catch(() => undefined);
@@ -503,16 +506,16 @@ async function main(): Promise<void> {
       : mode === 'token' ? (interactive ? `the link signs a browser in (\`${NAME} token\` prints it again)` : `browsers sign in with the link \`${NAME} token\` prints`)
         : local ? 'no sign-in (--no-auth)' : 'no sign-in (--no-auth): anyone who reaches this address can run commands as you';
 
-  const { checkNewerClaude, claudeCodeInfo, claudeCodeLine, claudeSignIn, newerClaudeLine } = await import('./claude-code.js');
+  const { claudeCodeInfo, claudeCodeLine, claudeSignIn, olderLine } = await import('./claude-code.js');
   const { findPhoneAddress, phoneBlock } = await import('./phone.js');
   const nothing: import('./phone.js').PhoneSearch = {};
-  const [code, signIn, search, newer] = await Promise.all([
+  const [code, signIn, search] = await Promise.all([
     claudeCodeInfo(),
     config.demo ? undefined : within(claudeSignIn(), 4000, undefined),
     config.demo && local ? nothing : within(findPhoneAddress(config.port, config.host), 4000, nothing),
-    within(checkNewerClaude(), 4000, undefined),
   ]);
-  const claude = config.demo ? '' : `\n  ${claudeCodeLine(code, signIn, `${NAME} login`)}${newer ? `\n  ${newerClaudeLine(newer)}` : ''}`;
+  const older = code.version && code.tested ? `\n  ${olderLine(code.version, code.tested)}` : '';
+  const claude = config.demo ? '' : `\n  ${claudeCodeLine(code, signIn, `${NAME} login`)}${older}`;
   console.log(`\n  Pelican ${pkg.version} · ${config.machine}\n  ${open}\n  ${protection}${claude}\n`);
   if (!config.webDir) console.log('  The web app is not built: run `npm run build` (or use `npm run dev`).\n');
 

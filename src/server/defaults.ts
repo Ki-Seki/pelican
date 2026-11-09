@@ -3,8 +3,6 @@ import { lstat, mkdir, open, readFile, readlink, realpath, rename, stat, unlink 
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveSettings } from '@anthropic-ai/claude-agent-sdk';
-
 import {
   type DefaultChange, type DefaultSource, type EffortDefault, effortFor, type EffortTable, type FolderSetting, isSavedEffort, modelKey, OWN_EFFORT, type StartDefaults,
   type UserSettingsFile,
@@ -12,6 +10,7 @@ import {
 import { pickerValue } from '../shared/model-names.js';
 import { isPermissionMode, type PermissionMode, START_MODES } from '../shared/modes.js';
 import type { ModelOption, RunSettings } from '../shared/protocol.js';
+import { sdk } from './agent-sdk.js';
 import { config } from './config.js';
 import { knownModels, listModels } from './models.js';
 import { folderTrusted, type Launch, launchFor, NeedsTrust, type SettingSource } from './trust.js';
@@ -219,7 +218,7 @@ async function sourcesFor(dir: string | undefined): Promise<{ sources: SettingSo
 
 /** What a folder's own settings files set for a new session (fromSettings in trust.ts lists the same, to ask about it). */
 async function folderSets(dir: string): Promise<FolderSetting[]> {
-  const resolved = await resolveSettings({ cwd: dir, settingSources: ['project', 'local'] }).catch(() => undefined);
+  const resolved = await sdk().then(({ resolveSettings }) => resolveSettings({ cwd: dir, settingSources: ['project', 'local'] })).catch(() => undefined);
   const set = new Set<FolderSetting>();
   for (const { source, settings } of resolved?.sources ?? []) {
     if (source !== 'project' && source !== 'local') continue;
@@ -254,7 +253,7 @@ export async function readDefaults(cwd?: string, models: ModelOption[] | undefin
   const waiting = dir && waits ? await folderSets(dir) : [];
   const read = await readUserFile();
   // Claude Code's own merge of the files; should it fail, the user's file as read here.
-  const layers: Layer[] = await resolveSettings({ cwd: dir ?? os.homedir(), settingSources })
+  const layers: Layer[] = await sdk().then(({ resolveSettings }) => resolveSettings({ cwd: dir ?? os.homedir(), settingSources }))
     .then((resolved) => resolved.sources.map(({ source, settings }): Layer => ({ source: source === 'flag' ? 'managed' : source, settings: settings as Settings })))
     .catch(() => (read.json && Object.keys(read.json).length > 0 ? [{ source: 'user' as const, settings: read.json }] : []));
   // JSON Claude Code skipped all the same: a value in it is not one it reads.

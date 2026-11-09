@@ -363,7 +363,7 @@ describe('the weekly issue', () => {
   it('lists the newer Agent SDKs and Claude Code entries, each with a link', () => {
     const body = newerMarkdown({ version: '0.3.318', versions, sdkLog: SDK_LOG, claudeCodeLog: CLAUDE_CODE_LOG });
     expect(body.split('\n').slice(0, 7)).toEqual([
-      'Pelican pins Agent SDK 0.3.318, which brings Claude Code 2.1.318.',
+      'Pelican pins Agent SDK 0.3.318, released with Claude Code 2.1.318.',
       '',
       '### Agent SDK',
       '',

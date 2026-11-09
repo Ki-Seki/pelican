@@ -709,7 +709,6 @@ describe('a turn’s cost', () => {
   it('is left out where a subscription pays', async () => {
     nextAccount = { email: 'me@example.com', subscriptionType: 'max' };
     nextModels = [{ value: 'default', displayName: 'Default', description: '' }];
-    config.claudeExecutable = undefined;
     await readModels();
     const { run, claude, state } = await start();
     claude.say(result({ total_cost_usd: 0.5 }));

@@ -69,6 +69,26 @@ describe('the demo’s list', () => {
     expect(path.relative(config.home, config.stateDir)).toBe('state');
     expect(JSON.parse(await readFile(path.join(config.stateDir, 'pinned.json'), 'utf8'))).toEqual({ ids: [RELEASE_NOTES] });
   });
+
+  it('reads each session as the Agent SDK does, with no SDK: the demo loads none', async () => {
+    const { getSessionInfo } = await import('@anthropic-ai/claude-agent-sdk');
+    const { demoSessionInfo } = await import('../src/server/demo-sessions');
+    const ids = (await readdir(path.join(config.claudeHome, 'projects'), { recursive: true })).filter((file) => file.endsWith('.jsonl') && !file.includes('subagents')).map((file) => path.basename(file, '.jsonl'));
+    expect(ids.length).toBeGreaterThan(10);
+    for (const id of ids) expect(await demoSessionInfo(id), id).toEqual(await getSessionInfo(id));
+    // Listed as the demo lists them: the SDK, which would be fetched first, is never asked for.
+    const { useSdkContext } = await import('../src/server/agent-sdk');
+    let asked = 0;
+    useSdkContext({ installed: () => { asked += 1; throw new Error('The demo loaded the Agent SDK'); }, npm: () => undefined, say: () => undefined });
+    config.demo = true;
+    try {
+      expect((await listSummaries(() => undefined)).length).toBeGreaterThan(10);
+    } finally {
+      config.demo = false;
+      useSdkContext();
+    }
+    expect(asked).toBe(0);
+  });
 });
 
 const SLOW = 'b7e2a9c1-2222-4b2c-9d4e-000000000002';

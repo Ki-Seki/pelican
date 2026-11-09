@@ -2,18 +2,19 @@ import { spawn } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { bundledClaude, claudeBinary } from './claude-code.js';
+import { claudePath } from './claude-code.js';
 import { openRegular } from './open.js';
 import { limiter } from './transcripts.js';
 import { inside } from './workspace.js';
 
 /**
  * Searching the text of a session's folder, for Files. With the ripgrep Claude Code carries
- * inside it, as Claude Code runs it itself for Grep: the Claude Code binary, by its absolute path,
- * started as `rg` with `--no-config` (no RIPGREP_CONFIG_PATH), an empty environment and nothing
- * from PATH. It reads files and runs nothing else: no preprocessor, no git, links not followed,
- * so it works in folders nobody trusted. Where that binary does not answer as ripgrep, a bounded
- * scan of the folder in Node does the same, more slowly.
+ * inside it, as Claude Code runs it itself for Grep: the user's Claude Code binary (the one Pelican
+ * runs), by its absolute path, started as `rg` with `--no-config` (no RIPGREP_CONFIG_PATH), an
+ * empty environment and nothing from PATH. It reads files and runs nothing else: no preprocessor,
+ * no git, links not followed, so it works in folders nobody trusted. Where that is no native
+ * binary (a script that starts one) and so does not answer as ripgrep, or there is no Claude Code,
+ * a bounded scan of the folder in Node does the same, more slowly.
  *
  * The query is a literal string (not a pattern), matched as smart case does it: case-insensitive
  * unless it has a capital letter.
@@ -62,12 +63,10 @@ function answersAsRipgrep(binary: string): Promise<boolean> {
   return known;
 }
 
-/** The binary to search with: the Claude Code the SDK brings, else the one Pelican runs, if either is ripgrep inside. */
+/** The binary to search with: the Claude Code Pelican runs, where it is ripgrep inside. */
 async function ripgrep(): Promise<string | undefined> {
-  for (const binary of [...new Set([bundledClaude(), claudeBinary()])]) {
-    if (binary && path.isAbsolute(binary) && await answersAsRipgrep(binary)) return binary;
-  }
-  return undefined;
+  const binary = await claudePath();
+  return binary && path.isAbsolute(binary) && (await answersAsRipgrep(binary)) ? binary : undefined;
 }
 
 /** A path as ripgrep prints it (`./src/a.ts`), relative to the folder, or undefined if it is not one. */

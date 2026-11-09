@@ -5,8 +5,8 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bundledClaude } from '../src/server/claude-code';
 import { SEARCH_LIMITS, searchText } from '../src/server/search';
+import { testClaude } from './test-claude';
 
 let dir: string;
 let cwd: string;
@@ -32,7 +32,7 @@ const found = (result: Awaited<ReturnType<typeof searchText>>) => Object.fromEnt
 
 describe('searching the folder’s text', () => {
   it('with Claude Code’s ripgrep: smart case, lines numbered, nothing through links, ignored folders skipped', async () => {
-    if (!bundledClaude()) return;
+    if (!testClaude()) return;
     const result = await searchText(cwd, 'theme');
     expect(result.engine).toBe('rg');
     const files = found(result);
@@ -59,7 +59,7 @@ describe('searching the folder’s text', () => {
 
   it('sends a long line cut around what it found, however far along the line that is', async () => {
     for (const engine of [undefined, 'scan'] as const) {
-      if (!engine && !bundledClaude()) continue;
+      if (!engine && !testClaude()) continue;
       const [line] = (await searchText(cwd, 'needle', engine)).files.find((f) => f.path === 'long.md')!.lines;
       expect(line!.text).toContain('The needle is here');
       expect(line!.text).toMatch(/^….*…$/);

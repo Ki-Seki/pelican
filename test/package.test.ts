@@ -1,10 +1,11 @@
-// The package as npm installs it: the server with the packages it uses built in, the Agent SDK, of
-// whose Claude Code for each platform npm installs this computer's alone, and the terminal's PTY,
-// optional, of whose native module likewise. From a package that pins its tree with
-// npm-shrinkwrap.json, npm installs every platform's: 2.6 GB, 1.2 GB to download.
+// The package as npm installs it: the server with the packages it uses built in, and the terminal's
+// PTY, optional, of whose native module for each platform npm installs this computer's alone. From
+// a package that pins its tree with npm-shrinkwrap.json, npm installs every platform's: 2.6 GB, 1.2
+// GB to download. No Agent SDK: Pelican fetches Anthropic's own package the first time it runs
+// Claude Code, and runs the user's own Claude Code; the demo needs neither.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
 import os from 'node:os';
@@ -26,11 +27,13 @@ const freePort = () => new Promise<number>((resolve, reject) => {
 });
 
 describe('the package npm installs', () => {
-  it('pins no tree with a shrinkwrap, and asks npm for the Agent SDK alone, and the terminal’s PTY as optional', async () => {
-    const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string>; optionalDependencies?: Record<string, string>; files: string[] };
-    expect(Object.keys(manifest.dependencies)).toEqual(['@anthropic-ai/claude-agent-sdk']);
-    // Exactly the one CI tested, with the Claude Code it brings.
-    expect(manifest.dependencies['@anthropic-ai/claude-agent-sdk']).toMatch(/^\d+\.\d+\.\d+$/);
+  it('pins no tree with a shrinkwrap, and asks npm for nothing but the terminal’s PTY, as optional', async () => {
+    const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>; devDependencies: Record<string, string>; optionalDependencies?: Record<string, string>; files: string[];
+    };
+    expect(manifest.dependencies ?? {}).toEqual({});
+    // The Agent SDK builds and tests Pelican, exactly the version Pelican fetches when it runs.
+    expect(manifest.devDependencies['@anthropic-ai/claude-agent-sdk']).toMatch(/^\d+\.\d+\.\d+$/);
     // Exactly the one scripts/pty-binaries.mjs checked, with its platforms' binaries.
     expect(Object.keys(manifest.optionalDependencies ?? {})).toEqual(['@lydell/node-pty']);
     expect(manifest.optionalDependencies?.['@lydell/node-pty']).toMatch(/^\d+\.\d+\.\d+(?:-[\w.]+)?$/);
@@ -48,22 +51,25 @@ describe('the package npm installs', () => {
     expect([lock.version, lock.packages['']?.version]).toEqual([version, version]);
   });
 
-  it('serves the demo with nothing installed beside it but the Agent SDK', async () => {
+  it('serves the demo with nothing installed beside it, and never fetches the Agent SDK for it', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pelican-package-'));
+    const state = path.join(dir, 'state');
     let child: ReturnType<typeof spawn> | undefined;
     try {
       const outfile = path.join(dir, 'dist', 'server', 'index.js');
       const { metafile } = await build({ ...serverBuild, absWorkingDir: root, outfile, metafile: true, logLevel: 'silent' });
-      // What it imports from outside itself: Node's own modules, the Agent SDK, the terminal's PTY
-      // (loaded when a terminal is first asked for, which the demo never does), and what ws and
-      // debug try to load and go on without.
+      // What it imports from outside itself: Node's own modules, the Agent SDK (Anthropic's own
+      // package, loaded only to run Claude Code, which the demo never does), the terminal's PTY
+      // (loaded when a terminal is first asked for, which the demo never does either), and what ws
+      // and debug try to load and go on without.
       const outside = new Set(Object.values(metafile.outputs).flatMap((output) => output.imports).filter((imported) => imported.external).map((imported) => imported.path));
       const others = [...outside].filter((name) => !name.startsWith('node:') && !builtinModules.includes(name));
       expect(others.sort()).toEqual(['@anthropic-ai/claude-agent-sdk', '@lydell/node-pty', 'bufferutil', 'supports-color', 'utf-8-validate']);
-      await mkdir(path.join(dir, 'node_modules'));
-      await symlink(path.join(root, 'node_modules', '@anthropic-ai'), path.join(dir, 'node_modules', '@anthropic-ai'));
 
-      const server = spawn(process.execPath, [outfile, '--demo'], { env: { ...process.env, PELICAN_HOST: '127.0.0.1', PELICAN_PORT: String(await freePort()) }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const server = spawn(process.execPath, [outfile, '--demo'], {
+        env: { ...process.env, PELICAN_HOST: '127.0.0.1', PELICAN_PORT: String(await freePort()), PELICAN_STATE_DIR: state, PELICAN_CONFIG_DIR: path.join(dir, 'config') },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       child = server;
       let said = '';
       const url = await new Promise<string>((resolve, reject) => {
@@ -87,6 +93,11 @@ describe('the package npm installs', () => {
         socket.onerror = () => reject(new Error('The socket failed'));
       });
       socket.close();
+      // Its sessions, read with no SDK; and none fetched, nor asked for.
+      const { sessions } = (await (await fetch(new URL('api/sessions', url), { headers: { 'X-Pelican': '1' } })).json()) as { sessions: unknown[] };
+      expect(sessions.length).toBeGreaterThan(10);
+      expect((await readdir(state, { recursive: true })).filter((file) => file.includes('agent-sdk'))).toEqual([]);
+      expect(said).not.toMatch(/Agent SDK/);
     } finally {
       child?.kill();
       await rm(dir, { recursive: true, force: true });

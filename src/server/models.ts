@@ -1,10 +1,11 @@
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { AccountInfo, AgentInfo, McpServerStatus, ModelInfo, SDKControlGetUsageResponse, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
+import type { AccountInfo, AgentInfo, McpServerStatus, ModelInfo, Query, SDKControlGetUsageResponse, SDKUserMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 
 import type { Account, Agent, Command, McpServer, ModelOption, PlanUsage } from '../shared/protocol.js';
+import { sdk } from './agent-sdk.js';
+import { claudeToRun, INSTALL_COMMAND } from './claude-code.js';
 import { config } from './config.js';
 import { DEMO_MODELS } from './demo.js';
 import { folderTrusted } from './trust.js';
@@ -44,13 +45,14 @@ const inflight = new Map<string, Promise<unknown>>();
  * folder with the user's settings only: Claude Code runs git where it starts, and the folder's own
  * git config can name programs git runs (trust.ts).
  */
-async function probe<T>(key: string, cwd: string, ask: (q: ReturnType<typeof query>) => Promise<T>): Promise<T> {
+async function probe<T>(key: string, cwd: string, ask: (q: Query) => Promise<T>): Promise<T> {
   const dir = await realpath(cwd);
   const id = `${key}:${dir}`;
   const pending = inflight.get(id);
   if (pending) return pending as Promise<T>;
   const work = slot(async () => {
     const trusted = await folderTrusted(dir);
+    const [{ query }, claude] = await Promise.all([sdk(), claudeToRun()]);
     const q = query({
       prompt: idlePrompt,
       options: {
@@ -58,7 +60,7 @@ async function probe<T>(key: string, cwd: string, ask: (q: ReturnType<typeof que
         persistSession: false,
         settingSources: trusted ? ['user', 'project', 'local'] : ['user'],
         settings: { disableAllHooks: true },
-        ...(config.claudeExecutable ? { pathToClaudeCodeExecutable: config.claudeExecutable } : {}),
+        pathToClaudeCodeExecutable: claude,
       },
     });
     let timer: NodeJS.Timeout | undefined;
@@ -105,13 +107,14 @@ export function signedInFrom(account: AccountInfo): boolean {
 
 /**
  * Claude Code failing to start, in Pelican's words: the SDK's own text names an option of the
- * SDK, not the setting a Pelican user has.
+ * SDK, not the setting a Pelican user has, and has the user reinstall the SDK, which brings no
+ * Claude Code of its own as Pelican fetches it.
  */
 export function startError(text: string): string | undefined {
   const missing = text.match(/(?:native binary|Claude Code executable) not found at (.+?)\. (?:Please|Is)/);
-  if (!missing && !/native binary not found|Claude Code executable not found/.test(text)) return undefined;
+  if (!missing && !/native binary not found|Claude Code executable not found|Native CLI binary for \S+ not found/.test(text)) return undefined;
   const at = missing?.[1] ? ` at ${missing[1]}` : '';
-  return `Pelican could not find Claude Code${at}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or reinstall Pelican.`;
+  return `Pelican could not find Claude Code${at}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or install Claude Code there with\n${INSTALL_COMMAND}`;
 }
 
 /**

@@ -18,13 +18,14 @@ import { revealHidden } from '../shared/hidden.js';
 import { commandRefusal, sizeAllowed, TERMINAL_LIMITS, terminalColors } from '../shared/terminal.js';
 import { currentTasks } from '../shared/tasks.js';
 import { exportMarkdown, fork, remove } from './actions.js';
+import { SdkUnavailable } from './agent-sdk.js';
 import { forget, keep } from './kept.js';
 import { authMode, beginAttempt, checkPassword, checkToken, cookieName, issueCode, newSessionCookie, proofValid, redeemCode, renewedCookie, signedIn, signOut } from './auth.js';
 import { config } from './config.js';
 import { demoRunState, demoTaskOutput } from './demo.js';
 import { sessionsChanged } from './feed.js';
 import { findUpload, FolderError, listDirs, makeDir, MAX_UPLOAD_BYTES, saveUpload } from './files.js';
-import { claudeCodeInfo, newerClaude } from './claude-code.js';
+import { ClaudeCodeMissing, claudeCodeInfo, INSTALL_COMMAND } from './claude-code.js';
 import { createScratchFolder, isDirectory, pickFolder } from './folders.js';
 import { readDefaults, saveDefault, SettingsRefused } from './defaults.js';
 import { listCompletions, listModels, planUsage, probeMcpServers } from './models.js';
@@ -169,6 +170,9 @@ app.onError((error, c) => {
   if (error instanceof NeedsTrust) return c.json({ error: error.message, needsTrust: true, brings: error.brings, commands: error.commands, more: error.more }, 409);
   // Claude Code did not answer in time as it was given a message's settings: the message did not go, which is said as it is.
   if (error instanceof ClaudeNotAnswering) return c.json({ error: error.message }, 504);
+  // No Agent SDK, as npm could not fetch it, or no Claude Code: the terminal said so as it happened,
+  // or in the start banner. Each page that asks is told, the terminal not again each time.
+  if (error instanceof SdkUnavailable || error instanceof ClaudeCodeMissing) return c.json({ error: error.message }, 503);
   console.warn('[pelican]', c.req.method, c.req.path, error.message);
   return c.json({ error: error.message }, 500);
 });
@@ -227,11 +231,16 @@ app.get('/api/info', async (c) => {
   const info: ServerInfo = { machine: config.machine, home: config.home, version: pkg.version, auth: authMode() !== 'none', demo: config.demo, terminal: terminalAvailability() };
   const key = pushKey();
   if (key) info.pushKey = key;
-  // Which Claude Code this Pelican runs, for About (and bug reports), and the user's own when newer.
+  // Which Claude Code this Pelican runs, for About (and bug reports): whether it is older than the
+  // one Pelican was tested with, and how to install it where there is none.
   const code = await claudeCodeInfo();
-  const newer = newerClaude();
-  if (code.version || code.path) {
-    info.claudeCode = { ...(code.version ? { version: code.version } : {}), ...(code.path ? { path: code.path } : {}), ...(newer ? { newer } : {}) };
+  if (code.version || code.path || code.missing) {
+    info.claudeCode = {
+      ...(code.version ? { version: code.version } : {}),
+      ...(code.path ? { path: code.path } : {}),
+      ...(code.tested ? { tested: code.tested } : {}),
+      ...(code.missing ? { missing: true, ...(code.path ? {} : { install: INSTALL_COMMAND }) } : {}),
+    };
   }
   return c.json(info);
 });

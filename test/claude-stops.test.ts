@@ -10,9 +10,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import type { RunState, ServerEvent } from '../src/shared/protocol';
 import { app } from '../src/server/app';
+import { INSTALL_COMMAND } from '../src/server/claude-code';
 import { config } from '../src/server/config';
 import { feedFor } from '../src/server/feed';
-import { closeAll, getRun, runState, SessionRun } from '../src/server/runner';
+import { closeAll, getRun, runState, SessionRun, starter } from '../src/server/runner';
 
 let root: string;
 const saved = { ...config };
@@ -88,7 +89,7 @@ async function told(started: { status: number; sessionId?: string; error?: strin
 /** A Claude of a session of its own, started as a message would start it. */
 async function startedRun(): Promise<SessionRun> {
   const run = new SessionRun(randomUUID(), await mkdtemp(path.join(root, 'project-')), {}, false);
-  run.start();
+  run.start(await starter());
   return run;
 }
 
@@ -110,7 +111,7 @@ describe('Claude Code that stops before the first message reaches it', () => {
   it('that is not there says so, in Pelican’s words with what to do, as Claude Code never ran to say anything', async () => {
     const missing = path.join(root, 'missing');
     config.claudeExecutable = missing;
-    expect(await told(await startSession())).toBe(`Pelican could not find Claude Code at ${missing}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or reinstall Pelican.`);
+    expect(await told(await startSession())).toBe(`Pelican could not find Claude Code at ${missing}. Set PELICAN_CLAUDE_PATH to the claude program on ${config.machine}, or install Claude Code there with\n${INSTALL_COMMAND}`);
   });
 });
 
