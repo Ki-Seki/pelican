@@ -103,7 +103,15 @@ export function findNpm(execPath = process.execPath, PATH = process.env.PATH ?? 
 }
 
 const thisComputer: SdkContext = {
-  installed: async () => ({ module: await import('@anthropic-ai/claude-agent-sdk'), manifest: installedManifest() ?? {} }),
+  installed: async () => {
+    // The version Pelican pins, and no other: npm may have put another where Node looks from
+    // Pelican's code, as a global install beside a global Pelican, which is then not used.
+    const manifest = installedManifest();
+    if (manifest?.version !== SDK_VERSION) {
+      throw Object.assign(new Error(`${SDK_PACKAGE} ${manifest?.version ?? ''} is not the ${SDK_VERSION} Pelican pins`.replace('  ', ' ')), { code: 'ERR_MODULE_NOT_FOUND' });
+    }
+    return { module: await import('@anthropic-ai/claude-agent-sdk'), manifest };
+  },
   npm: () => findNpm(),
   // Beside the start banner, in the terminal or the service's log.
   say: (line) => console.log(line),
