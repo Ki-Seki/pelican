@@ -34,9 +34,9 @@ updates:
       runtime:
         dependency-type: production
         update-types: [minor, patch]
-  # The Agent SDK brings the Claude Code that Pelican runs, and a new one ships most days: each
-  # gets a pull request of its own, which runs all the checks and the browser smoke test, and
-  # sdk-report.yml comments on it with what changed upstream.
+  # The Agent SDK, which Pelican fetches and runs the user's Claude Code through, comes with each
+  # Claude Code release, most days: each gets a pull request of its own, which runs all the checks
+  # and the browser smoke test, and sdk-report.yml comments on it with what changed upstream.
   - package-ecosystem: npm
     directory: /
     # Dependabot takes a second entry for the same folder only on another target branch; naming

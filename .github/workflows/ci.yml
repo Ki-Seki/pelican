@@ -93,16 +93,17 @@ jobs:
       # As `npm install -g pelican-cc` installs it from npm, which reads a package's
       # npm-shrinkwrap.json only when the registry says it has one, never from a tarball installed
       # by its path: a registry on the runner hands the package out as npm's does. Its own npm
-      # cache, so the one setup-node keeps for the other jobs stays as it is. One Claude Code gets
-      # installed, this computer's: from a package with a shrinkwrap, npm installs every platform's.
+      # cache, so the one setup-node keeps for the other jobs stays as it is. Pelican alone: no
+      # Agent SDK, which Pelican fetches itself, and with it no Claude Code, as Pelican runs yours.
+      # The demo needs neither, and fetches nothing.
       - name: Install the package as people get it, and serve the demo from it
         run: |
           node scripts/registry.mjs pelican-cc-*.tgz npm install -g pelican-cc --cache "$RUNNER_TEMP/npm-cache"
           pelican --version
-          ls "$(npm root -g)/pelican-cc/node_modules/@anthropic-ai"
-          test "$(ls "$(npm root -g)/pelican-cc/node_modules/@anthropic-ai" | grep -c '^claude-agent-sdk-')" = 1
-          # And one terminal PTY, this computer's.
+          if find "$(npm root -g)" -path '*/@anthropic-ai/claude-agent-sdk*' -print | grep .; then echo 'An Agent SDK package came with pelican-cc'; exit 1; fi
+          # One terminal PTY, this computer's.
           test "$(ls "$(npm root -g)/pelican-cc/node_modules/@lydell" | grep -c '^node-pty-')" = 1
+          export PELICAN_STATE_DIR="$RUNNER_TEMP/demo-state"
           pelican --demo --port 7861 &
           for i in $(seq 1 30); do curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/info && break; sleep 1; done
           curl -fsS -H 'X-Pelican: 1' http://127.0.0.1:7861/api/sessions | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (d.sessions.length < 3) process.exit(1)'
@@ -110,6 +111,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' -H 'Host: attacker.example' http://127.0.0.1:7861/api/info)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7861/api/info)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Pelican: 1' -H 'Sec-Fetch-Site: cross-site' http://127.0.0.1:7861/api/info)" = 403
+          test -z "$(find "$PELICAN_STATE_DIR" -name agent-sdk)"
       - name: Without the demo, only the printed link signs a browser in
         run: |
           export PELICAN_CONFIG_DIR="$RUNNER_TEMP/config" PELICAN_STATE_DIR="$RUNNER_TEMP/state"
@@ -122,6 +124,12 @@ jobs:
           case "$link" in http://localhost:7862/?token=*) ;; *) exit 1 ;; esac
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$RUNNER_TEMP/cookies" "$link")" = 302
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 200
+          # The session list waited for the Agent SDK, which Pelican fetched from npm as it started:
+          # the version pinned, its JavaScript alone, with no Claude Code of its own beside it.
+          sdk="$RUNNER_TEMP/state/agent-sdk/$(node -p 'require("./package.json").devDependencies["@anthropic-ai/claude-agent-sdk"]')/node_modules/@anthropic-ai"
+          test -f "$sdk/claude-agent-sdk/sdk.mjs"
+          test "$(ls "$sdk")" = claude-agent-sdk
+          grep -q "Fetching Anthropic's Agent SDK" "$RUNNER_TEMP/pelican.log"
           # The terminal as installed: its PTY loads, and a shell starts in a folder and is closed.
           curl -fsS -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/terminals | grep -q '"available":true'
           id=$(curl -fsS -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' -H 'Content-Type: application/json' \

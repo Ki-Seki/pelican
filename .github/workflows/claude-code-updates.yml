@@ -1,8 +1,10 @@
 name: Claude Code updates
 
 # Once a week, the issue "Claude Code updates to consider": what Claude Code and the Agent SDK have
-# released since the version Pelican pins, from scripts/upstream-report.mjs. Always the same issue,
-# edited: closed once Pelican pins the newest, reopened when something new arrives.
+# released since the version Pelican pins, from scripts/upstream-report.mjs, and whether the newest
+# Claude Code starts through the pinned Agent SDK, as Pelican runs the user's own Claude Code with
+# it. Always the same issue, edited: closed once Pelican pins the newest and the newest Claude Code
+# starts, reopened when something new arrives. A Claude Code that does not start fails the run too.
 on:
   schedule:
     - cron: "23 6 * * 1"
@@ -16,8 +18,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Its own job, with no right to write anything: it runs Claude Code's installer and Claude Code.
+  handshake:
+    name: The newest Claude Code starts through the pinned Agent SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      started: ${{ steps.handshake.outputs.started }}
+      said: ${{ steps.handshake.outputs.said }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      # As people install it: Claude Code's own installer, the newest release, into ~/.local/bin.
+      - name: Install the newest Claude Code
+        run: curl -fsSL https://claude.ai/install.sh | bash
+      # As Pelican fetches it (src/server/agent-sdk.ts): the version package.json pins, without the
+      # optional packages that bring a Claude Code of their own.
+      - name: Fetch the Agent SDK Pelican pins
+        run: |
+          version=$(node -p 'require("./package.json").devDependencies["@anthropic-ai/claude-agent-sdk"]')
+          npm install --prefix "$RUNNER_TEMP/agent-sdk" --no-save --no-package-lock --omit=optional --ignore-scripts --no-audit --no-fund "@anthropic-ai/claude-agent-sdk@$version"
+      # Nothing is sent to Claude, and Claude Code starts with an empty config folder of its own.
+      - name: Start Claude Code through it, and ask what it supports
+        id: handshake
+        run: |
+          set +e
+          said=$(node scripts/handshake.mjs "$RUNNER_TEMP/agent-sdk" "$HOME/.local/bin/claude" 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$said"
+          echo "started=$([ "$code" = 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          delimiter="said-$(node -e 'console.log(require("crypto").randomUUID())')"
+          { echo "said<<$delimiter"; printf '%s\n' "$said" | tail -c 3000; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+      - name: Fail the run where it does not start
+        if: steps.handshake.outputs.started != 'true'
+        run: exit 1
+
   issue:
     name: Keep the issue current
+    needs: handshake
+    # Also when Claude Code did not start, or the check could not run: the issue says so.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -33,6 +78,29 @@ jobs:
       # Nothing to install: the script uses Node alone.
       - name: What is newer than the pinned Agent SDK
         run: node scripts/upstream-report.mjs > "$RUNNER_TEMP/updates.md"
+      # What the handshake said is Claude Code's own words: in the issue as text, in a code block.
+      - name: Whether the newest Claude Code starts through it
+        env:
+          STARTED: ${{ needs.handshake.outputs.started }}
+          SAID: ${{ needs.handshake.outputs.said }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="$RUNNER_TEMP/updates.md"
+          if [ "$STARTED" = true ]; then
+            # Said beside the rest, never alone: on its own it is no update to consider.
+            if [ -s "$body" ]; then printf '\n### The newest Claude Code\n\n%s\n' "$SAID" >> "$body"; fi
+          else
+            {
+              [ -s "$body" ] && echo
+              echo '### The newest Claude Code does not start through the pinned Agent SDK'
+              echo
+              echo "As Pelican starts the user's own Claude Code, [this run]($RUN) found:"
+              echo
+              echo '~~~~'
+              printf '%s\n' "${SAID:-The check did not get that far: see the run.}"
+              echo '~~~~'
+            } >> "$body"
+          fi
       - name: Edit, open or close the issue
         env:
           GH_TOKEN: ${{ github.token }}
