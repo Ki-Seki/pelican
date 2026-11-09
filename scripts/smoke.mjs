@@ -1085,6 +1085,36 @@ async function sessionsToWalk(page, base, sessions) {
   return found;
 }
 
+/**
+ * A step that says something of itself (at work, failed, denied), pointed at on a computer: its ⋯
+ * shows beside what the step says, not over it.
+ */
+async function checkStepStatus(browser, base, sessions, where) {
+  const context = await browser.newContext({ ...SIZES.wide });
+  const page = await context.newPage();
+  watch(page, () => `${where}, a step's status pointed at`);
+  let pointed = false;
+  for (const session of sessions.filter((s) => !s.sideChatOf)) {
+    await page.goto(`${base}?s=${encodeURIComponent(session.id)}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(300);
+    const head = page.locator('[data-step]:has(> button[aria-haspopup="menu"]) > [data-step-head]:has([data-step-status])').first();
+    if (!(await head.count())) continue;
+    await head.scrollIntoViewIfNeeded();
+    await head.hover();
+    await page.waitForTimeout(250);
+    const over = await head.evaluate((el) => {
+      const more = el.parentElement.querySelector(':scope > button[aria-haspopup="menu"]').getBoundingClientRect();
+      const said = el.querySelector('[data-step-status]').getBoundingClientRect();
+      return Math.round(Math.min(said.right, more.right) - Math.max(said.left, more.left));
+    });
+    if (over > 0) problems.push(`${where}, ${session.title}: a step's ⋯ lies ${over}px over what the step says of itself`);
+    pointed = true;
+    break;
+  }
+  if (!pointed) notes.push(`${where}: no step with a menu says something of itself, to point at`);
+  await context.close();
+}
+
 /** The first step with a menu of its own, as a locator. */
 async function stepWithMenu(page) {
   const index = await page.evaluate(() => [...document.querySelectorAll('[data-step]')].findIndex((step) => step.querySelector(':scope > button[aria-haspopup="menu"]')));
@@ -1865,6 +1895,7 @@ try {
     await checkWaysIn(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkRequests(browser, `${server.base}demo/`, sessions, saved, 'site, demo');
     await checkWhileWorking(browser, `${server.base}demo/`, sessions, 'site, demo');
+    await checkStepStatus(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkRewind(browser, `${server.base}demo/`, sessions, 'site, demo');
     await checkUsage(browser, `${server.base}demo/`);
   } else {
@@ -1880,6 +1911,7 @@ try {
     await checkWaysIn(browser, demo.base, sessions ?? [], 'app');
     await checkRequests(browser, demo.base, sessions ?? [], asked, 'app');
     await checkWhileWorking(browser, demo.base, sessions ?? [], 'app');
+    await checkStepStatus(browser, demo.base, sessions ?? [], 'app');
     await checkRewind(browser, demo.base, sessions ?? [], 'app');
     await checkSentFiles(browser, demo.base, sessions ?? [], asked);
     await checkExport(browser, demo.base, sessions ?? [], 'app');

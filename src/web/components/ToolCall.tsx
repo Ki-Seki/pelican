@@ -1085,6 +1085,14 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
   const verb = outcome.kind === 'pending' && running ? summary.running ?? summary.verb : failed ? summary.failed ?? summary.verb : summary.verb;
   // A refused or interrupted edit changed nothing, whatever it meant to change.
   const changed = stats && (outcome.kind === 'done' || outcome.kind === 'pending') && (stats.added > 0 || stats.removed > 0);
+  // What the step says of itself at the end of its row.
+  const status = [
+    ((outcome.kind === 'pending' && running) || agent?.phase === 'running') && <Loader2 key="working" className="size-3.5 animate-spin text-faint" />,
+    failed && !summary.failed && <span key="failed" className="text-[11px] text-danger">failed</span>,
+    outcome.kind === 'denied' && <span key="denied" className="text-[11px] text-faint">denied</span>,
+    outcome.kind === 'stopped' && <span key="stopped" className="text-[11px] text-faint">interrupted</span>,
+    (agentEnd === 'killed' || agentEnd === 'stopped') && <span key="ended" className="text-[11px] text-faint">stopped</span>,
+  ].filter(Boolean);
   const row = (target: React.ReactNode) => (
     <>
       <Icon className={`size-3.5 shrink-0 ${failed ? 'text-danger' : ''}`} />
@@ -1097,11 +1105,13 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1">
-        {((outcome.kind === 'pending' && running) || agent?.phase === 'running') && <Loader2 className="size-3.5 animate-spin text-faint" />}
-        {failed && !summary.failed && <span className="text-[11px] text-danger">failed</span>}
-        {outcome.kind === 'denied' && <span className="text-[11px] text-faint">denied</span>}
-        {outcome.kind === 'stopped' && <span className="text-[11px] text-faint">interrupted</span>}
-        {(agentEnd === 'killed' || agentEnd === 'stopped') && <span className="text-[11px] text-faint">stopped</span>}
+        {status.length > 0 && (
+          // With a pointer, ⋯ shows beside the chevron while the step is pointed at or its menu is
+          // open: what the step says of itself (at work, failed, denied) moves aside for it.
+          <span data-step-status className={`flex items-center gap-1.5 transition-[margin] duration-100 ${hasMenu ? `pointer-fine:[[data-step]:hover>[data-step-head]_&]:mr-8 ${menu ? 'pointer-fine:mr-8' : ''}` : ''}`}>
+            {status}
+          </span>
+        )}
         <ChevronRight className={`size-3.5 text-faint transition-transform ${open ? 'rotate-90' : ''}`} />
       </span>
     </>
@@ -1155,7 +1165,7 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
         // The file's name opens it, as a path does in Claude Desktop; the rest of the row still
         // opens the step (its toggle lies under the whole row, the name's link above it). On a
         // touch screen the row is a finger tall and the name takes taps over all of its height.
-        <div className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg pointer-coarse:min-h-11">
+        <div data-step-head className="group relative flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-[13px] text-muted hover:text-fg pointer-coarse:min-h-11">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${verb} ${summary.target ?? ''}`.trim()} className="absolute inset-0 rounded-md" />
           {row(
             <a href={fileLink.href} onClick={fileLink.onClick} title={`Open ${fileLink.path}`} className={`relative z-[1] flex min-w-0 ${STEP_LINK} pointer-coarse:self-stretch pointer-coarse:items-center pointer-coarse:after:absolute pointer-coarse:after:inset-x-0 pointer-coarse:after:-inset-y-1`}>
@@ -1167,6 +1177,7 @@ function Step({ call, cwd, running, defaultOpen = false, agent }: StepProps & { 
         <button
           ref={toggle}
           type="button"
+          data-step-head
           onClick={() => setOpen((v) => !v)}
           className="group flex min-h-8 w-full items-center gap-2 rounded-md py-1 text-left text-[13px] text-muted hover:text-fg"
           aria-expanded={open}
