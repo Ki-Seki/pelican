@@ -218,8 +218,8 @@
           <details><summary>Why not Remote Control?</summary><p>Use it if you are on a Claude plan and want to answer, from your phone, the prompt waiting in your terminal: Pelican cannot. Pelican shows every session without turning anything on, keeps nothing on anyone’s servers, and works with any login, API keys and cloud providers included.</p></details>
           <details><summary>Why not SSH and tmux?</summary><p>That works, and needs nothing new on the computer. Pelican is for what a terminal on a phone does badly: long transcripts, diffs, approvals in one tap, notifications, charts and pages, and history across compactions.</p></details>
           <details><summary>What if my computer sleeps?</summary><p>A computer that is asleep runs nothing, and Pelican cannot wake it. While Claude works, Pelican keeps it from going to sleep on its own; <a class="link" href="docs/install.html#running">keep it awake</a> yourself to reach Pelican at any time.</p></details>
-          <details><summary>Does it cost anything, or phone home?</summary><p>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browser and, for notifications, to the browser’s push service, with the content encrypted.</p></details>
-          <details><summary>Why is the install about 150 MB?</summary><p>The Agent SDK, which Pelican runs Claude Code through, brings its own copy of Claude Code, for your computer alone: about 150 MB to download, about 400 MB on disk. Pelican itself is about 2 MB. The live demo needs no install at all.</p></details>
+          <details><summary>Does it cost anything, or phone home?</summary><p>No. Pelican is free and MIT licensed, with no account and no telemetry. It talks to your browser and, for notifications, to the browser’s push service, with the content encrypted. The first time it starts, npm fetches Anthropic’s Agent SDK for it.</p></details>
+          <details><summary>Which Claude Code does it run?</summary><p>Yours, the <code>claude</code> your terminal runs, so <code>claude update</code> updates it, and Pelican stays small. The first time it starts, Pelican fetches Anthropic’s Agent SDK from npm, which it runs Claude Code through: about 60 MB on disk, once for each version. The live demo needs no install at all. <a class="link" href="docs/faq.html#which-claude-code">The details</a></p></details>
           <p class="after"><a class="link" href="docs/faq.html">More questions</a></p>
         </div>
       </div>
@@ -233,7 +233,7 @@
       <ol class="start">
         <li>
           <h3>Install it</h3>
-          <p>On the computer where you use Claude Code: macOS, Linux or WSL, with Node 22.12 or newer. <code>pelican</code> prints the link that signs this browser in.</p>
+          <p>On the computer where you use Claude Code, installed and signed in: macOS, Linux or WSL, with Node 22.12 or newer. <code>pelican</code> prints the link that signs this browser in.</p>
           <pre class="code"><code>npm install -g pelican-cc
 pelican</code></pre>
         </li>
@@ -249,7 +249,7 @@ pelican phone</code></pre>
           <pre class="code"><code>pelican service install</code></pre>
         </li>
       </ol>
-      <p class="after">About 150 MB to download, about 400 MB on disk, most of it the copy of Claude Code the Agent SDK brings. <a class="link" href="docs/phone.html">Other ways in</a>, or <a class="link" href="demo/">try the live demo</a> first.</p>
+      <p class="after">Pelican runs the Claude Code you have, and is small: its first start fetches Anthropic’s Agent SDK from npm, about 60 MB on disk, once for each version. <a class="link" href="docs/phone.html">Other ways in</a>, or <a class="link" href="demo/">try the live demo</a> first.</p>
     </div>
   </section>
 </main>

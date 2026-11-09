@@ -5,7 +5,9 @@ app small and quiet, are both welcome.
 
 ## Set up
 
-You need Node 22.12 or newer and Claude Code signed in on your computer.
+You need Node 22.12 or newer and Claude Code installed and signed in on your computer: Pelican
+runs it. `npm ci` installs the Agent SDK beside the code, a devDependency, which Pelican loads
+there rather than fetching its own copy.
 
 ```bash
 npm ci
@@ -36,7 +38,8 @@ Microsoft's node-pty, and a new version needs its own few files read and pinned 
 
 The tests never see your own Claude Code sessions or Pelican sign-in: `test/setup.ts` points them
 at temporary folders before anything reads the environment, and keeps your git settings out of the
-repositories they make.
+repositories they make. Nor do they run your Claude Code: they run the one the Agent SDK's package
+for your platform brings, which `npm ci` installed beside it, the version Pelican is tested with.
 
 Check what you changed in a browser, at phone size too. `node scripts/smoke.mjs` opens the built
 app with made-up sessions in headless Chrome, every session and sheet, on a phone and wide, light
@@ -55,7 +58,8 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 | `src/server/auth.ts` | The access token, the password, the sign-in cookie and the sign-ins signed out |
 | `src/server/app.ts` | The HTTP API, and the host, origin, request and sign-in checks in front of it |
 | `src/server/runner.ts` | Runs Claude Code through the Agent SDK, one process per active session |
-| `src/server/claude-code.ts` | Which Claude Code runs, its version, and whether it is signed in |
+| `src/server/claude-code.ts` | Which Claude Code runs (the user's own), its version, whether it is older than the one Pelican was tested with, and whether it is signed in |
+| `src/server/agent-sdk.ts` | Anthropic's Agent SDK, loaded only here: where npm installed it, else Pelican's own copy, fetched from npm once for each version |
 | `src/server/history.ts` | Reads a transcript, across compactions, incrementally |
 | `src/server/feed.ts` | Delivers a session's new messages to the pages watching it |
 | `src/server/kept.ts`, `archive.ts`, `pinned.ts` | Archived and pinned sessions, never both: Pelican's own, in its state folder, apart from Claude Desktop's |
@@ -97,12 +101,17 @@ place, and `PELICAN_DEMO_PORT` if the port a script starts its demo on is taken.
 
 ## Keeping up with Claude Code
 
-Pelican pins the Agent SDK exactly, and with it the Claude Code it runs. Dependabot proposes each
-new version about a day after it ships, in a pull request of its own that runs all the checks, and
-a comment on it says what changed upstream: the Agent SDK's and Claude Code's changelog entries in
-between, and the changes to the SDK's types. `node scripts/upstream-report.mjs <from> <to>` prints
-that report, and `node scripts/upstream-report.mjs` what is newer than the pinned version, which the
-issue "Claude Code updates to consider" keeps each week.
+Pelican pins the Agent SDK exactly, a devDependency: Pelican's package holds none of it, and
+fetches Anthropic's own package of that version as it first starts. It runs the user's own Claude
+Code, and says when that is older than the one the SDK was made with, which the tests run.
+Dependabot proposes each new SDK about a day after it ships, in a pull request of its own that runs
+all the checks, and a comment on it says what changed upstream: the Agent SDK's and Claude Code's
+changelog entries in between, and the changes to the SDK's types.
+`node scripts/upstream-report.mjs <from> <to>` prints that report, and
+`node scripts/upstream-report.mjs` what is newer than the pinned version, which the issue "Claude
+Code updates to consider" keeps each week, with whether the newest Claude Code, from its own
+installer, starts through the pinned SDK as Pelican starts it
+(`node scripts/handshake.mjs <folder the SDK is in> <claude>`, which sends nothing to Claude).
 
 ## Releasing
 
@@ -113,7 +122,8 @@ issue "Claude Code updates to consider" keeps each week.
 3. `gh release create v<x.y.z> --verify-tag --title v<x.y.z> --notes-file <the changelog section>`,
    with `--prerelease` for a release candidate such as `v0.3.0-rc.1`.
 
-Before the bump, take the newest Agent SDK, and the Claude Code it brings, if all its checks pass.
+Before the bump, take the newest Agent SDK, if all its checks pass with the Claude Code it was made
+with.
 Then bring the docs' Claude Code coverage table (`site/docs-src/coverage.html`) up to date with what
 changed, and the "checked on" dates of the comparison in `README.md`, `site/index.html` and
 `site/docs-src/compare.html`.

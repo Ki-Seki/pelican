@@ -337,18 +337,33 @@ can read your sessions and have Claude run commands as you, so treat access to i
   it stays one when the side chat it came from is deleted, cleaned up by Claude Code, or many
   branches back.
 - **What gets installed is what was tested.** The packages Pelican's server uses are built into
-  it, as CI tested them, and npm installs two: the Agent SDK, pinned to one version, with the
-  Claude Code it bundles for your computer, and the terminal's optional PTY, `@lydell/node-pty`,
+  it, as CI tested them, and npm installs one: the terminal's optional PTY, `@lydell/node-pty`,
   pinned to one version, with its native module for your computer, which that version pins to its
-  own, each checked against the registry's integrity hash. Beside them npm installs the packages
-  the SDK lists as its peers, which Pelican never loads. The package ships no
-  `npm-shrinkwrap.json`: from one, npm installs Claude Code for every platform.
-  `THIRD_PARTY_NOTICES` in it names each package built in, with its version and license.
+  own, checked against the registry's integrity hash. The package ships no `npm-shrinkwrap.json`:
+  from one, npm installs every platform's native module. `THIRD_PARTY_NOTICES` in it names each
+  package built in, with its version and license.
+- **The Agent SDK is Anthropic's own package, fetched once for each version.** Its license lets no
+  one else ship its code, so Pelican's package holds none of it, and no Claude Code: Pelican runs
+  the user's own (`PELICAN_CLAUDE_PATH`, else the first `claude` on PATH in absolute folders only,
+  else where Claude Code's installers put it). The first time Pelican needs the SDK, outside the
+  demo, it runs `npm install --prefix <folder> --no-save --no-package-lock --omit=optional
+  --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-agent-sdk@<version>`, with the exact
+  version Pelican was built and tested with, into a new folder in `<state>/agent-sdk` (which only
+  the user can read) and from that folder, so no project's `.npmrc` names the registry: the npm
+  beside the Node running Pelican (else the first npm on PATH), with the user's own npm settings
+  and nothing an earlier npm left in the environment.
+  npm checks each tarball against the registry's integrity and runs no install script; the SDK's
+  optional packages, each a copy of Claude Code, are left out, and the packages it lists as its
+  peers come with it, which Pelican never loads. Only a whole copy of that version then takes its
+  place, `<state>/agent-sdk/<version>`, folder and all, so a Pelican starting meanwhile finds it or
+  not, never half of it; copies of other versions are then removed. Where npm installed the SDK
+  beside Pelican's code (in development, and in the tests), that copy is loaded instead. The demo
+  loads none.
 - **An update installs only pelican-cc, from npm's registry, and only when you ask.** Once a day,
   and when Settings opens (at most every five minutes), Pelican asks the registry a global install
   uses (`npm config get registry --global`, run by the npm beside the Node running Pelican, from
-  your home folder, as all npm commands here are, so that a project's `.npmrc` in the folder
-  Pelican was started from names nothing) for pelican-cc's document, and nothing else; when it
+  your home folder, as all of an update's npm commands are, so that a project's `.npmrc` in the
+  folder Pelican was started from names nothing) for pelican-cc's document, and nothing else; when it
   names a newer version as `latest`, Pelican downloads that version's tarball, only from the
   registry's own origin (a tarball elsewhere is left to npm, and Settings links to the release
   notes instead), checks it against the integrity the registry gives, and reads its `CHANGELOG.md`

@@ -30,7 +30,8 @@
 
 ## Get started
 
-You need macOS or Linux (WSL works too), Node 22.12 or newer, and Claude Code signed in.
+You need macOS or Linux (WSL works too), Node 22.12 or newer, and
+[Claude Code](https://code.claude.com/docs/en/setup) installed and signed in: Pelican runs yours.
 
 **1. Install and start it** on the computer where you use Claude Code:
 
@@ -39,7 +40,8 @@ npm install -g pelican-cc
 pelican
 ```
 
-Open the link it prints. Your sessions are already there.
+Open the link it prints. Your sessions are already there. The first start fetches Anthropic's
+Agent SDK from npm, which Pelican runs Claude Code through: about 60 MB, once for each version.
 
 **2. Open it on your phone.** Put [Tailscale](https://tailscale.com/download) on the computer and
 the phone, signed in to the same account, then:
@@ -121,6 +123,10 @@ signed in the way you signed in to `claude`, and never sees your credentials. Wh
 Pelican is Agent SDK usage and counts toward your plan's limits, as
 [Anthropic's help center](https://support.claude.com/en/articles/15036540) says.
 
+**Which Claude Code does it run?** Yours, the `claude` your terminal runs, so `claude update`
+updates it, and Pelican itself stays small. Pelican says when yours is older than the one it was
+tested with.
+
 **Why not Remote Control?** Use it to answer, from your phone, the prompt waiting in your terminal:
 Pelican cannot. Pelican shows every session without turning anything on, keeps nothing on anyone's
 servers, and works with any login.
@@ -157,4 +163,4 @@ npm run dev
 
 [MIT](LICENSE). Pelican is an independent project, not made by or affiliated with Anthropic. The
 packages built into it keep their own licenses, each given in full in `THIRD_PARTY_NOTICES` in the
-npm package.
+npm package. Anthropic's Agent SDK, which Pelican fetches from npm, is under Anthropic's terms.
