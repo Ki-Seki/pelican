@@ -41,7 +41,7 @@ pelican
 ```
 
 Open the link it prints. Your sessions are already there. The first start fetches Anthropic's
-Agent SDK from npm, which Pelican runs Claude Code through: about 60 MB, once for each version.
+Agent SDK from npm, which Pelican runs Claude Code through: about 5 MB, once for each version.
 
 **2. Open it on your phone.** Put [Tailscale](https://tailscale.com/download) on the computer and
 the phone, signed in to the same account, then:

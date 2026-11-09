@@ -13,8 +13,9 @@ Pelican runs your own Claude Code, and installs in a moment: about 3 MB, where i
 - **A small install.** `npm install -g pelican-cc` installs Pelican alone: about 3 MB to download
   and 9 MB on disk, where it was 150 MB and 400 MB. `npx pelican-cc --demo` is as small.
 - **The Agent SDK, fetched once for each version.** Its license lets no one else ship it, so
-  Pelican's first start fetches Anthropic's own package from npm, the version it was tested with
-  and no Claude Code: about 60 MB in `~/.local/state/pelican/agent-sdk`, with your npm settings.
+  Pelican's first start fetches Anthropic's own package from npm, the version it was tested with,
+  alone and with no Claude Code: about 5 MB in `~/.local/state/pelican/agent-sdk`, with your npm
+  settings.
   Where npm cannot, Pelican says what npm said and the command to run, and tries again later. It
   loads that version alone, never another found elsewhere.
 - The banner and Settings › About say when your Claude Code is older than the one Pelican was

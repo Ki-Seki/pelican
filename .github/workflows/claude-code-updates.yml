@@ -36,12 +36,13 @@ jobs:
       # As people install it: Claude Code's own installer, the newest release, into ~/.local/bin.
       - name: Install the newest Claude Code
         run: curl -fsSL https://claude.ai/install.sh | bash
-      # As Pelican fetches it (src/server/agent-sdk.ts): the version package.json pins, without the
-      # optional packages that bring a Claude Code of their own.
+      # As Pelican fetches it (src/server/agent-sdk.ts): the version package.json pins, alone: without
+      # its peers, which only its other entries import, nor the optional packages that bring a Claude
+      # Code of their own.
       - name: Fetch the Agent SDK Pelican pins
         run: |
           version=$(node -p 'require("./package.json").devDependencies["@anthropic-ai/claude-agent-sdk"]')
-          npm install --prefix "$RUNNER_TEMP/agent-sdk" --no-save --no-package-lock --omit=optional --ignore-scripts --no-audit --no-fund "@anthropic-ai/claude-agent-sdk@$version"
+          npm install --prefix "$RUNNER_TEMP/agent-sdk" --no-save --no-package-lock --omit=optional --omit=peer --ignore-scripts --no-audit --no-fund "@anthropic-ai/claude-agent-sdk@$version"
       # Nothing is sent to Claude, and Claude Code starts with an empty config folder of its own.
       - name: Start Claude Code through it, and ask what it supports
         id: handshake

@@ -126,10 +126,12 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/sessions)" = 200
           # The session list waited for the Agent SDK, which Pelican fetched from npm as it started:
           # the version pinned, its JavaScript alone, with no Claude Code of its own beside it.
-          sdk="$RUNNER_TEMP/state/agent-sdk/$(node -p 'require("./package.json").devDependencies["@anthropic-ai/claude-agent-sdk"]')/node_modules/@anthropic-ai"
-          test -f "$sdk/claude-agent-sdk/sdk.mjs"
-          # Its peers come with it (the API client, MCP's SDK, zod); Claude Code, built for each platform, does not.
-          if ls "$sdk" | grep '^claude-agent-sdk-'; then echo 'Claude Code came with the Agent SDK'; exit 1; fi
+          sdk="$RUNNER_TEMP/state/agent-sdk/$(node -p 'require("./package.json").devDependencies["@anthropic-ai/claude-agent-sdk"]')/node_modules"
+          test -f "$sdk/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+          # The package alone: not its peers, which its entry does not import, nor Claude Code, built for each platform.
+          test -z "$(find "$sdk" -name package.json ! -path "$sdk/@anthropic-ai/claude-agent-sdk/*")"
+          # Its entry loads with nothing beside it, as Pelican loads it.
+          node -e 'import(process.argv[1]).then((m) => process.exit(typeof m.query === "function" ? 0 : 1))' "$sdk/@anthropic-ai/claude-agent-sdk/sdk.mjs"
           grep -q "Fetching Anthropic's Agent SDK" "$RUNNER_TEMP/pelican.log"
           # The terminal as installed: its PTY loads, and a shell starts in a folder and is closed.
           curl -fsS -b "$RUNNER_TEMP/cookies" -H 'X-Pelican: 1' http://localhost:7862/api/terminals | grep -q '"available":true'

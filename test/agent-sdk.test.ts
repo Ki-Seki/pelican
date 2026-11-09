@@ -109,7 +109,7 @@ describe('the Agent SDK', () => {
     expect(more).toEqual([]);
     const fetchedIn = run!.args[2]!;
     expect(run!.args).toEqual([
-      'install', '--prefix', fetchedIn, '--no-save', '--no-package-lock', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund', `@anthropic-ai/claude-agent-sdk@${SDK_VERSION}`,
+      'install', '--prefix', fetchedIn, '--no-save', '--no-package-lock', '--omit=optional', '--omit=peer', '--ignore-scripts', '--no-audit', '--no-fund', `@anthropic-ai/claude-agent-sdk@${SDK_VERSION}`,
     ]);
     expect(npmInstall(fetchedIn)).toEqual(run!.args);
     // In a folder of its own beside where it goes, where no project's .npmrc is, and run from there.
@@ -121,7 +121,7 @@ describe('the Agent SDK', () => {
     expect(existsSync(path.join(copy(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.mjs'))).toBe(true);
     // Its package.json is the one said: the copy loaded, wherever it came from.
     expect(sdkPackage()).toMatchObject({ version: SDK_VERSION, claudeCodeVersion: '2.1.999' });
-    expect(said).toEqual([`pelican: Fetching Anthropic's Agent SDK ${SDK_VERSION} from npm (@anthropic-ai/claude-agent-sdk), once for this version: about 60 MB, into ${shown(sdkFolder())}`]);
+    expect(said).toEqual([`pelican: Fetching Anthropic's Agent SDK ${SDK_VERSION} from npm (@anthropic-ai/claude-agent-sdk), once for this version: about 5 MB, into ${shown(sdkFolder())}`]);
 
     // Loaded once; and on the next start, from the copy, with no npm at all.
     expect(await fetchedBy()).toBe('this Pelican');
@@ -168,7 +168,7 @@ describe('the Agent SDK', () => {
   it('that npm could not fetch says what npm said and the command to run by hand, and is tried again when next needed', async () => {
     process.env.STANDIN_NPM_FAIL = '1';
     const why = `Pelican could not fetch Anthropic's Agent SDK ${SDK_VERSION} from npm: npm said ENOTFOUND: network request to https://registry.npmjs.org/@anthropic-ai%2fclaude-agent-sdk failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org. It tries again when it next needs it; to fetch it yourself, run:\n`
-      + `npm install --prefix ${shown(copy())} --no-save --no-package-lock --omit=optional --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-agent-sdk@${SDK_VERSION}`;
+      + `npm install --prefix ${shown(copy())} --no-save --no-package-lock --omit=optional --omit=peer --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-agent-sdk@${SDK_VERSION}`;
     expect(fetchCommand()).toBe(why.split('\n')[1]);
     await expect(sdk()).rejects.toThrow(why);
     expect(said).toEqual([expect.stringMatching(/^pelican: Fetching /), `pelican: ${why}`]);

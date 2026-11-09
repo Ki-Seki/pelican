@@ -15,8 +15,9 @@ import { type Npm, npmBeside, npmEnvironment, npmSaid, type Ran, shellWord } fro
  * Its license lets no one else ship its code, so Pelican's package holds none of it: Pelican loads
  * Anthropic's own npm package where npm installed it (in development, and in the tests), or else its
  * own copy in its state folder, which it fetches from npm the first time it needs it, once for each
- * version it pins. Only the package and what it lists as its peers: not its optional packages, each
- * a copy of Claude Code, as Pelican runs the user's own (claude-code.ts). The demo never loads it.
+ * version it pins. Only the package itself, whose entry holds all that Pelican runs of it: not the
+ * packages it lists as its peers, which only its other entries import, nor its optional packages,
+ * each a copy of Claude Code, as Pelican runs the user's own (claude-code.ts). The demo never loads it.
  */
 
 export type AgentSdk = typeof import('@anthropic-ai/claude-agent-sdk');
@@ -36,7 +37,7 @@ const require = createRequire(import.meta.url);
 
 /** The npm arguments that fetch the SDK into `prefix`: exactly the version pinned, its JavaScript alone, nothing run. */
 export const npmInstall = (prefix: string): string[] => [
-  'install', '--prefix', prefix, '--no-save', '--no-package-lock', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund', `${SDK_PACKAGE}@${SDK_VERSION}`,
+  'install', '--prefix', prefix, '--no-save', '--no-package-lock', '--omit=optional', '--omit=peer', '--ignore-scripts', '--no-audit', '--no-fund', `${SDK_PACKAGE}@${SDK_VERSION}`,
 ];
 
 /** Where Pelican keeps its copies, a folder for each version. */
@@ -261,7 +262,7 @@ async function fetchInto(target: string): Promise<void> {
   try {
     if (!fetchSaid) {
       fetchSaid = true;
-      say(`pelican: Fetching Anthropic's Agent SDK ${SDK_VERSION} from npm (${SDK_PACKAGE}), once for this version: about 60 MB, into ${tilde(root)}`);
+      say(`pelican: Fetching Anthropic's Agent SDK ${SDK_VERSION} from npm (${SDK_PACKAGE}), once for this version: about 5 MB, into ${tilde(root)}`);
     }
     const ran = await runNpm(npm, npmInstall(temporary), temporary);
     if (ran.code !== 0) throw new Error(ran.code === -1 && !ran.stderr.trim() ? `npm did not finish in ${sdkTiming.fetchMs / 60_000} minutes` : `npm said ${npmSaid(ran)}`);

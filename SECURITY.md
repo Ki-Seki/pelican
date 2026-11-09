@@ -347,14 +347,14 @@ can read your sessions and have Claude run commands as you, so treat access to i
   the user's own (`PELICAN_CLAUDE_PATH`, else the first `claude` on PATH in absolute folders only,
   else where Claude Code's installers put it). The first time Pelican needs the SDK, outside the
   demo, it runs `npm install --prefix <folder> --no-save --no-package-lock --omit=optional
-  --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-agent-sdk@<version>`, with the exact
+  --omit=peer --ignore-scripts --no-audit --no-fund @anthropic-ai/claude-agent-sdk@<version>`, with the exact
   version Pelican was built and tested with, into a new folder in `<state>/agent-sdk` (which only
   the user can read) and from that folder, so no project's `.npmrc` names the registry: the npm
   beside the Node running Pelican (else the first npm on PATH), with the user's own npm settings
   and nothing an earlier npm left in the environment.
-  npm checks each tarball against the registry's integrity and runs no install script; the SDK's
-  optional packages, each a copy of Claude Code, are left out, and the packages it lists as its
-  peers come with it, which Pelican never loads. Only a whole copy of that version then takes its
+  npm checks the tarball against the registry's integrity and runs no install script; the SDK's
+  optional packages, each a copy of Claude Code, are left out, and so are the packages it lists as
+  its peers, which only the entries Pelican never loads import. Only a whole copy of that version then takes its
   place, `<state>/agent-sdk/<version>`, folder and all, so a Pelican starting meanwhile finds it or
   not, never half of it; copies of other versions are then removed. Where npm installed the SDK
   beside Pelican's code (in development, and in the tests), that copy is loaded instead. The demo
