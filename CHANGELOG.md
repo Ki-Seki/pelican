@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1
+
+A request Cloudflare turned away is no longer called a sign-in problem.
+
+### Fixes
+
+- When Cloudflare, in front of Anthropic's API, turns a request away (its 403 "Attention
+  Required!" page), Claude Code says it failed to authenticate, and Pelican said Claude Code was not
+  signed in and to sign in again, which changes nothing. It now says the API turned the request
+  away from that computer: try again in a moment, and if it keeps happening, check its network or
+  proxy. The session list says "request turned away".
+
 ## 0.6.0
 
 Pelican runs your own Claude Code, and installs in a moment: about 3 MB, where it was 150 MB.
