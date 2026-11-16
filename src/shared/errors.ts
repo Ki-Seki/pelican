@@ -3,7 +3,7 @@
  * words: what happened and what to do, without the API's JSON.
  */
 
-type Kind = 'signed-out' | 'too-long' | 'credit' | 'limit' | 'overloaded' | 'api' | 'offline' | 'too-long-reply';
+type Kind = 'signed-out' | 'blocked' | 'too-long' | 'credit' | 'limit' | 'overloaded' | 'api' | 'offline' | 'too-long-reply';
 
 /** Claude Code's own codes for a failed API call (the SDK's SDKAssistantMessageError), where its words say no more. */
 const CODES: Record<string, Kind> = {
@@ -19,6 +19,9 @@ const CODES: Record<string, Kind> = {
 function kindOf(text: string, code?: string): Kind | undefined {
   const t = text.trim();
   if (/prompt is too long/i.test(t)) return 'too-long';
+  // Cloudflare's block page in front of the API, which Claude Code says it failed to authenticate
+  // (authentication_failed): signing in again changes nothing.
+  if (/API Error: 403\b/.test(t) && /Attention Required|Cloudflare|Just a moment/i.test(t)) return 'blocked';
   if (/Not logged in|Please run \/login|Invalid API key|OAuth token (has )?expired|API Error: 401\b|authentication_failed/i.test(t)) return 'signed-out';
   if (/Credit balance is too low/i.test(t)) return 'credit';
   if (/^You['’]ve hit your (?:[\w-]+ ){0,2}limit/i.test(t)) return 'limit';
@@ -40,6 +43,8 @@ export function plainError(text: string, machine = 'your computer', code?: strin
       return 'The conversation is too long for the model. Send /compact to shorten it, or start a new session.';
     case 'signed-out':
       return `Claude Code is not signed in on ${machine}. Run claude in a terminal there and sign in with /login.`;
+    case 'blocked':
+      return `Anthropic’s API turned away the request from ${machine} (Cloudflare, 403). Signing in will not help: try again in a moment, and if it keeps happening, check ${machine}’s network or proxy.`;
     case 'credit':
       return 'The API account’s credit balance is too low. Add credits in the Claude Console.';
     case 'limit': {
@@ -69,11 +74,15 @@ export function errorLine(text: string, machine = 'your computer', code?: string
   if (kindOf(text, code) === 'signed-out') {
     return `Claude Code was not signed in on ${machine}, so Claude did not answer. Run claude in a terminal there and sign in with /login.`;
   }
+  if (kindOf(text, code) === 'blocked') {
+    return `Anthropic’s API turned away the request from ${machine} (Cloudflare, 403), so Claude did not answer. Signing in will not help: try again in a moment, and if it keeps happening, check ${machine}’s network or proxy.`;
+  }
   return plainError(text, machine, code);
 }
 
 const STOPPED: Record<Kind, string> = {
   'signed-out': 'not signed in',
+  blocked: 'request turned away',
   'too-long': 'conversation too long',
   credit: 'credit balance too low',
   limit: 'usage limit reached',

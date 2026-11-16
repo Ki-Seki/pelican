@@ -27,6 +27,17 @@ describe('Claude Code’s errors in plain words', () => {
     expect(errorLine('API Error: 529 {"type":"error"}', 'studio')).toBe('Anthropic’s API is overloaded. Try again in a moment.');
   });
 
+  it('does not send someone signed in to sign in again when Cloudflare turned the request away', () => {
+    // As Claude Code wrote it on a devbox whose requests Cloudflare blocked for a few minutes.
+    const blocked = 'Failed to authenticate. API Error: 403 Attention Required! | Cloudflare';
+    expect(plainError(blocked, 'ivory', 'authentication_failed')).toBe('Anthropic’s API turned away the request from ivory (Cloudflare, 403). Signing in will not help: try again in a moment, and if it keeps happening, check ivory’s network or proxy.');
+    expect(errorLine(blocked, 'ivory', 'authentication_failed')).toMatch(/^Anthropic’s API turned away the request from ivory \(Cloudflare, 403\), so Claude did not answer\. Signing in will not help/);
+    expect(stoppedBecause(blocked, 'authentication_failed')).toBe('request turned away');
+    // A 403 of the API's own, and a sign-in that failed, are what they were.
+    expect(plainError('API Error: 403 {"type":"error","error":{"type":"permission_error","message":"OAuth token has been revoked"}}', 'ivory', 'authentication_failed')).toMatch(/^Claude Code is not signed in on ivory/);
+    expect(plainError('Failed to authenticate. API Error: 401 {"type":"error"}', 'ivory', 'authentication_failed')).toMatch(/^Claude Code is not signed in on ivory/);
+  });
+
   it('says in a few words why a turn stopped, for the session list', () => {
     expect(stoppedBecause('Not logged in · Please run /login', 'authentication_failed')).toBe('not signed in');
     expect(stoppedBecause('Prompt is too long', 'invalid_request')).toBe('conversation too long');
